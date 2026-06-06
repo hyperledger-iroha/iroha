@@ -95,6 +95,8 @@ def fake_opener_for(
     block_response_hash=None,
     block_response_number=None,
     block_response_receipts_root=None,
+    finalized_block_hash=None,
+    finalized_block_number=None,
     deployment_transaction_hash=None,
     deployment_transaction_block_hash=None,
     deployment_transaction_block_number=None,
@@ -108,6 +110,8 @@ def fake_opener_for(
     block_response_hash = block_response_hash or receipt_block_hash
     block_response_number = block_response_number or receipt_block_number
     block_response_receipts_root = block_response_receipts_root or ("0x" + "bc" * 32)
+    finalized_block_hash = finalized_block_hash or receipt_block_hash
+    finalized_block_number = finalized_block_number or receipt_block_number
     deployment_transaction_block_hash = (
         deployment_transaction_block_hash or receipt_block_hash
     )
@@ -186,6 +190,19 @@ def fake_opener_for(
                 }
             )
         if method == "eth_getBlockByNumber":
+            if params[0] == "finalized":
+                assert params[1] is False
+                return FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "hash": finalized_block_hash,
+                            "number": finalized_block_number,
+                            "receiptsRoot": block_response_receipts_root,
+                        },
+                    }
+                )
             assert params[0] == receipt_block_number
             assert params[1] is False
             return FakeResponse(
@@ -570,6 +587,9 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert source["deployment_receipt_block_receipts_root"] == "0x" + "bc" * 32
     assert source["deployment_receipt_block_receipts_root_verified"] is True
     assert source["deployment_receipt_block_code_hash_matches"] is True
+    assert source["deployment_receipt_block_finalized"] is True
+    assert source["deployment_receipt_finalized_block_number"] == 0x1234
+    assert source["deployment_receipt_finalized_block_hash"] == "0x" + "99" * 32
     assert summary["source_records"] == {
         "source_verifier_material_hash": "0x" + material_hash.hex(),
         "source_adapter_engine_deployment_hash": "0x" + deployment_hash.hex(),
@@ -613,6 +633,14 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
         + '"'
         in rendered
     )
+    assert (
+        '# sccp_evm_source_deployment_finalized_block_hash = "0x'
+        + "99" * 32
+        + '"'
+        in rendered
+    )
+    assert '# sccp_evm_source_deployment_finalized_block_number = "4660"' in rendered
+    assert "# sccp_evm_source_deployment_block_finalized = true" in rendered
     assert rendered.count("# sccp_evm_source_rpc_chain_id") == 1
     assert rendered.count("# sccp_evm_source_block_tag") == 1
     assert rendered.count("# sccp_evm_source_bridge_address") == 1
@@ -627,6 +655,9 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert rendered.count("# sccp_evm_source_deployment_block_hash") == 1
     assert rendered.count("# sccp_evm_source_deployment_block_number") == 1
     assert rendered.count("# sccp_evm_source_deployment_block_receipts_root") == 1
+    assert rendered.count("# sccp_evm_source_deployment_finalized_block_hash") == 1
+    assert rendered.count("# sccp_evm_source_deployment_finalized_block_number") == 1
+    assert rendered.count("# sccp_evm_source_deployment_block_finalized") == 1
     assert 'source_chain = "eth"' in rendered
     assert 'source_bridge_emitter_code_hash = "0x' + fake.bridge_code_hash.hex() in rendered
     offline_args = summary["offline_evidence_args"]
@@ -749,6 +780,13 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata():
                 False,
             ),
             "deployment receipt block code hash",
+        ),
+        (
+            lambda forged: forged["source_bridge"].__setitem__(
+                "deployment_receipt_block_finalized",
+                False,
+            ),
+            "finality",
         ),
         (
             lambda forged: forged["source_records"].__setitem__(
@@ -1164,6 +1202,52 @@ def test_evm_source_live_rejects_receipt_block_number_drift():
         assert "block number does not match eth_getBlockByNumber" in str(exc)
     else:
         raise AssertionError("drifted deployment receipt block number was accepted")
+
+
+def test_evm_source_live_rejects_unfinalized_deployment_receipt_block():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        finalized_block_number="0x1233",
+    )
+
+    try:
+        module.collect_source_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            block_tag="finalized",
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            opener=fake.opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        assert "newer than the finalized execution block" in str(exc)
+    else:
+        raise AssertionError("unfinalized Ethereum source deployment receipt was accepted")
+
+
+def test_evm_source_live_rejects_finalized_deployment_receipt_hash_drift():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        finalized_block_hash="0x" + "98" * 32,
+    )
+
+    try:
+        module.collect_source_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            block_tag="finalized",
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            opener=fake.opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        assert "does not match the finalized execution block" in str(exc)
+    else:
+        raise AssertionError("finalized Ethereum source deployment hash drift was accepted")
 
 
 def test_evm_source_live_rejects_zero_receipt_block_receipts_root():

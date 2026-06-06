@@ -26,8 +26,8 @@ Files:
   secp256k1 attestation quorum with `keccak256` and `ecrecover`; it is not a
   production SCCP verifier.
 - `test/sccp_message_bridge_smoke.js`: focused Ganache smoke test for the EVM
-  wrapper plus the TRON/TVM destination-verifier and governed source-bridge
-  entrypoint paths.
+  wrapper plus the TRON/TVM and BSC route bridge, destination-verifier, and
+  governed source-bridge entrypoint paths.
 
 Quick verification:
 
@@ -36,9 +36,9 @@ scripts/sccp_evm_contract_smoke.sh
 ```
 
 The smoke installs pinned `solc`, `ganache`, and `ethers` versions into a
-temporary directory, compiles the EVM and TRON SCCP contracts, and runs the
-deterministic BN254 acceptance/replay checks without relying on repository-local
-Node dependencies.
+temporary directory, compiles the EVM, TRON, and BSC SCCP contracts, and runs
+the deterministic BN254 acceptance/replay checks without relying on
+repository-local Node dependencies.
 
 The current reference path keeps the native SCCP proof artifact as a canonical
 `OpenVerifyEnvelope` that wraps the FASTPQ proof and bound public inputs, while
@@ -52,16 +52,26 @@ verifier_key_hash`). The wrapper constructor rejects missing or mismatched
 verifier bytecode hashes, any backend other than `evm-groth16-bn254-v1`, and
 any proof family other than `stark-fri-v1`. It requires the verifier contract
 to expose the expected immutable verifying-key hash via `verifyingKeyHash()`
-and rejects empty verifier-backend/proof-family labels, a zero network id, a
-non-SORA source domain, a target domain outside ETH/BSC, and same-domain
-deployments.
+and rejects contracts that have runtime code but no compatible key-hash
+endpoint. It also rejects empty verifier-backend/proof-family labels, a zero
+network id, a non-SORA source domain, a target domain outside ETH/BSC, and
+same-domain deployments. ETH-targeted deployments must use the bytes32 EIP-155 chain-id
+word for Ethereum mainnet (`1`), and BSC-targeted deployments must use the
+bytes32 EIP-155 chain-id word for BNB Smart Chain mainnet (`56`) or BSC
+testnet (`97`).
 The wrapper enforces the expected source/target domains, rejects zero SCCP
 statement/public-input fields before calling the verifier, and checks the
 returned `messageId` and `commitmentRoot` against the supplied public inputs.
+It also rejects an already-used `messageId` from `public_inputs[0]` before the
+verifier call, so replay traffic cannot force another pairing check even when
+the replayed proof bytes are malformed.
 The `destinationBindingHash()` view exposes the deployment binding that the
 wrapper passes to the verifier, and accepted proof events include both the
 statement hash and destination binding hash so canary logs can be matched to the
-exact governed proof statement and wrapper/verifier deployment.
+exact governed proof statement and wrapper/verifier deployment. A Groth16 proof
+accepted for one wrapper is not portable to another wrapper address because the
+destination binding hash is one of the verifier's public signals; the smoke test
+covers both direct wrong-binding verification and cross-wrapper replay failure.
 The reference secp256k1 verifier contract checks canonical attestation ABI
 encoding, non-zero SCCP statement/public-input/native-proof fields, signer
 authorization, and destination binding on-chain, but it remains a
@@ -137,4 +147,6 @@ The Ganache smoke test constructs a deterministic self-consistent BN254 proof
 for the test verifying key and submits it through the EVM wrapper, so the
 positive pairing path and replay guard are covered in addition to malformed
 proof rejection, zero proof-point rejection, off-curve G2 rejection, and
-non-prime-subgroup G2 rejection.
+non-prime-subgroup G2 rejection. It also pins the verifier's pre-pairing proof
+word policy for overflowing source/target domains and same source/target domain
+bindings.

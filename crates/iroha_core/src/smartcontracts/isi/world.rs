@@ -8040,6 +8040,8 @@ pub mod isi {
             evm_route_canary_receipt_block_hash: configured
                 .evm_route_canary_receipt_block_hash
                 .clone(),
+            evm_route_canary_receipt_block_finalized: configured
+                .evm_route_canary_receipt_block_finalized,
             evm_route_canary_block_receipts_root: configured
                 .evm_route_canary_block_receipts_root
                 .clone(),
@@ -8425,10 +8427,97 @@ pub mod isi {
         }
     }
 
+    fn validate_sccp_bridge_proof_range_matches_artifact(
+        proof: &iroha_data_model::bridge::BridgeProof,
+        artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+    ) -> Result<(), Error> {
+        let finality_height = artifact.public_inputs.finality_height;
+        if proof.range.start_height == finality_height && proof.range.end_height == finality_height
+        {
+            return Ok(());
+        }
+
+        Err(invalid_bridge_proof(format!(
+            "SCCP message proof range must match finality height {finality_height}"
+        )))
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct SccpMessageKey {
+        source_domain: u32,
+        target_domain: u32,
+        message_id: [u8; 32],
+    }
+
+    struct ValidatedBridgeProof {
+        encoded: Vec<u8>,
+        sccp_message_key: Option<SccpMessageKey>,
+    }
+
+    fn sccp_message_key_from_artifact(
+        artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+    ) -> SccpMessageKey {
+        SccpMessageKey {
+            source_domain: iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload),
+            target_domain: iroha_sccp::sccp_message_target_domain(&artifact.bundle.payload),
+            message_id: artifact.bundle.commitment.message_id,
+        }
+    }
+
+    fn sccp_message_key_from_bridge_proof(
+        proof: &iroha_data_model::bridge::BridgeProof,
+    ) -> Option<SccpMessageKey> {
+        let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(transparent) =
+            &proof.payload
+        else {
+            return None;
+        };
+        if !transparent.proof.backend.starts_with("sccp/stark-fri-v1/") {
+            return None;
+        }
+        let artifact =
+            iroha_sccp::decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)?;
+        if artifact.message_backend != transparent.proof.backend {
+            return None;
+        }
+        Some(sccp_message_key_from_artifact(&artifact))
+    }
+
+    fn find_existing_sccp_message_proof(
+        state_transaction: &StateTransaction<'_, '_>,
+        new_pid: &iroha_data_model::proof::ProofId,
+        new_key: SccpMessageKey,
+    ) -> Option<iroha_data_model::proof::ProofId> {
+        state_transaction.world.proofs.iter().find_map(|(id, rec)| {
+            if id == new_pid {
+                return None;
+            }
+            if rec.status != iroha_data_model::proof::ProofStatus::Verified {
+                return None;
+            }
+            let bridge = rec.bridge.as_ref()?;
+            if !bridge.proof.pinned {
+                return None;
+            }
+            if &rec.id != id
+                || rec.id.backend != bridge.proof.backend_label()
+                || rec.id.proof_hash != bridge.commitment
+            {
+                return None;
+            }
+            let existing_key = sccp_message_key_from_bridge_proof(&bridge.proof)?;
+            if existing_key == new_key {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
+    }
+
     fn encode_and_validate_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<ValidatedBridgeProof, Error> {
         let zk_cfg = &state_transaction.zk;
         let current_height = state_transaction._curr_block.height.get();
         if !proof.range.is_valid() {
@@ -8497,6 +8586,7 @@ pub mod isi {
             ));
         }
 
+        let mut sccp_message_key = None;
         match &proof.payload {
             iroha_data_model::bridge::BridgeProofPayload::Ics(ics) => {
                 if is_reserved_sccp_manifest_hash(&proof.manifest_hash) {
@@ -8553,10 +8643,17 @@ pub mod isi {
                                 "SCCP message proof manifest hash mismatch",
                             ));
                         }
+                        validate_sccp_bridge_proof_range_matches_artifact(proof, &artifact)?;
+                        if !proof.pinned {
+                            return Err(invalid_bridge_proof(
+                                "SCCP message proof records must be pinned for replay protection",
+                            ));
+                        }
                         validate_sccp_message_transparent_bridge_proof(
                             &artifact,
                             state_transaction,
                         )?;
+                        sccp_message_key = Some(sccp_message_key_from_artifact(&artifact));
                     }
                     _ if is_reserved_sccp_manifest_hash(&proof.manifest_hash) => {
                         return Err(invalid_bridge_proof(
@@ -8577,7 +8674,10 @@ pub mod isi {
             }
         }
 
-        Ok(encoded)
+        Ok(ValidatedBridgeProof {
+            encoded,
+            sccp_message_key,
+        })
     }
 
     struct BridgeProofEventArgs<'a> {
@@ -8786,10 +8886,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let current_height = state_transaction._curr_block.height.get();
-            let encoded = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
-            let proof_size = encoded.len();
+            let validated = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
+            let proof_size = validated.encoded.len();
             let backend_label = self.proof.backend_label();
-            let commitment = hash_bridge_proof(&backend_label, &encoded);
+            let commitment = hash_bridge_proof(&backend_label, &validated.encoded);
             let pid = iroha_data_model::proof::ProofId {
                 backend: backend_label.clone(),
                 proof_hash: commitment,
@@ -8800,6 +8900,17 @@ pub mod isi {
             // later message-settlement transaction.
             if state_transaction.world.proofs.get(&pid).is_some() {
                 return Ok(());
+            }
+
+            if let Some(sccp_message_key) = validated.sccp_message_key
+                && let Some(conflict) =
+                    find_existing_sccp_message_proof(state_transaction, &pid, sccp_message_key)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "SCCP message proof replays existing message proof {conflict}"
+                    )),
+                ));
             }
 
             if let Some(conflict) =
@@ -8819,8 +8930,9 @@ pub mod isi {
                 .tx_call_hash
                 .as_ref()
                 .map(|h| <[u8; 32]>::from(*h));
-            let envelope_hash: Option<[u8; 32]> =
-                Some(<[u8; 32]>::from(iroha_crypto::Hash::new(&encoded)));
+            let envelope_hash: Option<[u8; 32]> = Some(<[u8; 32]>::from(iroha_crypto::Hash::new(
+                &validated.encoded,
+            )));
 
             let record = iroha_data_model::proof::ProofRecord {
                 id: pid.clone(),
@@ -9236,9 +9348,16 @@ pub mod isi {
             .proofs
             .iter()
             .filter(|(id, _)| id.backend == backend)
-            .map(|(id, rec)| {
+            .filter_map(|(id, rec)| {
+                if rec
+                    .bridge
+                    .as_ref()
+                    .is_some_and(|bridge| bridge.proof.pinned)
+                {
+                    return None;
+                }
                 let height = rec.verified_at_height.unwrap_or(0);
-                (id.clone(), height)
+                Some((id.clone(), height))
             })
             .collect();
         let removals =
@@ -15781,6 +15900,7 @@ pub mod isi {
                     0,
                     10_000 + u64::from(domain),
                     [0xd5u8.wrapping_add(domain as u8); 32],
+                    true,
                     [0xd6u8.wrapping_add(domain as u8); 32],
                     [0xd0u8.wrapping_add(domain as u8); 32],
                     [0xd1u8.wrapping_add(domain as u8); 32],
@@ -16052,6 +16172,8 @@ pub mod isi {
                 evm_route_canary_receipt_block_hash: allowlist
                     .evm_route_canary_receipt_block_hash
                     .clone(),
+                evm_route_canary_receipt_block_finalized: allowlist
+                    .evm_route_canary_receipt_block_finalized,
                 evm_route_canary_block_receipts_root: allowlist
                     .evm_route_canary_block_receipts_root
                     .clone(),
@@ -16300,6 +16422,10 @@ pub mod isi {
                 Some(10_000 + u64::from(iroha_sccp::SCCP_DOMAIN_ETH))
             );
             assert!(eth_route.evm_route_canary_receipt_block_hash.is_some());
+            assert_eq!(
+                eth_route.evm_route_canary_receipt_block_finalized,
+                Some(true)
+            );
             assert!(eth_route.evm_route_canary_block_receipts_root.is_some());
             assert!(eth_route.evm_route_canary_call_data_sha256.is_some());
             assert!(eth_route.evm_route_canary_payload_hash.is_some());
@@ -16362,6 +16488,7 @@ pub mod isi {
             eth_route.evm_route_canary_log_index = None;
             eth_route.evm_route_canary_receipt_block_number = None;
             eth_route.evm_route_canary_receipt_block_hash = None;
+            eth_route.evm_route_canary_receipt_block_finalized = None;
             eth_route.evm_route_canary_block_receipts_root = None;
             eth_route.evm_route_canary_call_data_sha256 = None;
             eth_route.evm_route_canary_message_id = None;
@@ -16377,6 +16504,26 @@ pub mod isi {
 
             let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
                 .expect_err("EVM route canary must preserve transaction transcript fields");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("production-ready lane material for domain 1")
+                    && err.contains("route canary evidence is not bound"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_evm_non_finalized_route_canary() {
+            let mut zk = test_configured_sccp_all_lanes_zk_config();
+            let eth_route = zk
+                .sccp_route_allowlists
+                .iter_mut()
+                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_ETH)
+                .expect("configured ETH route");
+            eth_route.evm_route_canary_receipt_block_finalized = Some(false);
+
+            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("EVM route canary must come from finalized receipt block evidence");
             let err = format!("{err:?}");
             assert!(
                 err.contains("production-ready lane material for domain 1")
@@ -17876,8 +18023,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:tiny-add2inst-public",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                vec![1, 2],
+                vec![3, 4],
             );
             let resolved = resolve_vk_commitment(&attachment, Some(&envelope), &stx)
                 .expect("resolve vk commitment");
@@ -17887,8 +18034,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:tiny-add2inst-public",
                 [0u8; 32],
-                Vec::new(),
-                Vec::new(),
+                vec![1, 2],
+                vec![3, 4],
             );
             assert!(
                 resolve_vk_commitment(&attachment, Some(&zero_commitment_envelope), &stx).is_err(),

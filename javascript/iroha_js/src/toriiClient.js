@@ -73,6 +73,7 @@ const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
 const NORITO_COMPACT_LEN_FLAG = 0x02;
 const BFV_IDENTIFIER_SEED_BYTES = 32;
+const BFV_IDENTIFIER_MAX_INPUT_BYTES = 63;
 const BFV_RUST_ENCRYPT_DOMAIN = Buffer.from(
   "iroha.crypto.fhe.bfv.encrypt.v1",
   "utf8",
@@ -91,6 +92,14 @@ const BFV_IDENTIFIER_SLOT_DOMAIN = Buffer.from(
 );
 const BFV_IDENTIFIER_U_DOMAIN = Buffer.from(
   "iroha.sdk.identifier.bfv.u.v1",
+  "utf8",
+);
+const BFV_IDENTIFIER_E1_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.e1.v1",
+  "utf8",
+);
+const BFV_IDENTIFIER_E2_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.e2.v1",
   "utf8",
 );
 const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
@@ -21859,6 +21868,13 @@ function validateIdentifierBfvPublicParameters(publicParameters, context) {
       `${context}.max_input_bytes`,
     );
   }
+  if (maxInputBytes > BFV_IDENTIFIER_MAX_INPUT_BYTES) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.max_input_bytes must be at most ${BFV_IDENTIFIER_MAX_INPUT_BYTES} for the registered RAM-LFE BFV identifier profile`,
+      `${context}.max_input_bytes`,
+    );
+  }
   const publicKey = publicParameters.public_key;
   const b = publicKey.b.map((value, index) =>
     requireBfvUint(value, `${context}.public_key.b[${index}]`),
@@ -21970,6 +21986,19 @@ function sampleSmallPoly(params, stream) {
   });
 }
 
+function sampleErrorPoly(params, stream) {
+  return Array.from({ length: params.polynomialDegree }, () => {
+    const sample = Number(stream.nextBytes(1)[0] % 3);
+    if (sample === 0) {
+      return 0n;
+    }
+    if (sample === 1) {
+      return params.plaintextModulus;
+    }
+    return params.ciphertextModulus - params.plaintextModulus;
+  });
+}
+
 function rustHashDerivedRng(domain, seed) {
   return new IdentifierBfvRustChaCha20Rng(irohaHashBytes([domain, seed]));
 }
@@ -21992,6 +22021,19 @@ function sampleSmallPolyRust(params, rng) {
       return 1n;
     }
     return params.ciphertextModulus - 1n;
+  });
+}
+
+function sampleErrorPolyRust(params, rng) {
+  return Array.from({ length: params.polynomialDegree }, () => {
+    const reduced = rustRandomRangeU8Inclusive0To2(rng);
+    if (reduced === 0) {
+      return 0n;
+    }
+    if (reduced === 1) {
+      return params.plaintextModulus;
+    }
+    return params.ciphertextModulus - params.plaintextModulus;
   });
 }
 
@@ -22031,8 +22073,14 @@ function encryptIdentifierScalar(params, scalar, seed) {
     params,
     new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_U_DOMAIN),
   );
-  const e1 = Array.from({ length: params.polynomialDegree }, () => 0n);
-  const e2 = Array.from({ length: params.polynomialDegree }, () => 0n);
+  const e1 = sampleErrorPoly(
+    params,
+    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E1_DOMAIN),
+  );
+  const e2 = sampleErrorPoly(
+    params,
+    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E2_DOMAIN),
+  );
   const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
   encoded[0] = scalar % params.plaintextModulus;
   return {
@@ -22048,8 +22096,8 @@ function encryptIdentifierScalar(params, scalar, seed) {
 function encryptIdentifierScalarRust(params, scalar, seed) {
   const rng = rustHashDerivedRng(BFV_RUST_ENCRYPT_DOMAIN, seed);
   const u = sampleSmallPolyRust(params, rng);
-  const e1 = Array.from({ length: params.polynomialDegree }, () => 0n);
-  const e2 = Array.from({ length: params.polynomialDegree }, () => 0n);
+  const e1 = sampleErrorPolyRust(params, rng);
+  const e2 = sampleErrorPolyRust(params, rng);
   const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
   encoded[0] = scalar % params.plaintextModulus;
   return {

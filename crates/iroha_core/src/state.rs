@@ -25926,6 +25926,10 @@ fn zk_policy_put_sccp_route_allowlists(
                     .cmp(&right.evm_route_canary_receipt_block_hash)
             })
             .then_with(|| {
+                left.evm_route_canary_receipt_block_finalized
+                    .cmp(&right.evm_route_canary_receipt_block_finalized)
+            })
+            .then_with(|| {
                 left.evm_route_canary_block_receipts_root
                     .cmp(&right.evm_route_canary_block_receipts_root)
             })
@@ -26129,6 +26133,11 @@ fn zk_policy_put_sccp_route_allowlists(
             hasher,
             "evm_route_canary_receipt_block_hash",
             allowlist.evm_route_canary_receipt_block_hash.as_deref(),
+        );
+        zk_policy_put_option_bool(
+            hasher,
+            "evm_route_canary_receipt_block_finalized",
+            allowlist.evm_route_canary_receipt_block_finalized,
         );
         zk_policy_put_option_str(
             hasher,
@@ -52797,6 +52806,7 @@ mod tests {
                 evm_route_canary_log_index: None,
                 evm_route_canary_receipt_block_number: None,
                 evm_route_canary_receipt_block_hash: None,
+                evm_route_canary_receipt_block_finalized: None,
                 evm_route_canary_block_receipts_root: None,
                 evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
@@ -53051,6 +53061,7 @@ mod tests {
                 evm_route_canary_log_index: None,
                 evm_route_canary_receipt_block_number: None,
                 evm_route_canary_receipt_block_hash: None,
+                evm_route_canary_receipt_block_finalized: None,
                 evm_route_canary_block_receipts_root: None,
                 evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
@@ -60009,6 +60020,8 @@ mod tests {
                     payload: b"ciphertext".to_vec(),
                     payload_bytes: std::num::NonZeroU64::new(10).expect("nonzero"),
                     payload_commitment: Hash::new(b"ciphertext"),
+                    fhe_residual_multiple_bound: None,
+                    fhe_bound_mode: None,
                     last_update_sequence: 4,
                     governance_tx_hash: Hash::new(b"gov"),
                     source_action:

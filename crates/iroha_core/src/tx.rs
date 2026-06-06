@@ -2234,16 +2234,29 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(tx.fee_spend.anchor_root.into()),
         );
 
-        let fee_payer_seed = iroha_crypto::Hash::new(tx.action_hash().as_ref());
-        let fee_payer_keypair =
-            iroha_crypto::KeyPair::from_seed(fee_payer_seed.as_ref().to_vec(), Algorithm::Ed25519);
-        let fee_payer = AccountId::new(fee_payer_keypair.public_key().clone());
+        let fee_payer = Self::private_kaigi_fee_payer_account(tx)?;
 
         transfer
             .execute(&fee_payer, state_transaction)
             .map_err(|error| {
                 TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
             })
+    }
+
+    fn private_kaigi_fee_payer_account(
+        tx: &PrivateKaigiTransaction,
+    ) -> Result<AccountId, TransactionRejectionReason> {
+        let fee_payer_seed = iroha_crypto::Hash::new(tx.action_hash().as_ref());
+        let fee_payer_keypair = iroha_crypto::KeyPair::try_from_seed(
+            fee_payer_seed.as_ref().to_vec(),
+            Algorithm::Ed25519,
+        )
+        .map_err(|err| {
+            TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+                "failed to derive private Kaigi fee payer account: {err}"
+            )))
+        })?;
+        Ok(AccountId::new(fee_payer_keypair.public_key().clone()))
     }
 
     /// Like [`Self::accept_genesis`], but without wrapping.
@@ -7944,6 +7957,21 @@ pub mod tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn private_kaigi_fee_payer_account_uses_checked_ed25519_derivation() {
+        let tx = sample_private_kaigi_transaction("private-kaigi-chain".parse().expect("chain id"));
+        let fee_payer = AcceptedTransaction::private_kaigi_fee_payer_account(&tx)
+            .expect("checked private Kaigi fee payer derivation");
+        let seed = Hash::new(tx.action_hash().as_ref());
+        let expected_keypair = KeyPair::try_from_seed(seed.as_ref().to_vec(), Algorithm::Ed25519)
+            .expect("expected checked fee payer seed derivation");
+
+        assert_eq!(
+            fee_payer,
+            AccountId::new(expected_keypair.public_key().clone())
+        );
     }
 
     #[test]

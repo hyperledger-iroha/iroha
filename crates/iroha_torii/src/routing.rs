@@ -4875,8 +4875,17 @@ pub async fn handle_connect_session(
     chain_id: std::sync::Arc<iroha_data_model::ChainId>,
     NoritoJson(req): NoritoJson<ConnectSessionRequest>,
 ) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
+    let mut rng = rand::rngs::OsRng;
+    handle_connect_session_with_rng(chain_id, req, &mut rng).await
+}
+
+#[cfg(feature = "connect")]
+async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
+    chain_id: std::sync::Arc<iroha_data_model::ChainId>,
+    req: ConnectSessionRequest,
+    rng: &mut R,
+) -> Result<JsonBody<ConnectSessionResponse>, crate::Error> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-    use rand::{rand_core::TryRngCore as _, rngs::OsRng};
     // Require client-provided `sid` (base64url, no padding).
     let malformed = || {
         crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -4905,15 +4914,10 @@ pub async fn handle_connect_session(
     let mut t_wallet = [0u8; 32];
     let mut t_management = [0u8; 32];
     let mut t_relay = [0u8; 32];
-    let mut rng = OsRng;
-    rng.try_fill_bytes(&mut t_app)
-        .expect("operating-system RNG should be available");
-    rng.try_fill_bytes(&mut t_wallet)
-        .expect("operating-system RNG should be available");
-    rng.try_fill_bytes(&mut t_management)
-        .expect("operating-system RNG should be available");
-    rng.try_fill_bytes(&mut t_relay)
-        .expect("operating-system RNG should be available");
+    fill_connect_session_random_bytes("app token", &mut t_app, rng)?;
+    fill_connect_session_random_bytes("wallet token", &mut t_wallet, rng)?;
+    fill_connect_session_random_bytes("management token", &mut t_management, rng)?;
+    fill_connect_session_random_bytes("relay token", &mut t_relay, rng)?;
     let token_app = B64.encode(t_app);
     let token_wallet = B64.encode(t_wallet);
     let token_management = B64.encode(t_management);
@@ -4948,6 +4952,21 @@ pub async fn handle_connect_session(
 }
 
 #[cfg(feature = "connect")]
+fn fill_connect_session_random_bytes<R: rand::rand_core::TryCryptoRng + ?Sized>(
+    label: &'static str,
+    bytes: &mut [u8],
+    rng: &mut R,
+) -> Result<(), crate::Error> {
+    use rand::rand_core::TryRngCore as _;
+
+    rng.try_fill_bytes(bytes).map_err(|err| {
+        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "failed to generate Connect session {label}: {err}"
+        )))
+    })
+}
+
+#[cfg(feature = "connect")]
 #[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for WebSocket Connect endpoint
 pub struct ConnectWsQuery {
@@ -4960,8 +4979,41 @@ pub struct ConnectWsQuery {
 #[cfg(all(test, feature = "connect"))]
 mod connect_session_tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
 
     use super::*;
+
+    #[derive(Debug)]
+    struct FailingConnectSessionRng;
+
+    #[derive(Debug)]
+    struct FailingConnectSessionRngError;
+
+    impl std::fmt::Display for FailingConnectSessionRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing Connect session RNG")
+        }
+    }
+
+    impl std::error::Error for FailingConnectSessionRngError {}
+
+    impl TryRngCore for FailingConnectSessionRng {
+        type Error = FailingConnectSessionRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingConnectSessionRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingConnectSessionRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingConnectSessionRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingConnectSessionRng {}
 
     #[tokio::test]
     async fn connect_session_requires_client_sid() {
@@ -5017,6 +5069,33 @@ mod connect_session_tests {
             .await
             .err();
         assert!(err.is_some(), "expected error when sid is hex");
+    }
+
+    #[tokio::test]
+    async fn connect_session_reports_token_rng_failure() {
+        let chain_id: std::sync::Arc<iroha_data_model::ChainId> =
+            std::sync::Arc::new("testnet".parse().unwrap());
+        let sid_str = B64.encode([7u8; 32]);
+        let req = ConnectSessionRequest {
+            sid: Some(sid_str),
+            node: Some(String::new()),
+        };
+
+        let err =
+            match handle_connect_session_with_rng(chain_id, req, &mut FailingConnectSessionRng)
+                .await
+            {
+                Ok(_) => panic!("Connect session token RNG failure must be reported"),
+                Err(err) => err,
+            };
+
+        match err {
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(message)) => {
+                assert!(message.contains("Connect session app token"));
+                assert!(message.contains("failing Connect session RNG"));
+            }
+            other => panic!("expected Connect session RNG internal error, got {other:?}"),
+        }
     }
 }
 
@@ -7846,6 +7925,8 @@ fn sccp_configured_route_allowlist_for_domain(
         evm_route_canary_log_index: configured.evm_route_canary_log_index,
         evm_route_canary_receipt_block_number: configured.evm_route_canary_receipt_block_number,
         evm_route_canary_receipt_block_hash: configured.evm_route_canary_receipt_block_hash.clone(),
+        evm_route_canary_receipt_block_finalized: configured
+            .evm_route_canary_receipt_block_finalized,
         evm_route_canary_block_receipts_root: configured
             .evm_route_canary_block_receipts_root
             .clone(),
@@ -8556,7 +8637,7 @@ fn bridge_proof_from_sccp_message_bundle(
                 recursion_depth: None,
             },
         ),
-        pinned: false,
+        pinned: true,
     })
 }
 
@@ -9211,6 +9292,7 @@ mod sccp_message_backend_tests {
                 0,
                 10_000 + u64::from(domain),
                 [0xd5u8.wrapping_add(domain as u8); 32],
+                true,
                 [0xd6u8.wrapping_add(domain as u8); 32],
                 [0xd0u8.wrapping_add(domain as u8); 32],
                 [0xd1u8.wrapping_add(domain as u8); 32],
@@ -9465,6 +9547,8 @@ mod sccp_message_backend_tests {
             evm_route_canary_receipt_block_hash: allowlist
                 .evm_route_canary_receipt_block_hash
                 .clone(),
+            evm_route_canary_receipt_block_finalized: allowlist
+                .evm_route_canary_receipt_block_finalized,
             evm_route_canary_block_receipts_root: allowlist
                 .evm_route_canary_block_receipts_root
                 .clone(),
@@ -9858,7 +9942,7 @@ mod sccp_message_backend_tests {
                         recursion_depth: None,
                     },
                 ),
-                pinned: false,
+                pinned: true,
             },
             commitment,
             size_bytes: 2,
@@ -12016,6 +12100,10 @@ mod sccp_message_backend_tests {
             proof.manifest_hash,
             iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed)
         );
+        assert!(
+            proof.pinned,
+            "SCCP message bridge proofs must be pinned for core replay protection"
+        );
 
         let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, false, None)
             .expect_err("diagnostic proof must be blocked without the unready flag");
@@ -12067,6 +12155,16 @@ mod sccp_message_backend_tests {
         assert_eq!(
             sccp_message_source_domain(&extracted.bundle.payload),
             iroha_sccp::SCCP_DOMAIN_ETH
+        );
+
+        let mut unpinned = record.clone();
+        let Some(bridge) = unpinned.bridge.as_mut() else {
+            unreachable!("test record carries bridge metadata");
+        };
+        bridge.proof.pinned = false;
+        assert!(
+            sccp_message_artifact_from_verified_bridge_record(&unpinned, message_id).is_none(),
+            "unpinned SCCP message records must not be served as source-chain envelopes"
         );
 
         let rejected = proof_record_for_sccp_artifact(
@@ -12581,6 +12679,9 @@ fn sccp_message_artifact_from_verified_bridge_record(
         return None;
     }
     let bridge = record.bridge.as_ref()?;
+    if !bridge.proof.pinned {
+        return None;
+    }
     if record.id.backend != bridge.proof.backend_label()
         || record.id.proof_hash != bridge.commitment
     {

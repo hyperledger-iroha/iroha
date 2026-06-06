@@ -34,7 +34,11 @@ use norito::{
     NoritoSerialize,
     json::{self, JsonSerialize, Map, Value},
 };
-use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
+use rand::{
+    Rng, SeedableRng,
+    rand_core::TryCryptoRng,
+    rngs::{OsRng, StdRng},
+};
 use sorafs_car::taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata};
 use std::{
     borrow::Cow,
@@ -300,7 +304,7 @@ impl Run for IngestEdgeArgs {
             ));
         }
         let layout = EdgeOutputLayout::new(self.output_root.clone())?;
-        let mut rng = build_edge_rng(self.drift_seed);
+        let mut rng = build_edge_rng(self.drift_seed)?;
         let start_unix_ms = match self.start_unix_ms {
             Some(value) => value,
             None => unix_timestamp_ms()?,
@@ -652,13 +656,7 @@ impl Run for CekRotateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let event_name = parse_name(&self.event_id, "event-id")?;
         let stream_name = parse_name(&self.stream_id, "stream-id")?;
-        let hkdf_salt = if let Some(hex) = &self.hkdf_salt {
-            parse_hex_32(hex, "hkdf-salt")?
-        } else {
-            let mut salt = [0u8; 32];
-            rand::rng().fill_bytes(&mut salt);
-            salt
-        };
+        let hkdf_salt = build_cek_hkdf_salt(self.hkdf_salt.as_deref())?;
         let issued_at_unix = match self.issued_at_unix {
             Some(value) => value,
             None => current_unix_timestamp()
@@ -807,6 +805,24 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+fn build_cek_hkdf_salt(explicit: Option<&str>) -> Result<[u8; 32]> {
+    match explicit {
+        Some(hex) => parse_hex_32(hex, "hkdf-salt"),
+        None => random_cek_hkdf_salt(),
+    }
+}
+
+fn random_cek_hkdf_salt() -> Result<[u8; 32]> {
+    random_cek_hkdf_salt_with_rng(&mut OsRng)
+}
+
+fn random_cek_hkdf_salt_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<[u8; 32]> {
+    let mut salt = [0u8; 32];
+    rng.try_fill_bytes(&mut salt)
+        .map_err(|err| eyre!("failed to generate Taikai CEK HKDF salt random bytes: {err}"))?;
+    Ok(salt)
 }
 
 fn write_norito_file<T: NoritoSerialize>(path: &Path, label: &str, value: &T) -> Result<()> {
@@ -1390,8 +1406,12 @@ impl EdgeSummary {
     }
 }
 
-fn build_edge_rng(seed: Option<u64>) -> StdRng {
-    seed.map_or_else(StdRng::from_os_rng, StdRng::seed_from_u64)
+fn build_edge_rng(seed: Option<u64>) -> Result<StdRng> {
+    match seed {
+        Some(seed) => Ok(StdRng::seed_from_u64(seed)),
+        None => StdRng::try_from_os_rng()
+            .map_err(|err| eyre!("failed to seed Taikai edge drift RNG from OS entropy: {err}")),
+    }
 }
 
 fn jittered_drift<R: Rng + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i32 {
@@ -2345,7 +2365,39 @@ impl ExtensionMatcher {
 mod tests {
     use super::*;
     use iroha::data_model::taikai::TaikaiTrackKind;
+    use rand::RngCore as _;
     use std::{fs, path::Path};
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing Taikai CEK salt RNG")
+        }
+    }
+
+    impl std::error::Error for FailingTryRngError {}
+
+    struct FailingTryRng;
+
+    impl rand::rand_core::TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn hex_parser_accepts_32_byte_values() {
@@ -2487,6 +2539,40 @@ mod tests {
             map.get("fragment_dir").and_then(Value::as_str),
             Some(path_to_string(&layout.fragments_dir).as_str())
         );
+    }
+
+    #[test]
+    fn cek_hkdf_salt_accepts_explicit_hex() {
+        let salt = build_cek_hkdf_salt(Some(&"ab".repeat(32))).expect("explicit salt");
+        assert_eq!(salt, [0xAB; 32]);
+    }
+
+    #[test]
+    fn cek_hkdf_salt_random_path_reads_os_entropy() {
+        let salt = build_cek_hkdf_salt(None).expect("OS RNG should seed CEK salt RNG");
+        assert_eq!(salt.len(), 32);
+    }
+
+    #[test]
+    fn cek_hkdf_salt_random_path_reports_rng_failure() {
+        let err = random_cek_hkdf_salt_with_rng(&mut FailingTryRng)
+            .expect_err("RNG failure should surface");
+        assert!(err.to_string().contains("Taikai CEK HKDF salt"));
+        assert!(err.to_string().contains("failing Taikai CEK salt RNG"));
+    }
+
+    #[test]
+    fn build_edge_rng_seeded_path_is_deterministic() {
+        let mut first = build_edge_rng(Some(42)).expect("seeded edge RNG");
+        let mut second = build_edge_rng(Some(42)).expect("seeded edge RNG");
+        assert_eq!(first.next_u64(), second.next_u64());
+    }
+
+    #[test]
+    fn build_edge_rng_unseeded_path_reads_os_entropy() {
+        let mut rng = build_edge_rng(None).expect("OS RNG should seed Taikai edge RNG");
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
     }
 
     fn sample_args() -> BundleArgs {

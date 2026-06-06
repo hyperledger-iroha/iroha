@@ -8501,6 +8501,11 @@ case "$mode" in
 esac
 
 apalache_length="${APALACHE_LENGTH:-$apalache_length}"
+if [[ -z "${JVM_ARGS:-}" ]]; then
+  export JVM_ARGS="-Xss16m -Xmx4096m"
+elif [[ ! "$JVM_ARGS" =~ (^|[[:space:]])-Xss ]]; then
+  export JVM_ARGS="-Xss16m $JVM_ARGS"
+fi
 
 if [[ ! -f "$cfg_file" ]]; then
   echo "error: missing config '$cfg_file'" >&2
@@ -8557,6 +8562,7 @@ if [[ "$allow_docker_fallback" != "0" ]] && [[ "$docker_daemon_available" == "1"
 
   run_with_expected_status docker run --rm \
     --user "$(id -u):$(id -g)" \
+    --env "JVM_ARGS=$JVM_ARGS" \
     --volume "$root_dir:/work" \
     --workdir /work \
     "$apalache_docker_image" \

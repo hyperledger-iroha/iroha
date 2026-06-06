@@ -32,7 +32,7 @@ use quinn::{
     crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
     rustls::pki_types::{CertificateDer, PrivateKeyDer},
 };
-use rand::{rand_core::TryRngCore, rngs::OsRng};
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 #[cfg(feature = "local-quic-proxy")]
 use rcgen::generate_simple_self_signed;
 #[cfg(feature = "local-quic-proxy")]
@@ -570,6 +570,14 @@ pub enum ProxyError {
     /// Application stream handling failed.
     #[error("application stream error: {0}")]
     Stream(String),
+    /// Random bytes required for proxy session material could not be generated.
+    #[error("proxy random bytes failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that required entropy.
+        operation: &'static str,
+        /// Source RNG failure message.
+        message: String,
+    },
 }
 
 /// Runtime handle for a spawned local QUIC proxy.
@@ -592,12 +600,11 @@ impl LocalQuicProxyHandle {
     }
 
     /// Optional manifest payload for browser extensions.
-    #[must_use]
-    pub fn browser_manifest(&self) -> Option<BrowserExtensionManifest> {
-        self.inner
-            .browser_manifest
-            .as_ref()
-            .map(BrowserManifestTemplate::preview)
+    pub fn browser_manifest(&self) -> Result<Option<BrowserExtensionManifest>, ProxyError> {
+        match self.inner.browser_manifest.as_ref() {
+            Some(template) => template.preview().map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Runtime mode advertised by the proxy.
@@ -653,16 +660,16 @@ impl BrowserManifestTemplate {
         Self { base }
     }
 
-    fn instantiate(&self) -> BrowserExtensionManifest {
+    fn instantiate(&self) -> Result<BrowserExtensionManifest, ProxyError> {
         let mut manifest = self.base.clone();
-        manifest.session_id = Some(generate_session_id());
+        manifest.session_id = Some(generate_session_id()?);
         if let Some(cache) = manifest.cache_tagging.as_mut() {
-            cache.salt_hex = Some(generate_cache_salt());
+            cache.salt_hex = Some(generate_cache_salt()?);
         }
-        manifest
+        Ok(manifest)
     }
 
-    fn preview(&self) -> BrowserExtensionManifest {
+    fn preview(&self) -> Result<BrowserExtensionManifest, ProxyError> {
         self.instantiate()
     }
 }
@@ -1448,17 +1455,18 @@ async fn handle_connection(
     }
 
     record_transport_event(telemetry_label, "handshake_accept", "ok");
-    let manifest = manifest_template
-        .as_ref()
-        .map(BrowserManifestTemplate::instantiate);
+    let manifest = match manifest_template.as_ref() {
+        Some(template) => Some(template.instantiate()?),
+        None => None,
+    };
     let mut session_id = manifest.as_ref().and_then(|item| item.session_id.clone());
     let mut cache_tags = manifest.as_ref().and_then(CacheTagContext::from_manifest);
     if cache_tags.is_none() && guard_cache_key.is_some() {
         if session_id.is_none() {
-            session_id = Some(generate_session_id());
+            session_id = Some(generate_session_id()?);
         }
         let fallback_tagging = ProxyCacheTagging {
-            salt_hex: Some(generate_cache_salt()),
+            salt_hex: Some(generate_cache_salt()?),
             ..ProxyCacheTagging::default()
         };
         cache_tags = CacheTagContext::from_cache_tagging(&fallback_tagging);
@@ -2241,20 +2249,38 @@ fn extract_stream_target(open_frame: &ProxyStreamOpenV1) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-fn generate_session_id() -> String {
-    let mut bytes = [0u8; PROXY_SESSION_ID_LEN];
+fn generate_session_id() -> Result<String, ProxyError> {
     let mut rng = OsRng;
-    rng.try_fill_bytes(&mut bytes)
-        .expect("os rng available for session id");
-    bytes.encode_hex::<String>()
+    generate_session_id_with_rng(&mut rng)
 }
 
-fn generate_cache_salt() -> String {
-    let mut bytes = [0u8; PROXY_CACHE_TAG_SALT_LEN];
-    let mut rng = OsRng;
+fn generate_session_id_with_rng<R: TryCryptoRng + ?Sized>(
+    rng: &mut R,
+) -> Result<String, ProxyError> {
+    let mut bytes = [0u8; PROXY_SESSION_ID_LEN];
     rng.try_fill_bytes(&mut bytes)
-        .expect("os rng available for cache salt");
-    bytes.encode_hex::<String>()
+        .map_err(|err| ProxyError::RandomBytes {
+            operation: "generating proxy session id",
+            message: err.to_string(),
+        })?;
+    Ok(bytes.encode_hex::<String>())
+}
+
+fn generate_cache_salt() -> Result<String, ProxyError> {
+    let mut rng = OsRng;
+    generate_cache_salt_with_rng(&mut rng)
+}
+
+fn generate_cache_salt_with_rng<R: TryCryptoRng + ?Sized>(
+    rng: &mut R,
+) -> Result<String, ProxyError> {
+    let mut bytes = [0u8; PROXY_CACHE_TAG_SALT_LEN];
+    rng.try_fill_bytes(&mut bytes)
+        .map_err(|err| ProxyError::RandomBytes {
+            operation: "generating proxy cache salt",
+            message: err.to_string(),
+        })?;
+    Ok(bytes.encode_hex::<String>())
 }
 
 /// Proxy handshake payload dispatched by clients.
@@ -2357,8 +2383,41 @@ mod tests {
     };
 
     use super::*;
+    use rand::rand_core::TryRngCore;
 
     const TEST_GUARD_KEY: &str = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+
+    #[derive(Debug)]
+    struct FailingProxyRng;
+
+    #[derive(Debug)]
+    struct FailingProxyRngError;
+
+    impl std::fmt::Display for FailingProxyRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing proxy session RNG")
+        }
+    }
+
+    impl std::error::Error for FailingProxyRngError {}
+
+    impl TryRngCore for FailingProxyRng {
+        type Error = FailingProxyRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingProxyRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingProxyRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingProxyRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingProxyRng {}
 
     use quinn::{
         ClientConfig, Endpoint, ServerConfig, VarInt,
@@ -2452,7 +2511,7 @@ mod tests {
         let template =
             build_manifest_template(&config, addr, &cert_pem, &cert_der, Some(&guard_key))
                 .expect("manifest template");
-        let manifest = template.preview();
+        let manifest = template.preview().expect("manifest preview");
 
         let expected_fingerprint = {
             let mut hasher = Sha256::new();
@@ -2486,6 +2545,32 @@ mod tests {
     }
 
     #[test]
+    fn proxy_session_id_reports_rng_failure() {
+        let error =
+            generate_session_id_with_rng(&mut FailingProxyRng).expect_err("session RNG failure");
+        match error {
+            ProxyError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating proxy session id");
+                assert!(message.contains("failing proxy session RNG"));
+            }
+            other => panic!("expected random bytes error, got {other}"),
+        }
+    }
+
+    #[test]
+    fn proxy_cache_salt_reports_rng_failure() {
+        let error =
+            generate_cache_salt_with_rng(&mut FailingProxyRng).expect_err("cache salt RNG failure");
+        match error {
+            ProxyError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating proxy cache salt");
+                assert!(message.contains("failing proxy session RNG"));
+            }
+            other => panic!("expected random bytes error, got {other}"),
+        }
+    }
+
+    #[test]
     fn cache_tag_generation_matches_expected() {
         let config = LocalQuicProxyConfig {
             telemetry_label: Some("dev-proxy".into()),
@@ -2499,7 +2584,7 @@ mod tests {
         let template =
             build_manifest_template(&config, addr, &cert_pem, &cert_der, Some(&guard_key))
                 .expect("manifest template");
-        let manifest = template.preview();
+        let manifest = template.preview().expect("manifest preview");
         let cache_context =
             CacheTagContext::from_manifest(&manifest).expect("cache context present");
         let expected_context = cache_context.clone();

@@ -2,8 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   BscMainnetSccp,
+  BscTestnetSccp,
+  BscTestnetSccpProver,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+  SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SORA,
@@ -12,10 +16,16 @@ import {
   SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
   SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
   bscMainnetSccpDestinationBinding,
+  bscTestnetSccpDestinationBinding,
   bscSccpReceiptProofHash,
   buildBscMainnetSccpLocalAdmissionSubmission,
+  buildBscMainnetSccpDestinationProofRequest,
+  buildBscTestnetSccpLocalAdmissionSubmission,
+  buildBscTestnetSccpDestinationProofRequest,
+  buildBscTestnetSccpDestinationSubmission,
   evmSccpSourceEventTopic,
   wrapBscMainnetSccpDestinationProofResult,
+  wrapBscTestnetSccpDestinationProofResult,
 } from "../src/sccp.js";
 
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
@@ -98,6 +108,19 @@ const sampleOutboundInput = (targetDomain = SCCP_DOMAIN_BSC, destinationBindingO
   publicInputs: { ...samplePublicInputs, targetDomain },
   bundleBytes: [1, 2, 3],
   destinationBinding: bscMainnetSccpDestinationBinding(
+    sampleDestinationBindingInput(destinationBindingOverrides),
+  ),
+  sourceDomain: SCCP_DOMAIN_SORA,
+  statementHash: hex32("66"),
+});
+
+const sampleBscTestnetOutboundInput = (
+  targetDomain = SCCP_DOMAIN_BSC,
+  destinationBindingOverrides = {},
+) => ({
+  publicInputs: { ...samplePublicInputs, targetDomain },
+  bundleBytes: [1, 2, 3],
+  destinationBinding: bscTestnetSccpDestinationBinding(
     sampleDestinationBindingInput(destinationBindingOverrides),
   ),
   sourceDomain: SCCP_DOMAIN_SORA,
@@ -200,6 +223,42 @@ test("BscMainnetSccp rejects Ethereum and noncanonical JSON-RPC chain ids", asyn
   );
 });
 
+test("BscTestnetSccp validates EIP-1193 execution providers as BSC testnet", async () => {
+  const provider = {
+    async request({ method }) {
+      assert.equal(method, "eth_chainId");
+      return "0x61";
+    },
+  };
+  const sdk = new BscTestnetSccp({ executionProvider: provider });
+
+  assert.equal(await sdk.validateExecutionProviderTestnet(), "0x61");
+  assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
+
+  await assert.rejects(
+    () =>
+      new BscTestnetSccp({
+        executionProvider: {
+          async request() {
+            return "0x38";
+          },
+        },
+      }).validateExecutionProviderTestnet(),
+    /eth_chainId == 0x61/u,
+  );
+  await assert.rejects(
+    () =>
+      new BscTestnetSccp({
+        executionProvider: {
+          async request() {
+            return "0x061";
+          },
+        },
+      }).validateExecutionProviderTestnet(),
+    /canonical JSON-RPC quantity/u,
+  );
+});
+
 test("BscMainnetSccp collects receipt evidence from BSC execution and Parlia providers", async () => {
   const calls = [];
   const provider = {
@@ -245,6 +304,80 @@ test("BscMainnetSccp collects receipt evidence from BSC execution and Parlia pro
     calls.map(([method]) => method),
     ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"],
   );
+});
+
+test("BscMainnetSccp collectInboundEvidenceFromReceipt snapshots consensus evidence", async () => {
+  const mutableTopics = [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST];
+  const receiptLogs = [sourceEventLog({ topics: mutableTopics })];
+  const receipt = {
+    transactionHash: TX_HASH,
+    blockHash: BLOCK_HASH,
+    blockNumber: "0x1234",
+    status: "0x1",
+    logs: receiptLogs,
+  };
+  const blockWitness = { branch: [hex32("e1")], bytes: new Uint8Array([0xbb]) };
+  const block = {
+    hash: BLOCK_HASH,
+    number: "0x1234",
+    receiptsRoot: RECEIPTS_ROOT,
+    mutableWitness: blockWitness,
+  };
+  const finalityWitness = {
+    branch: [hex32("e2")],
+    bytes: new Uint8Array([0xcc]),
+  };
+  const mutablePayload = new Uint8Array([0xaa]);
+  const sdk = new BscMainnetSccp({
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+    consensusProvider: {
+      async collectFinalityEvidence(evidence) {
+        assert.equal(Object.isFrozen(evidence), true);
+        assert.equal(Object.isFrozen(evidence.receipt), true);
+        assert.equal(Object.isFrozen(evidence.receipt.logs), true);
+        assert.equal(Object.isFrozen(evidence.receipt.logs[0].topics), true);
+        assert.equal(Object.isFrozen(evidence.block), true);
+        assert.equal(Object.isFrozen(evidence.block.mutableWitness.branch), true);
+        assert.equal(evidence.receipt.logs[0].topics[1], SOURCE_EVENT_DIGEST);
+        assert.deepEqual([...evidence.block.mutableWitness.bytes], [0xbb]);
+        assert.throws(() => {
+          evidence.receipt.logs.push(sourceEventLog());
+        }, TypeError);
+        assert.throws(() => {
+          evidence.block.mutableWitness.branch.push(hex32("99"));
+        }, TypeError);
+
+        receiptLogs.push(sourceEventLog());
+        mutableTopics[1] = hex32("99");
+        blockWitness.branch.push(hex32("99"));
+        blockWitness.bytes[0] = 0x7c;
+        return sampleParliaFinality({ mutableWitness: finalityWitness });
+      },
+    },
+  });
+
+  const evidence = await sdk.collectInboundEvidenceFromReceipt({
+    receipt,
+    block,
+    mutablePayload,
+  });
+  finalityWitness.branch.push(hex32("99"));
+  finalityWitness.bytes[0] = 0x7d;
+  mutablePayload[0] = 0x7e;
+
+  assert.equal(Object.isFrozen(evidence), true);
+  assert.equal(Object.isFrozen(evidence.receipt.logs), true);
+  assert.equal(Object.isFrozen(evidence.parliaFinality.mutableWitness.branch), true);
+  assert.throws(() => {
+    evidence.receipt.logs.push(sourceEventLog());
+  }, TypeError);
+  assert.equal(evidence.mutablePayload[0], 0xaa);
+  assert.equal(evidence.receipt.logs.length, 1);
+  assert.equal(evidence.receipt.logs[0].topics[1], SOURCE_EVENT_DIGEST);
+  assert.deepEqual(evidence.block.mutableWitness.branch, [hex32("e1")]);
+  assert.deepEqual([...evidence.block.mutableWitness.bytes], [0xbb]);
+  assert.deepEqual(evidence.parliaFinality.mutableWitness.branch, [hex32("e2")]);
+  assert.deepEqual([...evidence.parliaFinality.mutableWitness.bytes], [0xcc]);
 });
 
 test("BscMainnetSccp rejects failed or drifted receipt evidence before proving", async () => {
@@ -401,6 +534,89 @@ test("BscMainnetSccp keeps the easy outbound path BSC-only", () => {
   );
 });
 
+test("BSC testnet destination helpers bind outbound proofs to chain id 97", () => {
+  const testnetBinding = bscTestnetSccpDestinationBinding(sampleDestinationBindingInput());
+  assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
+  assert.equal(testnetBinding.sourceDomain, SCCP_DOMAIN_SORA);
+  assert.equal(testnetBinding.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(testnetBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+
+  const input = {
+    publicInputs: samplePublicInputs,
+    bundleBytes: [1, 2, 3],
+    destinationBinding: testnetBinding,
+    sourceDomain: SCCP_DOMAIN_SORA,
+    statementHash: hex32("66"),
+  };
+  const request = buildBscTestnetSccpDestinationProofRequest(input);
+  assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(request.destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+
+  const proofResult = wrapBscTestnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  const submission = buildBscTestnetSccpDestinationSubmission({ proofResult });
+  assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
+
+  assert.throws(
+    () =>
+      bscTestnetSccpDestinationBinding(
+        sampleDestinationBindingInput({ networkId: SCCP_BSC_MAINNET_NETWORK_ID }),
+      ),
+    /chain id 97/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTestnetSccpDestinationProofRequest({
+        ...input,
+        publicInputs: { ...samplePublicInputs, targetDomain: SCCP_DOMAIN_ETH },
+      }),
+    /destinationBinding must match request route|target BSC/u,
+  );
+  const mainnetRequest = buildBscMainnetSccpDestinationProofRequest(sampleOutboundInput());
+  const mainnetProofResult = wrapBscMainnetSccpDestinationProofResult(
+    GROTH16_PROOF_BYTES,
+    mainnetRequest,
+  );
+  assert.throws(
+    () => buildBscTestnetSccpDestinationSubmission({ proofResult: mainnetProofResult }),
+    /BSC testnet destinationBinding|chain id 97/u,
+  );
+});
+
+test("BscTestnetSccp keeps outbound proof and calldata on BSC testnet", async () => {
+  const sdk = new BscTestnetSccp();
+  const request = sdk.buildOutboundProofRequest(sampleBscTestnetOutboundInput());
+  assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(request.destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+
+  assert.throws(
+    () => sdk.buildOutboundProofRequest(sampleBscTestnetOutboundInput(SCCP_DOMAIN_ETH)),
+    /request route|targetDomain|BSC/u,
+  );
+
+  const proofResult = wrapBscTestnetSccpDestinationProofResult(
+    GROTH16_PROOF_BYTES,
+    request,
+  );
+  const submission = sdk.buildBscCalldata({ proofResult });
+  assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
+
+  const mainnetRequest = buildBscMainnetSccpDestinationProofRequest(sampleOutboundInput());
+  const mainnetProofResult = wrapBscMainnetSccpDestinationProofResult(
+    GROTH16_PROOF_BYTES,
+    mainnetRequest,
+  );
+  assert.throws(
+    () => sdk.buildBscCalldata({ proofResult: mainnetProofResult }),
+    /chain id 97|BSC testnet destinationBinding/u,
+  );
+
+  assert.equal((await new BscTestnetSccpProver().buildRequest(
+    sampleBscTestnetOutboundInput(),
+  )).destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+});
+
 test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () => {
   const sdk = new BscMainnetSccp();
   const request = sdk.buildOutboundProofRequest(sampleOutboundInput());
@@ -555,6 +771,147 @@ test("BscMainnetSccp outbound provider path derives target from wrapped proof re
   assert.equal(submittedTxs.length, 3);
 });
 
+test("BscMainnetSccp validates configured providers before app-owned submit callbacks", async () => {
+  const request = new BscMainnetSccp().buildOutboundProofRequest(sampleOutboundInput());
+  const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  let called = false;
+  await assert.rejects(
+    () =>
+      new BscMainnetSccp({
+        executionProvider: {
+          async request({ method }) {
+            assert.equal(method, "eth_chainId");
+            return "0x61";
+          },
+        },
+        submitOutboundToBsc() {
+          called = true;
+          return "submitted";
+        },
+      }).submitOutboundToBsc({ proofResult }),
+    /eth_chainId == 0x38/u,
+  );
+  assert.equal(called, false);
+
+  const methods = [];
+  const sdk = new BscMainnetSccp({
+    executionProvider: {
+      async request({ method }) {
+        methods.push(method);
+        if (method === "eth_chainId") return "0x38";
+        throw new Error(`unexpected RPC method ${method}`);
+      },
+    },
+    submitOutboundToBsc(submission) {
+      called = true;
+      assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
+      return "submitted";
+    },
+  });
+  assert.equal(await sdk.submitOutboundToBsc({ proofResult }), "submitted");
+  assert.equal(called, true);
+  assert.deepEqual(methods, ["eth_chainId"]);
+
+  let callbackOnlyCalled = false;
+  assert.equal(
+    await new BscMainnetSccp({
+      submitOutboundToBsc(submission) {
+        callbackOnlyCalled = true;
+        return submission.targetDomain;
+      },
+    }).submitOutboundToBsc({ proofResult }),
+    SCCP_DOMAIN_BSC,
+  );
+  assert.equal(callbackOnlyCalled, true);
+});
+
+test("BscTestnetSccp outbound provider path submits on chain id 0x61", async () => {
+  const submittedTxs = [];
+  const provider = {
+    async request({ method, params }) {
+      if (method === "eth_chainId") return "0x61";
+      if (method === "eth_sendTransaction") {
+        submittedTxs.push(params[0]);
+        return `0xbscTestnet${submittedTxs.length}`;
+      }
+      throw new Error(`unexpected RPC method ${method}`);
+    },
+  };
+  const sdk = new BscTestnetSccp({ executionProvider: provider });
+  const request = sdk.buildOutboundProofRequest(sampleBscTestnetOutboundInput());
+  const proofResult = wrapBscTestnetSccpDestinationProofResult(
+    GROTH16_PROOF_BYTES,
+    request,
+  );
+
+  assert.equal(await sdk.submitOutboundToBsc({ proofResult }), "0xbscTestnet1");
+  assert.equal(submittedTxs[0].to, request.destinationBinding.bridgeAddress);
+  assert.equal(submittedTxs[0].data, sdk.buildBscCalldata({ proofResult }).callDataHex);
+  assert.equal(submittedTxs[0].chainId, "0x61");
+
+  await assert.rejects(
+    () =>
+      new BscTestnetSccp({
+        executionProvider: {
+          async request({ method }) {
+            if (method === "eth_chainId") return "0x38";
+            throw new Error(`unexpected RPC method ${method}`);
+          },
+        },
+      }).submitOutboundToBsc({ proofResult }),
+    /eth_chainId == 0x61/u,
+  );
+});
+
+test("BscTestnetSccp validates configured providers before app-owned submit callbacks", async () => {
+  const request = new BscTestnetSccp().buildOutboundProofRequest(
+    sampleBscTestnetOutboundInput(),
+  );
+  const proofResult = wrapBscTestnetSccpDestinationProofResult(
+    GROTH16_PROOF_BYTES,
+    request,
+  );
+  let called = false;
+  await assert.rejects(
+    () =>
+      new BscTestnetSccp({
+        executionProvider: {
+          async request({ method }) {
+            assert.equal(method, "eth_chainId");
+            return "0x38";
+          },
+        },
+        submitOutboundToBsc() {
+          called = true;
+          return "submitted";
+        },
+      }).submitOutboundToBsc({ proofResult }),
+    /eth_chainId == 0x61/u,
+  );
+  assert.equal(called, false);
+
+  const methods = [];
+  assert.equal(
+    await new BscTestnetSccp({
+      executionProvider: {
+        async request({ method }) {
+          methods.push(method);
+          if (method === "eth_chainId") return "0x61";
+          throw new Error(`unexpected RPC method ${method}`);
+        },
+      },
+      submitOutboundToBsc(submission) {
+        called = true;
+        assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
+        return "submitted";
+      },
+    }).submitOutboundToBsc({ proofResult }),
+    "submitted",
+  );
+  assert.equal(called, true);
+  assert.deepEqual(methods, ["eth_chainId"]);
+});
+
 test("BscMainnetSccp builds BSC -> SORA local-admission submissions", () => {
   const input = {
     sourceDomain: SCCP_DOMAIN_BSC,
@@ -569,6 +926,8 @@ test("BscMainnetSccp builds BSC -> SORA local-admission submissions", () => {
   };
   const submission = buildBscMainnetSccpLocalAdmissionSubmission(input);
   const facadeSubmission = new BscMainnetSccp().buildLocalAdmissionSubmission(input);
+  const testnetSubmission = buildBscTestnetSccpLocalAdmissionSubmission(input);
+  const testnetFacadeSubmission = new BscTestnetSccp().buildLocalAdmissionSubmission(input);
 
   assert.equal(submission.platformPayload, SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1);
   assert.equal(submission.envelopeEncoding, SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1);
@@ -582,9 +941,13 @@ test("BscMainnetSccp builds BSC -> SORA local-admission submissions", () => {
   assert.deepEqual([...submission.envelopeBytes], [10, 11, 12]);
   assert.deepEqual([...submission.localAdmission.proofBytes], [1, 2, 3]);
   assert.equal(facadeSubmission.envelopeHex, submission.envelopeHex);
+  assert.equal(testnetSubmission.sourceDomain, SCCP_DOMAIN_BSC);
+  assert.equal(testnetSubmission.targetDomain, SCCP_DOMAIN_SORA);
+  assert.equal(testnetFacadeSubmission.envelopeHex, testnetSubmission.envelopeHex);
 
   input.proofBytes[0] = 99;
   assert.deepEqual([...submission.proofBytes], [1, 2, 3]);
+  assert.deepEqual([...testnetSubmission.proofBytes], [1, 2, 3]);
 
   assert.throws(
     () => buildBscMainnetSccpLocalAdmissionSubmission({ ...input, sourceDomain: SCCP_DOMAIN_ETH }),
@@ -818,6 +1181,32 @@ test("BscMainnetSccp requires full receipt proof evidence before inbound proving
       }),
     /receiptProofHash must not use multiple aliases/u,
   );
+});
+
+test("BscTestnetSccp proves inbound BSC-family receipt evidence", async () => {
+  const fullProofHash = bscSccpReceiptProofHash(sampleReceiptProof);
+  let callbackEvidence;
+  const sdk = new BscTestnetSccp({
+    proveInbound(proverEvidence) {
+      callbackEvidence = proverEvidence;
+      return [9, 8, 7];
+    },
+  });
+
+  assert.deepEqual(
+    [
+      ...(await sdk.proveInboundToSora({
+        ...sampleInboundEvidence(),
+        receiptProof: sampleReceiptProof,
+        receiptProofHash: fullProofHash,
+      })),
+    ],
+    [9, 8, 7],
+  );
+  assert.equal(callbackEvidence.sourceDomain, SCCP_DOMAIN_BSC);
+  assert.equal(callbackEvidence.targetDomain, SCCP_DOMAIN_SORA);
+  assert.equal(callbackEvidence.receiptProofHash, fullProofHash);
+  assert.equal(callbackEvidence.sourceEventDigest, SOURCE_EVENT_DIGEST);
 });
 
 test("BscMainnetSccp inbound proving requires Parlia finality before callbacks run", async () => {

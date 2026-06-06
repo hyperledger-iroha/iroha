@@ -10,8 +10,8 @@ use iroha_config::client_api::{
     ConfidentialGas as ConfidentialGasDTO, ConfigUpdateDTO, Logger as LoggerDTO,
 };
 use iroha_crypto::{ConfidentialKeyset, derive_keyset_from_slice};
-use rand::random;
-use zeroize::Zeroize;
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use zeroize::Zeroizing;
 
 use crate::{Run, RunContext};
 
@@ -50,11 +50,18 @@ pub struct CreateKeysArgs {
 
 impl CreateKeysArgs {
     fn parse_seed(&self) -> Result<([u8; 32], bool)> {
+        self.parse_seed_with_rng(&mut OsRng)
+    }
+
+    fn parse_seed_with_rng<R: TryCryptoRng>(&self, rng: &mut R) -> Result<([u8; 32], bool)> {
         if let Some(seed_hex) = &self.seed_hex {
             let bytes = parse_hex_32(seed_hex)?;
             Ok((bytes, false))
         } else {
-            let seed: [u8; 32] = random();
+            let mut seed = [0_u8; 32];
+            rng.try_fill_bytes(&mut seed).map_err(|error| {
+                eyre::eyre!("failed to generate random confidential spend key: {error}")
+            })?;
             Ok((seed, true))
         }
     }
@@ -62,8 +69,9 @@ impl CreateKeysArgs {
 
 impl Run for CreateKeysArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let (mut spend_key, random_generated) = self.parse_seed()?;
-        let keyset = derive_keyset_from_slice(&spend_key)
+        let (spend_key, random_generated) = self.parse_seed()?;
+        let spend_key = Zeroizing::new(spend_key);
+        let keyset = derive_keyset_from_slice(spend_key.as_ref())
             .wrap_err("failed to derive confidential key hierarchy")?;
 
         let json = render_keyset_json(&keyset, random_generated);
@@ -82,8 +90,6 @@ impl Run for CreateKeysArgs {
         if !self.quiet {
             context.print_data(&json)?;
         }
-
-        spend_key.zeroize();
 
         Ok(())
     }
@@ -211,7 +217,7 @@ fn parse_hex_32(hex_str: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Display;
+    use std::fmt::{self, Display};
 
     use iroha::{
         config::Config,
@@ -220,7 +226,37 @@ mod tests {
     };
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::{self, JsonSerialize};
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
     use url::Url;
+
+    struct FailingConfidentialSeedRng;
+
+    #[derive(Debug)]
+    struct FailingConfidentialSeedRngError;
+
+    impl fmt::Display for FailingConfidentialSeedRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing confidential spend-key RNG")
+        }
+    }
+
+    impl TryRngCore for FailingConfidentialSeedRng {
+        type Error = FailingConfidentialSeedRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingConfidentialSeedRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingConfidentialSeedRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingConfidentialSeedRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingConfidentialSeedRng {}
 
     #[test]
     fn parse_hex_32_rejects_invalid_length() {
@@ -358,5 +394,23 @@ mod tests {
         assert!(format!("{err}").contains("expected 32 bytes"));
         assert!(ctx.printed.is_empty());
         assert!(ctx.lines.is_empty());
+    }
+
+    #[test]
+    fn create_keys_random_reports_rng_failure() {
+        let args = CreateKeysArgs {
+            seed_hex: None,
+            output: None,
+            quiet: false,
+        };
+        let mut rng = FailingConfidentialSeedRng;
+
+        let error = args
+            .parse_seed_with_rng(&mut rng)
+            .expect_err("random spend-key generation should fail when entropy fails");
+        let message = format!("{error:?}");
+
+        assert!(message.contains("failed to generate random confidential spend key"));
+        assert!(message.contains("failing confidential spend-key RNG"));
     }
 }

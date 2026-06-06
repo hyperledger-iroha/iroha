@@ -231,20 +231,22 @@ fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount
     }
 }
 
-pub(crate) fn peer_keypair(index: usize) -> KeyPair {
+pub(crate) fn peer_keypair(index: usize) -> Result<KeyPair> {
     let seed = format!("{IZANAMI_BASE_SEED}-peer-{index}");
     let mut seed_bytes = seed.into_bytes();
     seed_bytes.extend_from_slice(b":bls");
-    KeyPair::from_seed(seed_bytes, Algorithm::BlsNormal)
+    KeyPair::try_from_seed(seed_bytes, Algorithm::BlsNormal)
+        .map_err(|err| eyre!("failed to derive Izanami peer {index} BLS key pair: {err}"))
 }
 
-fn nexus_gas_keypair() -> KeyPair {
-    KeyPair::from_seed(b"izanami::nexus::gas-account".to_vec(), Algorithm::Ed25519)
+fn nexus_gas_keypair() -> Result<KeyPair> {
+    KeyPair::try_from_seed(b"izanami::nexus::gas-account".to_vec(), Algorithm::Ed25519)
+        .map_err(|err| eyre!("failed to derive Izanami Nexus gas account key pair: {err}"))
 }
 
 /// Deterministic gas/sink account used by Izanami Nexus profiles.
-pub(crate) fn nexus_gas_account_id() -> AccountId {
-    AccountId::new(nexus_gas_keypair().public_key().clone())
+pub(crate) fn nexus_gas_account_id() -> Result<AccountId> {
+    Ok(AccountId::new(nexus_gas_keypair()?.public_key().clone()))
 }
 
 /// Prepared chaos state with pre-built genesis instructions.
@@ -260,12 +262,12 @@ pub fn npos_post_topology_instructions(
     peer_count: usize,
     bootstrap_public_lanes: &[LaneId],
     min_self_bond: u64,
-) -> Vec<InstructionBox> {
+) -> Result<Vec<InstructionBox>> {
     let effective_peers = peer_count.max(1);
     let stake_amount: Numeric = min_self_bond.into();
     let mut instructions = Vec::new();
     for index in 0..effective_peers {
-        let key_pair = peer_keypair(index);
+        let key_pair = peer_keypair(index)?;
         let validator_id = AccountId::new(key_pair.public_key().clone());
         for &lane_id in bootstrap_public_lanes {
             instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
@@ -282,7 +284,7 @@ pub fn npos_post_topology_instructions(
             }));
         }
     }
-    instructions
+    Ok(instructions)
 }
 
 /// Create the baseline chaos state and its associated genesis block.
@@ -297,7 +299,8 @@ pub fn prepare_state(
     let effective_accounts = account_count.max(MIN_WORKLOAD_USER_ACCOUNTS);
     let base_domain =
         DomainId::try_new("chaosnet", "universal").map_err(|_| eyre!("invalid base domain"))?;
-    let treasury_key = KeyPair::random();
+    let treasury_key = KeyPair::try_random()
+        .map_err(|err| eyre!("failed to generate Izanami treasury key pair: {err}"))?;
     let treasury_id = AccountId::new(treasury_key.public_key().clone());
     let treasury = AccountRecord {
         id: treasury_id,
@@ -307,7 +310,8 @@ pub fn prepare_state(
 
     let mut users = Vec::with_capacity(effective_accounts);
     for _ in 0..effective_accounts {
-        let key = KeyPair::random();
+        let key = KeyPair::try_random()
+            .map_err(|err| eyre!("failed to generate Izanami user account key pair: {err}"))?;
         let account_id = AccountId::new(key.public_key().clone());
         users.push(AccountRecord {
             id: account_id,
@@ -394,7 +398,7 @@ pub fn prepare_state(
             .map_err(|_| eyre!("failed to parse ivm domain id"))?;
         let universal_domain = DomainId::try_new("universal", "universal")
             .map_err(|_| eyre!("failed to parse universal domain id"))?;
-        let gas_account_id = nexus_gas_account_id();
+        let gas_account_id = nexus_gas_account_id()?;
         let gas_label: Name = "gas"
             .parse()
             .map_err(|_| eyre!("failed to parse gas account label"))?;
@@ -453,7 +457,7 @@ pub fn prepare_state(
 
         let mut validator_accounts = Vec::new();
         for index in 0..effective_peers {
-            let key_pair = peer_keypair(index);
+            let key_pair = peer_keypair(index)?;
             let account_id = AccountId::new(key_pair.public_key().clone());
             validator_accounts.push(AccountRecord {
                 id: account_id.clone(),
@@ -1072,16 +1076,17 @@ impl ChaosState {
         self.nexus_staking.is_some()
     }
 
-    fn allocate_uaid_record(&mut self) -> AccountRecord {
+    fn allocate_uaid_record(&mut self) -> Result<AccountRecord> {
         let _ = self.bump_account();
-        let key = KeyPair::random();
+        let key = KeyPair::try_random()
+            .map_err(|err| eyre!("failed to generate Izanami UAID account key pair: {err}"))?;
         let uaid = self.next_uaid();
         let account_id = AccountId::new(key.public_key().clone());
-        AccountRecord {
+        Ok(AccountRecord {
             id: account_id,
             key_pair: key,
             uaid: Some(uaid),
-        }
+        })
     }
 
     fn next_uaid(&mut self) -> UniversalAccountId {
@@ -1158,9 +1163,9 @@ impl ChaosState {
     fn produce_plan(&mut self, kind: RecipeKind, rng: &mut StdRng) -> Result<TransactionPlan> {
         match kind {
             RecipeKind::DuplicateDomain => Ok(self.plan_duplicate_domain()),
-            RecipeKind::RegisterAccount => Ok(self.plan_register_account()),
+            RecipeKind::RegisterAccount => self.plan_register_account(),
             RecipeKind::DuplicateAccount => self.plan_duplicate_account(rng),
-            RecipeKind::RegisterUaidAccount => Ok(self.plan_register_uaid_account()),
+            RecipeKind::RegisterUaidAccount => self.plan_register_uaid_account(),
             RecipeKind::RegisterAssetDefinition => self.plan_register_asset_definition(),
             RecipeKind::UnregisterAssetDefinition => Ok(self.plan_unregister_asset_definition(rng)),
             RecipeKind::RegisterNft => self.plan_register_nft(rng),
@@ -1238,9 +1243,10 @@ impl ChaosState {
         }
     }
 
-    fn plan_register_account(&mut self) -> TransactionPlan {
+    fn plan_register_account(&mut self) -> Result<TransactionPlan> {
         let _suffix = self.bump_account();
-        let key = KeyPair::random();
+        let key = KeyPair::try_random()
+            .map_err(|err| eyre!("failed to generate Izanami account key pair: {err}"))?;
         let account_id = AccountId::new(key.public_key().clone());
         let record = AccountRecord {
             id: account_id.clone(),
@@ -1251,13 +1257,13 @@ impl ChaosState {
             account_id.clone(),
         )))];
         instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
-        TransactionPlan {
+        Ok(TransactionPlan {
             state_updates: vec![PlanUpdate::TrackAccount(record)],
             label: "register_account",
             instructions,
             signer: self.treasury.clone(),
             expect_success: true,
-        }
+        })
     }
 
     fn plan_duplicate_account(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
@@ -1273,18 +1279,18 @@ impl ChaosState {
         })
     }
 
-    fn plan_register_uaid_account(&mut self) -> TransactionPlan {
-        let record = self.allocate_uaid_record();
+    fn plan_register_uaid_account(&mut self) -> Result<TransactionPlan> {
+        let record = self.allocate_uaid_record()?;
         let account = account_from_record(&record, &self.base_domain);
         let mut instructions = vec![InstructionBox::from(Register::account(account))];
         instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
-        TransactionPlan {
+        Ok(TransactionPlan {
             state_updates: vec![PlanUpdate::TrackAccount(record)],
             label: "register_uaid_account",
             instructions,
             signer: self.treasury.clone(),
             expect_success: true,
-        }
+        })
     }
 
     fn plan_mint_asset(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
@@ -2166,7 +2172,7 @@ impl ChaosState {
                 .ok_or_else(|| eyre!("UAID record missing from registry"))?;
             uaid
         } else {
-            let record = self.allocate_uaid_record();
+            let record = self.allocate_uaid_record()?;
             let account = account_from_record(&record, &self.base_domain);
             instructions.push(InstructionBox::from(Register::account(account)));
             instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
@@ -3154,7 +3160,7 @@ mod tests {
         );
         assert_eq!(
             setup.fee_sink,
-            nexus_gas_account_id(),
+            nexus_gas_account_id().expect("nexus gas account"),
             "nexus staking setup should use deterministic Izanami gas account"
         );
         assert_eq!(
@@ -3191,7 +3197,8 @@ mod tests {
             setup.validator_accounts.len(),
             profile.bootstrap_public_lanes.as_slice(),
             SumeragiNposParameters::default().min_self_bond(),
-        );
+        )
+        .expect("post topology instructions");
         let mut registered_validators = HashSet::new();
         let mut activated_validators = HashSet::new();
         for instruction in &post_topology {
@@ -3246,7 +3253,8 @@ mod tests {
         let min_self_bond = 2_048_u64;
         let bootstrap_public_lanes = [LaneId::new(0), LaneId::new(1)];
         let instructions =
-            npos_post_topology_instructions(4, &bootstrap_public_lanes, min_self_bond);
+            npos_post_topology_instructions(4, &bootstrap_public_lanes, min_self_bond)
+                .expect("post topology instructions");
 
         let mut register_count = 0usize;
         let mut activate_count = 0usize;
@@ -3292,7 +3300,12 @@ mod tests {
             "expected one validator activation per peer and bootstrap lane"
         );
         for index in 0..4 {
-            let validator = AccountId::new(peer_keypair(index).public_key().clone());
+            let validator = AccountId::new(
+                peer_keypair(index)
+                    .expect("validator peer key pair")
+                    .public_key()
+                    .clone(),
+            );
             for &lane_id in &bootstrap_public_lanes {
                 assert!(
                     registered_pairs.contains(&(lane_id, validator.clone())),
@@ -4754,7 +4767,9 @@ mod tests {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let before = state.uaid_accounts.len();
-        let plan = state.plan_register_uaid_account();
+        let plan = state
+            .plan_register_uaid_account()
+            .expect("register UAID account plan");
         assert_eq!(plan.label, "register_uaid_account");
         assert_eq!(
             state.uaid_accounts.len(),
@@ -4782,7 +4797,9 @@ mod tests {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let before = state.users.len();
-        let plan = state.plan_register_account();
+        let plan = state
+            .plan_register_account()
+            .expect("register account plan");
         assert_eq!(plan.label, "register_account");
         assert_eq!(
             state.users.len(),
@@ -4882,7 +4899,9 @@ mod tests {
             prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
                 .expect("state prepared");
         let before = state.users.len();
-        let plan = state.plan_register_account();
+        let plan = state
+            .plan_register_account()
+            .expect("register account plan");
         let registered_account = plan
             .instructions
             .iter()

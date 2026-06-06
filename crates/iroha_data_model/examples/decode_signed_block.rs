@@ -13,6 +13,10 @@ use iroha_data_model::{
 };
 use nonzero_ext::nonzero;
 
+fn reference_signer() -> Result<KeyPair, iroha_crypto::Error> {
+    KeyPair::try_random()
+}
+
 fn read_varint(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Box<dyn Error>> {
     let mut value = 0u64;
     let mut shift = 0u32;
@@ -56,8 +60,8 @@ fn extract_first_btreeset_element(payload: &[u8]) -> Result<&[u8], Box<dyn Error
         .ok_or("element span out of range")?)
 }
 
-fn dump_reference_encoding() {
-    let kp = KeyPair::random();
+fn dump_reference_encoding() -> Result<(), Box<dyn Error>> {
+    let kp = reference_signer()?;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let sig = SignatureOf::<BlockHeader>::from_hash(kp.private_key(), header.hash());
     let block_sig = BlockSignature::new(0, sig);
@@ -74,11 +78,12 @@ fn dump_reference_encoding() {
             .collect::<Vec<_>>()
             .join(" ")
     );
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn Error>> {
-    dump_reference_encoding();
+    dump_reference_encoding()?;
 
     let path = env::args()
         .nth(1)
@@ -227,4 +232,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_signer_uses_checked_default_key_generation() {
+        let key_pair = reference_signer().expect("checked reference signer generation");
+
+        assert_eq!(
+            key_pair
+                .public_key()
+                .try_algorithm()
+                .expect("generated public key algorithm"),
+            iroha_crypto::Algorithm::Ed25519
+        );
+    }
 }

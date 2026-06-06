@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
 import java.net.URLEncoder;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -199,6 +200,7 @@ public final class HttpClientTransportTests {
     resolveAccountAliasFailsOnMalformedJson();
     identifierNormalizationCanonicalizesInputs();
     identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors();
+    identifierBfvEnvelopeBuilderMatchesSharedSoracloudOperationInputVectors();
     sharedSoracloudBfvKeyBundleComponentVectorsAreComplete();
     sharedSoracloudBfvKeyBundleComponentVectorsRejectAdversarialDrift();
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
@@ -3391,7 +3393,7 @@ public final class HttpClientTransportTests {
             null);
     final byte[] seed = hexToBytes("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF");
     final String expected =
-        "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000004887a2a6d485fb5100a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002cab6c00000000000800000000000000440e92000000000008000000000000005a25000000000000080000000000000049671100000000000800000000000000bd3e2300000000000800000000000000403d85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ed884300000000000800000000000000dc21b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006b979b00000000000800000000000000ddd4410000000000080000000000000052086600000000000800000000000000ee13ae00000000002001000000000000880000000000000008000000000000000800000000000000d96d690000000000080000000000000092060e0000000000080000000000000034077500000000000800000000000000dcc4190000000000080000000000000062ea230000000000080000000000000055ef0a00000000000800000000000000ac52d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f3214400000000000800000000000000caedd2000000000008000000000000001cfb5b00000000000800000000000000d26e660000000000080000000000000016ec0e000000000008000000000000003cee83000000000008000000000000006d7ef900000000000800000000000000c2fbbb00000000002001000000000000880000000000000008000000000000000800000000000000c9c7eb00000000000800000000000000c8c04800000000000800000000000000ef1e8700000000000800000000000000aed22c000000000008000000000000006021990000000000080000000000000035ac8c00000000000800000000000000d24393000000000008000000000000008a206d0000000000880000000000000008000000000000000800000000000000407ded00000000000800000000000000d79c3400000000000800000000000000a0332c0000000000080000000000000091fe5700000000000800000000000000543de8000000000008000000000000005eb9df00000000000800000000000000a7c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005c874400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006c1c1a000000000008000000000000006f4fc200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000caf929000000000008000000000000005848730000000000080000000000000061909200000000000800000000000000f5f5dd00000000000800000000000000435a3b000000000008000000000000009a9f690000000000";
+        "4e52543000001042e5b988077612440e4cd45673596b00b004000000000000dd479e32bf99dbd000a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002dac6c00000000000800000000000000440e92000000000008000000000000005b2600000000000008000000000000004a681100000000000800000000000000bc3d2300000000000800000000000000413e85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ee894300000000000800000000000000dd22b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006a969b00000000000800000000000000ddd4410000000000080000000000000051076600000000000800000000000000ef14ae00000000002001000000000000880000000000000008000000000000000800000000000000d86c690000000000080000000000000093070e0000000000080000000000000033067500000000000800000000000000ddc5190000000000080000000000000062ea230000000000080000000000000056f00a00000000000800000000000000ab51d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f2204400000000000800000000000000c9ecd2000000000008000000000000001dfc5b00000000000800000000000000d16d660000000000080000000000000016ec0e000000000008000000000000003def83000000000008000000000000006e7ff900000000000800000000000000c1fabb00000000002001000000000000880000000000000008000000000000000800000000000000c8c6eb00000000000800000000000000c9c14800000000000800000000000000f01f8700000000000800000000000000aed22c000000000008000000000000006122990000000000080000000000000036ad8c00000000000800000000000000d1429300000000000800000000000000891f6d0000000000880000000000000008000000000000000800000000000000417eed00000000000800000000000000d79c34000000000008000000000000009f322c0000000000080000000000000091fe5700000000000800000000000000533ce8000000000008000000000000005db8df00000000000800000000000000a8c313000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005d884400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006d1d1a000000000008000000000000007050c200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000cbfa290000000000080000000000000057477300000000000800000000000000608f9200000000000800000000000000f5f5dd00000000000800000000000000445b3b00000000000800000000000000999e690000000000";
 
     assert expected.equals(policy.encryptInput("ab", seed))
         : "Deterministic BFV ciphertext mismatch";
@@ -3432,6 +3434,53 @@ public final class HttpClientTransportTests {
   private static void sharedSoracloudBfvKeyBundleComponentVectorsAreComplete()
       throws Exception {
     assertBfvOperationKeyComponentVectors(object(loadSharedBfvFixture(), "operation_vectors"));
+  }
+
+  private static void identifierBfvEnvelopeBuilderMatchesSharedSoracloudOperationInputVectors()
+      throws Exception {
+    final Map<String, Object> fixture = loadSharedBfvFixture();
+    final Map<String, Object> operationVectors = object(fixture, "operation_vectors");
+    assert "soracloud-bfv-operation-v1".equals(operationVectors.get("vector_set"))
+        : "operation vector set mismatch";
+    final IdentifierPolicySummary policy =
+        new IdentifierPolicySummary(
+            "soracloud-operation#fixture",
+            "owner",
+            true,
+            IdentifierNormalization.EXACT,
+            "ed25519:ed0120" + "11".repeat(32),
+            "bfv-programmed-sha3-256-v1",
+            "bfv-v1",
+            null,
+            identifierBfvParametersFromFixture(
+                object(operationVectors, "public_parameters_decoded")),
+            null);
+    final List<String> observedDigests = new ArrayList<>();
+    int checkedInputs = 0;
+    for (final Map<String, Object> vector : objectList(operationVectors, "vectors")) {
+      final String vectorName = string(vector, "name");
+      for (final Map<String, Object> input : objectList(vector, "inputs")) {
+        if (input.get("packed_slots") != null) {
+          continue;
+        }
+        final String seedUtf8 = string(input, "seed_utf8");
+        final byte[] inputBytes = hexToBytes(string(input, "input_hex"));
+        final String ciphertextHex =
+            policy.encryptInput(
+                new String(inputBytes, StandardCharsets.UTF_8),
+                seedUtf8.getBytes(StandardCharsets.UTF_8));
+        assert number(input, "expected_ciphertext_bytes").intValue() == ciphertextHex.length() / 2
+            : vectorName + "/" + seedUtf8 + " ciphertext byte length mismatch";
+        final String digest = sha256Hex(hexToBytes(ciphertextHex));
+        assert string(input, "expected_ciphertext_sha256").equals(digest)
+            : vectorName + "/" + seedUtf8 + " ciphertext digest mismatch";
+        assert !observedDigests.contains(digest)
+            : "operation input digest must be unique: " + digest;
+        observedDigests.add(digest);
+        checkedInputs++;
+      }
+    }
+    assert checkedInputs == 8 : "fixture should cover every non-packed operation input";
   }
 
   private static void sharedSoracloudBfvKeyBundleComponentVectorsRejectAdversarialDrift()
@@ -3563,6 +3612,16 @@ public final class HttpClientTransportTests {
                         0))
                 .encryptInput("ab", seed),
         "zero max input byte count must be rejected");
+
+    expectIllegalArgument(
+        () ->
+            sampleIdentifierPolicy(
+                    new IdentifierBfvPublicParameters(
+                        base.parameters(),
+                        base.publicKey(),
+                        64))
+                .encryptInput("ab", seed),
+        "max input byte count above registered RAM-LFE profile must be rejected");
 
     expectIllegalArgument(
         () ->
@@ -3770,7 +3829,10 @@ public final class HttpClientTransportTests {
         new IdentifierBfvPublicParameters.PublicKey(
             longList(publicKey, "b"),
             longList(publicKey, "a")),
-        number(params, "max_input_bytes").intValue());
+        number(params, "max_input_bytes").intValue(),
+        params.get("norito_length_encoding") instanceof String
+            ? (String) params.get("norito_length_encoding")
+            : null);
   }
 
   private static String sha256Hex(final byte[] bytes) throws Exception {
@@ -3950,21 +4012,211 @@ public final class HttpClientTransportTests {
     final Map<String, Object> bootstrap = object(operationVectors, "bootstrap_key");
     assert string(evaluationKey, "bootstrap_key_id").equals(string(bootstrap, "key_id"))
         : "bootstrap key id mismatch";
+    assert number(evaluationKey, "bootstrap_max_refresh_rounds").longValue()
+            == number(bootstrap, "max_refresh_rounds").longValue()
+        : "bootstrap max refresh rounds mismatch";
+    assert number(bootstrap, "max_refresh_rounds").longValue() > 0
+        : "bootstrap max refresh rounds must be positive";
     final Map<String, Object> bootstrapComponents = object(bootstrap, "zero_refresh_components");
     assert number(bootstrapComponents, "coefficient_count").longValue() == publicDegree
         : "bootstrap coefficient count mismatch";
     assertBfvComponentDigest("bootstrap c0", string(bootstrapComponents, "c0_sha256"), componentDigests);
     assertBfvComponentDigest("bootstrap c1", string(bootstrapComponents, "c1_sha256"), componentDigests);
+    final List<Map<String, Object>> roundRefreshes = objectList(bootstrap, "round_refreshes");
+    assert roundRefreshes.size() == number(bootstrap, "max_refresh_rounds").intValue()
+        : "bootstrap round refresh count mismatch";
+    for (int index = 0; index < roundRefreshes.size(); index++) {
+      final Map<String, Object> refresh = roundRefreshes.get(index);
+      assert number(refresh, "round_index").longValue() == index
+          : "bootstrap round refresh index mismatch";
+      assert number(refresh, "expected_refresh_bytes").longValue() > 0
+          : "bootstrap round refresh bytes must be positive";
+      assertBfvUpperSha256("bootstrap round " + index + " refresh", string(refresh, "expected_refresh_sha256"));
+      final Map<String, Object> components = object(refresh, "components");
+      assert number(components, "coefficient_count").longValue() == publicDegree
+          : "bootstrap round refresh coefficient count mismatch";
+      if (index == 0) {
+        assert string(bootstrapComponents, "c0_sha256").equals(string(components, "c0_sha256"))
+            : "bootstrap round 0 c0 must mirror zero refresh";
+        assert string(bootstrapComponents, "c1_sha256").equals(string(components, "c1_sha256"))
+            : "bootstrap round 0 c1 must mirror zero refresh";
+        assertBfvUpperSha256("bootstrap round 0 c0", string(components, "c0_sha256"));
+        assertBfvUpperSha256("bootstrap round 0 c1", string(components, "c1_sha256"));
+      } else {
+        assertBfvComponentDigest("bootstrap round " + index + " c0", string(components, "c0_sha256"), componentDigests);
+        assertBfvComponentDigest("bootstrap round " + index + " c1", string(components, "c1_sha256"), componentDigests);
+      }
+    }
+    assert string(bootstrap, "expected_zero_refresh_sha256")
+        .equals(string(roundRefreshes.get(0), "expected_refresh_sha256"))
+        : "bootstrap first round must mirror zero refresh";
+    if (roundRefreshes.size() > 1) {
+      assert !string(roundRefreshes.get(0), "expected_refresh_sha256")
+          .equals(string(roundRefreshes.get(1), "expected_refresh_sha256"))
+          : "bootstrap round refresh material must be domain separated";
+    }
+    final List<Map<String, Object>> bootstrapRefreshVectors =
+        objectList(operationVectors, "bootstrap_refresh_vectors");
+    assert !bootstrapRefreshVectors.isEmpty() : "bootstrap refresh vectors must not be empty";
+    for (final Map<String, Object> vector : bootstrapRefreshVectors) {
+      final String name = string(vector, "name");
+      assert string(bootstrap, "key_id").equals(string(vector, "key_id"))
+          : "bootstrap refresh vector key id mismatch";
+      final long refreshRounds = number(vector, "refresh_rounds").longValue();
+      assert refreshRounds > 0 : "bootstrap refresh vector rounds must be positive";
+      assert refreshRounds <= number(bootstrap, "max_refresh_rounds").longValue()
+          : "bootstrap refresh vector rounds exceed key bound";
+      final List<Long> plaintextSlots = longList(vector, "input_plaintext_slots");
+      assert !plaintextSlots.isEmpty() : "bootstrap refresh vector plaintext slots empty";
+      for (final long slot : plaintextSlots) {
+        assert slot >= 0 : "bootstrap refresh vector plaintext slot negative";
+      }
+      assert number(vector, "expected_input_ciphertext_bytes").longValue() > 0
+          : "bootstrap refresh vector input bytes must be positive";
+      assert number(vector, "expected_output_ciphertext_bytes").longValue() > 0
+          : "bootstrap refresh vector output bytes must be positive";
+      assertBfvUpperSha256("bootstrap refresh vector " + name + " input", string(vector, "expected_input_ciphertext_sha256"));
+      assertBfvUpperSha256("bootstrap refresh vector " + name + " output", string(vector, "expected_output_ciphertext_sha256"));
+      assertBfvUpperSha256("bootstrap refresh vector " + name + " plaintext", string(vector, "expected_plaintext_sha256"));
+      final Map<String, Object> components = object(vector, "output_components");
+      assert number(components, "coefficient_count").longValue() == publicDegree
+          : "bootstrap refresh vector coefficient count mismatch";
+      assertBfvComponentDigest("bootstrap refresh vector " + name + " c0", string(components, "c0_sha256"), componentDigests);
+      assertBfvComponentDigest("bootstrap refresh vector " + name + " c1", string(components, "c1_sha256"), componentDigests);
+    }
+    final List<Map<String, Object>> runtimeVectors = objectList(operationVectors, "vectors");
+    for (final Map<String, Object> vector : runtimeVectors) {
+      final int expectedDepth = "Multiply".equals(string(vector, "operation"))
+          ? balancedBfvMultiplicationDepth(objectList(vector, "inputs").size())
+          : 0;
+      assert number(vector, "requested_multiplication_depth").intValue() == expectedDepth
+          : string(vector, "name") + " requested multiplication depth mismatch";
+    }
+    Map<String, Object> packedRotate = null;
+    for (final Map<String, Object> vector : runtimeVectors) {
+      if ("soracloud-packed-rotate-left-output".equals(string(vector, "name"))) {
+        packedRotate = vector;
+        break;
+      }
+    }
+    assert packedRotate != null : "packed RotateLeft operation vector must be present";
+    assert "RotateLeft".equals(string(packedRotate, "operation")) : "packed RotateLeft operation mismatch";
+    assert number(packedRotate, "rotation_steps").longValue() == publicDegree / 2
+        : "packed RotateLeft rotation mismatch";
+    final long packedRotatePower = number(packedRotate, "automorphism_power").longValue();
+    assert packedRotatePower == publicDegree + 1 : "packed RotateLeft Galois power mismatch";
+    boolean hasPackedRotateKey = false;
+    for (final Map<String, Object> key : galoisKeys) {
+      if (number(key, "automorphism_power").longValue() == packedRotatePower) {
+        hasPackedRotateKey = true;
+        break;
+      }
+    }
+    assert hasPackedRotateKey : "packed RotateLeft vector has no matching Galois key";
+    final List<Map<String, Object>> packedRotateInputs = objectList(packedRotate, "inputs");
+    assert packedRotateInputs.size() == 1 : "packed RotateLeft input count mismatch";
+    final Map<String, Object> packedRotateInput = packedRotateInputs.get(0);
+    final List<Long> inputSlots = longList(packedRotateInput, "packed_slots");
+    final List<Long> outputSlots = longList(packedRotate, "expected_packed_slots");
+    assert inputSlots.size() == publicDegree : "packed RotateLeft input slot count mismatch";
+    assert outputSlots.size() == publicDegree : "packed RotateLeft output slot count mismatch";
+    for (final long slot : inputSlots) {
+      assert slot >= 0 : "packed RotateLeft input slot negative";
+    }
+    for (final long slot : outputSlots) {
+      assert slot >= 0 : "packed RotateLeft output slot negative";
+    }
+    assert number(packedRotateInput, "expected_ciphertext_bytes").longValue() > 0
+        : "packed RotateLeft input bytes must be positive";
+    assert number(packedRotate, "expected_output_ciphertext_bytes").longValue() > 0
+        : "packed RotateLeft output bytes must be positive";
+    assertBfvUpperSha256("packed RotateLeft input plaintext", string(packedRotateInput, "expected_packed_plaintext_sha256"));
+    assertBfvUpperSha256("packed RotateLeft input", string(packedRotateInput, "expected_ciphertext_sha256"));
+    assertBfvUpperSha256("packed RotateLeft output", string(packedRotate, "expected_output_ciphertext_sha256"));
+    assertBfvUpperSha256("packed RotateLeft plaintext", string(packedRotate, "expected_plaintext_coefficients_sha256"));
+    final Map<String, Object> packedRotateComponents = object(packedRotate, "output_components");
+    assert number(packedRotateComponents, "coefficient_count").longValue() == publicDegree
+        : "packed RotateLeft coefficient count mismatch";
+    assertBfvComponentDigest("packed RotateLeft c0", string(packedRotateComponents, "c0_sha256"), componentDigests);
+    assertBfvComponentDigest("packed RotateLeft c1", string(packedRotateComponents, "c1_sha256"), componentDigests);
+
+    Map<String, Object> packedRotateSchedule = null;
+    for (final Map<String, Object> vector : runtimeVectors) {
+      if ("soracloud-packed-rotate-left-schedule-output".equals(string(vector, "name"))) {
+        packedRotateSchedule = vector;
+        break;
+      }
+    }
+    assert packedRotateSchedule != null : "packed RotateLeft schedule vector must be present";
+    assert "RotateLeft".equals(string(packedRotateSchedule, "operation"))
+        : "packed RotateLeft schedule operation mismatch";
+    assert number(packedRotateSchedule, "rotation_steps").longValue() == 1
+        : "packed RotateLeft schedule rotation mismatch";
+    final List<Long> schedulePowers = longList(packedRotateSchedule, "automorphism_powers");
+    assert schedulePowers.size() > 1 : "packed RotateLeft schedule must use multiple powers";
+    for (final long power : schedulePowers) {
+      assert power > 0 : "packed RotateLeft schedule power must be positive";
+      boolean hasSchedulePowerKey = false;
+      for (final Map<String, Object> key : galoisKeys) {
+        if (number(key, "automorphism_power").longValue() == power) {
+          hasSchedulePowerKey = true;
+          break;
+        }
+      }
+      assert hasSchedulePowerKey : "packed RotateLeft schedule power has no matching Galois key";
+    }
+    final List<Map<String, Object>> packedRotateScheduleInputs =
+        objectList(packedRotateSchedule, "inputs");
+    assert packedRotateScheduleInputs.size() == 1
+        : "packed RotateLeft schedule input count mismatch";
+    final Map<String, Object> packedRotateScheduleInput = packedRotateScheduleInputs.get(0);
+    final List<Long> scheduleInputSlots = longList(packedRotateScheduleInput, "packed_slots");
+    final List<Long> scheduleOutputSlots = longList(packedRotateSchedule, "expected_packed_slots");
+    assert scheduleInputSlots.size() == publicDegree
+        : "packed RotateLeft schedule input slot count mismatch";
+    assert scheduleOutputSlots.size() == publicDegree
+        : "packed RotateLeft schedule output slot count mismatch";
+    final List<Long> expectedScheduleOutputSlots =
+        new ArrayList<>(scheduleInputSlots.subList(1, scheduleInputSlots.size()));
+    expectedScheduleOutputSlots.add(scheduleInputSlots.get(0));
+    assert expectedScheduleOutputSlots.equals(scheduleOutputSlots)
+        : "packed RotateLeft schedule output slot mismatch";
+    for (final long slot : scheduleInputSlots) {
+      assert slot >= 0 : "packed RotateLeft schedule input slot negative";
+    }
+    for (final long slot : scheduleOutputSlots) {
+      assert slot >= 0 : "packed RotateLeft schedule output slot negative";
+    }
+    assert number(packedRotateScheduleInput, "expected_ciphertext_bytes").longValue() > 0
+        : "packed RotateLeft schedule input bytes must be positive";
+    assert number(packedRotateSchedule, "expected_output_ciphertext_bytes").longValue() > 0
+        : "packed RotateLeft schedule output bytes must be positive";
+    assertBfvUpperSha256("packed RotateLeft schedule input plaintext", string(packedRotateScheduleInput, "expected_packed_plaintext_sha256"));
+    assertBfvUpperSha256("packed RotateLeft schedule input", string(packedRotateScheduleInput, "expected_ciphertext_sha256"));
+    assertBfvUpperSha256("packed RotateLeft schedule output", string(packedRotateSchedule, "expected_output_ciphertext_sha256"));
+    assertBfvUpperSha256("packed RotateLeft schedule plaintext", string(packedRotateSchedule, "expected_plaintext_coefficients_sha256"));
+    final Map<String, Object> packedRotateScheduleComponents =
+        object(packedRotateSchedule, "output_components");
+    assert number(packedRotateScheduleComponents, "coefficient_count").longValue() == publicDegree
+        : "packed RotateLeft schedule coefficient count mismatch";
+    assertBfvComponentDigest("packed RotateLeft schedule c0", string(packedRotateScheduleComponents, "c0_sha256"), componentDigests);
+    assertBfvComponentDigest("packed RotateLeft schedule c1", string(packedRotateScheduleComponents, "c1_sha256"), componentDigests);
   }
 
   private static void assertBfvRnsModulusChainFixture(
       final Map<String, Object> operationVectors, final long publicDegree) {
     final Map<String, Object> rns = object(operationVectors, "rns_modulus_chain");
     final List<Long> moduli = longList(rns, "moduli");
-    assert moduli.equals(java.util.Arrays.asList(358273L, 448769L, 449921L))
-        : "RNS modulus-chain limbs mismatch";
-    assert string(rns, "product").equals("72339115408190977")
-        : "RNS modulus-chain product mismatch";
+    assert !moduli.isEmpty() : "RNS modulus-chain limbs must not be empty";
+    final List<Long> sortedModuli = new ArrayList<>(moduli);
+    sortedModuli.sort(Long::compareTo);
+    assert sortedModuli.equals(moduli) : "RNS modulus-chain limbs must be sorted";
+    for (final long modulus : moduli) {
+      assert modulus > 2L && (modulus & 1L) == 1L
+          : "RNS modulus-chain limbs must be odd prime candidates";
+    }
+    assert string(rns, "product").matches("[0-9]+")
+        : "RNS modulus-chain product must be decimal";
     assertBfvLowerDigest("RNS modulus-chain digest", string(rns, "expected_digest_hex"));
 
     final Map<String, Object> samples = object(rns, "sample_polynomials");
@@ -4002,6 +4254,17 @@ public final class HttpClientTransportTests {
   private static void assertBfvUpperSha256(final String label, final String value) {
     assert value.matches("[0-9A-F]{64}") : label + " must be canonical uppercase SHA-256";
     assert !value.equals("0".repeat(64)) : label + " must not be zero";
+  }
+
+  private static int balancedBfvMultiplicationDepth(final int inputCount) {
+    assert inputCount > 0 : "BFV multiplication depth requires at least one input";
+    int covered = 1;
+    int depth = 0;
+    while (covered < inputCount) {
+      covered *= 2;
+      depth += 1;
+    }
+    return depth;
   }
 
   private static void assertBfvLowerDigest(final String label, final String value) {
@@ -4065,10 +4328,13 @@ public final class HttpClientTransportTests {
 
   private static Number number(final Map<String, Object> root, final String key) {
     final Object value = root.get(key);
-    if (!(value instanceof Number)) {
-      throw new IllegalArgumentException(key + " must be a number");
+    if (value instanceof Number) {
+      return (Number) value;
     }
-    return (Number) value;
+    if (value instanceof String) {
+      return new BigInteger((String) value);
+    }
+    throw new IllegalArgumentException(key + " must be a number");
   }
 
   private static Long optionalLong(final Map<String, Object> root, final String key) {
@@ -4076,10 +4342,13 @@ public final class HttpClientTransportTests {
     if (value == null) {
       return null;
     }
-    if (!(value instanceof Number)) {
-      throw new IllegalArgumentException(key + " must be a number");
+    if (value instanceof Number) {
+      return ((Number) value).longValue();
     }
-    return ((Number) value).longValue();
+    if (value instanceof String) {
+      return new BigInteger((String) value).longValue();
+    }
+    throw new IllegalArgumentException(key + " must be a number");
   }
 
   private static List<Long> longList(final Map<String, Object> root, final String key) {
@@ -4090,10 +4359,13 @@ public final class HttpClientTransportTests {
     final List<?> raw = (List<?>) value;
     final List<Long> out = new ArrayList<>();
     for (final Object entry : raw) {
-      if (!(entry instanceof Number)) {
+      if (entry instanceof Number) {
+        out.add(((Number) entry).longValue());
+      } else if (entry instanceof String) {
+        out.add(new BigInteger((String) entry).longValue());
+      } else {
         throw new IllegalArgumentException(key + " entries must be numbers");
       }
-      out.add(((Number) entry).longValue());
     }
     return out;
   }

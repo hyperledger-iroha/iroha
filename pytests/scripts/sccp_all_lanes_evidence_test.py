@@ -201,6 +201,10 @@ def abi_word_address(address20):
     return b"\x00" * 12 + address20
 
 
+def abi_word_hex(value):
+    return int(value, 16).to_bytes(32, "big")
+
+
 def tron_route_canary_submit_call_data(
     *,
     message_id=bytes.fromhex("dd" * 32),
@@ -212,12 +216,25 @@ def tron_route_canary_submit_call_data(
     finality_height=123,
     finality_block_hash=bytes.fromhex("cd" * 32),
 ):
+    g2_generator_words = tuple(
+        abi_word_hex(value)
+        for value in (
+            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed",
+            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2",
+            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa",
+            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b",
+        )
+    )
     proof_words = [
         abi_word_u32(1),
         message_id,
         abi_word_u32(source_domain),
         commitment_root,
-        *(bytes([index]) * 32 for index in range(1, 9)),
+        abi_word_u32(1),
+        abi_word_u32(2),
+        *g2_generator_words,
+        abi_word_u32(1),
+        abi_word_u32(2),
     ]
     proof_bytes = b"".join(proof_words)
     public_inputs = [
@@ -742,6 +759,18 @@ def fake_evm_source_live_opener(module, *, domain):
                 }
             )
         if method == "eth_getBlockByNumber":
+            if params == ["finalized", False]:
+                return FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "hash": "0x" + "99" * 32,
+                            "number": "0x1234",
+                            "receiptsRoot": "0x" + "bc" * 32,
+                        },
+                    }
+                )
             assert params == ["0x1234", False]
             return FakeResponse(
                 {
@@ -1342,6 +1371,7 @@ def route_allowlist(
             proof_family_hash=raw_hex(destination["_comment_evm_proof_family_hash"]),
             network_id=raw_hex(destination["destination_network_id"]),
             used_message_proof=True,
+            receipt_block_finalized=True,
         )
         route["_comment_route_canary_evidence_hash"] = "0x" + canary_hash.hex()
         route["_comment_evm_route_canary_transaction_hash"] = (
@@ -2835,6 +2865,7 @@ def test_all_lanes_accepts_verified_evm_live_toml(tmp_path):
         proof_family_hash=live_module.evidence.evm_proof_family_hash(),
         network_id=fake.network_id,
         used_message_proof=True,
+        receipt_block_finalized=True,
     )
     live_summary = live_module.collect_live_evidence(
         SimpleNamespace(
@@ -3437,6 +3468,7 @@ def test_all_lanes_accepts_verified_evm_source_live_toml(tmp_path):
             proof_family_hash=raw_hex(destination["_comment_evm_proof_family_hash"]),
             network_id=raw_hex(destination["destination_network_id"]),
             used_message_proof=True,
+            receipt_block_finalized=True,
         ).hex()
     )
 

@@ -1,8 +1,46 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import IrohaSwift
 
 final class SccpSolanaProverTests: XCTestCase {
+    private static let ethereumSyncCommitteeSupermajorityBits =
+        "0x" + String(repeating: "ff", count: 42) + "3f" + String(repeating: "00", count: 21)
+    private static let ethereumSyncCommitteeSupermajorityParticipation = "342"
+    private static let ethereumFinalityBranch =
+        (0..<6).map { "0x" + String(repeating: String(format: "%02x", 0x50 + $0), count: 32) }
+
+    private static func ethereumSyncCommitteeBytes(_ byte: UInt8, count: Int) -> [Data] {
+        (0..<512).map { index in
+            var value = Data(repeating: byte, count: count)
+            value[count - 2] = UInt8((index >> 8) & 0xff)
+            value[count - 1] = UInt8(index & 0xff)
+            return value
+        }
+    }
+
+    private static func ethereumSyncCommitteeWeights() -> [UInt64] {
+        Array(repeating: 1, count: 512)
+    }
+
+    private static func ethereumSyncCommitteeSignersBitmap(_ count: Int) -> Data {
+        var bitmap = Data(repeating: 0, count: 64)
+        for index in 0..<count {
+            let byteIndex = index / 8
+            bitmap[byteIndex] = bitmap[byteIndex] | UInt8(1 << (index % 8))
+        }
+        return bitmap
+    }
+
+    private static func sampleEthereumSyncCommitteePayload(publicKeyByte: UInt8 = 0x33,
+                                                           popByte: UInt8 = 0xcc) throws -> Data {
+        try canonicalEthSyncCommitteePayloadBytes(
+            syncCommitteePublicKeys: ethereumSyncCommitteeBytes(publicKeyByte, count: 48),
+            syncCommitteeWeights: ethereumSyncCommitteeWeights(),
+            syncCommitteePops: ethereumSyncCommitteeBytes(popByte, count: 96)
+        )
+    }
+
     private static let solanaSignature55 =
         "2hxGyn4y9Mjkii76BqmxVoNYbTs3tw97bmtZRXnDoZPAw7VZTWhhk1aV11DtFgYGVibPaty4PQLHVLaKrT24NxGU"
     private static let solanaSignature01 =
@@ -218,6 +256,28 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    private final class EthereumMainnetMutatingConsensusProviderStub: EthereumMainnetConsensusProvider {
+        private let finality: [String: Any]
+        private let onCollect: ([String: Any]?, [String: Any]?, String?) throws -> Void
+        private(set) var calls = 0
+
+        init(finality: [String: Any],
+             onCollect: @escaping ([String: Any]?, [String: Any]?, String?) throws -> Void) {
+            self.finality = finality
+            self.onCollect = onCollect
+        }
+
+        func collectFinalityEvidence(
+            receipt: [String: Any]?,
+            block: [String: Any]?,
+            transactionHash: String?
+        ) async throws -> [String: Any] {
+            calls += 1
+            try onCollect(receipt, block, transactionHash)
+            return finality
+        }
+    }
+
     private final class EthereumMainnetBeaconRestTransportStub: EthereumMainnetBeaconRestTransport {
         private let responses: [String: EthereumMainnetBeaconRestResponse]
         private(set) var calls: [(url: String, headers: [String: String])] = []
@@ -364,10 +424,21 @@ final class SccpSolanaProverTests: XCTestCase {
 
     private static func ethereumBeaconFinalityUpdateJson(slot: String = "32",
                                                          signatureSlot: String = "33",
-                                                         syncCommitteeBits: String = "0x01" + String(repeating: "00", count: 63),
+                                                         syncCommitteeBits: String = "0x" + String(repeating: "ff", count: 42) + "3f" + String(repeating: "00", count: 21),
                                                          syncCommitteeSignature: String = "0x" + String(repeating: "34", count: 96),
-                                                         executionOptimistic: Bool = false) -> Data {
-        Data("""
+                                                         executionOptimistic: Bool = false,
+                                                         includeFinalityBranch: Bool = true,
+                                                         finalityBranch: [String]? = nil) -> Data {
+        let finalityBranchJson = (finalityBranch ?? Self.ethereumFinalityBranch)
+            .map { "\"\($0)\"" }
+            .joined(separator: ",")
+        let finalityBranchField: String
+        if includeFinalityBranch {
+            finalityBranchField = "\"finality_branch\": [\(finalityBranchJson)],"
+        } else {
+            finalityBranchField = ""
+        }
+        return Data("""
         {
           "execution_optimistic": \(executionOptimistic),
           "data": {
@@ -380,6 +451,7 @@ final class SccpSolanaProverTests: XCTestCase {
                 "body_root": "0x\(String(repeating: "03", count: 32))"
               }
             },
+            \(finalityBranchField)
             "sync_aggregate": {
               "sync_committee_bits": "\(syncCommitteeBits)",
               "sync_committee_signature": "\(syncCommitteeSignature)"
@@ -443,6 +515,28 @@ final class SccpSolanaProverTests: XCTestCase {
             calls += 1
             XCTAssertEqual(receipt?["blockHash"] as? String, block?["hash"] as? String)
             XCTAssertEqual(transactionHash, receipt?["transactionHash"] as? String)
+            return finality
+        }
+    }
+
+    private final class BscMainnetMutatingConsensusProviderStub: BscMainnetConsensusProvider {
+        private let finality: [String: Any]
+        private let onCollect: ([String: Any]?, [String: Any]?, String?) throws -> Void
+        private(set) var calls = 0
+
+        init(finality: [String: Any],
+             onCollect: @escaping ([String: Any]?, [String: Any]?, String?) throws -> Void) {
+            self.finality = finality
+            self.onCollect = onCollect
+        }
+
+        func collectFinalityEvidence(
+            receipt: [String: Any]?,
+            block: [String: Any]?,
+            transactionHash: String?
+        ) async throws -> [String: Any] {
+            calls += 1
+            try onCollect(receipt, block, transactionHash)
             return finality
         }
     }
@@ -8765,6 +8859,25 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceProofBytes: Data([10])
         ))
         XCTAssertNotEqual(request.requestHash, shiftedSplitRequest.requestHash)
+        let artifactRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            sourceProofBytes: Data([9, 10]),
+            proofArtifactHash: String(repeating: "91", count: 32),
+            provingKeyHash: String(repeating: "92", count: 32)
+        ))
+        XCTAssertEqual(artifactRequest.proofArtifactHash, "0x" + String(repeating: "91", count: 32))
+        XCTAssertEqual(artifactRequest.provingKeyHash, "0x" + String(repeating: "92", count: 32))
+        XCTAssertNotEqual(artifactRequest.requestHash, request.requestHash)
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            proofArtifactHash: String(repeating: "91", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifactHash/provingKeyHash"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            proofArtifactHash: String(repeating: "00", count: 32),
+            provingKeyHash: String(repeating: "92", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .zeroField("proofArtifactHash"))
+        }
         XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(statementHash: ""))) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidHex32("statementHash"))
         }
@@ -8869,9 +8982,852 @@ final class SccpSolanaProverTests: XCTestCase {
         let ethRequest = try await facade.buildOutboundProofRequest(input)
         XCTAssertEqual(ethRequest.targetDomain, sccpDomainEthereum)
         XCTAssertEqual(ethRequest.destinationBindingHash, binding.hash)
+        let nativeProverBundle = try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: binding.hash
+        )
+        let parsedNativeProverBundle = try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(destinationBindingHash: binding.hash),
+            expectedDestinationBindingHash: binding.hash
+        )
+        XCTAssertEqual(parsedNativeProverBundle, nativeProverBundle)
+        XCTAssertEqual(parsedNativeProverBundle.proofArtifact, "artifacts/eth-mainnet/proof-artifact.bin")
+        XCTAssertEqual(parsedNativeProverBundle.provingKey, "artifacts/eth-mainnet/proving-key.bin")
+        XCTAssertEqual(parsedNativeProverBundle.verifierKey, "artifacts/eth-mainnet/verifier-key.bin")
+        XCTAssertEqual(
+            parsedNativeProverBundle.nativeProverSelfTestArtifact,
+            "artifacts/eth-mainnet/native-prover-self-test.json"
+        )
+        XCTAssertEqual(
+            parsedNativeProverBundle.nativeSdkArtifacts.first { $0.sdk == "swift" }?.implementationArtifact,
+            "artifacts/eth-mainnet/swift-implementation.bin"
+        )
+        let parityJson = Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: nativeProverBundle
+        )
+        let parityFixture = try EthereumMainnetNativeEvmProverParityFixture(
+            jsonString: parityJson,
+            nativeProverBundle: nativeProverBundle
+        )
+        XCTAssertEqual(parityFixture.schema, sccpEthNativeEvmProverParityFixtureSchemaV1)
+        XCTAssertEqual(parityFixture.destinationBindingHash, binding.hash)
+        XCTAssertEqual(parityFixture.publicSignalWords.count, 9)
+        XCTAssertEqual(
+            parityFixture.sdkResults["swift"]?.toriiSubmitPayloadHash,
+            parityFixture.toriiSubmitPayloadHash
+        )
+        let driftedParityFixture = Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: nativeProverBundle,
+            swiftCalldataHash: "0x" + String(repeating: "96", count: 32)
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverParityFixture(
+            jsonString: driftedParityFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverParityFixture.sdkResults.swift")
+            )
+        }
+        let duplicateParityFixture = parityJson.replacingOccurrences(
+            of: "\"schema\": \"\(sccpEthNativeEvmProverParityFixtureSchemaV1)\"",
+            with: """
+            "schema": "forged",
+                  "schema": "\(sccpEthNativeEvmProverParityFixtureSchemaV1)"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverParityFixture(
+            jsonString: duplicateParityFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverParityFixture.duplicateJsonKey"))
+        }
+        let selfTestJson = Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: nativeProverBundle
+        )
+        let selfTestFixture = try EthereumMainnetNativeEvmProverSelfTestFixture(
+            jsonString: selfTestJson,
+            nativeProverBundle: nativeProverBundle
+        )
+        XCTAssertEqual(selfTestFixture.schema, sccpEthNativeEvmProverSelfTestSchemaV1)
+        XCTAssertEqual(selfTestFixture.destinationBindingHash, binding.hash)
+        XCTAssertEqual(selfTestFixture.publicSignalWords.count, 9)
+        XCTAssertEqual(selfTestFixture.sdkResults["swift"]?.proofHash, selfTestFixture.proofHash)
+        let driftedSelfTestFixture = Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: nativeProverBundle,
+            swiftProofHash: "0x" + String(repeating: "97", count: 32)
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverSelfTestFixture(
+            jsonString: driftedSelfTestFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverSelfTestFixture.sdkResults.swift")
+            )
+        }
+        let duplicateSelfTestFixture = selfTestJson.replacingOccurrences(
+            of: "\"schema\": \"\(sccpEthNativeEvmProverSelfTestSchemaV1)\"",
+            with: """
+            "schema": "forged",
+                  "schema": "\(sccpEthNativeEvmProverSelfTestSchemaV1)"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverSelfTestFixture(
+            jsonString: duplicateSelfTestFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestFixture.duplicateJsonKey"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: binding.hash,
+                noWasm: false
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.noWasm"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: "0x" + String(repeating: "95", count: 32)
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.destinationBindingHash"))
+        }
+        let noncanonicalDomainManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"domain\": \(sccpDomainEthereum)",
+            with: "\"domain\": \"01\""
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: noncanonicalDomainManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("domain"))
+        }
+        let duplicateJsonKeyManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"bundle_id\": \"\(sccpEthNativeEvmProverBundleIdV1)\"",
+            with: """
+            "bundle_id": "forged",
+                      "bundle_id": "\(sccpEthNativeEvmProverBundleIdV1)"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: duplicateJsonKeyManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.duplicateJsonKey"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: binding.hash,
+                proofArtifact: "../proof-artifact.bin"
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifact"))
+        }
+        let unknownManifestField = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"audit_hashes\":",
+            with: "\"experimental_manifest_note\": true,\n          \"audit_hashes\":"
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: unknownManifestField,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverBundle.experimental_manifest_note")
+            )
+        }
+        let duplicateManifestAlias = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"proof_artifact_hash\": \"0x\(String(repeating: "91", count: 32))\"",
+            with: """
+            "proofArtifactHash": "0x\(String(repeating: "91", count: 32))",
+                      "proof_artifact_hash": "0x\(String(repeating: "91", count: 32))"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: duplicateManifestAlias,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifactHash"))
+        }
+        let unknownArtifactField = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"implementation_hash\":",
+            with: "\"experimental_manifest_note\": true,\n                  \"implementation_hash\":"
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: unknownArtifactField,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeSdkArtifacts[0].experimental_manifest_note")
+            )
+        }
+        let noncanonicalAuditManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"0x\(String(repeating: "a1", count: 32))\"",
+            with: "\"0x\(String(repeating: "A1", count: 32))\""
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: noncanonicalAuditManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidHex32("auditHashes.circuit_security_audit")
+            )
+        }
+        let replayedAuditManifest = Self.sampleEthereumNativeEvmProverBundleJson(
+            destinationBindingHash: binding.hash
+        ).replacingOccurrences(
+            of: "\"0x\(String(repeating: "a1", count: 32))\"",
+            with: "\"0x\(String(repeating: "91", count: 32))\""
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: replayedAuditManifest,
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("auditHashes.circuit_security_audit")
+            )
+        }
+        let bundledFacade = EthereumMainnetSccp(nativeProverBundle: nativeProverBundle)
+        let bundledRequest = try await bundledFacade.buildOutboundProofRequest(input)
+        XCTAssertEqual(bundledRequest.proofArtifactHash, "0x" + String(repeating: "91", count: 32))
+        XCTAssertEqual(bundledRequest.provingKeyHash, "0x" + String(repeating: "92", count: 32))
+        XCTAssertNotEqual(bundledRequest.requestHash, ethRequest.requestHash)
+        XCTAssertEqual(
+            try nativeProverBundle.applying(to: input).proofArtifactHash,
+            "0x" + String(repeating: "91", count: 32)
+        )
+        let verifierKeyMismatchedBundle = try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: binding.hash,
+            verifierKeyHash: "0x" + String(repeating: "dd", count: 32)
+        )
+        XCTAssertThrowsError(try verifierKeyMismatchedBundle.applying(to: input)) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.verifierKeyHash"))
+        }
+        let proofArtifactBytes = Self.nativeEvmProverArtifactBytes("swift proof artifact v1")
+        let provingKeyBytes = Self.nativeEvmProverArtifactBytes("swift proving key v1")
+        let verifierKeyBytes = Self.nativeEvmProverArtifactBytes("swift verifier key v1")
+        let implementationBytes = Self.nativeEvmProverArtifactBytes("swift implementation artifact v1")
+        let proofArtifactHash = Self.sha256Hex(proofArtifactBytes)
+        let provingKeyHash = Self.sha256Hex(provingKeyBytes)
+        let verifierKeyHash = Self.sha256Hex(verifierKeyBytes)
+        let implementationHash = Self.sha256Hex(implementationBytes)
+        let artifactBinding = try EthereumMainnetSccp.destinationBinding(
+            verifierAddress: "0x" + String(repeating: "11", count: 20),
+            bridgeAddress: "0x" + String(repeating: "22", count: 20),
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: verifierKeyHash
+        )
+        let artifactInput = try EvmSccpProofRequestInput(
+            publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainEthereum),
+            bundleBytes: Data([5, 6, 7]),
+            sourceProofBytes: Data([9, 10]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBinding: artifactBinding
+        )
+        let draftVerifiedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: proofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
+                .sorted { $0.key < $1.key }
+                .enumerated()
+                .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: proofArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                        implementationHash: entry.key == "swift"
+                            ? implementationHash
+                            : "0x" + String(
+                                repeating: String(format: "%02x", index + 1),
+                                count: 32
+                            )
+                    )
+                },
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let parityFixtureBytes = Data(Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: draftVerifiedBundle
+        ).utf8)
+        let parityFixtureHash = Self.sha256Hex(parityFixtureBytes)
+        let selfTestFixtureBytes = Data(Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: draftVerifiedBundle
+        ).utf8)
+        let selfTestFixtureHash = Self.sha256Hex(selfTestFixtureBytes)
+        var verifiedAuditHashes = Self.sampleEthereumNativeEvmProverAuditHashes()
+        verifiedAuditHashes["cross_sdk_fixture_parity"] = parityFixtureHash
+        verifiedAuditHashes["native_prover_self_test"] = selfTestFixtureHash
+        let verifiedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: proofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: draftVerifiedBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: verifiedAuditHashes,
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let verifiedArtifacts = try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )
+        XCTAssertEqual(verifiedArtifacts.hashAlgorithm, sccpNativeEvmProverArtifactHashAlgorithmV1)
+        XCTAssertEqual(verifiedArtifacts.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(verifiedArtifacts.provingKeyHash, provingKeyHash)
+        XCTAssertEqual(verifiedArtifacts.verifierKeyHash, verifierKeyHash)
+        XCTAssertEqual(verifiedArtifacts.crossSdkFixtureParityHash, parityFixtureHash)
+        XCTAssertEqual(
+            verifiedArtifacts.crossSdkFixtureParity?.calldataHash,
+            "0x" + String(repeating: "d3", count: 32)
+        )
+        XCTAssertEqual(verifiedArtifacts.nativeProverSelfTestHash, selfTestFixtureHash)
+        XCTAssertEqual(
+            verifiedArtifacts.nativeProverSelfTest?.proofHash,
+            "0x" + String(repeating: "e4", count: 32)
+        )
+        XCTAssertEqual(verifiedArtifacts.implementation, "native-swift")
+        XCTAssertEqual(verifiedArtifacts.implementationHash, implementationHash)
+        let swiftImplementationArtifact = try XCTUnwrap(
+            verifiedBundle.nativeSdkArtifacts.first { $0.sdk == "swift" }?.implementationArtifact
+        )
+        let artifactBytesByPath = [
+            try XCTUnwrap(verifiedBundle.proofArtifact): proofArtifactBytes,
+            try XCTUnwrap(verifiedBundle.provingKey): provingKeyBytes,
+            try XCTUnwrap(verifiedBundle.verifierKey): verifierKeyBytes,
+            try XCTUnwrap(verifiedBundle.crossSdkFixtureParityArtifact): parityFixtureBytes,
+            try XCTUnwrap(verifiedBundle.nativeProverSelfTestArtifact): selfTestFixtureBytes,
+            swiftImplementationArtifact: implementationBytes
+        ]
+        let verifiedFromResolver = try verifiedBundle.verifiedArtifacts(sdk: "swift") { path in
+            guard let bytes = artifactBytesByPath[path] else {
+                throw EvmSccpProverError.invalidPublicInputs(path)
+            }
+            return bytes
+        }
+        XCTAssertEqual(verifiedFromResolver.implementationHash, implementationHash)
+        XCTAssertEqual(verifiedFromResolver.crossSdkFixtureParityHash, parityFixtureHash)
+        XCTAssertEqual(verifiedFromResolver.nativeProverSelfTestHash, selfTestFixtureHash)
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(sdk: "swift") { path in
+            if path == verifiedBundle.crossSdkFixtureParityArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("crossSdkFixtureParityArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityArtifact"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(sdk: "swift") { path in
+            if path == verifiedBundle.nativeProverSelfTestArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverSelfTestArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestArtifact"))
+        }
+        var missingArtifactsProverCalled = false
+        let missingArtifactsFacade = EthereumMainnetSccp(proveFunction: { _ in
+            missingArtifactsProverCalled = true
+            return Self.sampleGroth16ProofBytes()
+        })
+        do {
+            _ = try await missingArtifactsFacade.proveOutboundToEthereum(input)
+            XCTFail("Ethereum outbound prover must require verified native artifacts")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .invalidPublicInputs("nativeProverArtifacts"))
+        }
+        XCTAssertFalse(missingArtifactsProverCalled)
+        var artifactBoundRequest: EvmSccpProofRequest?
+        var artifactBoundSelfTestCalled = false
+        let artifactBoundFacade = EthereumMainnetSccp(
+            proveFunction: { request in
+                artifactBoundRequest = request
+                XCTAssertEqual(request.proofArtifactHash, proofArtifactHash)
+                XCTAssertEqual(request.provingKeyHash, provingKeyHash)
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverSelfTestFunction: { fixture, expected, artifacts in
+                artifactBoundSelfTestCalled = true
+                XCTAssertEqual(fixture.proofHash, "0x" + String(repeating: "e4", count: 32))
+                XCTAssertEqual(artifacts.nativeProverSelfTestHash, selfTestFixtureHash)
+                return expected
+            },
+            nativeProverArtifacts: verifiedArtifacts
+        )
+        let preflightResult = try await artifactBoundFacade.runNativeProverSelfTest()
+        XCTAssertTrue(artifactBoundSelfTestCalled)
+        XCTAssertEqual(preflightResult.proofHash, "0x" + String(repeating: "e4", count: 32))
+        artifactBoundSelfTestCalled = false
+        let artifactBoundResult = try await artifactBoundFacade.proveOutboundToEthereum(artifactInput)
+        XCTAssertTrue(artifactBoundSelfTestCalled)
+        XCTAssertEqual(artifactBoundRequest?.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(artifactBoundResult.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(artifactBoundResult.provingKeyHash, provingKeyHash)
+        var missingSelfTestHookProverCalled = false
+        let missingSelfTestHookFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                missingSelfTestHookProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: verifiedArtifacts
+        )
+        do {
+            _ = try await missingSelfTestHookFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must require the native self-test hook")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverSelfTestFunction")
+            )
+        }
+        XCTAssertFalse(missingSelfTestHookProverCalled)
+        var driftingSelfTestHookProverCalled = false
+        let driftingSelfTestHookFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                driftingSelfTestHookProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverSelfTestFunction: { _, _, _ in
+                try EthereumMainnetNativeEvmProverSelfTestSdkResult(
+                    requestHash: "0x" + String(repeating: "e1", count: 32),
+                    witnessHash: "0x" + String(repeating: "e2", count: 32),
+                    sourceProofHash: "0x" + String(repeating: "e3", count: 32),
+                    proofHash: "0x" + String(repeating: "97", count: 32),
+                    publicSignalWords: (0..<9).map { index in
+                        "0x" + String(repeating: String(format: "%02x", index + 0x20), count: 32)
+                    },
+                    calldataHash: "0x" + String(repeating: "e5", count: 32),
+                    toriiSubmitPayloadHash: "0x" + String(repeating: "e6", count: 32)
+                )
+            },
+            nativeProverArtifacts: verifiedArtifacts
+        )
+        do {
+            _ = try await driftingSelfTestHookFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject drifting native self-test output")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverSelfTestResult")
+            )
+        }
+        XCTAssertFalse(driftingSelfTestHookProverCalled)
+        var factoryBoundRequest: EvmSccpProofRequest?
+        let factoryBoundFacade = try EthereumMainnetSccp.fromNativeProverBundle(
+            proveFunction: { request in
+                factoryBoundRequest = request
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverSelfTestFunction: { _, expected, _ in expected },
+            nativeProverBundle: verifiedBundle,
+            sdk: "swift"
+        ) { path in
+            guard let bytes = artifactBytesByPath[path] else {
+                throw EvmSccpProverError.invalidPublicInputs(path)
+            }
+            return bytes
+        }
+        let factoryBoundResult = try await factoryBoundFacade.proveOutboundToEthereum(artifactInput)
+        XCTAssertEqual(factoryBoundRequest?.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(factoryBoundRequest?.provingKeyHash, provingKeyHash)
+        XCTAssertEqual(factoryBoundResult.proofArtifactHash, proofArtifactHash)
+        XCTAssertEqual(factoryBoundResult.provingKeyHash, provingKeyHash)
+        XCTAssertThrowsError(try EthereumMainnetSccp.fromNativeProverBundle(
+            nativeProverBundle: verifiedBundle,
+            sdk: "swift"
+        ) { path in
+            if path == verifiedBundle.crossSdkFixtureParityArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("crossSdkFixtureParityArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityArtifact"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetSccp.fromNativeProverBundle(
+            nativeProverBundle: verifiedBundle,
+            sdk: "swift"
+        ) { path in
+            if path == verifiedBundle.nativeProverSelfTestArtifact {
+                throw EvmSccpProverError.invalidPublicInputs("nativeProverSelfTestArtifact")
+            }
+            return artifactBytesByPath[path] ?? Data()
+        }) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestArtifact"))
+        }
+        let implementationUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: verifiedBundle,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            crossSdkFixtureParityHash: parityFixtureHash,
+            crossSdkFixtureParity: verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash: selfTestFixtureHash,
+            nativeProverSelfTest: verifiedArtifacts.nativeProverSelfTest,
+            sdk: "swift",
+            implementation: "native-swift",
+            implementationHash: nil
+        )
+        var implementationUnboundProverCalled = false
+        let implementationUnboundFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                implementationUnboundProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: implementationUnboundArtifacts
+        )
+        do {
+            _ = try await implementationUnboundFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject implementation-unbound native artifacts")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.implementationHash")
+            )
+        }
+        XCTAssertFalse(implementationUnboundProverCalled)
+        let verifierKeyUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: verifiedBundle,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: "0x" + String(repeating: "ef", count: 32),
+            crossSdkFixtureParityHash: parityFixtureHash,
+            crossSdkFixtureParity: verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash: selfTestFixtureHash,
+            nativeProverSelfTest: verifiedArtifacts.nativeProverSelfTest,
+            sdk: "swift",
+            implementation: "native-swift",
+            implementationHash: implementationHash
+        )
+        var verifierKeyUnboundProverCalled = false
+        let verifierKeyUnboundFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                verifierKeyUnboundProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: verifierKeyUnboundArtifacts
+        )
+        do {
+            _ = try await verifierKeyUnboundFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject verifier-key-unbound native artifacts")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.verifierKeyHash")
+            )
+        }
+        XCTAssertFalse(verifierKeyUnboundProverCalled)
+        let selfTestUnboundArtifacts = EthereumMainnetNativeEvmProverArtifacts(
+            hashAlgorithm: sccpNativeEvmProverArtifactHashAlgorithmV1,
+            nativeProverBundle: verifiedBundle,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash,
+            verifierKeyHash: verifierKeyHash,
+            crossSdkFixtureParityHash: parityFixtureHash,
+            crossSdkFixtureParity: verifiedArtifacts.crossSdkFixtureParity,
+            nativeProverSelfTestHash: nil,
+            nativeProverSelfTest: nil,
+            sdk: "swift",
+            implementation: "native-swift",
+            implementationHash: implementationHash
+        )
+        var selfTestUnboundProverCalled = false
+        let selfTestUnboundFacade = EthereumMainnetSccp(
+            proveFunction: { _ in
+                selfTestUnboundProverCalled = true
+                return Self.sampleGroth16ProofBytes()
+            },
+            nativeProverArtifacts: selfTestUnboundArtifacts
+        )
+        do {
+            _ = try await selfTestUnboundFacade.proveOutboundToEthereum(artifactInput)
+            XCTFail("Ethereum outbound prover must reject self-test-unbound native artifacts")
+        } catch {
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("nativeProverArtifacts.nativeProverSelfTestHash")
+            )
+        }
+        XCTAssertFalse(selfTestUnboundProverCalled)
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: Data([0]),
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifactBytes"))
+        }
+        let tinyProofArtifactBytes = Data([1, 2, 3, 4, 5, 6, 7])
+        let tinyProofArtifactHash = Self.sha256Hex(tinyProofArtifactBytes)
+        let draftTinyBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: tinyProofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
+                .sorted { $0.key < $1.key }
+                .enumerated()
+                .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: tinyProofArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                        implementationHash: entry.key == "swift"
+                            ? implementationHash
+                            : "0x" + String(
+                                repeating: String(format: "%02x", index + 1),
+                                count: 32
+                            )
+                    )
+                },
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let tinyParityFixtureBytes = Data(Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: draftTinyBundle
+        ).utf8)
+        let tinySelfTestFixtureBytes = Data(Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: draftTinyBundle
+        ).utf8)
+        var tinyAuditHashes = Self.sampleEthereumNativeEvmProverAuditHashes()
+        tinyAuditHashes["cross_sdk_fixture_parity"] = Self.sha256Hex(tinyParityFixtureBytes)
+        tinyAuditHashes["native_prover_self_test"] = Self.sha256Hex(tinySelfTestFixtureBytes)
+        let tinyBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: tinyProofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: draftTinyBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: tinyAuditHashes,
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        XCTAssertThrowsError(try tinyBundle.verifiedArtifacts(
+            proofArtifactBytes: tinyProofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: tinyParityFixtureBytes,
+            nativeProverSelfTestBytes: tinySelfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("proofArtifactBytes.minBytes")
+            )
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sdk"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("implementationBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: Data("tampered".utf8),
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("implementationBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: Data("{}".utf8),
+            nativeProverSelfTestBytes: selfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("crossSdkFixtureParityBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestBytes"))
+        }
+        XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
+            proofArtifactBytes: proofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: parityFixtureBytes,
+            nativeProverSelfTestBytes: Data("{}".utf8)
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestBytes"))
+        }
+        let flaggedArtifactBytes = Self.nativeEvmProverArtifactBytes("proof.wasm swift artifact marker")
+        let flaggedArtifactHash = Self.sha256Hex(flaggedArtifactBytes)
+        let draftFlaggedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: flaggedArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
+                .sorted { $0.key < $1.key }
+                .enumerated()
+                .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: flaggedArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                        implementationHash: entry.key == "swift"
+                            ? implementationHash
+                            : "0x" + String(
+                                repeating: String(format: "%02x", index + 1),
+                                count: 32
+                            )
+                    )
+                },
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let flaggedParityFixtureBytes = Data(Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: draftFlaggedBundle
+        ).utf8)
+        let flaggedSelfTestFixtureBytes = Data(Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: draftFlaggedBundle
+        ).utf8)
+        var flaggedAuditHashes = Self.sampleEthereumNativeEvmProverAuditHashes()
+        flaggedAuditHashes["cross_sdk_fixture_parity"] = Self.sha256Hex(flaggedParityFixtureBytes)
+        flaggedAuditHashes["native_prover_self_test"] = Self.sha256Hex(flaggedSelfTestFixtureBytes)
+        let flaggedBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: flaggedArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: draftFlaggedBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: flaggedAuditHashes,
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        XCTAssertThrowsError(try flaggedBundle.verifiedArtifacts(
+            proofArtifactBytes: flaggedArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
+            nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("proofArtifactBytes.forbiddenMarker")
+            )
+        }
+        XCTAssertThrowsError(try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: binding.hash,
+            noWasm: false
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.noWasm"))
+        }
+        XCTAssertThrowsError(try Self.sampleEthereumNativeEvmProverBundle(
+            destinationBindingHash: "0x" + String(repeating: "95", count: 32),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.destinationBindingHash"))
+        }
 
         let proofBytes = Self.sampleGroth16ProofBytes()
         let proofResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: ethRequest)
+        do {
+            _ = try await facade.buildOutboundProofRequest(EvmSccpProofRequestInput(
+                publicInputs: ethRequest.publicInputs,
+                bundleBytes: ethRequest.bundleBytes,
+                sourceProofBytes: ethRequest.sourceProofBytes,
+                statementHash: ethRequest.statementHash,
+                destinationBindingHash: "0x" + String(repeating: "99", count: 32),
+                destinationBinding: ethRequest.destinationBinding
+            ))
+            XCTFail("Ethereum outbound facade must reject forged destinationBindingHash before returning request")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .invalidPublicInputs("destinationBindingHash"))
+        }
         let forgedBindingHashRequest = try buildEvmSccpProofRequest(EvmSccpProofRequestInput(
             publicInputs: ethRequest.publicInputs,
             bundleBytes: ethRequest.bundleBytes,
@@ -8886,15 +9842,23 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBindingHash"))
         }
-        let submission = try facade.buildEthereumCalldata(EvmSccpSubmissionInput(proofResult: proofResult))
+        XCTAssertThrowsError(try facade.buildEthereumCalldata(EvmSccpSubmissionInput(proofResult: proofResult))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverArtifacts"))
+        }
+        let submissionFacade = EthereumMainnetSccp(nativeProverArtifacts: verifiedArtifacts)
+        let submission = try submissionFacade.buildEthereumCalldata(
+            EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+        )
         XCTAssertEqual(submission.targetDomain, sccpDomainEthereum)
         XCTAssertEqual(submission.proofBytes, proofBytes)
         let submitFacade = EthereumMainnetSccp(outboundSubmitFunction: { submission in
             XCTAssertEqual(submission.targetDomain, sccpDomainEthereum)
             XCTAssertEqual(submission.proofBytes, proofBytes)
             return "eth-submitted"
-        })
-        let submitted = try await submitFacade.submitOutboundToEthereum(EvmSccpSubmissionInput(proofResult: proofResult))
+        }, nativeProverArtifacts: verifiedArtifacts)
+        let submitted = try await submitFacade.submitOutboundToEthereum(
+            EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+        )
         XCTAssertEqual(submitted as? String, "eth-submitted")
         var guardedSubmitterCalled = false
         let guardedSubmitFacade = EthereumMainnetSccp(
@@ -8906,17 +9870,22 @@ final class SccpSolanaProverTests: XCTestCase {
             outboundSubmitFunction: { _ in
                 guardedSubmitterCalled = true
                 return "wrong-chain"
-            }
+            },
+            nativeProverArtifacts: verifiedArtifacts
         )
         do {
-            _ = try await guardedSubmitFacade.submitOutboundToEthereum(EvmSccpSubmissionInput(proofResult: proofResult))
+            _ = try await guardedSubmitFacade.submitOutboundToEthereum(
+                EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+            )
             XCTFail("Ethereum outbound submitter must reject non-mainnet execution RPC")
         } catch let error as EvmSccpProverError {
             XCTAssertEqual(error, .invalidPublicInputs("eth_chainId"))
         }
         XCTAssertFalse(guardedSubmitterCalled)
         do {
-            _ = try await facade.submitOutboundToEthereum(EvmSccpSubmissionInput(proofResult: proofResult))
+            _ = try await submissionFacade.submitOutboundToEthereum(
+                EvmSccpSubmissionInput(proofResult: artifactBoundResult)
+            )
             XCTFail("Ethereum outbound submitter must be app-supplied")
         } catch let error as EvmSccpProverError {
             XCTAssertEqual(error, .localProverUnavailable)
@@ -9156,28 +10125,24 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testEthereumMainnetBeaconRestConsensusProviderCollectsFinalizedTargetEvidence() async throws {
         let finalizedHeaderRoot = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c"
-        let targetHeaderRoot = "0x" + String(repeating: "ee", count: 32)
+        let targetHeaderRoot = finalizedHeaderRoot
         let blockHash = "0x" + String(repeating: "bb", count: 32)
         let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
-        let syncCommitteePayload = try canonicalEthSyncCommitteePayloadBytes(
-            syncCommitteePublicKeys: [Data(repeating: 0x11, count: 48), Data(repeating: 0x22, count: 48)],
-            syncCommitteeWeights: [1, 2],
-            syncCommitteePops: [Data(repeating: 0xaa, count: 96), Data(repeating: 0xbb, count: 96)]
-        )
+        let syncCommitteePayload = try Self.sampleEthereumSyncCommitteePayload()
         let syncCommitteeRoot = try ethSyncCommitteeHashFromPayload(payload: syncCommitteePayload)
         let transport = EthereumMainnetBeaconRestTransportStub(responses: [
             "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/headers/32?token=rpc": Self.ethereumBeaconResponse(
-                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "32")
+            "https://beacon.example/eth/v1/beacon/headers/64?token=rpc": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/blocks/32/root?token=rpc": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v1/beacon/blocks/64/root?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockRootJson(finalizedHeaderRoot: targetHeaderRoot)
             ),
-            "https://beacon.example/eth/v2/beacon/blocks/32?token=rpc": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v2/beacon/blocks/64?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockJson(
-                    slot: "32",
+                    slot: "64",
                     blockHash: blockHash,
                     receiptsRoot: receiptsRoot
                 )
@@ -9202,7 +10167,7 @@ final class SccpSolanaProverTests: XCTestCase {
                 "hash": blockHash,
                 "number": "0x1234",
                 "receiptsRoot": receiptsRoot,
-                "beaconSlot": "32",
+                "beaconSlot": "64",
             ],
             transactionHash: nil
         )
@@ -9213,15 +10178,16 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, finalizedHeaderRoot)
         XCTAssertEqual(finality["syncCommitteeRoot"] as? String, syncCommitteeRoot)
         XCTAssertEqual(finality["beaconSlot"] as? String, "64")
-        XCTAssertEqual(finality["syncCommitteeBits"] as? String, "0x01" + String(repeating: "00", count: 63))
+        XCTAssertEqual(finality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+        XCTAssertEqual(finality["syncCommitteeBits"] as? String, Self.ethereumSyncCommitteeSupermajorityBits)
         XCTAssertEqual(finality["syncCommitteeSignature"] as? String, "0x" + String(repeating: "34", count: 96))
-        XCTAssertEqual(finality["syncCommitteeParticipation"] as? String, "1")
+        XCTAssertEqual(finality["syncCommitteeParticipation"] as? String, Self.ethereumSyncCommitteeSupermajorityParticipation)
         XCTAssertEqual(finality["syncSignatureSlot"] as? String, "65")
         XCTAssertEqual(transport.calls.map { $0.url }, [
             "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc",
-            "https://beacon.example/eth/v1/beacon/headers/32?token=rpc",
-            "https://beacon.example/eth/v1/beacon/blocks/32/root?token=rpc",
-            "https://beacon.example/eth/v2/beacon/blocks/32?token=rpc",
+            "https://beacon.example/eth/v1/beacon/headers/64?token=rpc",
+            "https://beacon.example/eth/v1/beacon/blocks/64/root?token=rpc",
+            "https://beacon.example/eth/v2/beacon/blocks/64?token=rpc",
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints?token=rpc",
             "https://beacon.example/eth/v1/beacon/light_client/finality_update?token=rpc",
         ])
@@ -9230,7 +10196,7 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testEthereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp() async throws {
         let finalizedHeaderRoot = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c"
-        let targetHeaderRoot = "0x" + String(repeating: "ee", count: 32)
+        let targetHeaderRoot = finalizedHeaderRoot
         let blockHash = "0x" + String(repeating: "bb", count: 32)
         let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
         let transport = EthereumMainnetBeaconRestTransportStub(responses: [
@@ -9240,15 +10206,15 @@ final class SccpSolanaProverTests: XCTestCase {
             "https://beacon.example/eth/v1/beacon/headers/finalized": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/headers/32": Self.ethereumBeaconResponse(
-                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "32")
+            "https://beacon.example/eth/v1/beacon/headers/64": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: targetHeaderRoot, slot: "64")
             ),
-            "https://beacon.example/eth/v1/beacon/blocks/32/root": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v1/beacon/blocks/64/root": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockRootJson(finalizedHeaderRoot: targetHeaderRoot)
             ),
-            "https://beacon.example/eth/v2/beacon/blocks/32": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v2/beacon/blocks/64": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconBlockJson(
-                    slot: "32",
+                    slot: "64",
                     blockHash: blockHash,
                     receiptsRoot: receiptsRoot
                 )
@@ -9272,7 +10238,7 @@ final class SccpSolanaProverTests: XCTestCase {
                 "hash": blockHash,
                 "number": "0x1234",
                 "receiptsRoot": receiptsRoot,
-                "timestamp": "0x1e4",
+                "timestamp": "0x364",
             ],
             transactionHash: nil
         )
@@ -9282,9 +10248,9 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(transport.calls.map { $0.url }, [
             "https://beacon.example/eth/v1/beacon/genesis",
             "https://beacon.example/eth/v1/beacon/headers/finalized",
-            "https://beacon.example/eth/v1/beacon/headers/32",
-            "https://beacon.example/eth/v1/beacon/blocks/32/root",
-            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/headers/64",
+            "https://beacon.example/eth/v1/beacon/blocks/64/root",
+            "https://beacon.example/eth/v2/beacon/blocks/64",
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
             "https://beacon.example/eth/v1/beacon/light_client/finality_update",
         ])
@@ -9359,11 +10325,7 @@ final class SccpSolanaProverTests: XCTestCase {
             "number": "0x1234",
             "receiptsRoot": "0x" + String(repeating: "cc", count: 32),
         ]
-        let syncCommitteePayload = try canonicalEthSyncCommitteePayloadBytes(
-            syncCommitteePublicKeys: [Data(repeating: 0x11, count: 48)],
-            syncCommitteeWeights: [1],
-            syncCommitteePops: [Data(repeating: 0xaa, count: 96)]
-        )
+        let syncCommitteePayload = try Self.sampleEthereumSyncCommitteePayload()
         let syncCommitteeRoot = try ethSyncCommitteeHashFromPayload(payload: syncCommitteePayload)
 
         func provider(
@@ -9421,6 +10383,31 @@ final class SccpSolanaProverTests: XCTestCase {
             _ = try await provider(
                 header: Data(repeating: 0x7b, count: 1024 * 1024 + 1)
             ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        var historicalBlock = block
+        historicalBlock["beaconSlot"] = "32"
+        let historicalTransport = EthereumMainnetBeaconRestTransportStub(responses: [
+            "https://beacon.example/eth/v1/beacon/headers/finalized": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "64")
+            ),
+            "https://beacon.example/eth/v1/beacon/headers/32": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconHeaderJson(
+                    finalizedHeaderRoot: "0x" + String(repeating: "aa", count: 32),
+                    slot: "32"
+                )
+            ),
+        ])
+        let historicalProvider = try EthereumMainnetBeaconRestConsensusProvider(
+            endpoint: "https://beacon.example/eth/v1",
+            syncCommitteeRoot: syncCommitteeRoot,
+            transport: historicalTransport
+        )
+        await assertEvmError(.invalidPublicInputs("beaconRest.targetHeader.ancestryProof")) {
+            _ = try await historicalProvider.collectFinalityEvidence(
+                receipt: nil,
+                block: historicalBlock,
+                transactionHash: nil
+            )
         }
         await assertEvmError(.invalidPublicInputs("beaconRest.finalizedHeader")) {
             _ = try await provider(
@@ -9543,6 +10530,44 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
         }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(
+                    syncCommitteeBits: "0x01" + String(repeating: "00", count: 63)
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST light-client finality update.data.finality_branch")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(includeFinalityBranch: false)
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST light-client finality update.data.finality_branch")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(
+                    finalityBranch: Array(Self.ethereumFinalityBranch.prefix(5))
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .zeroField("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature")
+        ) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot),
+                finalityUpdate: Self.ethereumBeaconFinalityUpdateJson(
+                    syncCommitteeSignature: "0x" + String(repeating: "00", count: 96)
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
         XCTAssertThrowsError(
             try EthereumMainnetBeaconRestConsensusProvider(
                 endpoint: "https://beacon.example/eth/v1",
@@ -9642,6 +10667,46 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(
                 error as? SccpSourceProofHashError,
                 .invalidRlp("blockReceipts[0].transactionIndex")
+            )
+        }
+        var conflictingReceiptIndex = typedReceipt
+        conflictingReceiptIndex["transaction_index"] = "0x0"
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingReceiptIndex], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("blockReceipts[0].transactionIndex")
+            )
+        }
+        var conflictingReceiptHash = typedReceipt
+        conflictingReceiptHash["transaction_hash"] = typedReceipt["transactionHash"]
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingReceiptHash], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("blockReceipts[0].transactionHash")
+            )
+        }
+        var conflictingCumulativeGas = typedReceipt
+        conflictingCumulativeGas["cumulative_gas_used"] = "0x5208"
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingCumulativeGas], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("receipt.cumulativeGasUsed")
+            )
+        }
+        var conflictingLogsBloom = typedReceipt
+        conflictingLogsBloom["logs_bloom"] = logsBloom
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts([conflictingLogsBloom], transactionIndex: "0x0")
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("receipt.logsBloom")
             )
         }
         var duplicateHashReceipt = legacyReceipt
@@ -9778,9 +10843,10 @@ final class SccpSolanaProverTests: XCTestCase {
             "receiptsRoot": "0x" + String(repeating: "cc", count: 32),
         ]
         let beaconFinalityUpdateFields: [String: Any] = [
-            "syncCommitteeBits": "0x01" + String(repeating: "00", count: 63),
+            "finalityBranch": Self.ethereumFinalityBranch,
+            "syncCommitteeBits": Self.ethereumSyncCommitteeSupermajorityBits,
             "syncCommitteeSignature": "0x" + String(repeating: "34", count: 96),
-            "syncCommitteeParticipation": "1",
+            "syncCommitteeParticipation": Self.ethereumSyncCommitteeSupermajorityParticipation,
             "syncSignatureSlot": "65",
         ]
         let beaconFinalityEvidence = EthereumMainnetBeaconFinalityEvidence(
@@ -9788,16 +10854,18 @@ final class SccpSolanaProverTests: XCTestCase {
             executionBlockHash: blockHash,
             executionReceiptsRoot: "0x" + String(repeating: "cc", count: 32),
             beaconSlot: "0x20",
-            syncCommitteeBits: "0x01" + String(repeating: "00", count: 63),
+            syncCommitteeBits: Self.ethereumSyncCommitteeSupermajorityBits,
             syncCommitteeSignature: "0x" + String(repeating: "34", count: 96),
-            syncCommitteeParticipation: "1",
+            syncCommitteeParticipation: Self.ethereumSyncCommitteeSupermajorityParticipation,
             syncSignatureSlot: "65",
             additionalFields: [
                 "finalizedHeaderRoot": "0x" + String(repeating: "dd", count: 32),
                 "syncCommitteeRoot": "0x" + String(repeating: "aa", count: 32),
+                "finalityBranch": Self.ethereumFinalityBranch,
             ]
         )
         let beaconFinality = beaconFinalityEvidence.dictionary
+        XCTAssertEqual(beaconFinality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
         let autoReceiptBlock: [String: Any] = [
             "hash": blockHash,
             "number": "0x1234",
@@ -9810,6 +10878,7 @@ final class SccpSolanaProverTests: XCTestCase {
             "finalizedHeaderRoot": "0x" + String(repeating: "dd", count: 32),
             "syncCommitteeRoot": "0x" + String(repeating: "aa", count: 32),
             "beaconSlot": "0x20",
+            "finalityBranch": Self.ethereumFinalityBranch,
         ].merging(beaconFinalityUpdateFields) { _, new in new }
         let autoReceiptInclusionBranch = [Data(repeating: 0x44, count: 32)]
         let autoReceiptProvider = EthereumMainnetExecutionProviderStub(
@@ -9854,6 +10923,119 @@ final class SccpSolanaProverTests: XCTestCase {
                 inclusionBranch: autoReceiptProof.inclusionBranch
             )
         )
+        for (missingField, label) in [
+            ("finalizedHeaderRoot", "beaconFinality.finalizedHeaderRoot"),
+            ("syncCommitteeRoot", "beaconFinality.syncCommitteeRoot"),
+            ("beaconSlot", "beaconFinality.beaconSlot"),
+        ] {
+            var incompleteFinality = autoReceiptFinality
+            incompleteFinality.removeValue(forKey: missingField)
+            await assertEvmError(.invalidPublicInputs(label)) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: rlpSourceReceipt,
+                        block: autoReceiptBlock,
+                        beaconFinality: incompleteFinality,
+                        blockReceipts: blockReceipts,
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
+        for (alias, value, label) in [
+            ("transaction_hash", "0x" + String(repeating: "ab", count: 32), "receipt.transactionHash"),
+            ("block_hash", "0x" + String(repeating: "ab", count: 32), "receipt.blockHash"),
+            ("block_number", "0x1235", "receipt.blockNumber"),
+            ("transaction_index", "0x0", "receipt.transactionIndex"),
+        ] {
+            var conflictingReceipt = rlpSourceReceipt
+            conflictingReceipt[alias] = value
+            await assertEvmError(.invalidPublicInputs(label)) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: conflictingReceipt,
+                        block: autoReceiptBlock,
+                        beaconFinality: autoReceiptFinality,
+                        blockReceipts: blockReceipts,
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
+        for (alias, value) in [
+            ("blockNumber", "0x1235"),
+            ("block_number", "0x1235"),
+        ] {
+            var conflictingBlock = autoReceiptBlock
+            conflictingBlock[alias] = value
+            await assertEvmError(.invalidPublicInputs("block.number")) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: rlpSourceReceipt,
+                        block: conflictingBlock,
+                        beaconFinality: autoReceiptFinality,
+                        blockReceipts: blockReceipts,
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
+        var conflictingBlockReceiptsRoot = autoReceiptBlock
+        conflictingBlockReceiptsRoot["receipts_root"] = "0x" + String(repeating: "ab", count: 32)
+        await assertEvmError(.invalidPublicInputs("block.receiptsRoot")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: rlpSourceReceipt,
+                    block: conflictingBlockReceiptsRoot,
+                    beaconFinality: autoReceiptFinality,
+                    blockReceipts: blockReceipts,
+                    inclusionBranch: autoReceiptInclusionBranch,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        for (alias, value, label) in [
+            ("block_hash", "0x" + String(repeating: "ab", count: 32), "blockReceipts.blockHash"),
+            ("block_number", "0x1235", "blockReceipts.blockNumber"),
+        ] {
+            var conflictingIndexedReceipt = rlpSourceReceipt
+            conflictingIndexedReceipt[alias] = value
+            await assertEvmError(.invalidPublicInputs(label)) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: rlpSourceReceipt,
+                        block: autoReceiptBlock,
+                        beaconFinality: autoReceiptFinality,
+                        blockReceipts: [conflictingIndexedReceipt, otherReceipt],
+                        inclusionBranch: autoReceiptInclusionBranch,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
+        var conflictingIndexedHashReceipt = rlpSourceReceipt
+        conflictingIndexedHashReceipt["transaction_hash"] = rlpSourceReceipt["transactionHash"]
+        do {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: rlpSourceReceipt,
+                    block: autoReceiptBlock,
+                    beaconFinality: autoReceiptFinality,
+                    blockReceipts: [conflictingIndexedHashReceipt, otherReceipt],
+                    inclusionBranch: autoReceiptInclusionBranch,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+            XCTFail("expected blockReceipts[0].transactionHash")
+        } catch {
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("blockReceipts[0].transactionHash")
+            )
+        }
         await assertEvmError(.invalidPublicInputs("receiptProof.executionReceiptsRoot")) {
             _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
                 EthereumMainnetInboundEvidence(
@@ -9987,6 +11169,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(evidence.beaconFinality?["finalizedHeaderRoot"] as? String, beaconFinality["finalizedHeaderRoot"] as? String)
         XCTAssertEqual(evidence.beaconFinality?["syncCommitteeRoot"] as? String, beaconFinality["syncCommitteeRoot"] as? String)
         XCTAssertEqual(evidence.beaconFinality?["beaconSlot"] as? String, "32")
+        XCTAssertEqual(evidence.beaconFinality?["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
         XCTAssertEqual(evidence.beaconFinality?["executionReceiptsRoot"] as? String, "0x" + String(repeating: "cc", count: 32))
         XCTAssertEqual(consensusProvider.calls, 1)
         XCTAssertEqual(provider.calls, ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"])
@@ -10002,18 +11185,6 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             )
         }
-        let proofBytes = try await sdk.proveInboundToSora(
-            EthereumMainnetInboundEvidence(
-                transactionHash: evidence.transactionHash,
-                receipt: sourceReceipt,
-                block: evidence.block,
-                beaconFinality: evidence.beaconFinality,
-                receiptProof: receiptProof,
-                receiptProofHash: receiptProofHash,
-                sourceBridgeEmitterAddress: sourceBridgeAddress
-            )
-        )
-        XCTAssertEqual(proofBytes, Data([1, 2, 3]))
         let proofReadyEvidence = EthereumMainnetInboundEvidence(
             transactionHash: evidence.transactionHash,
             receipt: sourceReceipt,
@@ -10023,6 +11194,26 @@ final class SccpSolanaProverTests: XCTestCase {
             receiptProofHash: receiptProofHash,
             sourceBridgeEmitterAddress: sourceBridgeAddress
         )
+        XCTAssertEqual(proofReadyEvidence.beaconFinality?["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+        let recollectedProofReadyEvidence = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(proofReadyEvidence)
+        XCTAssertEqual(recollectedProofReadyEvidence.beaconFinality?["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+        let proofBytes = try await sdk.proveInboundToSora(proofReadyEvidence)
+        XCTAssertEqual(proofBytes, Data([1, 2, 3]))
+        var missingFinalityBranchFinality = try XCTUnwrap(evidence.beaconFinality)
+        missingFinalityBranchFinality.removeValue(forKey: "finalityBranch")
+        await assertEvmError(.invalidPublicInputs("beaconFinality.finalityBranch")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: missingFinalityBranchFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
         var missingSyncBitsFinality = try XCTUnwrap(evidence.beaconFinality)
         missingSyncBitsFinality.removeValue(forKey: "syncCommitteeBits")
         await assertEvmError(.invalidPublicInputs("beaconFinality.syncCommitteeBits")) {
@@ -10053,6 +11244,126 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             )
         }
+        var mismatchedSyncParticipationFinality = try XCTUnwrap(evidence.beaconFinality)
+        mismatchedSyncParticipationFinality["syncCommitteeParticipation"] = "341"
+        await assertEvmError(.invalidPublicInputs("beaconFinality.syncCommitteeParticipation")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: mismatchedSyncParticipationFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var underQuorumSyncBitsFinality = try XCTUnwrap(evidence.beaconFinality)
+        underQuorumSyncBitsFinality["syncCommitteeBits"] = "0x01" + String(repeating: "00", count: 63)
+        underQuorumSyncBitsFinality["syncCommitteeParticipation"] = "1"
+        await assertEvmError(.invalidPublicInputs("beaconFinality.syncCommitteeBits")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: underQuorumSyncBitsFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var staleSyncSignatureSlotFinality = try XCTUnwrap(evidence.beaconFinality)
+        staleSyncSignatureSlotFinality["syncSignatureSlot"] = "31"
+        await assertEvmError(.invalidPublicInputs("beaconFinality.syncSignatureSlot")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: staleSyncSignatureSlotFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var zeroSyncCommitteeSignatureFinality = try XCTUnwrap(evidence.beaconFinality)
+        zeroSyncCommitteeSignatureFinality["syncCommitteeSignature"] = "0x" + String(repeating: "00", count: 96)
+        await assertEvmError(.zeroField("beaconFinality.syncCommitteeSignature")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: sourceReceipt,
+                    block: evidence.block,
+                    beaconFinality: zeroSyncCommitteeSignatureFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        let aliasOnlyFinality: [String: Any] = [
+            "execution_block_number": "0x1234",
+            "finality_block_hash": blockHash,
+            "receipts_root": "0x" + String(repeating: "cc", count: 32),
+            "finalized_header_root": "0x" + String(repeating: "dd", count: 32),
+            "sync_committee_root": "0x" + String(repeating: "aa", count: 32),
+            "beacon_slot": "0x20",
+            "finality_branch": Self.ethereumFinalityBranch,
+            "sync_committee_bits": Self.ethereumSyncCommitteeSupermajorityBits,
+            "sync_committee_signature": "0x" + String(repeating: "34", count: 96),
+            "sync_committee_participation": Self.ethereumSyncCommitteeSupermajorityParticipation,
+            "signature_slot": "65",
+            "extensionWitness": "kept",
+        ]
+        let aliasOnlyProof = try await EthereumMainnetSccp(
+            inboundProveFunction: { evidence in
+                let finality = try XCTUnwrap(evidence.beaconFinality)
+                XCTAssertEqual(finality["executionBlockNumber"] as? String, "4660")
+                XCTAssertEqual(finality["executionBlockHash"] as? String, blockHash)
+                XCTAssertEqual(finality["executionReceiptsRoot"] as? String, "0x" + String(repeating: "cc", count: 32))
+                XCTAssertEqual(finality["finalizedHeaderRoot"] as? String, "0x" + String(repeating: "dd", count: 32))
+                XCTAssertEqual(finality["syncCommitteeRoot"] as? String, "0x" + String(repeating: "aa", count: 32))
+                XCTAssertEqual(finality["beaconSlot"] as? String, "32")
+                XCTAssertEqual(finality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)
+                XCTAssertEqual(finality["syncCommitteeBits"] as? String, Self.ethereumSyncCommitteeSupermajorityBits)
+                XCTAssertEqual(finality["syncCommitteeSignature"] as? String, "0x" + String(repeating: "34", count: 96))
+                XCTAssertEqual(finality["syncCommitteeParticipation"] as? String, Self.ethereumSyncCommitteeSupermajorityParticipation)
+                XCTAssertEqual(finality["syncSignatureSlot"] as? String, "65")
+                XCTAssertEqual(finality["extensionWitness"] as? String, "kept")
+                for alias in [
+                    "execution_block_number",
+                    "finalityHeight",
+                    "finality_block_hash",
+                    "receipts_root",
+                    "finalized_header_root",
+                    "sync_committee_root",
+                    "beacon_slot",
+                    "finality_branch",
+                    "sync_committee_bits",
+                    "sync_committee_signature",
+                    "sync_committee_participation",
+                    "signature_slot",
+                ] {
+                    XCTAssertFalse(finality.keys.contains(alias))
+                }
+                return Data([4, 5, 6])
+            }
+        ).proveInboundToSora(
+            EthereumMainnetInboundEvidence(
+                transactionHash: evidence.transactionHash,
+                receipt: sourceReceipt,
+                block: evidence.block,
+                beaconFinality: aliasOnlyFinality,
+                receiptProof: receiptProof,
+                receiptProofHash: receiptProofHash,
+                sourceBridgeEmitterAddress: sourceBridgeAddress
+            )
+        )
+        XCTAssertEqual(aliasOnlyProof, Data([4, 5, 6]))
         for (alias, value, label) in [
             ("finalized_header_root", "0x" + String(repeating: "13", count: 32), "beaconFinality.finalizedHeaderRoot"),
             ("sync_committee_root", "0x" + String(repeating: "14", count: 32), "beaconFinality.syncCommitteeRoot"),
@@ -10081,6 +11392,14 @@ final class SccpSolanaProverTests: XCTestCase {
         await assertEvmError(.allZeroProof) {
             _ = try await EthereumMainnetSccp(inboundProveFunction: { _ in Data([0, 0]) })
                 .proveInboundToSora(proofReadyEvidence)
+        }
+        let oversizedInboundProof = Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1)
+        await assertEvmError(.invalidPublicInputs("proofBytes")) {
+            _ = try await EthereumMainnetSccp(inboundProveFunction: { _ in oversizedInboundProof })
+                .proveInboundToSora(proofReadyEvidence)
+        }
+        await assertEvmError(.invalidPublicInputs("proofBytes")) {
+            _ = try await sdk.submitInboundToIroha(oversizedInboundProof)
         }
         let submitResult = try await sdk.submitInboundToIroha(Data([1, 2, 3]))
         XCTAssertEqual(submitResult as? String, "submitted")
@@ -10772,6 +12091,258 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot() async throws {
+        let txHash = "0x" + String(repeating: "aa", count: 32)
+        let blockHash = "0x" + String(repeating: "bb", count: 32)
+        let sourceEventDigest = "0x" + String(repeating: "ee", count: 32)
+        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
+        let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
+        let finalizedRoot = "0x" + String(repeating: "dd", count: 32)
+        let syncCommitteeRoot = "0x" + String(repeating: "aa", count: 32)
+        let receiptNested = NSMutableDictionary(dictionary: [
+            "value": "keep",
+            "bytes": NSMutableData(data: Data([0xbb])),
+        ])
+        let receiptWitness = NSMutableArray(array: [receiptNested])
+        let blockWitness = NSMutableDictionary(dictionary: [
+            "value": "block",
+            "bytes": NSMutableData(data: Data([0xcc])),
+        ])
+        let finalityBranchWitness = NSMutableArray(array: Self.ethereumFinalityBranch)
+        let finalityBytes = NSMutableData(data: Data([0xaa]))
+        let finalityWitness = NSMutableDictionary(dictionary: [
+            "branch": finalityBranchWitness,
+            "bytes": finalityBytes,
+        ])
+        let blockReceiptsWitness = NSMutableArray(array: ["receipt-list"])
+        let sourceEventLog: [String: Any] = [
+            "address": sourceBridgeAddress,
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
+            "data": "0x",
+        ]
+        let receipt: [String: Any] = [
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "status": "0x1",
+            "logs": [sourceEventLog],
+            "mutableWitness": receiptWitness,
+        ]
+        let block: [String: Any] = [
+            "hash": blockHash,
+            "number": "0x1234",
+            "receiptsRoot": receiptsRoot,
+            "mutableWitness": blockWitness,
+        ]
+        let beaconFinality: [String: Any] = [
+            "executionBlockNumber": "0x1234",
+            "executionBlockHash": blockHash,
+            "executionReceiptsRoot": receiptsRoot,
+            "finalizedHeaderRoot": finalizedRoot,
+            "syncCommitteeRoot": syncCommitteeRoot,
+            "beaconSlot": "0x20",
+            "finalityBranch": Self.ethereumFinalityBranch,
+            "syncCommitteeBits": Self.ethereumSyncCommitteeSupermajorityBits,
+            "syncCommitteeSignature": "0x" + String(repeating: "34", count: 96),
+            "syncCommitteeParticipation": Self.ethereumSyncCommitteeSupermajorityParticipation,
+            "syncSignatureSlot": "65",
+            "mutableWitness": finalityWitness,
+        ]
+        var blockReceipt = receipt
+        blockReceipt["mutableWitness"] = blockReceiptsWitness
+        var mutableReceiptProofNode = Data([0x01, 0x02])
+        var mutableReceiptProofBranch = Data(repeating: 0x11, count: 32)
+        var mutableInputBranch = Data([0x44])
+        let receiptProof = EthereumMainnetReceiptProof(
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 32,
+            executionBlockNumber: 0x1234,
+            executionBlockHash: blockHash,
+            executionReceiptsRoot: receiptsRoot,
+            beaconFinalizedRoot: finalizedRoot,
+            syncCommitteeRoot: syncCommitteeRoot,
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [mutableReceiptProofNode],
+            inclusionBranch: [mutableReceiptProofBranch]
+        )
+        let receiptProofHash = try evmSccpReceiptProofHash(
+            sourceEventDigest: receiptProof.sourceEventDigest,
+            beaconSlot: receiptProof.beaconSlot,
+            executionBlockNumber: receiptProof.executionBlockNumber,
+            executionBlockHash: receiptProof.executionBlockHash,
+            executionReceiptsRoot: receiptProof.executionReceiptsRoot,
+            beaconFinalizedRoot: receiptProof.beaconFinalizedRoot,
+            syncCommitteeRoot: receiptProof.syncCommitteeRoot,
+            receiptRootIndex: receiptProof.receiptRootIndex,
+            receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+            inclusionBranch: receiptProof.inclusionBranch
+        )
+        let proofBytes = try await EthereumMainnetSccp(
+            inboundProveFunction: { evidence in
+                receiptWitness.add("changed")
+                receiptNested.setObject("changed", forKey: "value" as NSString)
+                blockWitness.setObject("changed", forKey: "value" as NSString)
+                finalityBranchWitness.add("0x" + String(repeating: "99", count: 32))
+                finalityBytes.setData(Data([0xff]))
+                finalityWitness.setObject("changed", forKey: "new" as NSString)
+                blockReceiptsWitness.add("changed")
+                mutableReceiptProofNode[0] = 0xff
+                mutableReceiptProofBranch[0] = 0xee
+                mutableInputBranch[0] = 0x45
+
+                XCTAssertNil(evidence.receipt?["mutableWitness"] as? NSMutableArray)
+                let receiptSnapshot = try XCTUnwrap(evidence.receipt?["mutableWitness"] as? [Any])
+                XCTAssertEqual(receiptSnapshot.count, 1)
+                let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+                XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+                XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+
+                XCTAssertNil(evidence.block?["mutableWitness"] as? NSMutableDictionary)
+                let blockSnapshot = try XCTUnwrap(evidence.block?["mutableWitness"] as? [String: Any])
+                XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+                XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+
+                XCTAssertNil(evidence.beaconFinality?["mutableWitness"] as? NSMutableDictionary)
+                let finalitySnapshot = try XCTUnwrap(evidence.beaconFinality?["mutableWitness"] as? [String: Any])
+                let branchSnapshot = try XCTUnwrap(finalitySnapshot["branch"] as? [Any])
+                XCTAssertEqual(branchSnapshot.count, Self.ethereumFinalityBranch.count)
+                XCTAssertEqual(branchSnapshot.first as? String, Self.ethereumFinalityBranch.first)
+                XCTAssertEqual(try XCTUnwrap(finalitySnapshot["bytes"] as? Data), Data([0xaa]))
+
+                let blockReceiptsSnapshot = try XCTUnwrap(evidence.blockReceipts)
+                XCTAssertNil(blockReceiptsSnapshot[0]["mutableWitness"] as? NSMutableArray)
+                let blockReceiptWitnessSnapshot = try XCTUnwrap(blockReceiptsSnapshot[0]["mutableWitness"] as? [Any])
+                XCTAssertEqual(blockReceiptWitnessSnapshot.count, 1)
+                XCTAssertEqual(blockReceiptWitnessSnapshot[0] as? String, "receipt-list")
+
+                XCTAssertEqual(evidence.inclusionBranch?[0], Data([0x44]))
+                XCTAssertEqual(evidence.receiptProof?.receiptTrieProofNodes[0], Data([0x01, 0x02]))
+                XCTAssertEqual(evidence.receiptProof?.inclusionBranch[0], Data(repeating: 0x11, count: 32))
+                XCTAssertEqual(evidence.receiptProofHash, receiptProofHash)
+                return Data([9, 8, 7])
+            }
+        ).proveInboundToSora(
+            EthereumMainnetInboundEvidence(
+                receipt: receipt,
+                block: block,
+                beaconFinality: beaconFinality,
+                blockReceipts: [blockReceipt],
+                inclusionBranch: [mutableInputBranch],
+                receiptProof: receiptProof,
+                receiptProofHash: receiptProofHash,
+                sourceBridgeEmitterAddress: sourceBridgeAddress
+            )
+        )
+        XCTAssertEqual(proofBytes, Data([9, 8, 7]))
+    }
+
+    func testEthereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary() async throws {
+        let txHash = "0x" + String(repeating: "aa", count: 32)
+        let blockHash = "0x" + String(repeating: "bb", count: 32)
+        let sourceEventDigest = "0x" + String(repeating: "ee", count: 32)
+        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
+        let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
+        let finalizedRoot = "0x" + String(repeating: "dd", count: 32)
+        let syncCommitteeRoot = "0x" + String(repeating: "aa", count: 32)
+        let receiptNested = NSMutableDictionary(dictionary: [
+            "value": "keep",
+            "bytes": NSMutableData(data: Data([0xbb])),
+        ])
+        let receiptWitness = NSMutableArray(array: [receiptNested])
+        let blockWitness = NSMutableDictionary(dictionary: [
+            "value": "block",
+            "bytes": NSMutableData(data: Data([0xcc])),
+        ])
+        let finalityBranchWitness = NSMutableArray(array: Self.ethereumFinalityBranch)
+        let finalityBytes = NSMutableData(data: Data([0xaa]))
+        let finalityWitness = NSMutableDictionary(dictionary: [
+            "branch": finalityBranchWitness,
+            "bytes": finalityBytes,
+        ])
+        let sourceEventLog: [String: Any] = [
+            "address": sourceBridgeAddress,
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
+            "data": "0x",
+        ]
+        let receipt: [String: Any] = [
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "status": "0x1",
+            "logs": [sourceEventLog],
+            "mutableWitness": receiptWitness,
+        ]
+        let block: [String: Any] = [
+            "hash": blockHash,
+            "number": "0x1234",
+            "receiptsRoot": receiptsRoot,
+            "mutableWitness": blockWitness,
+        ]
+        let beaconFinality: [String: Any] = [
+            "executionBlockNumber": "0x1234",
+            "executionBlockHash": blockHash,
+            "executionReceiptsRoot": receiptsRoot,
+            "finalizedHeaderRoot": finalizedRoot,
+            "syncCommitteeRoot": syncCommitteeRoot,
+            "beaconSlot": "0x20",
+            "finalityBranch": Self.ethereumFinalityBranch,
+            "syncCommitteeBits": Self.ethereumSyncCommitteeSupermajorityBits,
+            "syncCommitteeSignature": "0x" + String(repeating: "34", count: 96),
+            "syncCommitteeParticipation": Self.ethereumSyncCommitteeSupermajorityParticipation,
+            "syncSignatureSlot": "65",
+            "mutableWitness": finalityWitness,
+        ]
+        let consensusProvider = EthereumMainnetMutatingConsensusProviderStub(finality: beaconFinality) { receipt, block, transactionHash in
+            XCTAssertEqual(transactionHash, txHash)
+            XCTAssertNil(receipt?["mutableWitness"] as? NSMutableArray)
+            let receiptSnapshot = try XCTUnwrap(receipt?["mutableWitness"] as? [Any])
+            let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+            XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+            XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+            XCTAssertNil(block?["mutableWitness"] as? NSMutableDictionary)
+            let blockSnapshot = try XCTUnwrap(block?["mutableWitness"] as? [String: Any])
+            XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+            XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+
+            receiptWitness.add("changed")
+            receiptNested.setObject("changed", forKey: "value" as NSString)
+            blockWitness.setObject("changed", forKey: "value" as NSString)
+        }
+
+        let evidence = try await EthereumMainnetSccp(
+            consensusProvider: consensusProvider,
+            sourceBridgeEmitterAddress: sourceBridgeAddress
+        ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt, block: block))
+        finalityBranchWitness.add("0x" + String(repeating: "99", count: 32))
+        finalityBytes.setData(Data([0xff]))
+        finalityWitness.setObject("changed", forKey: "new" as NSString)
+
+        XCTAssertEqual(consensusProvider.calls, 1)
+        XCTAssertNil(evidence.receipt?["mutableWitness"] as? NSMutableArray)
+        let receiptSnapshot = try XCTUnwrap(evidence.receipt?["mutableWitness"] as? [Any])
+        XCTAssertEqual(receiptSnapshot.count, 1)
+        let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+        XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+        XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+        XCTAssertNil(evidence.block?["mutableWitness"] as? NSMutableDictionary)
+        let blockSnapshot = try XCTUnwrap(evidence.block?["mutableWitness"] as? [String: Any])
+        XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+        XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+        XCTAssertNil(evidence.beaconFinality?["mutableWitness"] as? NSMutableDictionary)
+        let finalitySnapshot = try XCTUnwrap(evidence.beaconFinality?["mutableWitness"] as? [String: Any])
+        let branchSnapshot = try XCTUnwrap(finalitySnapshot["branch"] as? [Any])
+        XCTAssertEqual(branchSnapshot.count, Self.ethereumFinalityBranch.count)
+        XCTAssertEqual(branchSnapshot.first as? String, Self.ethereumFinalityBranch.first)
+        XCTAssertEqual(try XCTUnwrap(finalitySnapshot["bytes"] as? Data), Data([0xaa]))
+        XCTAssertNil(finalitySnapshot["new"])
+    }
+
     func testBscMainnetSccpFacadeRequiresChainId56AndBscTarget() async throws {
         let binding = try sccpBscMainnetDestinationBinding(
             verifierAddress: "0x" + String(repeating: "11", count: 20),
@@ -11439,6 +13010,105 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testBscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary() async throws {
+        let txHash = "0x" + String(repeating: "aa", count: 32)
+        let blockHash = "0x" + String(repeating: "bb", count: 32)
+        let sourceEventDigest = "0x" + String(repeating: "ee", count: 32)
+        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
+        let receiptsRoot = "0x" + String(repeating: "cc", count: 32)
+        let validatorSetHash = "0x" + String(repeating: "ab", count: 32)
+        let commitSealHash = "0x" + String(repeating: "dd", count: 32)
+        let receiptNested = NSMutableDictionary(dictionary: [
+            "value": "keep",
+            "bytes": NSMutableData(data: Data([0xbb])),
+        ])
+        let receiptWitness = NSMutableArray(array: [receiptNested])
+        let blockWitness = NSMutableDictionary(dictionary: [
+            "value": "block",
+            "bytes": NSMutableData(data: Data([0xcc])),
+        ])
+        let finalityBranchWitness = NSMutableArray(array: [validatorSetHash])
+        let finalityBytes = NSMutableData(data: Data([0xaa]))
+        let finalityWitness = NSMutableDictionary(dictionary: [
+            "branch": finalityBranchWitness,
+            "bytes": finalityBytes,
+        ])
+        let sourceEventLog: [String: Any] = [
+            "address": sourceBridgeAddress,
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
+            "data": "0x",
+        ]
+        let receipt: [String: Any] = [
+            "transactionHash": txHash,
+            "blockHash": blockHash,
+            "blockNumber": "0x1234",
+            "status": "0x1",
+            "logs": [sourceEventLog],
+            "mutableWitness": receiptWitness,
+        ]
+        let block: [String: Any] = [
+            "hash": blockHash,
+            "number": "0x1234",
+            "receiptsRoot": receiptsRoot,
+            "mutableWitness": blockWitness,
+        ]
+        let parliaFinality: [String: Any] = [
+            "executionBlockNumber": "0x1234",
+            "executionBlockHash": blockHash,
+            "executionReceiptsRoot": receiptsRoot,
+            "validatorEpoch": "0x24",
+            "validatorSetHash": validatorSetHash,
+            "commitSealHash": commitSealHash,
+            "mutableWitness": finalityWitness,
+        ]
+        let consensusProvider = BscMainnetMutatingConsensusProviderStub(finality: parliaFinality) { receipt, block, transactionHash in
+            XCTAssertEqual(transactionHash, txHash)
+            XCTAssertNil(receipt?["mutableWitness"] as? NSMutableArray)
+            let receiptSnapshot = try XCTUnwrap(receipt?["mutableWitness"] as? [Any])
+            let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+            XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+            XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+            XCTAssertNil(block?["mutableWitness"] as? NSMutableDictionary)
+            let blockSnapshot = try XCTUnwrap(block?["mutableWitness"] as? [String: Any])
+            XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+            XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+
+            receiptWitness.add("changed")
+            receiptNested.setObject("changed", forKey: "value" as NSString)
+            blockWitness.setObject("changed", forKey: "value" as NSString)
+        }
+
+        let evidence = try await BscMainnetSccp(
+            consensusProvider: consensusProvider,
+            sourceBridgeEmitterAddress: sourceBridgeAddress
+        ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt: receipt, block: block))
+        finalityBranchWitness.add("0x" + String(repeating: "99", count: 32))
+        finalityBytes.setData(Data([0xff]))
+        finalityWitness.setObject("changed", forKey: "new" as NSString)
+
+        XCTAssertEqual(consensusProvider.calls, 1)
+        XCTAssertNil(evidence.receipt?["mutableWitness"] as? NSMutableArray)
+        let receiptSnapshot = try XCTUnwrap(evidence.receipt?["mutableWitness"] as? [Any])
+        XCTAssertEqual(receiptSnapshot.count, 1)
+        let receiptNestedSnapshot = try XCTUnwrap(receiptSnapshot[0] as? [String: Any])
+        XCTAssertEqual(receiptNestedSnapshot["value"] as? String, "keep")
+        XCTAssertEqual(try XCTUnwrap(receiptNestedSnapshot["bytes"] as? Data), Data([0xbb]))
+        XCTAssertNil(evidence.block?["mutableWitness"] as? NSMutableDictionary)
+        let blockSnapshot = try XCTUnwrap(evidence.block?["mutableWitness"] as? [String: Any])
+        XCTAssertEqual(blockSnapshot["value"] as? String, "block")
+        XCTAssertEqual(try XCTUnwrap(blockSnapshot["bytes"] as? Data), Data([0xcc]))
+        XCTAssertNil(evidence.parliaFinality?["mutableWitness"] as? NSMutableDictionary)
+        let finalitySnapshot = try XCTUnwrap(evidence.parliaFinality?["mutableWitness"] as? [String: Any])
+        let branchSnapshot = try XCTUnwrap(finalitySnapshot["branch"] as? [Any])
+        XCTAssertEqual(branchSnapshot.count, 1)
+        XCTAssertEqual(branchSnapshot.first as? String, validatorSetHash)
+        XCTAssertEqual(try XCTUnwrap(finalitySnapshot["bytes"] as? Data), Data([0xaa]))
+        XCTAssertNil(finalitySnapshot["new"])
+    }
+
     func testEvmProverRequiresLinkedProofEngine() async throws {
         let prover = EvmSccpProver()
 
@@ -11499,6 +13169,16 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
         XCTAssertEqual(result.requestHash, try buildEvmSccpProofRequest(sourceProofInput).requestHash)
         XCTAssertEqual(result.envelopeHash.count, 66)
+        let artifactInput = try Self.sampleProductionEvmProofRequestInput(
+            sourceProofBytes: Data([9, 10]),
+            proofArtifactHash: String(repeating: "91", count: 32),
+            provingKeyHash: String(repeating: "92", count: 32)
+        )
+        let artifactRequest = try buildEvmSccpProofRequest(artifactInput)
+        let artifactResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: artifactRequest)
+        XCTAssertEqual(artifactResult.proofArtifactHash, artifactRequest.proofArtifactHash)
+        XCTAssertEqual(artifactResult.provingKeyHash, artifactRequest.provingKeyHash)
+        XCTAssertNotEqual(artifactRequest.requestHash, try buildEvmSccpProofRequest(sourceProofInput).requestHash)
 
         let hashOnlyRequest = try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(sourceProofBytes: Data([9, 10])))
         XCTAssertThrowsError(try wrapEvmSccpProofResult(
@@ -12736,44 +14416,31 @@ final class SccpSolanaProverTests: XCTestCase {
             )
         )
 
-        let parentSyncKeys = [Data(repeating: 0x11, count: 48), Data(repeating: 0x22, count: 48)]
-        let parentSyncWeights: [UInt64] = [1, 2]
-        let parentSyncPops = [Data(repeating: 0xaa, count: 96), Data(repeating: 0xbb, count: 96)]
-        let nextSyncKeys = [Data(repeating: 0x33, count: 48), Data(repeating: 0x44, count: 48)]
-        let nextSyncWeights: [UInt64] = [3, 4]
-        let nextSyncPops = [Data(repeating: 0xcc, count: 96), Data(repeating: 0xdd, count: 96)]
+        let parentSyncKeys = Self.ethereumSyncCommitteeBytes(0x11, count: 48)
+        let parentSyncWeights = Self.ethereumSyncCommitteeWeights()
+        let parentSyncPops = Self.ethereumSyncCommitteeBytes(0xaa, count: 96)
+        let nextSyncKeys = Self.ethereumSyncCommitteeBytes(0x33, count: 48)
+        let nextSyncWeights = Self.ethereumSyncCommitteeWeights()
+        let nextSyncPops = Self.ethereumSyncCommitteeBytes(0xcc, count: 96)
         let nextSyncPayload = try canonicalEthSyncCommitteePayloadBytes(
             syncCommitteePublicKeys: nextSyncKeys,
             syncCommitteeWeights: nextSyncWeights,
             syncCommitteePops: nextSyncPops
         )
-        XCTAssertEqual(
-            try ethSyncCommitteeHash(
-                syncCommitteePublicKeys: parentSyncKeys,
-                syncCommitteeWeights: parentSyncWeights,
-                syncCommitteePops: parentSyncPops
-            ),
-            "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536"
+        let parentSyncCommitteeHash = try ethSyncCommitteeHash(
+            syncCommitteePublicKeys: parentSyncKeys,
+            syncCommitteeWeights: parentSyncWeights,
+            syncCommitteePops: parentSyncPops
         )
-        XCTAssertEqual(
-            nextSyncPayload.hexEncodedString(),
-            "010200000030000000"
-                + String(repeating: "33", count: 48)
-                + "030000000000000060000000"
-                + String(repeating: "cc", count: 96)
-                + "30000000"
-                + String(repeating: "44", count: 48)
-                + "040000000000000060000000"
-                + String(repeating: "dd", count: 96)
-        )
-        XCTAssertEqual(
-            try ethSyncCommitteeHashFromPayload(payload: nextSyncPayload),
-            "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445"
-        )
-        XCTAssertEqual(
-            try ethSyncCommitteePayloadHash(payload: nextSyncPayload),
-            "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17"
-        )
+        let nextSyncCommitteeHash = try ethSyncCommitteeHashFromPayload(payload: nextSyncPayload)
+        let nextSyncCommitteePayloadHash = try ethSyncCommitteePayloadHash(payload: nextSyncPayload)
+        func assertHex32(_ value: String) {
+            XCTAssertNotNil(value.range(of: #"^0x[0-9a-f]{64}$"#, options: .regularExpression))
+        }
+        XCTAssertEqual(nextSyncPayload.count, 81_925)
+        assertHex32(parentSyncCommitteeHash)
+        assertHex32(nextSyncCommitteeHash)
+        assertHex32(nextSyncCommitteePayloadHash)
         XCTAssertEqual(sccpEthMainnetSlotsPerSyncCommitteePeriod, 8192)
         XCTAssertEqual(ethMainnetSyncCommitteePeriodForSlot(19), 0)
         XCTAssertEqual(ethMainnetSyncCommitteePeriodForSlot(8192), 1)
@@ -12782,23 +14449,20 @@ final class SccpSolanaProverTests: XCTestCase {
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )
-        XCTAssertEqual(
-            ethTransitionMessageHash,
-            "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e"
-        )
+        assertHex32(ethTransitionMessageHash)
         XCTAssertThrowsError(try canonicalEthSyncCommitteeTransitionMessageBytes(
             fromSyncPeriod: 0,
             toSyncPeriod: 2,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("toSyncPeriod"))
@@ -12808,9 +14472,9 @@ final class SccpSolanaProverTests: XCTestCase {
             toSyncPeriod: 2,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("transitionSlot"))
@@ -12820,114 +14484,153 @@ final class SccpSolanaProverTests: XCTestCase {
             toSyncPeriod: 1,
             transitionSlot: 0,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32)
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("transitionSlot"))
         }
-        XCTAssertEqual(try canonicalEthSyncCommitteeTransitionSignatureBytes(
+        let transitionSignatureTranscript = try canonicalEthSyncCommitteeTransitionSignatureBytes(
             fromSyncPeriod: 0,
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
             nextSyncCommitteePayload: nextSyncPayload,
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
             transitionMessageHash: ethTransitionMessageHash,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
-        ).count, 1068)
-        XCTAssertEqual(try ethSyncCommitteeTransitionSignatureHash(
+        )
+        XCTAssertGreaterThan(transitionSignatureTranscript.count, nextSyncPayload.count)
+        let ethTransitionSignatureHash = try ethSyncCommitteeTransitionSignatureHash(
             fromSyncPeriod: 0,
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
             nextSyncCommitteePayload: nextSyncPayload,
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
             transitionMessageHash: ethTransitionMessageHash,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
-        ), "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d")
+        )
+        assertHex32(ethTransitionSignatureHash)
         XCTAssertThrowsError(try canonicalEthSyncCommitteeTransitionSignatureBytes(
             version: 0,
             fromSyncPeriod: 0,
             toSyncPeriod: 1,
             transitionSlot: 19,
             finalizedBeaconRoot: String(repeating: "aa", count: 32),
-            parentSyncCommitteeHash: "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash: "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+            parentSyncCommitteeHash: parentSyncCommitteeHash,
+            nextSyncCommitteeHash: nextSyncCommitteeHash,
             nextSyncCommitteePayload: nextSyncPayload,
-            nextSyncCommitteePayloadHash: "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            nextSyncCommitteePayloadHash: nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash: String(repeating: "be", count: 32),
             transitionMessageHash: ethTransitionMessageHash,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
         ))
         XCTAssertThrowsError(try canonicalEthBeaconSyncCommitteeProofBytes(
             version: 0,
-            totalWeight: 3,
-            signedWeight: 3,
+            totalWeight: 512,
+            signedWeight: 342,
             syncCommitteeMessageHash: ethTransitionMessageHash,
             syncCommitteePublicKeys: parentSyncKeys,
             syncCommitteeWeights: parentSyncWeights,
             syncCommitteePops: parentSyncPops,
-            signersBitmap: Data([0x03]),
+            signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
             aggregateSignature: Data(repeating: 0xee, count: 96)
         ))
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys: Array(repeating: Data(repeating: 0x11, count: 48), count: 513),
-                syncCommitteeWeights: Array(repeating: 1, count: 513),
-                syncCommitteePops: Array(repeating: Data(repeating: 0xaa, count: 96), count: 513)
+                syncCommitteePublicKeys: [Data(repeating: 0x11, count: 48), Data(repeating: 0x22, count: 48)],
+                syncCommitteeWeights: [1, 1],
+                syncCommitteePops: [Data(repeating: 0xaa, count: 96), Data(repeating: 0xbb, count: 96)]
             )
         )
+        var weightedSyncWeights = parentSyncWeights
+        weightedSyncWeights[0] = 2
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys: [Data(repeating: 0x11, count: 47), parentSyncKeys[1]],
+                syncCommitteePublicKeys: parentSyncKeys,
+                syncCommitteeWeights: weightedSyncWeights,
+                syncCommitteePops: parentSyncPops
+            )
+        )
+        var oversizedSyncKeys = parentSyncKeys
+        oversizedSyncKeys.append(Data(repeating: 0x55, count: 48))
+        var oversizedSyncWeights = parentSyncWeights
+        oversizedSyncWeights.append(1)
+        var oversizedSyncPops = parentSyncPops
+        oversizedSyncPops.append(Data(repeating: 0xdd, count: 96))
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: oversizedSyncKeys,
+                syncCommitteeWeights: oversizedSyncWeights,
+                syncCommitteePops: oversizedSyncPops
+            )
+        )
+        var shortSyncKeys = parentSyncKeys
+        shortSyncKeys[0] = Data(repeating: 0x11, count: 47)
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: shortSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops
             )
         )
+        var zeroSyncKeys = parentSyncKeys
+        zeroSyncKeys[0] = Data(repeating: 0, count: 48)
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys: [Data(repeating: 0, count: 48), parentSyncKeys[1]],
+                syncCommitteePublicKeys: zeroSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops
             )
         )
+        var duplicateSyncKeys = parentSyncKeys
+        duplicateSyncKeys[1] = duplicateSyncKeys[0]
+        XCTAssertThrowsError(
+            try canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys: duplicateSyncKeys,
+                syncCommitteeWeights: parentSyncWeights,
+                syncCommitteePops: parentSyncPops
+            )
+        )
+        var zeroSyncPops = parentSyncPops
+        zeroSyncPops[0] = Data(repeating: 0, count: 96)
         XCTAssertThrowsError(
             try canonicalEthSyncCommitteePayloadBytes(
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
-                syncCommitteePops: [Data(repeating: 0, count: 96), parentSyncPops[1]]
+                syncCommitteePops: zeroSyncPops
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 342,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
@@ -12938,73 +14641,73 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
+                totalWeight: 512,
                 signedWeight: 0,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x00]),
+                signersBitmap: Data(repeating: 0, count: 64),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 341,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x04]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 2,
+                totalWeight: 512,
+                signedWeight: 511,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x01]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 4,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 341,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x03]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(341),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 1,
+                totalWeight: 511,
+                signedWeight: 342,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x01]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0xee, count: 96)
             )
         )
         XCTAssertThrowsError(
             try canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight: 3,
-                signedWeight: 3,
+                totalWeight: 512,
+                signedWeight: 342,
                 syncCommitteeMessageHash: ethTransitionMessageHash,
                 syncCommitteePublicKeys: parentSyncKeys,
                 syncCommitteeWeights: parentSyncWeights,
                 syncCommitteePops: parentSyncPops,
-                signersBitmap: Data([0x03]),
+                signersBitmap: Self.ethereumSyncCommitteeSignersBitmap(342),
                 aggregateSignature: Data(repeating: 0, count: 96)
             )
         )
@@ -15038,7 +16741,9 @@ final class SccpSolanaProverTests: XCTestCase {
         statementHash: String = String(repeating: "56", count: 32),
         destinationBindingHash: String = String(repeating: "78", count: 32),
         backend: String = sccpEvmGroth16Bn254ProofBackendV1,
-        sourceDomain: UInt32 = sccpDomainSora
+        sourceDomain: UInt32 = sccpDomainSora,
+        proofArtifactHash: String? = nil,
+        provingKeyHash: String? = nil
     ) -> EvmSccpProofRequestInput {
         EvmSccpProofRequestInput(
             publicInputs: publicInputs,
@@ -15047,7 +16752,9 @@ final class SccpSolanaProverTests: XCTestCase {
             statementHash: statementHash,
             destinationBindingHash: destinationBindingHash,
             backend: backend,
-            sourceDomain: sourceDomain
+            sourceDomain: sourceDomain,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash
         )
     }
 
@@ -15075,7 +16782,9 @@ final class SccpSolanaProverTests: XCTestCase {
         sourceProofBytes: Data = Data(),
         statementHash: String = String(repeating: "56", count: 32),
         backend: String = sccpEvmGroth16Bn254ProofBackendV1,
-        sourceDomain: UInt32 = sccpDomainSora
+        sourceDomain: UInt32 = sccpDomainSora,
+        proofArtifactHash: String? = nil,
+        provingKeyHash: String? = nil
     ) throws -> EvmSccpProofRequestInput {
         try EvmSccpProofRequestInput(
             publicInputs: publicInputs,
@@ -15084,8 +16793,238 @@ final class SccpSolanaProverTests: XCTestCase {
             statementHash: statementHash,
             destinationBinding: try sampleEvmDestinationBinding(targetDomain: publicInputs.targetDomain),
             backend: backend,
-            sourceDomain: sourceDomain
+            sourceDomain: sourceDomain,
+            proofArtifactHash: proofArtifactHash,
+            provingKeyHash: provingKeyHash
         )
+    }
+
+    private static func sampleEthereumNativeEvmProverBundle(
+        destinationBindingHash: String,
+        verifierKeyHash: String = "0x" + String(repeating: "cc", count: 32),
+        noWasm: Bool = true,
+        remoteProverRequired: Bool = false,
+        expectedDestinationBindingHash: String? = nil
+    ) throws -> EthereumMainnetNativeEvmProverBundle {
+        let proofArtifactHash = "0x" + String(repeating: "91", count: 32)
+        let provingKeyHash = "0x" + String(repeating: "92", count: 32)
+        let artifacts = try sccpEthNativeEvmProverRequiredImplementationsV1
+            .sorted { $0.key < $1.key }
+            .enumerated()
+            .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: proofArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                        implementationHash: "0x" + String(
+                            repeating: String(format: "%02x", index + 1),
+                            count: 32
+                    )
+                )
+            }
+        return try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: proofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: destinationBindingHash,
+            noWasm: noWasm,
+            remoteProverRequired: remoteProverRequired,
+            nativeSdkArtifacts: artifacts,
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
+            expectedDestinationBindingHash: expectedDestinationBindingHash
+        )
+    }
+
+    private static func sampleEthereumNativeEvmProverAuditHashes() -> [String: String] {
+        [
+            "circuit_security_audit": "0x" + String(repeating: "a1", count: 32),
+            "native_implementation_audit": "0x" + String(repeating: "a2", count: 32),
+            "reproducible_build_attestation": "0x" + String(repeating: "a3", count: 32),
+            "cross_sdk_fixture_parity": "0x" + String(repeating: "a4", count: 32),
+            "native_prover_self_test": "0x" + String(repeating: "a5", count: 32),
+            "no_wasm_no_remote_scan": "0x" + String(repeating: "a6", count: 32)
+        ]
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        "0x" + Data(SHA256.hash(data: data)).hexEncodedString()
+    }
+
+    private static func nativeEvmProverArtifactBytes(_ label: String) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 256)
+        let labelBytes = Array(label.utf8)
+        for index in bytes.indices {
+            bytes[index] = UInt8((index * 37 + labelBytes.count * 11) & 0xff)
+        }
+        for (index, byte) in labelBytes.prefix(bytes.count).enumerated() {
+            bytes[index] = byte
+        }
+        return Data(bytes)
+    }
+
+    private static func sampleEthereumNativeEvmProverBundleJson(
+        destinationBindingHash: String,
+        proofArtifact: String = "artifacts/eth-mainnet/proof-artifact.bin",
+        noWasm: Bool = true,
+        remoteProverRequired: Bool = false
+    ) -> String {
+        let proofArtifactHash = "0x" + String(repeating: "91", count: 32)
+        let provingKeyHash = "0x" + String(repeating: "92", count: 32)
+        let artifacts = sccpEthNativeEvmProverRequiredImplementationsV1
+            .sorted { $0.key < $1.key }
+            .enumerated()
+            .map { index, entry in
+                """
+                {
+                  "sdk": "\(entry.key)",
+                  "implementation": "\(entry.value)",
+                  "prover_artifact_hash": "\(proofArtifactHash)",
+                  "proving_key_hash": "\(provingKeyHash)",
+                  "implementation_artifact": "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                  "implementation_hash": "0x\(String(repeating: String(format: "%02x", index + 1), count: 32))"
+                }
+                """
+            }
+            .joined(separator: ",")
+        return """
+        {
+          "schema": "\(sccpNativeEvmProverBundleSchemaV1)",
+          "bundle_id": "\(sccpEthNativeEvmProverBundleIdV1)",
+          "domain": \(sccpDomainEthereum),
+          "chain": "eth",
+          "proof_backend": "\(sccpEvmGroth16Bn254ProofBackendV1)",
+          "proof_artifact": "\(proofArtifact)",
+          "proof_artifact_hash": "\(proofArtifactHash)",
+          "proving_key": "artifacts/eth-mainnet/proving-key.bin",
+          "proving_key_hash": "\(provingKeyHash)",
+          "verifier_key": "artifacts/eth-mainnet/verifier-key.bin",
+          "verifier_key_hash": "0x\(String(repeating: "cc", count: 32))",
+          "destination_binding_hash": "\(destinationBindingHash)",
+          "no_wasm": \(noWasm),
+          "remote_prover_required": \(remoteProverRequired),
+          "browser_implementation": "pure-typescript",
+          "native_sdk_artifacts": [\(artifacts)],
+          "cross_sdk_fixture_parity_artifact": "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+          "native_prover_self_test_artifact": "artifacts/eth-mainnet/native-prover-self-test.json",
+          "audit_hashes": {
+            "circuit_security_audit": "0x\(String(repeating: "a1", count: 32))",
+            "native_implementation_audit": "0x\(String(repeating: "a2", count: 32))",
+            "reproducible_build_attestation": "0x\(String(repeating: "a3", count: 32))",
+            "cross_sdk_fixture_parity": "0x\(String(repeating: "a4", count: 32))",
+            "native_prover_self_test": "0x\(String(repeating: "a5", count: 32))",
+            "no_wasm_no_remote_scan": "0x\(String(repeating: "a6", count: 32))"
+          }
+        }
+        """
+    }
+
+    private static func sampleEthereumNativeEvmProverParityFixtureJson(
+        nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+        swiftCalldataHash: String? = nil
+    ) -> String {
+        let publicSignalWords = (0..<9)
+            .map { index in
+                "0x" + String(repeating: String(format: "%02x", index + 0x10), count: 32)
+            }
+        func sdkResult(calldataHash: String = "0x" + String(repeating: "d3", count: 32)) -> String {
+            """
+            {
+              "receipt_proof_hash": "0x\(String(repeating: "d1", count: 32))",
+              "source_proof_hash": "0x\(String(repeating: "d2", count: 32))",
+              "destination_binding_hash": "\(nativeProverBundle.destinationBindingHash)",
+              "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+              "calldata_hash": "\(calldataHash)",
+              "torii_submit_payload_hash": "0x\(String(repeating: "d4", count: 32))"
+            }
+            """
+        }
+        let sdkResults = sccpEthNativeEvmProverRequiredImplementationsV1
+            .keys
+            .sorted()
+            .map { sdk in
+                "\"\(sdk)\": \(sdkResult(calldataHash: sdk == "swift" ? (swiftCalldataHash ?? "0x" + String(repeating: "d3", count: 32)) : "0x" + String(repeating: "d3", count: 32)))"
+            }
+            .joined(separator: ",")
+        return """
+        {
+          "schema": "\(sccpEthNativeEvmProverParityFixtureSchemaV1)",
+          "domain": \(sccpDomainEthereum),
+          "chain": "eth",
+          "proof_backend": "\(sccpEvmGroth16Bn254ProofBackendV1)",
+          "proof_artifact_hash": "\(nativeProverBundle.proofArtifactHash)",
+          "proving_key_hash": "\(nativeProverBundle.provingKeyHash)",
+          "verifier_key_hash": "\(nativeProverBundle.verifierKeyHash)",
+          "destination_binding_hash": "\(nativeProverBundle.destinationBindingHash)",
+          "receipt_proof_hash": "0x\(String(repeating: "d1", count: 32))",
+          "source_proof_hash": "0x\(String(repeating: "d2", count: 32))",
+          "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+          "calldata_hash": "0x\(String(repeating: "d3", count: 32))",
+          "torii_submit_payload_hash": "0x\(String(repeating: "d4", count: 32))",
+          "sdk_results": {
+            \(sdkResults)
+          }
+        }
+        """
+    }
+
+    private static func sampleEthereumNativeEvmProverSelfTestFixtureJson(
+        nativeProverBundle: EthereumMainnetNativeEvmProverBundle,
+        swiftProofHash: String? = nil
+    ) -> String {
+        let publicSignalWords = (0..<9)
+            .map { index in
+                "0x" + String(repeating: String(format: "%02x", index + 0x20), count: 32)
+            }
+        let proofHash = "0x" + String(repeating: "e4", count: 32)
+        func sdkResult(proofHash sdkProofHash: String) -> String {
+            """
+            {
+              "request_hash": "0x\(String(repeating: "e1", count: 32))",
+              "witness_hash": "0x\(String(repeating: "e2", count: 32))",
+              "source_proof_hash": "0x\(String(repeating: "e3", count: 32))",
+              "proof_hash": "\(sdkProofHash)",
+              "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+              "calldata_hash": "0x\(String(repeating: "e5", count: 32))",
+              "torii_submit_payload_hash": "0x\(String(repeating: "e6", count: 32))"
+            }
+            """
+        }
+        let sdkResults = sccpEthNativeEvmProverRequiredImplementationsV1
+            .keys
+            .sorted()
+            .map { sdk in
+                "\"\(sdk)\": \(sdkResult(proofHash: sdk == "swift" ? (swiftProofHash ?? proofHash) : proofHash))"
+            }
+            .joined(separator: ",")
+        return """
+        {
+          "schema": "\(sccpEthNativeEvmProverSelfTestSchemaV1)",
+          "domain": \(sccpDomainEthereum),
+          "chain": "eth",
+          "proof_backend": "\(sccpEvmGroth16Bn254ProofBackendV1)",
+          "proof_artifact_hash": "\(nativeProverBundle.proofArtifactHash)",
+          "proving_key_hash": "\(nativeProverBundle.provingKeyHash)",
+          "verifier_key_hash": "\(nativeProverBundle.verifierKeyHash)",
+          "destination_binding_hash": "\(nativeProverBundle.destinationBindingHash)",
+          "request_hash": "0x\(String(repeating: "e1", count: 32))",
+          "witness_hash": "0x\(String(repeating: "e2", count: 32))",
+          "source_proof_hash": "0x\(String(repeating: "e3", count: 32))",
+          "proof_hash": "\(proofHash)",
+          "public_signal_words": [\(publicSignalWords.map { "\"\($0)\"" }.joined(separator: ","))],
+          "calldata_hash": "0x\(String(repeating: "e5", count: 32))",
+          "torii_submit_payload_hash": "0x\(String(repeating: "e6", count: 32))",
+          "sdk_results": {
+            \(sdkResults)
+          }
+        }
+        """
     }
 
     private static func sampleEvmPublicInputs(

@@ -529,12 +529,11 @@ _SCCP_GROTH16_BN254_G2_B_C1 = int(
 )
 _SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX = 9
 _SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH = 4
-_SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512
+_SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512
+_SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = _SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES
 _SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48
 _SCCP_ETH_SYNC_COMMITTEE_POP_BYTES = 96
 _SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES = 96
-_SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 96
-_SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES = 256
 _SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNATURE_BYTES = 192
 SCCP_ETH_MAINNET_SLOTS_PER_EPOCH = 32
 SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256
@@ -546,7 +545,7 @@ _SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES = (
     1
     + 4
     + _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
-    * (4 + _SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + _SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES)
+    * (4 + _SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4 + _SCCP_ETH_SYNC_COMMITTEE_POP_BYTES)
 )
 _SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNERS_BITMAP_BYTES = (
     _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES + 7
@@ -7943,13 +7942,13 @@ def _normalize_eth_sync_committee_parts(input_value: Any) -> Dict[str, Sequence[
         or isinstance(pops, (str, bytes, bytearray))
     ):
         raise TypeError("ETH sync committee public keys, weights, and PoPs must be arrays")
-    if not public_keys or len(public_keys) != len(weights) or len(public_keys) != len(pops):
+    if len(public_keys) != len(weights) or len(public_keys) != len(pops):
         raise ValueError(
-            "ETH sync committee public keys, weights, and PoPs must be non-empty equal-length arrays"
+            "ETH sync committee public keys, weights, and PoPs must be equal-length arrays"
         )
-    if len(public_keys) > _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES:
+    if len(public_keys) != _SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES:
         raise ValueError(
-            f"ETH sync committee must contain at most {_SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities"
+            f"ETH sync committee must contain exactly {_SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES} authorities"
         )
     seen = set()
     normalized_public_keys = []
@@ -7970,8 +7969,8 @@ def _normalize_eth_sync_committee_parts(input_value: Any) -> Dict[str, Sequence[
             raise ValueError(f"syncCommitteePublicKeys[{index}] must be unique")
         seen.add(public_key)
         weight = _normalize_u64(weight_value, f"syncCommitteeWeights[{index}]")
-        if weight == 0:
-            raise ValueError(f"syncCommitteeWeights[{index}] must not be zero")
+        if weight != 1:
+            raise ValueError(f"syncCommitteeWeights[{index}] must be 1 for Ethereum mainnet")
         pop = _to_bytes(pop_value, f"syncCommitteePops[{index}]")
         if len(pop) != _SCCP_ETH_SYNC_COMMITTEE_POP_BYTES:
             raise ValueError(
@@ -8020,11 +8019,9 @@ def _decode_eth_sync_committee_payload(payload: bytes) -> None:
     cursor += 1
     count = int.from_bytes(payload[cursor : cursor + 4], "little")
     cursor += 4
-    if count == 0:
-        raise ValueError("ETH sync committee payload must not be empty")
-    if count > _SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES:
+    if count != _SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES:
         raise ValueError(
-            f"ETH sync committee must contain at most {_SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES} authorities"
+            f"ETH sync committee must contain exactly {_SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES} authorities"
         )
     seen = set()
     for index in range(count):
@@ -8051,8 +8048,8 @@ def _decode_eth_sync_committee_payload(payload: bytes) -> None:
             raise ValueError("ETH sync committee weight is truncated")
         weight = int.from_bytes(payload[cursor : cursor + 8], "little")
         cursor += 8
-        if weight == 0:
-            raise ValueError(f"syncCommitteeWeights[{index}] must not be zero")
+        if weight != 1:
+            raise ValueError(f"syncCommitteeWeights[{index}] must be 1 for Ethereum mainnet")
         if cursor + 4 > len(payload):
             raise ValueError("ETH sync committee PoP is truncated")
         pop_len = int.from_bytes(payload[cursor : cursor + 4], "little")
@@ -19072,9 +19069,13 @@ async def _evm_facade_collect_finality(
     for method_name in ("collect_finality_evidence", "collectFinalityEvidence"):
         if hasattr(consensus_provider, method_name):
             collector = getattr(consensus_provider, method_name)
-            return await _maybe_await(collector(dict(evidence), options))
+            return await _maybe_await(
+                collector(_clone_prover_callback_request(evidence), options)
+            )
     if callable(consensus_provider):
-        return await _maybe_await(consensus_provider(dict(evidence), options))
+        return await _maybe_await(
+            consensus_provider(_clone_prover_callback_request(evidence), options)
+        )
     raise TypeError(f"{label} must collect finality evidence")
 
 
@@ -19146,6 +19147,102 @@ def _normalize_ethereum_mainnet_beacon_finality(
         raise ValueError(
             "beaconFinality.executionReceiptsRoot must match block.receiptsRoot"
         )
+    finalized_header_root = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.finalizedHeaderRoot",
+            "finalizedHeaderRoot",
+            "finalized_header_root",
+            "beaconFinalizedRoot",
+            "beacon_finalized_root",
+        ),
+        "beaconFinality.finalizedHeaderRoot",
+        32,
+    )
+    sync_committee_root = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.syncCommitteeRoot",
+            "syncCommitteeRoot",
+            "sync_committee_root",
+        ),
+        "beaconFinality.syncCommitteeRoot",
+        32,
+    )
+    beacon_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.beaconSlot",
+            "beaconSlot",
+            "beacon_slot",
+            "finalizedSlot",
+            "finalized_slot",
+            "slot",
+        ),
+        "beaconFinality.beaconSlot",
+    )
+    if beacon_slot == 0:
+        raise ValueError("beaconFinality.beaconSlot must be positive")
+    finality_branch = _normalize_ethereum_mainnet_finality_branch(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.finalityBranch",
+            "finalityBranch",
+            "finality_branch",
+        ),
+        "beaconFinality.finalityBranch",
+    )
+    sync_committee_bits = _normalize_ethereum_mainnet_finality_sync_committee_bits(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.syncCommitteeBits",
+            "syncCommitteeBits",
+            "sync_committee_bits",
+        ),
+        "beaconFinality.syncCommitteeBits",
+    )
+    sync_committee_signature = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.syncCommitteeSignature",
+            "syncCommitteeSignature",
+            "sync_committee_signature",
+        ),
+        "beaconFinality.syncCommitteeSignature",
+        96,
+    )
+    sync_signature_slot = _normalize_u64(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.syncSignatureSlot",
+            "syncSignatureSlot",
+            "sync_signature_slot",
+            "signatureSlot",
+            "signature_slot",
+        ),
+        "beaconFinality.syncSignatureSlot",
+    )
+    if sync_signature_slot == 0:
+        raise ValueError("beaconFinality.syncSignatureSlot must be positive")
+    if sync_signature_slot < beacon_slot:
+        raise ValueError("beaconFinality.syncSignatureSlot must cover beaconFinality.beaconSlot")
+    sync_committee_participation = _normalize_u64(
+        _mapping_value_without_aliases(
+            finality,
+            "beaconFinality.syncCommitteeParticipation",
+            "syncCommitteeParticipation",
+            "sync_committee_participation",
+        ),
+        "beaconFinality.syncCommitteeParticipation",
+    )
+    if sync_committee_participation == 0:
+        raise ValueError("beaconFinality.syncCommitteeParticipation must be positive")
+    if sync_committee_participation != _ethereum_mainnet_sync_committee_participation(
+        sync_committee_bits
+    ):
+        raise ValueError(
+            "beaconFinality.syncCommitteeParticipation must match syncCommitteeBits"
+        )
 
     normalized = {
         key: item
@@ -19164,6 +19261,29 @@ def _normalize_ethereum_mainnet_beacon_finality(
             "execution_receipts_root",
             "receiptsRoot",
             "receipts_root",
+            "finalizedHeaderRoot",
+            "finalized_header_root",
+            "beaconFinalizedRoot",
+            "beacon_finalized_root",
+            "syncCommitteeRoot",
+            "sync_committee_root",
+            "beaconSlot",
+            "beacon_slot",
+            "finalizedSlot",
+            "finalized_slot",
+            "slot",
+            "finalityBranch",
+            "finality_branch",
+            "syncCommitteeBits",
+            "sync_committee_bits",
+            "syncCommitteeSignature",
+            "sync_committee_signature",
+            "syncSignatureSlot",
+            "sync_signature_slot",
+            "signatureSlot",
+            "signature_slot",
+            "syncCommitteeParticipation",
+            "sync_committee_participation",
         }
     }
     normalized.update(
@@ -19171,9 +19291,44 @@ def _normalize_ethereum_mainnet_beacon_finality(
             "execution_block_number": str(execution_block_number),
             "execution_block_hash": execution_block_hash,
             "execution_receipts_root": execution_receipts_root,
+            "finalized_header_root": finalized_header_root,
+            "sync_committee_root": sync_committee_root,
+            "beacon_slot": str(beacon_slot),
+            "finality_branch": finality_branch,
+            "sync_committee_bits": sync_committee_bits,
+            "sync_committee_signature": sync_committee_signature,
+            "sync_signature_slot": str(sync_signature_slot),
+            "sync_committee_participation": str(sync_committee_participation),
         }
     )
     return normalized
+
+
+def _normalize_ethereum_mainnet_finality_branch(value: Any, label: str) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray, str)):
+        raise TypeError(f"{label} must be an array")
+    if len(value) != 6:
+        raise ValueError(f"{label} must contain 6 siblings")
+    return [
+        _normalize_evm_rpc_hex(sibling, f"{label}[{index}]", 32, nonzero=False)
+        for index, sibling in enumerate(value)
+    ]
+
+
+def _normalize_ethereum_mainnet_finality_sync_committee_bits(
+    value: Any, label: str
+) -> str:
+    bits = _normalize_evm_rpc_hex(value, label, 64, nonzero=False)
+    participation = _ethereum_mainnet_sync_committee_participation(bits)
+    if participation == 0:
+        raise TypeError(f"{label} must contain at least one participant")
+    if participation * 3 < 512 * 2:
+        raise TypeError(f"{label} must contain Ethereum sync committee supermajority")
+    return bits
+
+
+def _ethereum_mainnet_sync_committee_participation(bits: str) -> int:
+    return sum(bin(byte).count("1") for byte in bytes.fromhex(bits[2:]))
 
 
 def _require_ethereum_mainnet_receipt_proof_matches_evidence(
@@ -19262,6 +19417,48 @@ def _require_ethereum_mainnet_receipt_proof_matches_evidence(
         raise ValueError(
             "receiptProof.executionReceiptsRoot must match beaconFinality.executionReceiptsRoot"
         )
+    if beacon_finality is not None:
+        proof_finalized_root = _normalize_evm_rpc_hex(
+            _mapping_value_without_aliases(
+                proof,
+                "receiptProof.beaconFinalizedRoot",
+                "beaconFinalizedRoot",
+                "beacon_finalized_root",
+            ),
+            "receiptProof.beaconFinalizedRoot",
+            32,
+        )
+        if proof_finalized_root != beacon_finality["finalized_header_root"]:
+            raise ValueError(
+                "receiptProof.beaconFinalizedRoot must match beaconFinality.finalizedHeaderRoot"
+            )
+        proof_sync_committee_root = _normalize_evm_rpc_hex(
+            _mapping_value_without_aliases(
+                proof,
+                "receiptProof.syncCommitteeRoot",
+                "syncCommitteeRoot",
+                "sync_committee_root",
+            ),
+            "receiptProof.syncCommitteeRoot",
+            32,
+        )
+        if proof_sync_committee_root != beacon_finality["sync_committee_root"]:
+            raise ValueError(
+                "receiptProof.syncCommitteeRoot must match beaconFinality.syncCommitteeRoot"
+            )
+        proof_beacon_slot = _normalize_u64(
+            _mapping_value_without_aliases(
+                proof,
+                "receiptProof.beaconSlot",
+                "beaconSlot",
+                "beacon_slot",
+                "finalizedSlot",
+                "finalized_slot",
+            ),
+            "receiptProof.beaconSlot",
+        )
+        if proof_beacon_slot != int(beacon_finality["beacon_slot"], 10):
+            raise ValueError("receiptProof.beaconSlot must match beaconFinality.beaconSlot")
     if source_event_digest is not None:
         proof_source_event_digest = _normalize_evm_rpc_hex(
             _mapping_value_without_aliases(
@@ -26880,6 +27077,9 @@ class EthereumMainnetSccp:
             raise EvmSccpProverUnavailableError(
                 "Ethereum mainnet SCCP outbound submitter is not linked"
             )
+        provider = options.get("execution_provider", self.execution_provider)
+        if provider is not None:
+            await self.validate_execution_provider_mainnet(provider)
         return await _maybe_await(submitter(dict(submission), options))
 
     async def validate_execution_provider_mainnet(
@@ -27227,6 +27427,7 @@ class EthereumMainnetSccp:
         if receipt_proof_hash is not None:
             evidence["receipt_proof_hash"] = receipt_proof_hash
 
+        evidence = dict(_clone_prover_callback_request(evidence))
         if supplied_finality is not None:
             evidence["beacon_finality"] = _normalize_ethereum_mainnet_beacon_finality(
                 supplied_finality,
@@ -27263,7 +27464,7 @@ class EthereumMainnetSccp:
             beacon_finality=evidence.get("beacon_finality"),
             source_event_digest=evidence.get("source_event_digest"),
         )
-        return evidence
+        return _clone_prover_callback_request(evidence)
 
     async def prove_inbound_to_sora(
         self,
@@ -27292,8 +27493,12 @@ class EthereumMainnetSccp:
             raise TypeError(
                 "Ethereum mainnet SCCP inbound proof requires receipt source event validation"
             )
-        proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
-        return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+        proof_bytes = await _maybe_await(
+            self.inbound_prove_fn(_clone_prover_callback_request(evidence), options)
+        )
+        proof_copy = bytes(_to_bytes(proof_bytes, "proofBytes"))
+        _require_native_recursive_proof_bytes(proof_copy, "proofBytes")
+        return proof_copy
 
     async def submit_inbound_to_iroha(
         self,
@@ -27307,7 +27512,8 @@ class EthereumMainnetSccp:
             raise EvmSccpProverUnavailableError(
                 "Ethereum mainnet SCCP inbound submitter is not linked"
             )
-        proof_copy = bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
+        proof_copy = bytes(_to_bytes(proof_bytes, "proofBytes"))
+        _require_native_recursive_proof_bytes(proof_copy, "proofBytes")
         return await _maybe_await(submitter(proof_copy, options))
 
 
@@ -27593,6 +27799,34 @@ class BscMainnetSccp:
                     default_source_bridge_emitter_address=self.source_bridge_emitter_address,
                 ),
             )
+        elif (
+            _strict_optional_mapping_value(
+                value,
+                "sourceEventDigest",
+                "sourceEventDigest",
+                "source_event_digest",
+            )
+            is not None
+            or _source_bridge_emitter_address_input(value, "sourceBridgeEmitterAddress")
+            is not None
+            or _source_bridge_emitter_address_input(options, "sourceBridgeEmitterAddress")
+            is not None
+            or _strict_optional_mapping_value(
+                value,
+                "sourceVerifierMaterial",
+                "sourceVerifierMaterial",
+                "source_verifier_material",
+            )
+            is not None
+            or _strict_optional_mapping_value(
+                options,
+                "sourceVerifierMaterial",
+                "sourceVerifierMaterial",
+                "source_verifier_material",
+            )
+            is not None
+        ):
+            raise TypeError("BSC mainnet SCCP source event validation requires receipt logs")
 
         block = _strict_optional_mapping_value(value, "block", "block")
         if block is None and block_hash is not None and provider is not None:
@@ -27665,6 +27899,16 @@ class BscMainnetSccp:
                 "receipt_proof",
                 "receiptProofHash",
                 "receipt_proof_hash",
+                "sourceEventDigest",
+                "source_event_digest",
+                "sourceBridgeEmitterAddress",
+                "source_bridge_emitter_address",
+                "expectedSourceBridgeEmitterAddress",
+                "expected_source_bridge_emitter_address",
+                "bridgeAddress",
+                "bridge_address",
+                "sourceVerifierMaterial",
+                "source_verifier_material",
                 "blockHash",
                 "block_hash",
                 "block",
@@ -27692,9 +27936,10 @@ class BscMainnetSccp:
             evidence["receipt_proof"] = _immutable_prover_envelope_value(receipt_proof)
         if receipt_proof_hash is not None:
             evidence["receipt_proof_hash"] = receipt_proof_hash
+        evidence = dict(_clone_prover_callback_request(evidence))
         if supplied_finality is not None:
             if isinstance(supplied_finality, Mapping) and not supplied_finality:
-                return evidence
+                return _clone_prover_callback_request(evidence)
             evidence["parlia_finality"] = _normalize_bsc_mainnet_parlia_finality(
                 supplied_finality,
                 expected_block_hash=block_hash,
@@ -27726,7 +27971,7 @@ class BscMainnetSccp:
             parlia_finality=evidence.get("parlia_finality"),
             source_event_digest=evidence.get("source_event_digest"),
         )
-        return evidence
+        return _clone_prover_callback_request(evidence)
 
     async def prove_inbound_to_sora(
         self,
@@ -27750,7 +27995,9 @@ class BscMainnetSccp:
             raise TypeError(
                 "BSC mainnet SCCP inbound proof requires receipt source event validation"
             )
-        proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
+        proof_bytes = await _maybe_await(
+            self.inbound_prove_fn(_clone_prover_callback_request(evidence), options)
+        )
         return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
 
     async def submit_inbound_to_iroha(

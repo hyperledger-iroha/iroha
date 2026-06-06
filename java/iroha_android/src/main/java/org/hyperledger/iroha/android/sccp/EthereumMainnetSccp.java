@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,6 +32,43 @@ public final class EthereumMainnetSccp {
   public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   private static final int BEACON_REST_MAX_RESPONSE_BYTES = 1024 * 1024;
   private static final long ETHEREUM_MAINNET_SECONDS_PER_SLOT = 12L;
+  private static final List<String> BEACON_FINALITY_ALIAS_KEYS =
+      Arrays.asList(
+          "executionBlockNumber",
+          "execution_block_number",
+          "finalityHeight",
+          "finality_height",
+          "executionBlockHash",
+          "execution_block_hash",
+          "finalityBlockHash",
+          "finality_block_hash",
+          "executionReceiptsRoot",
+          "execution_receipts_root",
+          "receiptsRoot",
+          "receipts_root",
+          "finalizedHeaderRoot",
+          "finalized_header_root",
+          "beaconFinalizedRoot",
+          "beacon_finalized_root",
+          "syncCommitteeRoot",
+          "sync_committee_root",
+          "beaconSlot",
+          "beacon_slot",
+          "finalizedSlot",
+          "finalized_slot",
+          "slot",
+          "finalityBranch",
+          "finality_branch",
+          "syncCommitteeBits",
+          "sync_committee_bits",
+          "syncCommitteeSignature",
+          "sync_committee_signature",
+          "syncSignatureSlot",
+          "sync_signature_slot",
+          "signatureSlot",
+          "signature_slot",
+          "syncCommitteeParticipation",
+          "sync_committee_participation");
 
   private static final class BeaconRestHeaderSummary {
     final String root;
@@ -57,6 +95,7 @@ public final class EthereumMainnetSccp {
   private static final class BeaconRestFinalityUpdateSummary {
     final String finalizedHeaderRoot;
     final long beaconSlot;
+    final List<String> finalityBranch;
     final String syncCommitteeBits;
     final String syncCommitteeSignature;
     final long syncCommitteeParticipation;
@@ -65,12 +104,14 @@ public final class EthereumMainnetSccp {
     BeaconRestFinalityUpdateSummary(
         final String finalizedHeaderRoot,
         final long beaconSlot,
+        final List<String> finalityBranch,
         final String syncCommitteeBits,
         final String syncCommitteeSignature,
         final long syncCommitteeParticipation,
         final long syncSignatureSlot) {
       this.finalizedHeaderRoot = finalizedHeaderRoot;
       this.beaconSlot = beaconSlot;
+      this.finalityBranch = finalityBranch;
       this.syncCommitteeBits = syncCommitteeBits;
       this.syncCommitteeSignature = syncCommitteeSignature;
       this.syncCommitteeParticipation = syncCommitteeParticipation;
@@ -85,10 +126,23 @@ public final class EthereumMainnetSccp {
   private final InboundProver inboundProver;
   private final InboundSubmitter inboundSubmitter;
   private final OutboundSubmitter outboundSubmitter;
+  private final NativeProverSelfTest nativeProverSelfTest;
+  private final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle;
+  private final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts;
   private final String sourceBridgeEmitterAddress;
 
   public EthereumMainnetSccp() {
     this(null, null, null, null, null);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+    this(null, null, null, null, null, null, null, nativeProverBundle, null);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts) {
+    this(null, null, null, null, null, null, null, null, nativeProverArtifacts, null);
   }
 
   public EthereumMainnetSccp(
@@ -151,6 +205,78 @@ public final class EthereumMainnetSccp {
       final InboundSubmitter inboundSubmitter,
       final OutboundSubmitter outboundSubmitter,
       final String sourceBridgeEmitterAddress) {
+    this(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        null,
+        sourceBridgeEmitterAddress);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sourceBridgeEmitterAddress) {
+    this(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        nativeProverBundle,
+        null,
+        sourceBridgeEmitterAddress);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+      final String sourceBridgeEmitterAddress) {
+    this(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        nativeProverBundle,
+        nativeProverArtifacts,
+        null,
+        sourceBridgeEmitterAddress);
+  }
+
+  public EthereumMainnetSccp(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+      final NativeProverSelfTest nativeProverSelfTest,
+      final String sourceBridgeEmitterAddress) {
     this.witnessProvider = witnessProvider;
     this.proofEngine = proofEngine;
     this.executionProvider = executionProvider;
@@ -158,7 +284,76 @@ public final class EthereumMainnetSccp {
     this.inboundProver = inboundProver;
     this.inboundSubmitter = inboundSubmitter;
     this.outboundSubmitter = outboundSubmitter;
+    this.nativeProverSelfTest = nativeProverSelfTest;
+    this.nativeProverArtifacts = nativeProverArtifacts;
+    this.nativeProverBundle =
+        nativeProverArtifacts == null ? nativeProverBundle : nativeProverArtifacts.nativeProverBundle();
     this.sourceBridgeEmitterAddress = sourceBridgeEmitterAddress;
+  }
+
+  public static EthereumMainnetSccp fromNativeProverBundle(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sdk,
+      final EvmSccpProver.NativeEvmProverArtifactResolver artifactResolver) {
+    return fromNativeProverBundle(
+        null, null, null, null, null, null, null, nativeProverBundle, sdk, artifactResolver, null);
+  }
+
+  public static EthereumMainnetSccp fromNativeProverBundle(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sdk,
+      final EvmSccpProver.NativeEvmProverArtifactResolver artifactResolver,
+      final String sourceBridgeEmitterAddress) {
+    return fromNativeProverBundle(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        null,
+        nativeProverBundle,
+        sdk,
+        artifactResolver,
+        sourceBridgeEmitterAddress);
+  }
+
+  public static EthereumMainnetSccp fromNativeProverBundle(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final NativeProverSelfTest nativeProverSelfTest,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      final String sdk,
+      final EvmSccpProver.NativeEvmProverArtifactResolver artifactResolver,
+      final String sourceBridgeEmitterAddress) {
+    Objects.requireNonNull(nativeProverBundle, "nativeProverBundle");
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts =
+        nativeProverBundle.verifiedArtifacts(sdk, artifactResolver);
+    return new EthereumMainnetSccp(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        verifiedArtifacts.nativeProverBundle(),
+        verifiedArtifacts,
+        nativeProverSelfTest,
+        sourceBridgeEmitterAddress);
   }
 
   public static void requireMainnetChainId(final long chainId) {
@@ -240,7 +435,8 @@ public final class EthereumMainnetSccp {
       }
       final String receiptTransactionHash =
           normalizeRpcHex(
-              firstPresent(receipt, "transactionHash", "transaction_hash"),
+              strictFirstPresent(
+                  receipt, "receipt.transactionHash", "transactionHash", "transaction_hash"),
               "receipt.transactionHash",
               32);
       if (transactionHash != null && !transactionHash.equals(receiptTransactionHash)) {
@@ -248,8 +444,12 @@ public final class EthereumMainnetSccp {
       }
       transactionHash = receiptTransactionHash;
       blockHash =
-          normalizeRpcHex(firstPresent(receipt, "blockHash", "block_hash"), "receipt.blockHash", 32);
-      final Object receiptBlockNumberInput = firstPresent(receipt, "blockNumber", "block_number");
+          normalizeRpcHex(
+              strictFirstPresent(receipt, "receipt.blockHash", "blockHash", "block_hash"),
+              "receipt.blockHash",
+              32);
+      final Object receiptBlockNumberInput =
+          strictFirstPresent(receipt, "receipt.blockNumber", "blockNumber", "block_number");
       receiptBlockNumber = normalizePositiveRpcQuantity(receiptBlockNumberInput, "receipt.blockNumber");
     }
 
@@ -266,7 +466,7 @@ public final class EthereumMainnetSccp {
         throw new IllegalArgumentException("block.hash must match receipt.blockHash");
       }
       final Object blockNumberInput =
-          firstPresent(block, "number", "blockNumber", "block_number");
+          strictFirstPresent(block, "block.number", "number", "blockNumber", "block_number");
       final String blockNumber = normalizePositiveRpcQuantity(blockNumberInput, "block.number");
       if (receiptBlockNumber != null && !receiptBlockNumber.equals(blockNumber)) {
         throw new IllegalArgumentException("block.number must match receipt.blockNumber");
@@ -274,9 +474,13 @@ public final class EthereumMainnetSccp {
       receiptBlockNumber = blockNumber;
       blockReceiptsRoot =
           normalizeRpcHex(
-              firstPresent(block, "receiptsRoot", "receipts_root"), "block.receiptsRoot", 32);
+              strictFirstPresent(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
+              "block.receiptsRoot",
+              32);
     }
 
+    receipt = callbackMapSnapshot(receipt);
+    block = callbackMapSnapshot(block);
     final Map<String, Object> rawBeaconFinality =
         input.beaconFinality() != null
             ? input.beaconFinality()
@@ -320,7 +524,8 @@ public final class EthereumMainnetSccp {
                 "eth_getBlockReceipts");
       }
       final Object receiptTransactionIndex =
-          firstPresent(receipt, "transactionIndex", "transaction_index");
+          strictFirstPresent(
+              receipt, "receipt.transactionIndex", "transactionIndex", "transaction_index");
       final SourceSccpProofs.EvmReceiptTrieProof receiptTrieProof =
           SourceSccpProofs.buildEvmReceiptTrieProofFromReceipts(
               blockReceipts, receiptTransactionIndex);
@@ -341,7 +546,11 @@ public final class EthereumMainnetSccp {
       final Map<String, Object> indexedReceipt = blockReceipts.get((int) targetIndex);
       final String indexedTransactionHash =
           normalizeRpcHex(
-              firstPresent(indexedReceipt, "transactionHash", "transaction_hash"),
+              strictFirstPresent(
+                  indexedReceipt,
+                  "blockReceipts.transactionHash",
+                  "transactionHash",
+                  "transaction_hash"),
               "blockReceipts transactionHash",
               32);
       if (!indexedTransactionHash.equals(transactionHash)) {
@@ -350,7 +559,8 @@ public final class EthereumMainnetSccp {
       }
       final String indexedBlockHash =
           normalizeRpcHex(
-              firstPresent(indexedReceipt, "blockHash", "block_hash"),
+              strictFirstPresent(
+                  indexedReceipt, "blockReceipts.blockHash", "blockHash", "block_hash"),
               "blockReceipts blockHash",
               32);
       if (!indexedBlockHash.equals(blockHash)) {
@@ -359,7 +569,8 @@ public final class EthereumMainnetSccp {
       }
       final String indexedBlockNumber =
           normalizePositiveRpcQuantity(
-              firstPresent(indexedReceipt, "blockNumber", "block_number"),
+              strictFirstPresent(
+                  indexedReceipt, "blockReceipts.blockNumber", "blockNumber", "block_number"),
               "blockReceipts blockNumber");
       if (!indexedBlockNumber.equals(receiptBlockNumber)) {
         throw new IllegalArgumentException(
@@ -408,9 +619,10 @@ public final class EthereumMainnetSccp {
         sourceEvent.sourceEventDigest());
     final String receiptProofHash =
         normalizeReceiptProofHash(receiptProof, input.receiptProofHash());
-    return new InboundEvidence(
-        DOMAIN_ETH,
-        DOMAIN_SORA,
+    return callbackEvidenceSnapshot(
+        new InboundEvidence(
+            DOMAIN_ETH,
+            DOMAIN_SORA,
             transactionHash,
             receipt,
             block,
@@ -420,7 +632,7 @@ public final class EthereumMainnetSccp {
             sourceEvent.sourceEventDigest(),
             sourceEvent.sourceBridgeEmitterAddress(),
             blockReceipts,
-            input.inclusionBranch());
+            input.inclusionBranch()));
   }
 
   public byte[] proveInboundToSora(final InboundEvidence input) {
@@ -444,7 +656,7 @@ public final class EthereumMainnetSccp {
       throw new IllegalArgumentException(
           "Ethereum mainnet SCCP inbound proof requires receiptProof");
     }
-    if (evidence.receipt() != null && evidence.sourceEventDigest() == null) {
+    if (evidence.sourceEventDigest() == null) {
       throw new IllegalArgumentException(
           "Ethereum mainnet SCCP inbound proof requires receipt source event validation");
     }
@@ -462,6 +674,7 @@ public final class EthereumMainnetSccp {
     }
     for (final String field :
         Arrays.asList(
+            "finalityBranch",
             "syncCommitteeBits",
             "syncCommitteeSignature",
             "syncCommitteeParticipation",
@@ -471,32 +684,12 @@ public final class EthereumMainnetSccp {
             "Ethereum mainnet SCCP inbound proof requires beaconFinality." + field);
       }
     }
-    final byte[] proofBytes = inboundProver.prove(evidence);
-    if (proofBytes == null || proofBytes.length == 0) {
-      throw new IllegalArgumentException("proofBytes must not be empty");
-    }
-    boolean nonzero = false;
-    for (final byte value : proofBytes) {
-      nonzero |= value != 0;
-    }
-    if (!nonzero) {
-      throw new IllegalArgumentException("proofBytes must not be all zero");
-    }
-    return Arrays.copyOf(proofBytes, proofBytes.length);
+    return requireNativeRecursiveBytes(
+        inboundProver.prove(callbackEvidenceSnapshot(evidence)), "proofBytes");
   }
 
   public Object submitInboundToIroha(final byte[] proofBytes) {
-    final byte[] proof = Objects.requireNonNull(proofBytes, "proofBytes");
-    if (proof.length == 0) {
-      throw new IllegalArgumentException("proofBytes must not be empty");
-    }
-    boolean nonzero = false;
-    for (final byte value : proof) {
-      nonzero |= value != 0;
-    }
-    if (!nonzero) {
-      throw new IllegalArgumentException("proofBytes must not be all zero");
-    }
+    final byte[] proof = requireNativeRecursiveBytes(proofBytes, "proofBytes");
     if (inboundSubmitter == null) {
       throw new IllegalStateException("Ethereum mainnet SCCP inbound submitter is not linked");
     }
@@ -527,6 +720,12 @@ public final class EthereumMainnetSccp {
     final EvmSccpProver.ProofRequest request = EvmSccpProver.buildProofRequest(input);
     requireEthereumProofRequest(request);
     return request;
+  }
+
+  public static EvmSccpProver.ProofRequest buildProofRequest(
+      final EvmSccpProver.ProofRequestInput input,
+      final EvmSccpProver.EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+    return buildProofRequest(Objects.requireNonNull(nativeProverBundle, "nativeProverBundle").applyTo(input));
   }
 
   public static EvmSccpProver.ProofResult wrapProofResult(
@@ -625,21 +824,204 @@ public final class EthereumMainnetSccp {
       final EvmSccpProver.ProofRequestInput input) {
     final EvmSccpProver.ProofRequestInput resolved =
         witnessProvider == null ? input : witnessProvider.resolveWitness(inputSnapshot(input));
-    return buildProofRequest(resolved);
+    return buildProofRequest(nativeProverBundle == null ? resolved : nativeProverBundle.applyTo(resolved));
   }
 
   public EvmSccpProver.ProofResult proveOutboundToEthereum(
       final EvmSccpProver.ProofRequestInput input) {
     final EvmSccpProver.ProofRequest request = buildOutboundProofRequest(input);
+    requireVerifiedNativeProverArtifacts(nativeProverArtifacts, request);
+    requireNativeProverSelfTest(nativeProverArtifacts, nativeProverSelfTest);
     if (proofEngine == null) {
       throw new IllegalStateException("Ethereum mainnet SCCP Groth16 prover is not linked");
     }
-    return wrapProofResult(proofEngine.prove(request), request);
+    return wrapProofResult(
+        proofEngine.prove(EvmSccpProver.callbackRequestSnapshot(request)), request);
+  }
+
+  public EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult
+      runNativeProverSelfTest() {
+    return runNativeProverSelfTest(nativeProverArtifacts, nativeProverSelfTest);
+  }
+
+  public EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult
+      runNativeProverSelfTest(
+          final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
+          final NativeProverSelfTest nativeProverSelfTest) {
+    return requireNativeProverSelfTest(artifacts, nativeProverSelfTest);
+  }
+
+  private static void requireVerifiedNativeProverArtifacts(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
+      final EvmSccpProver.ProofRequest request) {
+    if (artifacts == null) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet SCCP outbound proof requires verified native EVM prover artifacts");
+    }
+    if (!artifacts.nativeProverBundle().destinationBindingHash().equals(request.destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts destinationBindingHash must match proof request");
+    }
+    if (!artifacts.proofArtifactHash().equals(request.proofArtifactHash())
+        || !artifacts.provingKeyHash().equals(request.provingKeyHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts artifact hashes must match proof request");
+    }
+    if (!artifacts.verifierKeyHash().equals(artifacts.nativeProverBundle().verifierKeyHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts verifierKeyHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.crossSdkFixtureParityHash(),
+            artifacts.nativeProverBundle().auditHashes().get("cross_sdk_fixture_parity"))
+        || artifacts.crossSdkFixtureParity() == null
+        || !Objects.equals(
+            artifacts.crossSdkFixtureParity().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.nativeProverSelfTestHash(),
+            artifacts.nativeProverBundle().auditHashes().get("native_prover_self_test"))
+        || artifacts.nativeProverSelfTest() == null
+        || !Objects.equals(
+            artifacts.nativeProverSelfTest().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle");
+    }
+    if (artifacts.sdk() == null
+        || artifacts.sdk().isEmpty()
+        || artifacts.implementation() == null
+        || artifacts.implementation().isEmpty()
+        || artifacts.implementationHash() == null
+        || artifacts.implementationHash().isEmpty()) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts must bind sdk implementation and implementationHash");
+    }
+    EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact artifact = null;
+    for (final EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact row :
+        artifacts.nativeProverBundle().nativeSdkArtifacts()) {
+      if (artifacts.sdk().equals(row.sdk())) {
+        artifact = row;
+        break;
+      }
+    }
+    if (artifact == null) {
+      throw new IllegalArgumentException(
+          "nativeProverBundle has no artifact row for sdk: " + artifacts.sdk());
+    }
+    if (!artifacts.implementation().equals(artifact.implementation())
+        || !artifacts.implementationHash().equals(artifact.implementationHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts implementation binding must match nativeProverBundle");
+    }
+  }
+
+  private static EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult
+      requireNativeProverSelfTest(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
+      final NativeProverSelfTest nativeProverSelfTest) {
+    Objects.requireNonNull(artifacts, "nativeProverArtifacts");
+    final String sdk = Objects.requireNonNull(artifacts.sdk(), "nativeProverArtifacts.sdk");
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture fixture =
+        Objects.requireNonNull(
+            artifacts.nativeProverSelfTest(), "nativeProverArtifacts.nativeProverSelfTest");
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult expectedResult =
+        fixture.sdkResults().get(sdk);
+    if (expectedResult == null) {
+      throw new IllegalArgumentException("nativeProverSelfTest sdkResults must include " + sdk);
+    }
+    if (nativeProverSelfTest == null) {
+      throw new IllegalArgumentException("nativeProverSelfTest runner is required");
+    }
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult result =
+        nativeProverSelfTest.run(fixture, expectedResult, artifacts);
+    if (!expectedResult.equals(result)) {
+      throw new IllegalArgumentException(
+          "nativeProverSelfTest result must match nativeProverBundle fixture");
+    }
+    return result;
+  }
+
+  private static void requireVerifiedNativeProverArtifacts(
+      final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
+      final EvmSccpProver.ProofResult proofResult) {
+    if (artifacts == null) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet SCCP submission requires verified native EVM prover artifacts");
+    }
+    if (!artifacts.nativeProverBundle().destinationBindingHash().equals(proofResult.destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts destinationBindingHash must match proofResult");
+    }
+    if (!artifacts.proofArtifactHash().equals(proofResult.proofArtifactHash())
+        || !artifacts.provingKeyHash().equals(proofResult.provingKeyHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts artifact hashes must match proofResult");
+    }
+    if (!artifacts.verifierKeyHash().equals(artifacts.nativeProverBundle().verifierKeyHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts verifierKeyHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.crossSdkFixtureParityHash(),
+            artifacts.nativeProverBundle().auditHashes().get("cross_sdk_fixture_parity"))
+        || artifacts.crossSdkFixtureParity() == null
+        || !Objects.equals(
+            artifacts.crossSdkFixtureParity().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle");
+    }
+    if (!Objects.equals(
+            artifacts.nativeProverSelfTestHash(),
+            artifacts.nativeProverBundle().auditHashes().get("native_prover_self_test"))
+        || artifacts.nativeProverSelfTest() == null
+        || !Objects.equals(
+            artifacts.nativeProverSelfTest().destinationBindingHash(),
+            artifacts.nativeProverBundle().destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle");
+    }
+    if (artifacts.sdk() == null
+        || artifacts.sdk().isEmpty()
+        || artifacts.implementation() == null
+        || artifacts.implementation().isEmpty()
+        || artifacts.implementationHash() == null
+        || artifacts.implementationHash().isEmpty()) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts must bind sdk implementation and implementationHash");
+    }
+    EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact artifact = null;
+    for (final EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact row :
+        artifacts.nativeProverBundle().nativeSdkArtifacts()) {
+      if (artifacts.sdk().equals(row.sdk())) {
+        artifact = row;
+        break;
+      }
+    }
+    if (artifact == null) {
+      throw new IllegalArgumentException(
+          "nativeProverBundle has no artifact row for sdk: " + artifacts.sdk());
+    }
+    if (!artifacts.implementation().equals(artifact.implementation())
+        || !artifacts.implementationHash().equals(artifact.implementationHash())) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts implementation binding must match nativeProverBundle");
+    }
   }
 
   public EvmSccpProver.Submission buildEthereumCalldata(
       final EvmSccpProver.SubmissionInput input) {
-    return buildSubmission(input);
+    final EvmSccpProver.Submission submission = buildSubmission(input);
+    requireVerifiedNativeProverArtifacts(
+        nativeProverArtifacts,
+        Objects.requireNonNull(
+            input.proofResult(),
+            "Ethereum mainnet submissions require a wrapped proofResult with destinationBinding"));
+    return submission;
   }
 
   public LocalAdmissionSubmission buildLocalAdmission(
@@ -723,7 +1105,9 @@ public final class EthereumMainnetSccp {
         input.destinationBindingHash(),
         input.backend(),
         input.sourceDomain(),
-        input.destinationBinding());
+        input.destinationBinding(),
+        input.proofArtifactHash(),
+        input.provingKeyHash());
   }
 
   private static long normalizeRpcChainId(final Object value) {
@@ -1063,6 +1447,100 @@ public final class EthereumMainnetSccp {
     }
   }
 
+  private static InboundEvidence callbackEvidenceSnapshot(final InboundEvidence evidence) {
+    return new InboundEvidence(
+        evidence.sourceDomain(),
+        evidence.targetDomain(),
+        evidence.transactionHash(),
+        callbackMapSnapshot(evidence.receipt()),
+        callbackMapSnapshot(evidence.block()),
+        callbackMapSnapshot(evidence.beaconFinality()),
+        callbackReceiptProofSnapshot(evidence.receiptProof()),
+        evidence.receiptProofHash(),
+        evidence.sourceEventDigest(),
+        evidence.sourceBridgeEmitterAddress(),
+        callbackMapListSnapshot(evidence.blockReceipts()),
+        evidence.inclusionBranch() == null
+            ? null
+            : copyByteArrayList(evidence.inclusionBranch(), "inclusionBranch"));
+  }
+
+  private static ReceiptProof callbackReceiptProofSnapshot(final ReceiptProof receiptProof) {
+    if (receiptProof == null) {
+      return null;
+    }
+    return new ReceiptProof(
+        receiptProof.sourceDomain(),
+        receiptProof.sourceEventDigest(),
+        receiptProof.beaconSlot(),
+        receiptProof.executionBlockNumber(),
+        receiptProof.executionBlockHash(),
+        receiptProof.executionReceiptsRoot(),
+        receiptProof.beaconFinalizedRoot(),
+        receiptProof.syncCommitteeRoot(),
+        receiptProof.receiptRootIndex(),
+        receiptProof.receiptTrieProofNodes(),
+        receiptProof.inclusionBranch());
+  }
+
+  private static List<Map<String, Object>> callbackMapListSnapshot(
+      final List<Map<String, Object>> values) {
+    if (values == null) {
+      return null;
+    }
+    final ArrayList<Map<String, Object>> copy = new ArrayList<>(values.size());
+    for (final Map<String, Object> value : values) {
+      copy.add(callbackMapSnapshot(value));
+    }
+    return Collections.unmodifiableList(copy);
+  }
+
+  private static Map<String, Object> callbackMapSnapshot(final Map<String, Object> value) {
+    if (value == null) {
+      return null;
+    }
+    final LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+    for (final Map.Entry<String, Object> entry : value.entrySet()) {
+      copy.put(entry.getKey(), callbackAnySnapshot(entry.getValue()));
+    }
+    return Collections.unmodifiableMap(copy);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Object callbackAnySnapshot(final Object value) {
+    if (value instanceof byte[]) {
+      final byte[] bytes = (byte[]) value;
+      return Arrays.copyOf(bytes, bytes.length);
+    }
+    if (value instanceof Map) {
+      final Map<?, ?> map = (Map<?, ?>) value;
+      final LinkedHashMap<String, Object> copy = new LinkedHashMap<>();
+      for (final Map.Entry<?, ?> entry : map.entrySet()) {
+        if (entry.getKey() instanceof String) {
+          copy.put((String) entry.getKey(), callbackAnySnapshot(entry.getValue()));
+        }
+      }
+      return Collections.unmodifiableMap(copy);
+    }
+    if (value instanceof List) {
+      final List<?> list = (List<?>) value;
+      final ArrayList<Object> copy = new ArrayList<>(list.size());
+      for (final Object item : list) {
+        copy.add(callbackAnySnapshot(item));
+      }
+      return Collections.unmodifiableList(copy);
+    }
+    if (value instanceof Object[]) {
+      final Object[] array = (Object[]) value;
+      final ArrayList<Object> copy = new ArrayList<>(array.length);
+      for (final Object item : array) {
+        copy.add(callbackAnySnapshot(item));
+      }
+      return Collections.unmodifiableList(copy);
+    }
+    return value;
+  }
+
   private static List<byte[]> copyByteArrayList(final List<byte[]> values, final String label) {
     Objects.requireNonNull(values, label);
     final ArrayList<byte[]> copy = new ArrayList<>(values.size());
@@ -1305,6 +1783,9 @@ public final class EthereumMainnetSccp {
     }
     final java.util.LinkedHashMap<String, Object> normalized =
         new java.util.LinkedHashMap<>(finality);
+    for (final String key : BEACON_FINALITY_ALIAS_KEYS) {
+      normalized.remove(key);
+    }
     normalized.put("executionBlockNumber", Long.toString(executionBlockNumber));
     normalized.put("executionBlockHash", executionBlockHash);
     normalized.put("executionReceiptsRoot", executionReceiptsRoot);
@@ -1342,12 +1823,24 @@ public final class EthereumMainnetSccp {
             "finalizedSlot",
             "finalized_slot",
             "slot");
+    Long normalizedBeaconSlot = null;
     if (beaconSlotInput != null) {
-      final long beaconSlot = normalizeUnsignedInteger(beaconSlotInput, "beaconFinality.beaconSlot");
-      if (beaconSlot == 0) {
+      normalizedBeaconSlot = normalizeUnsignedInteger(beaconSlotInput, "beaconFinality.beaconSlot");
+      if (normalizedBeaconSlot == 0) {
         throw new IllegalArgumentException("beaconFinality.beaconSlot must be positive");
       }
-      normalized.put("beaconSlot", Long.toString(beaconSlot));
+      normalized.put("beaconSlot", Long.toString(normalizedBeaconSlot));
+    }
+    final Object finalityBranchInput =
+        strictFirstPresent(
+            finality,
+            "beaconFinality.finalityBranch",
+            "finalityBranch",
+            "finality_branch");
+    if (finalityBranchInput != null) {
+      normalized.put(
+          "finalityBranch",
+          normalizeFinalityBranch(finalityBranchInput, "beaconFinality.finalityBranch"));
     }
     final Object syncCommitteeBitsInput =
         strictFirstPresent(
@@ -1355,11 +1848,14 @@ public final class EthereumMainnetSccp {
             "beaconFinality.syncCommitteeBits",
             "syncCommitteeBits",
             "sync_committee_bits");
+    String normalizedSyncCommitteeBits = null;
     if (syncCommitteeBitsInput != null) {
+      normalizedSyncCommitteeBits =
+          normalizeFinalitySyncCommitteeBits(
+              syncCommitteeBitsInput, "beaconFinality.syncCommitteeBits");
       normalized.put(
           "syncCommitteeBits",
-          normalizeFinalitySyncCommitteeBits(
-              syncCommitteeBitsInput, "beaconFinality.syncCommitteeBits"));
+          normalizedSyncCommitteeBits);
     }
     final Object syncCommitteeSignatureInput =
         strictFirstPresent(
@@ -1381,13 +1877,20 @@ public final class EthereumMainnetSccp {
             "sync_signature_slot",
             "signatureSlot",
             "signature_slot");
+    Long normalizedSyncSignatureSlot = null;
     if (syncSignatureSlotInput != null) {
-      final long syncSignatureSlot =
+      normalizedSyncSignatureSlot =
           normalizeUnsignedInteger(syncSignatureSlotInput, "beaconFinality.syncSignatureSlot");
-      if (syncSignatureSlot == 0) {
+      if (normalizedSyncSignatureSlot == 0) {
         throw new IllegalArgumentException("beaconFinality.syncSignatureSlot must be positive");
       }
-      normalized.put("syncSignatureSlot", Long.toString(syncSignatureSlot));
+      normalized.put("syncSignatureSlot", Long.toString(normalizedSyncSignatureSlot));
+    }
+    if (normalizedBeaconSlot != null
+        && normalizedSyncSignatureSlot != null
+        && normalizedSyncSignatureSlot < normalizedBeaconSlot) {
+      throw new IllegalArgumentException(
+          "beaconFinality.syncSignatureSlot must cover beaconFinality.beaconSlot");
     }
     final Object syncCommitteeParticipationInput =
         strictFirstPresent(
@@ -1395,15 +1898,25 @@ public final class EthereumMainnetSccp {
             "beaconFinality.syncCommitteeParticipation",
             "syncCommitteeParticipation",
             "sync_committee_participation");
+    Long normalizedSyncCommitteeParticipation = null;
     if (syncCommitteeParticipationInput != null) {
-      final long syncCommitteeParticipation =
+      normalizedSyncCommitteeParticipation =
           normalizeUnsignedInteger(
               syncCommitteeParticipationInput, "beaconFinality.syncCommitteeParticipation");
-      if (syncCommitteeParticipation == 0) {
+      if (normalizedSyncCommitteeParticipation == 0) {
         throw new IllegalArgumentException(
             "beaconFinality.syncCommitteeParticipation must be positive");
       }
-      normalized.put("syncCommitteeParticipation", Long.toString(syncCommitteeParticipation));
+      normalized.put(
+          "syncCommitteeParticipation",
+          Long.toString(normalizedSyncCommitteeParticipation));
+    }
+    if (normalizedSyncCommitteeBits != null
+        && normalizedSyncCommitteeParticipation != null
+        && finalitySyncCommitteeParticipation(normalizedSyncCommitteeBits)
+            != normalizedSyncCommitteeParticipation) {
+      throw new IllegalArgumentException(
+          "beaconFinality.syncCommitteeParticipation must match syncCommitteeBits");
     }
     return Collections.unmodifiableMap(normalized);
   }
@@ -1411,10 +1924,31 @@ public final class EthereumMainnetSccp {
   private static String normalizeFinalitySyncCommitteeBits(
       final Object value, final String label) {
     final String bits = normalizeRpcHex(value, label, 64, true);
-    if (finalitySyncCommitteeParticipation(bits) == 0) {
+    final long participation = finalitySyncCommitteeParticipation(bits);
+    if (participation == 0) {
       throw new IllegalArgumentException(label + " must contain at least one participant");
     }
+    if (participation * 3 < 512 * 2) {
+      throw new IllegalArgumentException(
+          label + " must contain Ethereum sync committee supermajority");
+    }
     return bits;
+  }
+
+  private static List<String> normalizeFinalityBranch(
+      final Object value, final String label) {
+    if (!(value instanceof List<?>)) {
+      throw new IllegalArgumentException(label + " must be an array");
+    }
+    final List<?> input = (List<?>) value;
+    if (input.size() != 6) {
+      throw new IllegalArgumentException(label + " must contain 6 siblings");
+    }
+    final List<String> branch = new ArrayList<>();
+    for (int index = 0; index < input.size(); index++) {
+      branch.add(normalizeRpcHex(input.get(index), label + "[" + index + "]", 32, true));
+    }
+    return Collections.unmodifiableList(branch);
   }
 
   private static long finalitySyncCommitteeParticipation(final String bits) {
@@ -1673,13 +2207,17 @@ public final class EthereumMainnetSccp {
       }
       final String blockHash = normalizeRpcHex(block.get("hash"), "block.hash", 32);
       final String blockNumber =
-          normalizeRpcQuantity(firstPresent(block, "number", "blockNumber", "block_number"), "block.number");
+          normalizeRpcQuantity(
+              strictFirstPresent(block, "block.number", "number", "blockNumber", "block_number"),
+              "block.number");
       if ("0x0".equals(blockNumber)) {
         throw new IllegalArgumentException("block.number must be positive");
       }
       final String receiptsRoot =
           normalizeRpcHex(
-              firstPresent(block, "receiptsRoot", "receipts_root"), "block.receiptsRoot", 32);
+              strictFirstPresent(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
+              "block.receiptsRoot",
+              32);
       final BeaconRestBlockId targetBlockId = beaconRestBlockIdForTarget(block);
       final Map<String, Object> finalizedHeaderResponse =
           fetchJsonObject("/eth/v1/beacon/headers/finalized", "Ethereum mainnet Beacon REST finalized header");
@@ -1708,6 +2246,10 @@ public final class EthereumMainnetSccp {
       if (targetHeader.slot > finalizedHeader.slot) {
         throw new IllegalArgumentException(
             "Ethereum mainnet Beacon REST target block is newer than the finalized header");
+      }
+      if (targetHeader.slot < finalizedHeader.slot) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof");
       }
       if (targetHeader.slot == finalizedHeader.slot && !targetHeader.root.equals(finalizedHeader.root)) {
         throw new IllegalArgumentException(
@@ -1866,6 +2408,7 @@ public final class EthereumMainnetSccp {
           "syncCommitteeRoot",
           resolveBeaconRestSyncCommitteeRoot(syncCommitteeRoot, syncCommitteePayload));
       evidence.put("beaconSlot", Long.toString(finalityUpdate.beaconSlot));
+      evidence.put("finalityBranch", finalityUpdate.finalityBranch);
       evidence.put("syncCommitteeBits", finalityUpdate.syncCommitteeBits);
       evidence.put("syncCommitteeSignature", finalityUpdate.syncCommitteeSignature);
       evidence.put(
@@ -2048,6 +2591,10 @@ public final class EthereumMainnetSccp {
               requireBeaconRestField(
                   syncAggregate, label + ".data.sync_aggregate", "sync_committee_bits"),
               label + ".data.sync_aggregate.sync_committee_bits");
+      final List<String> finalityBranch =
+          normalizeBeaconRestFinalityBranch(
+              requireBeaconRestField(data, label + ".data", "finality_branch"),
+              label + ".data.finality_branch");
       final String syncCommitteeSignature =
           normalizeRpcHex(
               requireBeaconRestField(
@@ -2057,6 +2604,7 @@ public final class EthereumMainnetSccp {
       return new BeaconRestFinalityUpdateSummary(
           finalizedHeaderRoot,
           finalizedSlot,
+          finalityBranch,
           syncCommitteeBits,
           syncCommitteeSignature,
           beaconRestSyncCommitteeParticipation(syncCommitteeBits),
@@ -2066,10 +2614,31 @@ public final class EthereumMainnetSccp {
     private static String normalizeBeaconRestSyncCommitteeBits(
         final Object value, final String label) {
       final String bits = normalizeRpcHex(value, label, 64, true);
-      if (beaconRestSyncCommitteeParticipation(bits) == 0) {
+      final long participation = beaconRestSyncCommitteeParticipation(bits);
+      if (participation == 0) {
         throw new IllegalArgumentException(label + " must contain at least one participant");
       }
+      if (participation * 3 < 512 * 2) {
+        throw new IllegalArgumentException(
+            label + " must contain Ethereum sync committee supermajority");
+      }
       return bits;
+    }
+
+    private static List<String> normalizeBeaconRestFinalityBranch(
+        final Object value, final String label) {
+      if (!(value instanceof List<?>)) {
+        throw new IllegalArgumentException(label + " must be an array");
+      }
+      final List<?> input = (List<?>) value;
+      if (input.size() != 6) {
+        throw new IllegalArgumentException(label + " must contain 6 siblings");
+      }
+      final List<String> branch = new ArrayList<>();
+      for (int index = 0; index < input.size(); index++) {
+        branch.add(normalizeRpcHex(input.get(index), label + "[" + index + "]", 32, true));
+      }
+      return Collections.unmodifiableList(branch);
     }
 
     private static long beaconRestSyncCommitteeParticipation(final String bits) {
@@ -2206,6 +2775,14 @@ public final class EthereumMainnetSccp {
   /** App-supplied Ethereum transaction submitter for locally generated outbound proof calldata. */
   public interface OutboundSubmitter {
     Object submit(EvmSccpProver.Submission submission);
+  }
+
+  /** App-linked native prover self-test runner for Ethereum mainnet outbound proofs. */
+  public interface NativeProverSelfTest {
+    EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult run(
+        EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture fixture,
+        EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult expectedResult,
+        EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts);
   }
 
   /** Input for Ethereum mainnet -> SORA local-admission submission packaging. */

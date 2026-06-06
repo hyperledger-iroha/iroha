@@ -6,6 +6,7 @@
 
 use std::{
     collections::HashSet,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,7 +27,6 @@ use iroha_data_model::{
 };
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
-use rand::Rng as _;
 use reqwest::Client as HttpClient;
 use sha2::{Digest as _, Sha256};
 use tokio::time::sleep;
@@ -43,6 +43,8 @@ const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+
+static OPERATOR_NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Late VRF reveal should clear penalties and leave the epoch seed unchanged.
 #[allow(clippy::too_many_lines)] // Complex scenario requires sequential orchestration.
@@ -765,7 +767,9 @@ fn operator_signature_headers(
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX);
-    let nonce_bytes: [u8; 12] = rand::rng().random();
+    let nonce_counter = OPERATOR_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut nonce_bytes = [0_u8; 12];
+    nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
 
     let mut hasher = Sha256::new();

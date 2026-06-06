@@ -40,10 +40,20 @@ impl<T: std::io::Write> RunArgs<T> for Args {
         let (kp, generated) = match (self.private_key, self.seed) {
             (Some(sk_hex), None) => {
                 let sk = PrivateKey::from_hex(alg, sk_hex).wrap_err("decode private key")?;
-                (KeyPair::from(sk), false)
+                (
+                    KeyPair::from_private_key(sk).wrap_err("derive key pair from private key")?,
+                    false,
+                )
             }
-            (None, Some(seed)) => (KeyPair::from_seed(seed.into_bytes(), alg), false),
-            (None, None) => (KeyPair::random_with_algorithm(alg), true),
+            (None, Some(seed)) => (
+                KeyPair::try_from_seed(seed.into_bytes(), alg)
+                    .wrap_err("derive seeded key pair")?,
+                false,
+            ),
+            (None, None) => (
+                KeyPair::try_random_with_algorithm(alg).wrap_err("generate random BLS key pair")?,
+                true,
+            ),
             _ => unreachable!("clap conflicts"),
         };
 

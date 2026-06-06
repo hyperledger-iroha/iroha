@@ -31,7 +31,7 @@ use iroha_telemetry::{
     privacy::{PrivacyBucketConfig, PrivacyConfigError, SoranetSecureAggregator},
 };
 use norito::json;
-use rand::Rng;
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use reqwest::{Client, StatusCode, Url};
 use sorafs_car::{
     CarBuildPlan, CarVerifier, CarWriteStats, CarWriter, TaikaiSegmentHint,
@@ -345,6 +345,9 @@ pub enum OrchestratorError {
     /// Local proxy operation failed.
     #[error("local proxy operation failed: {0}")]
     Proxy(#[from] ProxyError),
+    /// Job id generation failed before fetch telemetry could be emitted.
+    #[error("failed to generate SoraFS fetch job id: {0}")]
+    JobIdRandomness(String),
 }
 
 /// Transport policy applied when selecting providers.
@@ -2298,10 +2301,11 @@ impl LocalProxyRuntime {
         self.config.proxy_mode.clone()
     }
 
-    fn manifest(&self) -> Option<BrowserExtensionManifest> {
-        self.handle
-            .as_ref()
-            .and_then(LocalQuicProxyHandle::browser_manifest)
+    fn manifest(&self) -> Result<Option<BrowserExtensionManifest>, ProxyError> {
+        match self.handle.as_ref() {
+            Some(handle) => handle.browser_manifest(),
+            None => Ok(None),
+        }
     }
 }
 
@@ -2413,10 +2417,12 @@ impl Orchestrator {
         guard.handle.clone()
     }
 
-    async fn proxy_manifest(&self) -> Option<BrowserExtensionManifest> {
-        let runtime = self.proxy_runtime.as_ref()?;
+    async fn proxy_manifest(&self) -> Result<Option<BrowserExtensionManifest>, OrchestratorError> {
+        let Some(runtime) = self.proxy_runtime.as_ref() else {
+            return Ok(None);
+        };
         let guard = runtime.lock().await;
-        guard.manifest()
+        Ok(guard.manifest()?)
     }
 
     /// Updates the local proxy runtime mode, restarting the proxy if necessary.
@@ -2737,7 +2743,7 @@ impl Orchestrator {
             &self.config.fetch,
             &self.config.scoreboard,
             self.config.write_mode,
-        );
+        )?;
 
         if providers.is_empty()
             || (self.config.write_mode.enforces_pq_only()
@@ -2790,9 +2796,9 @@ impl Orchestrator {
                 .await
         };
 
-        let proxy_manifest = self.proxy_manifest().await;
         let session = match result {
             Ok(outcome) => {
+                let proxy_manifest = self.proxy_manifest().await?;
                 ctx.on_success(&outcome);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
@@ -2882,7 +2888,7 @@ impl Orchestrator {
             &self.config.fetch,
             &self.config.scoreboard,
             self.config.write_mode,
-        );
+        )?;
 
         if providers.is_empty()
             || (self.config.write_mode.enforces_pq_only()
@@ -2942,9 +2948,9 @@ impl Orchestrator {
             .await
         };
 
-        let proxy_manifest = self.proxy_manifest().await;
         let session = match result {
             Ok(outcome) => {
+                let proxy_manifest = self.proxy_manifest().await?;
                 ctx.on_success(&outcome);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
@@ -2995,7 +3001,7 @@ async fn apply_proxy_mode(
     let (previous_mode, label, config, previous_handle) = {
         let mut guard = runtime.lock().await;
         if guard.config.proxy_mode == mode {
-            return Ok(guard.manifest());
+            return Ok(guard.manifest()?);
         }
         let label = guard.telemetry_label();
         let previous_mode = guard.config.proxy_mode.clone();
@@ -3011,7 +3017,7 @@ async fn apply_proxy_mode(
 
     match spawn_local_quic_proxy(config.clone()) {
         Ok(handle) => {
-            let manifest = handle.browser_manifest();
+            let manifest = handle.browser_manifest()?;
             {
                 let mut guard = runtime.lock().await;
                 guard.config = config;
@@ -4415,12 +4421,12 @@ impl FetchMetricsCtx {
         fetch_options: &FetchOptions,
         scoreboard_config: &ScoreboardConfig,
         write_mode: WriteModeHint,
-    ) -> Self {
+    ) -> Result<Self, OrchestratorError> {
         let metrics = global_or_default();
         let otel = global_sorafs_fetch_otel();
         let manifest_id = manifest_id_hex(plan);
         metrics.sorafs_orchestrator_fetch_started(&manifest_id, region);
-        let job_id = generate_job_id();
+        let job_id = generate_job_id().map_err(OrchestratorError::JobIdRandomness)?;
         otel.fetch_started(&manifest_id, region, &job_id);
         let provider_count = providers.len();
         let telemetry = FetchTelemetryCtx::new(job_id.clone(), write_mode);
@@ -4533,7 +4539,7 @@ impl FetchMetricsCtx {
             policy_summary.policy.label(),
             policy_summary.selected_classical() as u64,
         );
-        Self {
+        Ok(Self {
             manifest_id,
             region: region.to_string(),
             job_id,
@@ -4543,7 +4549,7 @@ impl FetchMetricsCtx {
             latency_cap_ms: scoreboard_config.latency_cap_ms,
             policy_summary: policy_summary.clone(),
             start: Instant::now(),
-        }
+        })
     }
 
     fn on_success(&self, outcome: &FetchOutcome) {
@@ -5408,11 +5414,16 @@ fn manifest_id_hex(plan: &CarBuildPlan) -> String {
     hex::encode(plan.payload_digest.as_bytes())
 }
 
-fn generate_job_id() -> String {
+fn generate_job_id() -> Result<String, String> {
+    let mut rng = OsRng;
+    generate_job_id_with_rng(&mut rng)
+}
+
+fn generate_job_id_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<String, String> {
     let mut bytes = [0u8; 16];
-    let mut rng = rand::rng();
-    rng.fill(&mut bytes);
-    hex::encode(bytes)
+    rng.try_fill_bytes(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    Ok(hex::encode(bytes))
 }
 
 fn error_reason(error: &multi_fetch::MultiSourceError) -> &'static str {
@@ -5846,9 +5857,15 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use futures::executor::block_on;
+    use iroha_data_model::soranet::privacy_metrics::{
+        SoranetPrivacyEventActiveSampleV1, SoranetPrivacyEventHandshakeFailureV1,
+        SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventThrottleV1,
+        SoranetPrivacyEventVerifiedBytesV1, SoranetPrivacyThrottleScopeV1,
+    };
     use iroha_logger::{telemetry::Channel, test_logger};
     use iroha_telemetry::metrics::global_or_default;
     use norito::json::{self, Map, Value};
+    use rand::rand_core::TryRngCore;
     use reqwest::Url;
     use sorafs_car::{
         CarBuildPlan, CarChunk, ChunkFetchSpec, ChunkStore, FilePlan, TaikaiSegmentHint,
@@ -5952,6 +5969,43 @@ mod tests {
     }
 
     impl std::error::Error for HedgedTestError {}
+
+    struct FailingJobIdRng;
+
+    #[derive(Debug)]
+    struct FailingJobIdRngError;
+
+    impl fmt::Display for FailingJobIdRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing SoraFS fetch job id RNG")
+        }
+    }
+
+    impl TryRngCore for FailingJobIdRng {
+        type Error = FailingJobIdRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingJobIdRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingJobIdRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingJobIdRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingJobIdRng {}
+
+    #[test]
+    fn fetch_job_id_reports_rng_failure() {
+        let mut rng = FailingJobIdRng;
+        let error = generate_job_id_with_rng(&mut rng).expect_err("RNG failure should propagate");
+
+        assert!(error.contains("failing SoraFS fetch job id RNG"));
+    }
 
     fn taikai_plan_with_hint(payload: &[u8]) -> CarBuildPlan {
         let digest = blake3::hash(payload);

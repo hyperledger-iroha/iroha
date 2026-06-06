@@ -11,8 +11,8 @@ use std::{
 use iroha_crypto::{
     Hash,
     fhe_bfv::{
-        ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest,
-        registered_bfv_rns_modulus_chain_digest,
+        ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
+        registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
     },
 };
 #[cfg(feature = "json")]
@@ -22,17 +22,17 @@ use iroha_data_model::{
     Decode, Encode,
     soracloud::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
-        AgentToolCapabilityV1, AgentUpgradePolicyV1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
-        CIPHERTEXT_QUERY_RESPONSE_VERSION_V1, CIPHERTEXT_QUERY_SPEC_VERSION_V1,
-        CIPHERTEXT_STATE_RECORD_VERSION_V1, CiphertextInclusionProofV1,
-        CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
-        CiphertextQuerySpecV1, CiphertextStateMetadataV1, CiphertextStateRecordV1,
-        DECRYPTION_AUTHORITY_POLICY_VERSION_V1, DECRYPTION_REQUEST_VERSION_V1,
-        DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
-        FHE_EXECUTION_POLICY_VERSION_V1, FHE_GOVERNANCE_BUNDLE_VERSION_V1, FHE_JOB_SPEC_VERSION_V1,
-        FHE_PARAM_SET_VERSION_V1, FheDeterministicRoundingModeV1, FheExecutionPolicyV1,
-        FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1,
-        FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, BfvRefreshTranscriptModeV1,
+        CIPHERTEXT_QUERY_PROOF_VERSION_V1, CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
+        CIPHERTEXT_QUERY_SPEC_VERSION_V1, CIPHERTEXT_STATE_RECORD_VERSION_V1,
+        CiphertextInclusionProofV1, CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1,
+        CiphertextQueryResultItemV1, CiphertextQuerySpecV1, CiphertextStateMetadataV1,
+        CiphertextStateRecordV1, DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+        DECRYPTION_REQUEST_VERSION_V1, DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1,
+        DecryptionRequestV1, FHE_EXECUTION_POLICY_VERSION_V1, FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+        FHE_JOB_SPEC_VERSION_V1, FHE_PARAM_SET_VERSION_V1, FheDeterministicRoundingModeV1,
+        FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1,
+        FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
@@ -123,6 +123,12 @@ fn expected_fhe_evaluation_key_digest() -> Hash {
     "6018ed3cb8315df01d8e1f7910afab8bd02c978cbf96570ff9561f5812a8874b"
         .parse()
         .expect("fixture evaluation-key digest")
+}
+
+fn expected_fhe_refresh_transcript_digest() -> Hash {
+    "5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b"
+        .parse()
+        .expect("fixture refresh transcript digest")
 }
 
 fn expected_state_binding() -> SoraStateBindingV1 {
@@ -415,6 +421,9 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
         registered_bfv_parameter_digest(&registered_params).expect("registered BFV digest");
     let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&registered_params)
         .expect("registered BFV RNS digest");
+    let key_switch_decomposition_chain_digest =
+        registered_bfv_key_switch_decomposition_chain_digest(&registered_params)
+            .expect("registered BFV key-switch decomposition-chain digest");
     FheParamSetV1 {
         schema_version: FHE_PARAM_SET_VERSION_V1,
         param_set: "bfv-default".parse().expect("valid name"),
@@ -438,6 +447,7 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
         withdraw_height: None,
         parameter_digest,
         rns_modulus_chain_digest,
+        key_switch_decomposition_chain_digest,
     }
 }
 
@@ -448,6 +458,8 @@ fn expected_fhe_execution_policy() -> FheExecutionPolicyV1 {
         param_set: "bfv-default".parse().expect("valid name"),
         param_set_version: NonZeroU32::new(1).expect("nonzero"),
         evaluation_key_digest: expected_fhe_evaluation_key_digest(),
+        evaluation_key_refresh_transcript_digest: expected_fhe_refresh_transcript_digest(),
+        refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
         max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
         max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
         max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),

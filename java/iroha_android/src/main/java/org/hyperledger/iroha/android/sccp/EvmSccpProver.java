@@ -3,13 +3,20 @@ package org.hyperledger.iroha.android.sccp;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.bouncycastle.crypto.digests.KeccakDigest;
+import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 
 /** EVM-family SCCP Groth16 proof request helpers for local-first Android proof generation. */
@@ -18,6 +25,36 @@ public final class EvmSccpProver {
   public static final int DOMAIN_ETH = SourceSccpProofs.DOMAIN_ETH;
   public static final int DOMAIN_BSC = SourceSccpProofs.DOMAIN_BSC;
   public static final String GROTH16_BN254_PROOF_BACKEND_V1 = "evm-groth16-bn254-v1";
+  public static final String NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1 =
+      "sccp-native-evm-groth16-prover-bundle-v1";
+  public static final String ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
+      "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+  public static final String ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
+      "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
+  public static final String ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
+      "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
+  public static final Map<String, String> ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1 =
+      Collections.unmodifiableMap(
+          new LinkedHashMap<String, String>() {
+            {
+              put("javascript", "pure-typescript");
+              put("swift", "native-swift");
+              put("kotlin", "native-kotlin");
+              put("java-android", "native-java");
+              put("dotnet", "native-csharp");
+            }
+          });
+  public static final List<String> ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1 =
+      Collections.unmodifiableList(
+          Arrays.asList(
+              "circuit_security_audit",
+              "native_implementation_audit",
+              "reproducible_build_attestation",
+              "cross_sdk_fixture_parity",
+              "native_prover_self_test",
+              "no_wasm_no_remote_scan"));
+  public static final String NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1 = "sha256";
+  private static final int NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 = 256;
   public static final int GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
   public static final int SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   public static final String CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1";
@@ -45,6 +82,182 @@ public final class EvmSccpProver {
   private static final BigInteger BN254_G2_B_C1 =
       new BigInteger(
           "009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2", 16);
+  private static final Set<String> NATIVE_EVM_PROVER_BUNDLE_MANIFEST_KEYS =
+      Collections.unmodifiableSet(
+          new LinkedHashSet<>(
+              Arrays.asList(
+                  "schema",
+                  "bundleId",
+                  "bundle_id",
+                  "domain",
+                  "chain",
+                  "proofBackend",
+                  "proof_backend",
+                  "backend",
+                  "proofArtifact",
+                  "proof_artifact",
+                  "proverArtifact",
+                  "prover_artifact",
+                  "circuitArtifact",
+                  "circuit_artifact",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash",
+                  "circuitArtifactHash",
+                  "circuit_artifact_hash",
+                  "provingKey",
+                  "proving_key",
+                  "provingKeyHash",
+                  "proving_key_hash",
+                  "verifierKey",
+                  "verifier_key",
+                  "verifierKeyHash",
+                  "verifier_key_hash",
+                  "destinationBindingHash",
+                  "destination_binding_hash",
+                  "noWasm",
+                  "no_wasm",
+                  "remoteProverRequired",
+                  "remote_prover_required",
+                  "browserImplementation",
+                  "browser_implementation",
+                  "nativeSdkArtifacts",
+                  "native_sdk_artifacts",
+                  "sdkArtifacts",
+                  "sdk_artifacts",
+                  "crossSdkFixtureParityArtifact",
+                  "cross_sdk_fixture_parity_artifact",
+                  "nativeProverSelfTestArtifact",
+                  "native_prover_self_test_artifact",
+                  "selfTestArtifact",
+                  "self_test_artifact",
+                  "auditHashes",
+                  "audit_hashes")));
+  private static final Set<String> NATIVE_EVM_PROVER_BUNDLE_SDK_ARTIFACT_KEYS =
+      Collections.unmodifiableSet(
+          new LinkedHashSet<>(
+              Arrays.asList(
+                  "sdk",
+                  "implementation",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash",
+                  "provingKeyHash",
+                  "proving_key_hash",
+                  "implementationArtifact",
+                  "implementation_artifact",
+                  "implementationPath",
+                  "implementation_path",
+                  "implementationHash",
+                  "implementation_hash")));
+  private static final Set<String> NATIVE_EVM_PROVER_PARITY_FIXTURE_KEYS =
+      Collections.unmodifiableSet(
+          new LinkedHashSet<>(
+              Arrays.asList(
+                  "schema",
+                  "domain",
+                  "chain",
+                  "proofBackend",
+                  "proof_backend",
+                  "backend",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash",
+                  "circuitArtifactHash",
+                  "circuit_artifact_hash",
+                  "provingKeyHash",
+                  "proving_key_hash",
+                  "verifierKeyHash",
+                  "verifier_key_hash",
+                  "destinationBindingHash",
+                  "destination_binding_hash",
+                  "receiptProofHash",
+                  "receipt_proof_hash",
+                  "sourceProofHash",
+                  "source_proof_hash",
+                  "publicSignalWords",
+                  "public_signal_words",
+                  "calldataHash",
+                  "calldata_hash",
+                  "toriiSubmitPayloadHash",
+                  "torii_submit_payload_hash",
+                  "sdkResults",
+                  "sdk_results")));
+  private static final Set<String> NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS =
+      Collections.unmodifiableSet(
+          new LinkedHashSet<>(
+              Arrays.asList(
+                  "receiptProofHash",
+                  "receipt_proof_hash",
+                  "sourceProofHash",
+                  "source_proof_hash",
+                  "destinationBindingHash",
+                  "destination_binding_hash",
+                  "publicSignalWords",
+                  "public_signal_words",
+                  "calldataHash",
+                  "calldata_hash",
+                  "toriiSubmitPayloadHash",
+                  "torii_submit_payload_hash")));
+  private static final Set<String> NATIVE_EVM_PROVER_SELF_TEST_FIXTURE_KEYS =
+      Collections.unmodifiableSet(
+          new LinkedHashSet<>(
+              Arrays.asList(
+                  "schema",
+                  "domain",
+                  "chain",
+                  "proofBackend",
+                  "proof_backend",
+                  "backend",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash",
+                  "circuitArtifactHash",
+                  "circuit_artifact_hash",
+                  "provingKeyHash",
+                  "proving_key_hash",
+                  "verifierKeyHash",
+                  "verifier_key_hash",
+                  "destinationBindingHash",
+                  "destination_binding_hash",
+                  "requestHash",
+                  "request_hash",
+                  "witnessHash",
+                  "witness_hash",
+                  "sourceProofHash",
+                  "source_proof_hash",
+                  "proofHash",
+                  "proof_hash",
+                  "publicSignalWords",
+                  "public_signal_words",
+                  "calldataHash",
+                  "calldata_hash",
+                  "toriiSubmitPayloadHash",
+                  "torii_submit_payload_hash",
+                  "sdkResults",
+                  "sdk_results")));
+  private static final Set<String> NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS =
+      Collections.unmodifiableSet(
+          new LinkedHashSet<>(
+              Arrays.asList(
+                  "requestHash",
+                  "request_hash",
+                  "witnessHash",
+                  "witness_hash",
+                  "sourceProofHash",
+                  "source_proof_hash",
+                  "proofHash",
+                  "proof_hash",
+                  "publicSignalWords",
+                  "public_signal_words",
+                  "calldataHash",
+                  "calldata_hash",
+                  "toriiSubmitPayloadHash",
+                  "torii_submit_payload_hash")));
   private static final String[] SIGNAL_LABELS =
       new String[] {
         "sccp:groth16-bn254:signal:message-id:v1",
@@ -99,7 +312,9 @@ public final class EvmSccpProver {
         input.destinationBindingHash(),
         input.backend(),
         input.sourceDomain(),
-        input.destinationBinding());
+        input.destinationBinding(),
+        input.proofArtifactHash(),
+        input.provingKeyHash());
   }
 
   static ProofRequest callbackRequestSnapshot(final ProofRequest request) {
@@ -117,7 +332,9 @@ public final class EvmSccpProver {
         request.statementHash(),
         request.destinationBindingHash(),
         request.requestHash(),
-        request.destinationBinding());
+        request.destinationBinding(),
+        request.proofArtifactHash(),
+        request.provingKeyHash());
   }
 
   public static byte[] canonicalPublicInputsBytes(final PublicInputsInput input) {
@@ -194,6 +411,8 @@ public final class EvmSccpProver {
     final byte[] publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs());
     final ProofContext proofContext =
         normalizeProofContext(input.statementHash(), input.destinationBindingHash());
+    final Groth16ProverArtifacts proverArtifacts =
+        normalizeOptionalGroth16ProverArtifacts(input.proofArtifactHash(), input.provingKeyHash());
     final List<String> publicSignalWords =
         groth16Bn254PublicSignalWords(
             input.publicInputs(),
@@ -208,6 +427,10 @@ public final class EvmSccpProver {
     write(preimage, sourceProofBytes);
     write(preimage, hex32Bytes(proofContext.statementHash(), "statementHash"));
     write(preimage, hex32Bytes(proofContext.destinationBindingHash(), "destinationBindingHash"));
+    if (proverArtifacts != null) {
+      write(preimage, hex32Bytes(proverArtifacts.proofArtifactHash(), "proofArtifactHash"));
+      write(preimage, hex32Bytes(proverArtifacts.provingKeyHash(), "provingKeyHash"));
+    }
     for (final String signal : publicSignalWords) {
       write(preimage, hex32Bytes(signal, "publicSignalWords"));
     }
@@ -225,7 +448,9 @@ public final class EvmSccpProver {
         proofContext.statementHash(),
         proofContext.destinationBindingHash(),
         hashHex(PROOF_REQUEST_PREFIX_V1, preimage.toByteArray()),
-        input.destinationBinding());
+        input.destinationBinding(),
+        proverArtifacts == null ? null : proverArtifacts.proofArtifactHash(),
+        proverArtifacts == null ? null : proverArtifacts.provingKeyHash());
   }
 
   public static ProofResult wrapProofResult(final byte[] proofBytes, final ProofRequest request) {
@@ -252,7 +477,9 @@ public final class EvmSccpProver {
         request.destinationBindingHash(),
         request.requestHash(),
         hashHex(PROOF_ENVELOPE_PREFIX_V1, envelopePayload.toByteArray()),
-        request.destinationBinding());
+        request.destinationBinding(),
+        request.proofArtifactHash(),
+        request.provingKeyHash());
   }
 
   private static ProofResult requireWrappedProofResultForSubmission(final ProofResult proofResult) {
@@ -297,7 +524,9 @@ public final class EvmSccpProver {
                 proofResult.destinationBindingHash(),
                 proofResult.backend(),
                 DOMAIN_SORA,
-                proofResult.destinationBinding()));
+                proofResult.destinationBinding(),
+                proofResult.proofArtifactHash(),
+                proofResult.provingKeyHash()));
     if (!Objects.equals(expectedRequest.requestHash(), requestHash)) {
       throw new IllegalArgumentException(
           "proofResult.requestHash must match bundleBytes and sourceProofBytes");
@@ -731,7 +960,9 @@ public final class EvmSccpProver {
                 request.destinationBindingHash(),
                 request.backend(),
                 request.sourceDomain(),
-                request.destinationBinding()));
+                request.destinationBinding(),
+                request.proofArtifactHash(),
+                request.provingKeyHash()));
     if (request.version() != expected.version()
         || !Objects.equals(request.backend(), expected.backend())
         || request.sourceDomain() != expected.sourceDomain()
@@ -744,6 +975,8 @@ public final class EvmSccpProver {
         || !Objects.equals(request.proofContext(), expected.proofContext())
         || !Objects.equals(request.statementHash(), expected.statementHash())
         || !Objects.equals(request.destinationBindingHash(), expected.destinationBindingHash())
+        || !Objects.equals(request.proofArtifactHash(), expected.proofArtifactHash())
+        || !Objects.equals(request.provingKeyHash(), expected.provingKeyHash())
         || !Objects.equals(request.requestHash(), expected.requestHash())
         || !Objects.equals(request.destinationBinding(), expected.destinationBinding())) {
       throw new IllegalArgumentException("proof request must be canonical");
@@ -857,6 +1090,70 @@ public final class EvmSccpProver {
     return "0x" + hexLower(Blake2b.digest256(preimage));
   }
 
+  private static String sha256Hex(final byte[] payload) {
+    try {
+      return "0x" + hexLower(MessageDigest.getInstance("SHA-256").digest(payload));
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 digest is unavailable", ex);
+    }
+  }
+
+  private static final byte[][] NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS = {
+    {0x77, 0x65, 0x62, 0x61, 0x73, 0x73, 0x65, 0x6d, 0x62, 0x6c, 0x79},
+    {0x77, 0x61, 0x73, 0x6d},
+    {0x73, 0x6e, 0x61, 0x72, 0x6b, 0x6a, 0x73},
+    {0x72, 0x65, 0x6d, 0x6f, 0x74, 0x65, 0x70, 0x72, 0x6f, 0x76, 0x65, 0x72},
+    {0x72, 0x65, 0x6d, 0x6f, 0x74, 0x65, 0x20, 0x70, 0x72, 0x6f, 0x76, 0x65, 0x72},
+    {0x72, 0x65, 0x6d, 0x6f, 0x74, 0x65, 0x5f, 0x70, 0x72, 0x6f, 0x76, 0x65, 0x72},
+    {0x70, 0x72, 0x6f, 0x76, 0x65, 0x72, 0x5f, 0x75, 0x72, 0x6c},
+    {0x70, 0x72, 0x6f, 0x76, 0x65, 0x72, 0x2d, 0x75, 0x72, 0x6c},
+    {0x70, 0x72, 0x6f, 0x76, 0x65, 0x72, 0x65, 0x6e, 0x64, 0x70, 0x6f, 0x69, 0x6e, 0x74},
+    {0x70, 0x72, 0x6f, 0x76, 0x65, 0x72, 0x20, 0x65, 0x6e, 0x64, 0x70, 0x6f, 0x69, 0x6e, 0x74}
+  };
+
+  private static int lowerAsciiByte(final byte value) {
+    final int unsigned = value & 0xff;
+    return unsigned >= 0x41 && unsigned <= 0x5a ? unsigned + 0x20 : unsigned;
+  }
+
+  private static boolean containsNativeEvmProverMarker(
+      final byte[] bytes, final byte[] marker) {
+    if (marker.length > bytes.length) {
+      return false;
+    }
+    for (int offset = 0; offset <= bytes.length - marker.length; offset++) {
+      boolean matched = true;
+      for (int index = 0; index < marker.length; index++) {
+        if (lowerAsciiByte(bytes[offset + index]) != (marker[index] & 0xff)) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static void rejectNativeEvmProverForbiddenArtifactMarkers(
+      final byte[] bytes, final String field) {
+    for (final byte[] marker : NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS) {
+      if (containsNativeEvmProverMarker(bytes, marker)) {
+        throw new IllegalArgumentException(
+            field + " contains forbidden prover dependency marker");
+      }
+    }
+  }
+
+  private static void requireNativeEvmProverProductionArtifactSize(
+      final byte[] bytes, final String field) {
+    if (bytes.length < NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1) {
+      throw new IllegalArgumentException(
+          field + " must be at least " + NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 + " bytes");
+    }
+  }
+
   private static byte[] hex32Bytes(final String value, final String field) {
     String body = Objects.requireNonNull(value, field);
     if (!body.trim().equals(body)) {
@@ -894,8 +1191,80 @@ public final class EvmSccpProver {
     return "0x" + hexLower(nonZeroHex32Bytes(value, field));
   }
 
+  private static String normalizeNativeEvmProverBundleHex32(
+      final String value, final String field) {
+    final String normalized = normalizeHex32(value, field);
+    if (!normalized.equals(value)) {
+      throw new IllegalArgumentException(
+          field + " must be canonical lowercase 0x-prefixed 32-byte hex");
+    }
+    return normalized;
+  }
+
+  private static void requireNativeEvmProverBundleHashRoleSeparation(
+      final LinkedHashMap<String, String> roles) {
+    final LinkedHashMap<String, String> seen = new LinkedHashMap<>();
+    for (final Map.Entry<String, String> role : roles.entrySet()) {
+      final String previous = seen.putIfAbsent(role.getValue(), role.getKey());
+      if (previous != null) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle hashes must be role-separated: "
+                + role.getKey()
+                + " matches "
+                + previous);
+      }
+    }
+  }
+
+  private static String normalizeNativeEvmProverArtifactPath(
+      final String value, final String field) {
+    if (value == null || value.isEmpty()) {
+      throw new IllegalArgumentException(field + " must be a non-empty relative POSIX path");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char ch = value.charAt(index);
+      if (ch < 0x20 || ch == 0x7f) {
+        throw new IllegalArgumentException(field + " must not contain control characters");
+      }
+    }
+    if (value.startsWith("/") || value.indexOf('\\') >= 0) {
+      throw new IllegalArgumentException(field + " must be a relative POSIX path");
+    }
+    final String[] segments = value.split("/", -1);
+    for (final String segment : segments) {
+      if (segment.isEmpty() || ".".equals(segment) || "..".equals(segment)) {
+        throw new IllegalArgumentException(field + " must stay under the manifest directory");
+      }
+    }
+    return value;
+  }
+
   private static String normalizeOptionalHex32(final String value, final String field) {
     return "0x" + hexLower(hex32Bytes(value, field));
+  }
+
+  private static String normalizeNativeEvmProverParityHex32(
+      final String value, final String field) {
+    final String normalized = normalizeOptionalHex32(value, field);
+    if (!normalized.equals(value)) {
+      throw new IllegalArgumentException(
+          field + " must be canonical lowercase 0x-prefixed 32-byte hex");
+    }
+    return normalized;
+  }
+
+  private static Groth16ProverArtifacts normalizeOptionalGroth16ProverArtifacts(
+      final String proofArtifactHash, final String provingKeyHash) {
+    if ((proofArtifactHash == null) != (provingKeyHash == null)) {
+      throw new IllegalArgumentException(
+          "proofArtifactHash and provingKeyHash must be supplied together");
+    }
+    if (proofArtifactHash == null) {
+      return null;
+    }
+    return new Groth16ProverArtifacts(
+        normalizeHex32(proofArtifactHash, "proofArtifactHash"),
+        normalizeHex32(provingKeyHash, "provingKeyHash"));
   }
 
   private static ProofContext normalizeProofContext(
@@ -1047,6 +1416,1469 @@ public final class EvmSccpProver {
     ProofRequestInput resolveWitness(ProofRequestInput input);
   }
 
+  /** Resolves manifest-declared native prover artifact paths from app-local storage. */
+  public interface NativeEvmProverArtifactResolver {
+    byte[] resolveArtifact(String path);
+  }
+
+  /** One SDK implementation row in an audited Ethereum mainnet native EVM prover bundle. */
+  public record EthereumMainnetNativeEvmProverBundleSdkArtifact(
+      String sdk,
+      String implementation,
+      String proofArtifactHash,
+      String provingKeyHash,
+      String implementationArtifact,
+      String implementationHash) {
+    public EthereumMainnetNativeEvmProverBundleSdkArtifact {
+      if (sdk == null || sdk.isEmpty()) {
+        throw new IllegalArgumentException("nativeSdkArtifacts.sdk must be non-empty");
+      }
+      if (!Objects.equals(ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.get(sdk), implementation)) {
+        throw new IllegalArgumentException(
+            sdk + " implementation must match Ethereum native EVM prover bundle profile");
+      }
+      proofArtifactHash =
+          normalizeNativeEvmProverBundleHex32(proofArtifactHash, "proofArtifactHash");
+      provingKeyHash = normalizeNativeEvmProverBundleHex32(provingKeyHash, "provingKeyHash");
+      if (implementationArtifact != null) {
+        implementationArtifact =
+            normalizeNativeEvmProverArtifactPath(implementationArtifact, "implementationArtifact");
+      }
+      implementationHash =
+          normalizeNativeEvmProverBundleHex32(implementationHash, "implementationHash");
+    }
+
+    public EthereumMainnetNativeEvmProverBundleSdkArtifact(
+        final String sdk,
+        final String implementation,
+        final String proofArtifactHash,
+        final String provingKeyHash,
+        final String implementationHash) {
+      this(sdk, implementation, proofArtifactHash, provingKeyHash, null, implementationHash);
+    }
+  }
+
+  /** Audited native-only EVM Groth16 prover bundle for Ethereum mainnet. */
+  public record EthereumMainnetNativeEvmProverBundle(
+      String schema,
+      String bundleId,
+      int domain,
+      String chain,
+      String proofBackend,
+      String proofArtifact,
+      String proofArtifactHash,
+      String provingKey,
+      String provingKeyHash,
+      String verifierKey,
+      String verifierKeyHash,
+      String destinationBindingHash,
+      boolean noWasm,
+      boolean remoteProverRequired,
+      String browserImplementation,
+      String crossSdkFixtureParityArtifact,
+      String nativeProverSelfTestArtifact,
+      List<EthereumMainnetNativeEvmProverBundleSdkArtifact> nativeSdkArtifacts,
+      Map<String, String> auditHashes) {
+    public EthereumMainnetNativeEvmProverBundle {
+      if (!NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1.equals(schema)) {
+        throw new IllegalArgumentException("nativeProverBundle.schema is not supported");
+      }
+      if (!ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1.equals(bundleId)) {
+        throw new IllegalArgumentException("nativeProverBundle.bundleId is not supported");
+      }
+      if (domain != DOMAIN_ETH) {
+        throw new IllegalArgumentException("nativeProverBundle.domain must be ETH");
+      }
+      if (!"eth".equals(chain)) {
+        throw new IllegalArgumentException("nativeProverBundle.chain must be eth");
+      }
+      if (!GROTH16_BN254_PROOF_BACKEND_V1.equals(proofBackend)) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.proofBackend must be evm-groth16-bn254-v1");
+      }
+      if (!noWasm) {
+        throw new IllegalArgumentException("nativeProverBundle.noWasm must be true");
+      }
+      if (remoteProverRequired) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.remoteProverRequired must be false");
+      }
+      if (!"pure-typescript".equals(browserImplementation)) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.browserImplementation must be pure-typescript");
+      }
+      if (proofArtifact != null) {
+        proofArtifact = normalizeNativeEvmProverArtifactPath(proofArtifact, "proofArtifact");
+      }
+      proofArtifactHash =
+          normalizeNativeEvmProverBundleHex32(proofArtifactHash, "proofArtifactHash");
+      if (provingKey != null) {
+        provingKey = normalizeNativeEvmProverArtifactPath(provingKey, "provingKey");
+      }
+      provingKeyHash = normalizeNativeEvmProverBundleHex32(provingKeyHash, "provingKeyHash");
+      if (verifierKey != null) {
+        verifierKey = normalizeNativeEvmProverArtifactPath(verifierKey, "verifierKey");
+      }
+      verifierKeyHash =
+          normalizeNativeEvmProverBundleHex32(verifierKeyHash, "verifierKeyHash");
+      destinationBindingHash =
+          normalizeNativeEvmProverBundleHex32(destinationBindingHash, "destinationBindingHash");
+      if (crossSdkFixtureParityArtifact != null) {
+        crossSdkFixtureParityArtifact =
+            normalizeNativeEvmProverArtifactPath(
+                crossSdkFixtureParityArtifact, "crossSdkFixtureParityArtifact");
+      }
+      if (nativeProverSelfTestArtifact != null) {
+        nativeProverSelfTestArtifact =
+            normalizeNativeEvmProverArtifactPath(
+                nativeProverSelfTestArtifact, "nativeProverSelfTestArtifact");
+      }
+      if (auditHashes == null || auditHashes.isEmpty()) {
+        throw new IllegalArgumentException("nativeProverBundle.auditHashes must be non-empty");
+      }
+      for (final String key : auditHashes.keySet()) {
+        if (!ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1.contains(key)) {
+          throw new IllegalArgumentException("auditHashes." + key + " is not expected");
+        }
+      }
+      final LinkedHashMap<String, String> normalizedAuditHashes = new LinkedHashMap<>();
+      for (final String key : ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1) {
+        final String value = auditHashes.get(key);
+        if (value == null) {
+          throw new IllegalArgumentException("auditHashes." + key + " is required");
+        }
+        normalizedAuditHashes.put(
+            key, normalizeNativeEvmProverBundleHex32(value, "auditHashes." + key));
+      }
+      auditHashes = Collections.unmodifiableMap(normalizedAuditHashes);
+      if (nativeSdkArtifacts == null || nativeSdkArtifacts.isEmpty()) {
+        throw new IllegalArgumentException("nativeSdkArtifacts must be non-empty");
+      }
+      final LinkedHashMap<String, EthereumMainnetNativeEvmProverBundleSdkArtifact> bySdk =
+          new LinkedHashMap<>();
+      for (final EthereumMainnetNativeEvmProverBundleSdkArtifact artifact : nativeSdkArtifacts) {
+        if (bySdk.containsKey(artifact.sdk())) {
+          throw new IllegalArgumentException(
+              "nativeSdkArtifacts contains duplicate sdk: " + artifact.sdk());
+        }
+        if (!Objects.equals(artifact.proofArtifactHash(), proofArtifactHash)) {
+          throw new IllegalArgumentException(
+              artifact.sdk() + " proofArtifactHash must match bundle");
+        }
+        if (!Objects.equals(artifact.provingKeyHash(), provingKeyHash)) {
+          throw new IllegalArgumentException(artifact.sdk() + " provingKeyHash must match bundle");
+        }
+        bySdk.put(artifact.sdk(), artifact);
+      }
+      for (final String sdk : ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keySet()) {
+        if (!bySdk.containsKey(sdk)) {
+          throw new IllegalArgumentException("nativeSdkArtifacts missing sdk: " + sdk);
+        }
+      }
+      final LinkedHashMap<String, String> hashRoles = new LinkedHashMap<>();
+      hashRoles.put("proofArtifactHash", proofArtifactHash);
+      hashRoles.put("provingKeyHash", provingKeyHash);
+      hashRoles.put("verifierKeyHash", verifierKeyHash);
+      hashRoles.put("destinationBindingHash", destinationBindingHash);
+      for (final EthereumMainnetNativeEvmProverBundleSdkArtifact artifact : bySdk.values()) {
+        hashRoles.put(
+            "nativeSdkArtifacts[" + artifact.sdk() + "].implementationHash",
+            artifact.implementationHash());
+      }
+      for (final Map.Entry<String, String> entry : auditHashes.entrySet()) {
+        hashRoles.put("auditHashes." + entry.getKey(), entry.getValue());
+      }
+      requireNativeEvmProverBundleHashRoleSeparation(hashRoles);
+      nativeSdkArtifacts = Collections.unmodifiableList(new ArrayList<>(bySdk.values()));
+    }
+
+    public EthereumMainnetNativeEvmProverBundle(
+        final String schema,
+        final String bundleId,
+        final int domain,
+        final String chain,
+        final String proofBackend,
+        final String proofArtifact,
+        final String proofArtifactHash,
+        final String provingKey,
+        final String provingKeyHash,
+        final String verifierKey,
+        final String verifierKeyHash,
+        final String destinationBindingHash,
+        final boolean noWasm,
+        final boolean remoteProverRequired,
+        final String browserImplementation,
+        final List<EthereumMainnetNativeEvmProverBundleSdkArtifact> nativeSdkArtifacts,
+        final Map<String, String> auditHashes) {
+      this(
+          schema,
+          bundleId,
+          domain,
+          chain,
+          proofBackend,
+          proofArtifact,
+          proofArtifactHash,
+          provingKey,
+          provingKeyHash,
+          verifierKey,
+          verifierKeyHash,
+          destinationBindingHash,
+          noWasm,
+          remoteProverRequired,
+          browserImplementation,
+          null,
+          null,
+          nativeSdkArtifacts,
+          auditHashes);
+    }
+
+    public EthereumMainnetNativeEvmProverBundle(
+        final String proofArtifactHash,
+        final String provingKeyHash,
+        final String verifierKeyHash,
+        final String destinationBindingHash,
+        final List<EthereumMainnetNativeEvmProverBundleSdkArtifact> nativeSdkArtifacts,
+        final Map<String, String> auditHashes) {
+      this(
+          NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+          ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+          DOMAIN_ETH,
+          "eth",
+          GROTH16_BN254_PROOF_BACKEND_V1,
+          null,
+          proofArtifactHash,
+          null,
+          provingKeyHash,
+          null,
+          verifierKeyHash,
+          destinationBindingHash,
+          true,
+          false,
+          "pure-typescript",
+          null,
+          null,
+          nativeSdkArtifacts,
+          auditHashes);
+    }
+
+    public EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts(
+        final byte[] proofArtifactBytes,
+        final byte[] provingKeyBytes,
+        final byte[] verifierKeyBytes) {
+      return verifiedArtifacts(
+          proofArtifactBytes, provingKeyBytes, verifierKeyBytes, null, null, null, null);
+    }
+
+    public EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts(
+        final byte[] proofArtifactBytes,
+        final byte[] provingKeyBytes,
+        final byte[] verifierKeyBytes,
+        final String sdk,
+        final byte[] implementationBytes) {
+      return verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          sdk,
+          implementationBytes,
+          null,
+          null);
+    }
+
+    public EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts(
+        final byte[] proofArtifactBytes,
+        final byte[] provingKeyBytes,
+        final byte[] verifierKeyBytes,
+        final String sdk,
+        final byte[] implementationBytes,
+        final byte[] crossSdkFixtureParityBytes) {
+      return verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          sdk,
+          implementationBytes,
+          crossSdkFixtureParityBytes,
+          null);
+    }
+
+    public EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts(
+        final byte[] proofArtifactBytes,
+        final byte[] provingKeyBytes,
+        final byte[] verifierKeyBytes,
+        final String sdk,
+        final byte[] implementationBytes,
+        final byte[] crossSdkFixtureParityBytes,
+        final byte[] nativeProverSelfTestBytes) {
+      final String computedProofArtifactHash =
+          sha256Hex(Objects.requireNonNull(proofArtifactBytes, "proofArtifactBytes"));
+      if (!Objects.equals(computedProofArtifactHash, proofArtifactHash)) {
+        throw new IllegalArgumentException(
+            "proofArtifactBytes sha256 must match nativeProverBundle.proofArtifactHash");
+      }
+      final String computedProvingKeyHash =
+          sha256Hex(Objects.requireNonNull(provingKeyBytes, "provingKeyBytes"));
+      if (!Objects.equals(computedProvingKeyHash, provingKeyHash)) {
+        throw new IllegalArgumentException(
+            "provingKeyBytes sha256 must match nativeProverBundle.provingKeyHash");
+      }
+      final String computedVerifierKeyHash =
+          sha256Hex(Objects.requireNonNull(verifierKeyBytes, "verifierKeyBytes"));
+      if (!Objects.equals(computedVerifierKeyHash, verifierKeyHash)) {
+        throw new IllegalArgumentException(
+            "verifierKeyBytes sha256 must match nativeProverBundle.verifierKeyHash");
+      }
+      if (crossSdkFixtureParityBytes == null) {
+        throw new IllegalArgumentException(
+            "crossSdkFixtureParityBytes are required for nativeProverBundle parity binding");
+      }
+      final String crossSdkFixtureParityHash = sha256Hex(crossSdkFixtureParityBytes);
+      if (!Objects.equals(
+          crossSdkFixtureParityHash, auditHashes.get("cross_sdk_fixture_parity"))) {
+        throw new IllegalArgumentException(
+            "crossSdkFixtureParityBytes sha256 must match nativeProverBundle.auditHashes.cross_sdk_fixture_parity");
+      }
+      if (nativeProverSelfTestBytes == null) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestBytes are required for nativeProverBundle self-test binding");
+      }
+      final String nativeProverSelfTestHash = sha256Hex(nativeProverSelfTestBytes);
+      if (!Objects.equals(
+          nativeProverSelfTestHash, auditHashes.get("native_prover_self_test"))) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test");
+      }
+      requireNativeEvmProverProductionArtifactSize(proofArtifactBytes, "proofArtifactBytes");
+      requireNativeEvmProverProductionArtifactSize(provingKeyBytes, "provingKeyBytes");
+      requireNativeEvmProverProductionArtifactSize(verifierKeyBytes, "verifierKeyBytes");
+      rejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, "proofArtifactBytes");
+      rejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, "provingKeyBytes");
+      rejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, "verifierKeyBytes");
+      rejectNativeEvmProverForbiddenArtifactMarkers(
+          crossSdkFixtureParityBytes, "crossSdkFixtureParityBytes");
+      rejectNativeEvmProverForbiddenArtifactMarkers(
+          nativeProverSelfTestBytes, "nativeProverSelfTestBytes");
+      final EthereumMainnetNativeEvmProverParityFixture crossSdkFixtureParity =
+          EthereumMainnetNativeEvmProverParityFixture.fromJsonBytes(
+              crossSdkFixtureParityBytes, this);
+      final EthereumMainnetNativeEvmProverSelfTestFixture nativeProverSelfTest =
+          EthereumMainnetNativeEvmProverSelfTestFixture.fromJsonBytes(
+              nativeProverSelfTestBytes, this);
+
+      if (sdk == null || sdk.isEmpty()) {
+        throw new IllegalArgumentException(
+            "sdk must be a non-empty string for nativeProverBundle implementation binding");
+      }
+      if (implementationBytes == null) {
+        throw new IllegalArgumentException(
+            "implementationBytes are required for nativeProverBundle implementation binding");
+      }
+      EthereumMainnetNativeEvmProverBundleSdkArtifact artifact = null;
+      for (final EthereumMainnetNativeEvmProverBundleSdkArtifact row : nativeSdkArtifacts) {
+        if (Objects.equals(row.sdk(), sdk)) {
+          artifact = row;
+          break;
+        }
+      }
+      if (artifact == null) {
+        throw new IllegalArgumentException("nativeProverBundle has no artifact row for sdk: " + sdk);
+      }
+      final String implementationHash = sha256Hex(implementationBytes);
+      if (!Objects.equals(implementationHash, artifact.implementationHash())) {
+        throw new IllegalArgumentException(
+            "implementationBytes sha256 must match nativeProverBundle implementationHash");
+      }
+      requireNativeEvmProverProductionArtifactSize(implementationBytes, "implementationBytes");
+      rejectNativeEvmProverForbiddenArtifactMarkers(implementationBytes, "implementationBytes");
+      final String implementation = artifact.implementation();
+      return new EthereumMainnetNativeEvmProverArtifacts(
+          NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+          this,
+          computedProofArtifactHash,
+          computedProvingKeyHash,
+          computedVerifierKeyHash,
+          crossSdkFixtureParityHash,
+          crossSdkFixtureParity,
+          nativeProverSelfTestHash,
+          nativeProverSelfTest,
+          sdk,
+          implementation,
+          implementationHash);
+    }
+
+    public EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts(
+        final String sdk, final NativeEvmProverArtifactResolver artifactResolver) {
+      Objects.requireNonNull(artifactResolver, "artifactResolver");
+      if (proofArtifact == null) {
+        throw new IllegalArgumentException("proofArtifact is required");
+      }
+      if (provingKey == null) {
+        throw new IllegalArgumentException("provingKey is required");
+      }
+      if (verifierKey == null) {
+        throw new IllegalArgumentException("verifierKey is required");
+      }
+      if (crossSdkFixtureParityArtifact == null) {
+        throw new IllegalArgumentException("crossSdkFixtureParityArtifact is required");
+      }
+      if (nativeProverSelfTestArtifact == null) {
+        throw new IllegalArgumentException("nativeProverSelfTestArtifact is required");
+      }
+      EthereumMainnetNativeEvmProverBundleSdkArtifact artifact = null;
+      for (final EthereumMainnetNativeEvmProverBundleSdkArtifact row : nativeSdkArtifacts) {
+        if (Objects.equals(row.sdk(), sdk)) {
+          artifact = row;
+          break;
+        }
+      }
+      if (artifact == null) {
+        throw new IllegalArgumentException("nativeProverBundle has no artifact row for sdk: " + sdk);
+      }
+      if (artifact.implementationArtifact() == null) {
+        throw new IllegalArgumentException("implementationArtifact is required");
+      }
+      return verifiedArtifacts(
+          artifactResolver.resolveArtifact(proofArtifact),
+          artifactResolver.resolveArtifact(provingKey),
+          artifactResolver.resolveArtifact(verifierKey),
+          sdk,
+          artifactResolver.resolveArtifact(artifact.implementationArtifact()),
+          artifactResolver.resolveArtifact(crossSdkFixtureParityArtifact),
+          artifactResolver.resolveArtifact(nativeProverSelfTestArtifact));
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle fromJson(final String json) {
+      return fromJson(json, null);
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle fromJson(
+        final String json, final String expectedDestinationBindingHash) {
+      final Object parsed;
+      try {
+        parsed = JsonParser.parse(Objects.requireNonNull(json, "json"));
+      } catch (final IllegalStateException ex) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle JSON is invalid: " + ex.getMessage(), ex);
+      }
+      return fromMap(
+          expectManifestObject(parsed, "nativeProverBundle"),
+          expectedDestinationBindingHash);
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle fromJsonBytes(final byte[] payload) {
+      return fromJsonBytes(payload, null);
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle fromJsonBytes(
+        final byte[] payload, final String expectedDestinationBindingHash) {
+      return fromJson(
+          new String(Objects.requireNonNull(payload, "payload"), StandardCharsets.UTF_8),
+          expectedDestinationBindingHash);
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle fromMap(
+        final Map<String, Object> manifest) {
+      return fromMap(manifest, null);
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle fromMap(
+        final Map<String, Object> manifest, final String expectedDestinationBindingHash) {
+      Objects.requireNonNull(manifest, "manifest");
+      requireManifestKeys(
+          manifest, "nativeProverBundle", NATIVE_EVM_PROVER_BUNDLE_MANIFEST_KEYS);
+      final String proofArtifactHash =
+          manifestString(
+              manifestField(
+                  manifest,
+                  "proofArtifactHash",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash",
+                  "circuitArtifactHash",
+                  "circuit_artifact_hash"),
+              "proofArtifactHash");
+      final String provingKeyHash =
+          manifestString(
+              manifestField(manifest, "provingKeyHash", "provingKeyHash", "proving_key_hash"),
+              "provingKeyHash");
+      final EthereumMainnetNativeEvmProverBundle bundle =
+          new EthereumMainnetNativeEvmProverBundle(
+              manifestString(manifestField(manifest, "schema", "schema"), "schema"),
+              manifestString(manifestField(manifest, "bundleId", "bundleId", "bundle_id"), "bundleId"),
+              manifestDomain(manifestField(manifest, "domain", "domain"), "domain"),
+              manifestString(manifestField(manifest, "chain", "chain"), "chain"),
+              manifestString(
+                  manifestField(
+                      manifest, "proofBackend", "proofBackend", "proof_backend", "backend"),
+                  "proofBackend"),
+              manifestString(
+                  manifestField(
+                      manifest,
+                      "proofArtifact",
+                      "proofArtifact",
+                      "proof_artifact",
+                      "proverArtifact",
+                      "prover_artifact",
+                      "circuitArtifact",
+                      "circuit_artifact"),
+                  "proofArtifact"),
+              proofArtifactHash,
+              manifestString(
+                  manifestField(manifest, "provingKey", "provingKey", "proving_key"),
+                  "provingKey"),
+              provingKeyHash,
+              manifestString(
+                  manifestField(manifest, "verifierKey", "verifierKey", "verifier_key"),
+                  "verifierKey"),
+              manifestString(
+                  manifestField(
+                      manifest, "verifierKeyHash", "verifierKeyHash", "verifier_key_hash"),
+                  "verifierKeyHash"),
+              manifestString(
+                  manifestField(
+                      manifest,
+                      "destinationBindingHash",
+                      "destinationBindingHash",
+                      "destination_binding_hash"),
+                  "destinationBindingHash"),
+              manifestBoolean(manifestField(manifest, "noWasm", "noWasm", "no_wasm"), "noWasm"),
+              manifestBoolean(
+                  manifestField(
+                      manifest,
+                      "remoteProverRequired",
+                      "remoteProverRequired",
+                      "remote_prover_required"),
+                  "remoteProverRequired"),
+              manifestString(
+                  manifestField(
+                      manifest,
+                      "browserImplementation",
+                      "browserImplementation",
+                      "browser_implementation"),
+                  "browserImplementation"),
+              manifestString(
+                  manifestField(
+                      manifest,
+                      "crossSdkFixtureParityArtifact",
+                      "crossSdkFixtureParityArtifact",
+                      "cross_sdk_fixture_parity_artifact"),
+                  "crossSdkFixtureParityArtifact"),
+              manifestString(
+                  manifestField(
+                      manifest,
+                      "nativeProverSelfTestArtifact",
+                      "nativeProverSelfTestArtifact",
+                      "native_prover_self_test_artifact",
+                      "selfTestArtifact",
+                      "self_test_artifact"),
+                  "nativeProverSelfTestArtifact"),
+              manifestSdkArtifacts(
+                  manifestField(
+                      manifest,
+                      "nativeSdkArtifacts",
+                      "nativeSdkArtifacts",
+                      "native_sdk_artifacts",
+                      "sdkArtifacts",
+                      "sdk_artifacts"),
+                  proofArtifactHash,
+                  provingKeyHash),
+              manifestStringMap(
+                  manifestField(manifest, "auditHashes", "auditHashes", "audit_hashes"),
+                  "auditHashes"));
+      if (expectedDestinationBindingHash != null
+          && !Objects.equals(
+              normalizeNativeEvmProverBundleHex32(
+                  expectedDestinationBindingHash, "expectedDestinationBindingHash"),
+              bundle.destinationBindingHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.destinationBindingHash must match destinationBinding");
+      }
+      return bundle;
+    }
+
+    public ProofRequestInput applyTo(final ProofRequestInput input) {
+      Objects.requireNonNull(input, "input");
+      if (!Objects.equals(normalizeHex32(input.destinationBindingHash(), "destinationBindingHash"), destinationBindingHash)) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.destinationBindingHash must match destinationBinding");
+      }
+      if (input.destinationBinding() != null
+          && !Objects.equals(
+              normalizeHex32(input.destinationBinding().verifierKeyHash, "verifierKeyHash"),
+              verifierKeyHash)) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.verifierKeyHash must match destinationBinding");
+      }
+      if (input.proofArtifactHash() != null
+          && !Objects.equals(normalizeHex32(input.proofArtifactHash(), "proofArtifactHash"), proofArtifactHash)) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.proofArtifactHash must match proof request");
+      }
+      if (input.provingKeyHash() != null
+          && !Objects.equals(normalizeHex32(input.provingKeyHash(), "provingKeyHash"), provingKeyHash)) {
+        throw new IllegalArgumentException(
+            "nativeProverBundle.provingKeyHash must match proof request");
+      }
+      if ((input.proofArtifactHash() == null) != (input.provingKeyHash() == null)) {
+        throw new IllegalArgumentException(
+            "proofArtifactHash and provingKeyHash must be supplied together");
+      }
+      return new ProofRequestInput(
+          input.publicInputs(),
+          input.bundleBytes(),
+          input.sourceProofBytes(),
+          input.statementHash(),
+          destinationBindingHash,
+          input.backend(),
+          input.sourceDomain(),
+          input.destinationBinding(),
+          proofArtifactHash,
+          provingKeyHash);
+    }
+  }
+
+  public record EthereumMainnetNativeEvmProverParitySdkResult(
+      String receiptProofHash,
+      String sourceProofHash,
+      String destinationBindingHash,
+      List<String> publicSignalWords,
+      String calldataHash,
+      String toriiSubmitPayloadHash) {
+    public EthereumMainnetNativeEvmProverParitySdkResult {
+      receiptProofHash = normalizeNativeEvmProverBundleHex32(receiptProofHash, "receiptProofHash");
+      sourceProofHash = normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash");
+      destinationBindingHash = normalizeNativeEvmProverParityHex32(destinationBindingHash, "destinationBindingHash");
+      if (publicSignalWords == null || publicSignalWords.size() != 9) {
+        throw new IllegalArgumentException("publicSignalWords must contain 9 words");
+      }
+      final ArrayList<String> signals = new ArrayList<>();
+      for (int index = 0; index < publicSignalWords.size(); index++) {
+        signals.add(normalizeNativeEvmProverParityHex32(publicSignalWords.get(index), "publicSignalWords[" + index + "]"));
+      }
+      publicSignalWords = Collections.unmodifiableList(signals);
+      calldataHash = normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash");
+      toriiSubmitPayloadHash =
+          normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash");
+    }
+  }
+
+  public record EthereumMainnetNativeEvmProverParityFixture(
+      String schema,
+      int domain,
+      String chain,
+      String proofBackend,
+      String proofArtifactHash,
+      String provingKeyHash,
+      String verifierKeyHash,
+      String destinationBindingHash,
+      String receiptProofHash,
+      String sourceProofHash,
+      List<String> publicSignalWords,
+      String calldataHash,
+      String toriiSubmitPayloadHash,
+      Map<String, EthereumMainnetNativeEvmProverParitySdkResult> sdkResults) {
+    public EthereumMainnetNativeEvmProverParityFixture(
+        final EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        final String schema,
+        final int domain,
+        final String chain,
+        final String proofBackend,
+        final String proofArtifactHash,
+        final String provingKeyHash,
+        final String verifierKeyHash,
+        final String destinationBindingHash,
+        final String receiptProofHash,
+        final String sourceProofHash,
+        final List<String> publicSignalWords,
+        final String calldataHash,
+        final String toriiSubmitPayloadHash,
+        final Map<String, EthereumMainnetNativeEvmProverParitySdkResult> sdkResults) {
+      this(
+          schema,
+          domain,
+          chain,
+          proofBackend,
+          proofArtifactHash,
+          provingKeyHash,
+          verifierKeyHash,
+          destinationBindingHash,
+          receiptProofHash,
+          sourceProofHash,
+          publicSignalWords,
+          calldataHash,
+          toriiSubmitPayloadHash,
+          sdkResults);
+      Objects.requireNonNull(nativeProverBundle, "nativeProverBundle");
+      if (!Objects.equals(this.proofArtifactHash, nativeProverBundle.proofArtifactHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.proofArtifactHash must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.provingKeyHash, nativeProverBundle.provingKeyHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.provingKeyHash must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.verifierKeyHash, nativeProverBundle.verifierKeyHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.verifierKeyHash must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.destinationBindingHash, nativeProverBundle.destinationBindingHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.destinationBindingHash must match nativeProverBundle");
+      }
+      if (this.domain != DOMAIN_ETH || this.domain != nativeProverBundle.domain()) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.domain must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.chain, nativeProverBundle.chain())) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.chain must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.proofBackend, nativeProverBundle.proofBackend())) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.proofBackend must match nativeProverBundle");
+      }
+    }
+
+    public EthereumMainnetNativeEvmProverParityFixture {
+      if (!ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1.equals(schema)) {
+        throw new IllegalArgumentException("nativeProverParityFixture.schema is not supported");
+      }
+      if (domain != DOMAIN_ETH) {
+        throw new IllegalArgumentException("nativeProverParityFixture.domain must be ETH");
+      }
+      if (!"eth".equals(chain)) {
+        throw new IllegalArgumentException("nativeProverParityFixture.chain must be eth");
+      }
+      if (!GROTH16_BN254_PROOF_BACKEND_V1.equals(proofBackend)) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture.proofBackend must be evm-groth16-bn254-v1");
+      }
+      proofArtifactHash =
+          normalizeNativeEvmProverBundleHex32(proofArtifactHash, "proofArtifactHash");
+      provingKeyHash = normalizeNativeEvmProverBundleHex32(provingKeyHash, "provingKeyHash");
+      verifierKeyHash = normalizeNativeEvmProverBundleHex32(verifierKeyHash, "verifierKeyHash");
+      destinationBindingHash = normalizeNativeEvmProverParityHex32(destinationBindingHash, "destinationBindingHash");
+      receiptProofHash = normalizeNativeEvmProverBundleHex32(receiptProofHash, "receiptProofHash");
+      sourceProofHash = normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash");
+      if (publicSignalWords == null || publicSignalWords.size() != 9) {
+        throw new IllegalArgumentException("publicSignalWords must contain 9 words");
+      }
+      final ArrayList<String> signals = new ArrayList<>();
+      for (int index = 0; index < publicSignalWords.size(); index++) {
+        signals.add(normalizeNativeEvmProverParityHex32(publicSignalWords.get(index), "publicSignalWords[" + index + "]"));
+      }
+      publicSignalWords = Collections.unmodifiableList(signals);
+      calldataHash = normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash");
+      toriiSubmitPayloadHash =
+          normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash");
+      if (sdkResults == null || !sdkResults.keySet().equals(ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keySet())) {
+        throw new IllegalArgumentException("sdkResults must contain exactly the required SDKs");
+      }
+      final LinkedHashMap<String, EthereumMainnetNativeEvmProverParitySdkResult> normalizedResults =
+          new LinkedHashMap<>();
+      for (final String sdk : ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keySet()) {
+        final EthereumMainnetNativeEvmProverParitySdkResult result = sdkResults.get(sdk);
+        if (result == null) {
+          throw new IllegalArgumentException("sdkResults missing sdk: " + sdk);
+        }
+        if (!Objects.equals(result.receiptProofHash(), receiptProofHash)) {
+          throw new IllegalArgumentException("sdkResults." + sdk + ".receiptProofHash must match receiptProofHash");
+        }
+        if (!Objects.equals(result.sourceProofHash(), sourceProofHash)) {
+          throw new IllegalArgumentException("sdkResults." + sdk + ".sourceProofHash must match sourceProofHash");
+        }
+        if (!Objects.equals(result.destinationBindingHash(), destinationBindingHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".destinationBindingHash must match destinationBindingHash");
+        }
+        if (!Objects.equals(result.publicSignalWords(), publicSignalWords)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".publicSignalWords must match publicSignalWords");
+        }
+        if (!Objects.equals(result.calldataHash(), calldataHash)) {
+          throw new IllegalArgumentException("sdkResults." + sdk + ".calldataHash must match calldataHash");
+        }
+        if (!Objects.equals(result.toriiSubmitPayloadHash(), toriiSubmitPayloadHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".toriiSubmitPayloadHash must match toriiSubmitPayloadHash");
+        }
+        normalizedResults.put(sdk, result);
+      }
+      sdkResults = Collections.unmodifiableMap(normalizedResults);
+    }
+
+    public static EthereumMainnetNativeEvmProverParityFixture fromJson(
+        final String json, final EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+      final Object parsed;
+      try {
+        parsed = JsonParser.parse(Objects.requireNonNull(json, "json"));
+      } catch (final IllegalStateException ex) {
+        throw new IllegalArgumentException(
+            "nativeProverParityFixture JSON is invalid: " + ex.getMessage(), ex);
+      }
+      return fromMap(expectManifestObject(parsed, "nativeProverParityFixture"), nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverParityFixture fromJsonBytes(
+        final byte[] payload, final EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+      return fromJson(new String(Objects.requireNonNull(payload, "payload"), StandardCharsets.UTF_8), nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverParityFixture fromMap(
+        final Map<String, Object> fixture,
+        final EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+      Objects.requireNonNull(fixture, "fixture");
+      requireManifestKeys(
+          fixture, "nativeProverParityFixture", NATIVE_EVM_PROVER_PARITY_FIXTURE_KEYS);
+      final List<String> publicSignalWords =
+          manifestStringList(
+              manifestField(fixture, "publicSignalWords", "publicSignalWords", "public_signal_words"),
+              "publicSignalWords");
+      final Map<String, Object> sdkResultsInput =
+          expectManifestObject(manifestField(fixture, "sdkResults", "sdkResults", "sdk_results"), "sdkResults");
+      final LinkedHashMap<String, EthereumMainnetNativeEvmProverParitySdkResult> sdkResults =
+          new LinkedHashMap<>();
+      for (final String sdk : sdkResultsInput.keySet()) {
+        final Map<String, Object> result = expectManifestObject(sdkResultsInput.get(sdk), "sdkResults." + sdk);
+        requireManifestKeys(
+            result, "sdkResults." + sdk, NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS);
+        sdkResults.put(
+            sdk,
+            new EthereumMainnetNativeEvmProverParitySdkResult(
+                manifestString(
+                    manifestField(result, "sdkResults." + sdk + ".receiptProofHash", "receiptProofHash", "receipt_proof_hash"),
+                    "sdkResults." + sdk + ".receiptProofHash"),
+                manifestString(
+                    manifestField(result, "sdkResults." + sdk + ".sourceProofHash", "sourceProofHash", "source_proof_hash"),
+                    "sdkResults." + sdk + ".sourceProofHash"),
+                manifestString(
+                    manifestField(
+                        result,
+                        "sdkResults." + sdk + ".destinationBindingHash",
+                        "destinationBindingHash",
+                        "destination_binding_hash"),
+                    "sdkResults." + sdk + ".destinationBindingHash"),
+                manifestStringList(
+                    manifestField(
+                        result,
+                        "sdkResults." + sdk + ".publicSignalWords",
+                        "publicSignalWords",
+                        "public_signal_words"),
+                    "sdkResults." + sdk + ".publicSignalWords"),
+                manifestString(
+                    manifestField(result, "sdkResults." + sdk + ".calldataHash", "calldataHash", "calldata_hash"),
+                    "sdkResults." + sdk + ".calldataHash"),
+                manifestString(
+                    manifestField(
+                        result,
+                        "sdkResults." + sdk + ".toriiSubmitPayloadHash",
+                        "toriiSubmitPayloadHash",
+                        "torii_submit_payload_hash"),
+                    "sdkResults." + sdk + ".toriiSubmitPayloadHash")));
+      }
+      return new EthereumMainnetNativeEvmProverParityFixture(
+          nativeProverBundle,
+          manifestString(manifestField(fixture, "schema", "schema"), "schema"),
+          manifestDomain(manifestField(fixture, "domain", "domain"), "domain"),
+          manifestString(manifestField(fixture, "chain", "chain"), "chain"),
+          manifestString(
+              manifestField(fixture, "proofBackend", "proofBackend", "proof_backend", "backend"),
+              "proofBackend"),
+          manifestString(
+              manifestField(
+                  fixture,
+                  "proofArtifactHash",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash",
+                  "circuitArtifactHash",
+                  "circuit_artifact_hash"),
+              "proofArtifactHash"),
+          manifestString(
+              manifestField(fixture, "provingKeyHash", "provingKeyHash", "proving_key_hash"),
+              "provingKeyHash"),
+          manifestString(
+              manifestField(fixture, "verifierKeyHash", "verifierKeyHash", "verifier_key_hash"),
+              "verifierKeyHash"),
+          manifestString(
+              manifestField(
+                  fixture,
+                  "destinationBindingHash",
+                  "destinationBindingHash",
+                  "destination_binding_hash"),
+              "destinationBindingHash"),
+          manifestString(
+              manifestField(fixture, "receiptProofHash", "receiptProofHash", "receipt_proof_hash"),
+              "receiptProofHash"),
+          manifestString(
+              manifestField(fixture, "sourceProofHash", "sourceProofHash", "source_proof_hash"),
+              "sourceProofHash"),
+          publicSignalWords,
+          manifestString(
+              manifestField(fixture, "calldataHash", "calldataHash", "calldata_hash"),
+              "calldataHash"),
+          manifestString(
+              manifestField(
+                  fixture,
+                  "toriiSubmitPayloadHash",
+                  "toriiSubmitPayloadHash",
+                  "torii_submit_payload_hash"),
+              "toriiSubmitPayloadHash"),
+          sdkResults);
+    }
+  }
+
+  public record EthereumMainnetNativeEvmProverSelfTestSdkResult(
+      String requestHash,
+      String witnessHash,
+      String sourceProofHash,
+      String proofHash,
+      List<String> publicSignalWords,
+      String calldataHash,
+      String toriiSubmitPayloadHash) {
+    public EthereumMainnetNativeEvmProverSelfTestSdkResult {
+      requestHash = normalizeNativeEvmProverBundleHex32(requestHash, "requestHash");
+      witnessHash = normalizeNativeEvmProverBundleHex32(witnessHash, "witnessHash");
+      sourceProofHash = normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash");
+      proofHash = normalizeNativeEvmProverBundleHex32(proofHash, "proofHash");
+      if (publicSignalWords == null || publicSignalWords.size() != 9) {
+        throw new IllegalArgumentException("publicSignalWords must contain 9 words");
+      }
+      final ArrayList<String> signals = new ArrayList<>();
+      for (int index = 0; index < publicSignalWords.size(); index++) {
+        signals.add(
+            normalizeNativeEvmProverParityHex32(
+                publicSignalWords.get(index), "publicSignalWords[" + index + "]"));
+      }
+      publicSignalWords = Collections.unmodifiableList(signals);
+      calldataHash = normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash");
+      toriiSubmitPayloadHash =
+          normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash");
+    }
+  }
+
+  public record EthereumMainnetNativeEvmProverSelfTestFixture(
+      String schema,
+      int domain,
+      String chain,
+      String proofBackend,
+      String proofArtifactHash,
+      String provingKeyHash,
+      String verifierKeyHash,
+      String destinationBindingHash,
+      String requestHash,
+      String witnessHash,
+      String sourceProofHash,
+      String proofHash,
+      List<String> publicSignalWords,
+      String calldataHash,
+      String toriiSubmitPayloadHash,
+      Map<String, EthereumMainnetNativeEvmProverSelfTestSdkResult> sdkResults) {
+    public EthereumMainnetNativeEvmProverSelfTestFixture(
+        final EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        final String schema,
+        final int domain,
+        final String chain,
+        final String proofBackend,
+        final String proofArtifactHash,
+        final String provingKeyHash,
+        final String verifierKeyHash,
+        final String destinationBindingHash,
+        final String requestHash,
+        final String witnessHash,
+        final String sourceProofHash,
+        final String proofHash,
+        final List<String> publicSignalWords,
+        final String calldataHash,
+        final String toriiSubmitPayloadHash,
+        final Map<String, EthereumMainnetNativeEvmProverSelfTestSdkResult> sdkResults) {
+      this(
+          schema,
+          domain,
+          chain,
+          proofBackend,
+          proofArtifactHash,
+          provingKeyHash,
+          verifierKeyHash,
+          destinationBindingHash,
+          requestHash,
+          witnessHash,
+          sourceProofHash,
+          proofHash,
+          publicSignalWords,
+          calldataHash,
+          toriiSubmitPayloadHash,
+          sdkResults);
+      Objects.requireNonNull(nativeProverBundle, "nativeProverBundle");
+      if (!Objects.equals(this.proofArtifactHash, nativeProverBundle.proofArtifactHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.proofArtifactHash must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.provingKeyHash, nativeProverBundle.provingKeyHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.provingKeyHash must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.verifierKeyHash, nativeProverBundle.verifierKeyHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.verifierKeyHash must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.destinationBindingHash, nativeProverBundle.destinationBindingHash())) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.destinationBindingHash must match nativeProverBundle");
+      }
+      if (this.domain != DOMAIN_ETH || this.domain != nativeProverBundle.domain()) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.domain must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.chain, nativeProverBundle.chain())) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.chain must match nativeProverBundle");
+      }
+      if (!Objects.equals(this.proofBackend, nativeProverBundle.proofBackend())) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.proofBackend must match nativeProverBundle");
+      }
+    }
+
+    public EthereumMainnetNativeEvmProverSelfTestFixture {
+      if (!ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1.equals(schema)) {
+        throw new IllegalArgumentException("nativeProverSelfTestFixture.schema is not supported");
+      }
+      if (domain != DOMAIN_ETH) {
+        throw new IllegalArgumentException("nativeProverSelfTestFixture.domain must be ETH");
+      }
+      if (!"eth".equals(chain)) {
+        throw new IllegalArgumentException("nativeProverSelfTestFixture.chain must be eth");
+      }
+      if (!GROTH16_BN254_PROOF_BACKEND_V1.equals(proofBackend)) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture.proofBackend must be evm-groth16-bn254-v1");
+      }
+      proofArtifactHash =
+          normalizeNativeEvmProverBundleHex32(proofArtifactHash, "proofArtifactHash");
+      provingKeyHash = normalizeNativeEvmProverBundleHex32(provingKeyHash, "provingKeyHash");
+      verifierKeyHash = normalizeNativeEvmProverBundleHex32(verifierKeyHash, "verifierKeyHash");
+      destinationBindingHash =
+          normalizeNativeEvmProverParityHex32(destinationBindingHash, "destinationBindingHash");
+      requestHash = normalizeNativeEvmProverBundleHex32(requestHash, "requestHash");
+      witnessHash = normalizeNativeEvmProverBundleHex32(witnessHash, "witnessHash");
+      sourceProofHash = normalizeNativeEvmProverBundleHex32(sourceProofHash, "sourceProofHash");
+      proofHash = normalizeNativeEvmProverBundleHex32(proofHash, "proofHash");
+      if (publicSignalWords == null || publicSignalWords.size() != 9) {
+        throw new IllegalArgumentException("publicSignalWords must contain 9 words");
+      }
+      final ArrayList<String> signals = new ArrayList<>();
+      for (int index = 0; index < publicSignalWords.size(); index++) {
+        signals.add(
+            normalizeNativeEvmProverParityHex32(
+                publicSignalWords.get(index), "publicSignalWords[" + index + "]"));
+      }
+      publicSignalWords = Collections.unmodifiableList(signals);
+      calldataHash = normalizeNativeEvmProverBundleHex32(calldataHash, "calldataHash");
+      toriiSubmitPayloadHash =
+          normalizeNativeEvmProverBundleHex32(toriiSubmitPayloadHash, "toriiSubmitPayloadHash");
+      if (sdkResults == null
+          || !sdkResults.keySet().equals(ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keySet())) {
+        throw new IllegalArgumentException("sdkResults must contain exactly the required SDKs");
+      }
+      final LinkedHashMap<String, EthereumMainnetNativeEvmProverSelfTestSdkResult>
+          normalizedResults = new LinkedHashMap<>();
+      for (final String sdk : ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.keySet()) {
+        final EthereumMainnetNativeEvmProverSelfTestSdkResult result = sdkResults.get(sdk);
+        if (result == null) {
+          throw new IllegalArgumentException("sdkResults missing sdk: " + sdk);
+        }
+        if (!Objects.equals(result.requestHash(), requestHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".requestHash must match requestHash");
+        }
+        if (!Objects.equals(result.witnessHash(), witnessHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".witnessHash must match witnessHash");
+        }
+        if (!Objects.equals(result.sourceProofHash(), sourceProofHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".sourceProofHash must match sourceProofHash");
+        }
+        if (!Objects.equals(result.proofHash(), proofHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".proofHash must match proofHash");
+        }
+        if (!Objects.equals(result.publicSignalWords(), publicSignalWords)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".publicSignalWords must match publicSignalWords");
+        }
+        if (!Objects.equals(result.calldataHash(), calldataHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".calldataHash must match calldataHash");
+        }
+        if (!Objects.equals(result.toriiSubmitPayloadHash(), toriiSubmitPayloadHash)) {
+          throw new IllegalArgumentException(
+              "sdkResults." + sdk + ".toriiSubmitPayloadHash must match toriiSubmitPayloadHash");
+        }
+        normalizedResults.put(sdk, result);
+      }
+      sdkResults = Collections.unmodifiableMap(normalizedResults);
+    }
+
+    public static EthereumMainnetNativeEvmProverSelfTestFixture fromJson(
+        final String json, final EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+      final Object parsed;
+      try {
+        parsed = JsonParser.parse(Objects.requireNonNull(json, "json"));
+      } catch (final IllegalStateException ex) {
+        throw new IllegalArgumentException(
+            "nativeProverSelfTestFixture JSON is invalid: " + ex.getMessage(), ex);
+      }
+      return fromMap(expectManifestObject(parsed, "nativeProverSelfTestFixture"), nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverSelfTestFixture fromJsonBytes(
+        final byte[] payload, final EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+      return fromJson(
+          new String(Objects.requireNonNull(payload, "payload"), StandardCharsets.UTF_8),
+          nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverSelfTestFixture fromMap(
+        final Map<String, Object> fixture,
+        final EthereumMainnetNativeEvmProverBundle nativeProverBundle) {
+      Objects.requireNonNull(fixture, "fixture");
+      requireManifestKeys(
+          fixture, "nativeProverSelfTestFixture", NATIVE_EVM_PROVER_SELF_TEST_FIXTURE_KEYS);
+      final List<String> publicSignalWords =
+          manifestStringList(
+              manifestField(fixture, "publicSignalWords", "publicSignalWords", "public_signal_words"),
+              "publicSignalWords");
+      final Map<String, Object> sdkResultsInput =
+          expectManifestObject(
+              manifestField(fixture, "sdkResults", "sdkResults", "sdk_results"), "sdkResults");
+      final LinkedHashMap<String, EthereumMainnetNativeEvmProverSelfTestSdkResult> sdkResults =
+          new LinkedHashMap<>();
+      for (final String sdk : sdkResultsInput.keySet()) {
+        final Map<String, Object> result =
+            expectManifestObject(sdkResultsInput.get(sdk), "sdkResults." + sdk);
+        requireManifestKeys(
+            result, "sdkResults." + sdk, NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS);
+        sdkResults.put(
+            sdk,
+            new EthereumMainnetNativeEvmProverSelfTestSdkResult(
+                manifestString(
+                    manifestField(
+                        result, "sdkResults." + sdk + ".requestHash", "requestHash", "request_hash"),
+                    "sdkResults." + sdk + ".requestHash"),
+                manifestString(
+                    manifestField(
+                        result, "sdkResults." + sdk + ".witnessHash", "witnessHash", "witness_hash"),
+                    "sdkResults." + sdk + ".witnessHash"),
+                manifestString(
+                    manifestField(
+                        result,
+                        "sdkResults." + sdk + ".sourceProofHash",
+                        "sourceProofHash",
+                        "source_proof_hash"),
+                    "sdkResults." + sdk + ".sourceProofHash"),
+                manifestString(
+                    manifestField(result, "sdkResults." + sdk + ".proofHash", "proofHash", "proof_hash"),
+                    "sdkResults." + sdk + ".proofHash"),
+                manifestStringList(
+                    manifestField(
+                        result,
+                        "sdkResults." + sdk + ".publicSignalWords",
+                        "publicSignalWords",
+                        "public_signal_words"),
+                    "sdkResults." + sdk + ".publicSignalWords"),
+                manifestString(
+                    manifestField(result, "sdkResults." + sdk + ".calldataHash", "calldataHash", "calldata_hash"),
+                    "sdkResults." + sdk + ".calldataHash"),
+                manifestString(
+                    manifestField(
+                        result,
+                        "sdkResults." + sdk + ".toriiSubmitPayloadHash",
+                        "toriiSubmitPayloadHash",
+                        "torii_submit_payload_hash"),
+                    "sdkResults." + sdk + ".toriiSubmitPayloadHash")));
+      }
+      return new EthereumMainnetNativeEvmProverSelfTestFixture(
+          nativeProverBundle,
+          manifestString(manifestField(fixture, "schema", "schema"), "schema"),
+          manifestDomain(manifestField(fixture, "domain", "domain"), "domain"),
+          manifestString(manifestField(fixture, "chain", "chain"), "chain"),
+          manifestString(
+              manifestField(fixture, "proofBackend", "proofBackend", "proof_backend", "backend"),
+              "proofBackend"),
+          manifestString(
+              manifestField(
+                  fixture,
+                  "proofArtifactHash",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash",
+                  "circuitArtifactHash",
+                  "circuit_artifact_hash"),
+              "proofArtifactHash"),
+          manifestString(
+              manifestField(fixture, "provingKeyHash", "provingKeyHash", "proving_key_hash"),
+              "provingKeyHash"),
+          manifestString(
+              manifestField(fixture, "verifierKeyHash", "verifierKeyHash", "verifier_key_hash"),
+              "verifierKeyHash"),
+          manifestString(
+              manifestField(
+                  fixture,
+                  "destinationBindingHash",
+                  "destinationBindingHash",
+                  "destination_binding_hash"),
+              "destinationBindingHash"),
+          manifestString(
+              manifestField(fixture, "requestHash", "requestHash", "request_hash"),
+              "requestHash"),
+          manifestString(
+              manifestField(fixture, "witnessHash", "witnessHash", "witness_hash"),
+              "witnessHash"),
+          manifestString(
+              manifestField(fixture, "sourceProofHash", "sourceProofHash", "source_proof_hash"),
+              "sourceProofHash"),
+          manifestString(
+              manifestField(fixture, "proofHash", "proofHash", "proof_hash"),
+              "proofHash"),
+          publicSignalWords,
+          manifestString(
+              manifestField(fixture, "calldataHash", "calldataHash", "calldata_hash"),
+              "calldataHash"),
+          manifestString(
+              manifestField(
+                  fixture,
+                  "toriiSubmitPayloadHash",
+                  "toriiSubmitPayloadHash",
+                  "torii_submit_payload_hash"),
+              "toriiSubmitPayloadHash"),
+          sdkResults);
+    }
+  }
+
+  public record EthereumMainnetNativeEvmProverArtifacts(
+      String hashAlgorithm,
+      EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+      String proofArtifactHash,
+      String provingKeyHash,
+      String verifierKeyHash,
+      String crossSdkFixtureParityHash,
+      EthereumMainnetNativeEvmProverParityFixture crossSdkFixtureParity,
+      String nativeProverSelfTestHash,
+      EthereumMainnetNativeEvmProverSelfTestFixture nativeProverSelfTest,
+      String sdk,
+      String implementation,
+      String implementationHash) {}
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> expectManifestObject(final Object value, final String label) {
+    if (!(value instanceof Map)) {
+      throw new IllegalArgumentException(label + " must be an object");
+    }
+    final LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+    for (final Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+      if (!(entry.getKey() instanceof String)) {
+        throw new IllegalArgumentException(label + " keys must be strings");
+      }
+      out.put((String) entry.getKey(), entry.getValue());
+    }
+    return out;
+  }
+
+  private static Object manifestField(
+      final Map<String, Object> manifest, final String label, final String... aliases) {
+    String present = null;
+    for (final String alias : aliases) {
+      if (manifest.containsKey(alias)) {
+        if (present != null) {
+          throw new IllegalArgumentException(label + " must not use multiple aliases");
+        }
+        present = alias;
+      }
+    }
+    if (present != null) {
+      return manifest.get(present);
+    }
+    throw new IllegalArgumentException(label + " is required");
+  }
+
+  private static void requireManifestKeys(
+      final Map<String, Object> manifest, final String label, final Set<String> allowedKeys) {
+    for (final String key : manifest.keySet()) {
+      if (!allowedKeys.contains(key)) {
+        throw new IllegalArgumentException(label + " contains unknown field: " + key);
+      }
+    }
+  }
+
+  private static String manifestString(final Object value, final String label) {
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(label + " must be a string");
+    }
+    return (String) value;
+  }
+
+  private static List<String> manifestStringList(final Object value, final String label) {
+    if (!(value instanceof List<?>)) {
+      throw new IllegalArgumentException(label + " must be an array");
+    }
+    final List<?> raw = (List<?>) value;
+    final ArrayList<String> out = new ArrayList<>();
+    for (int index = 0; index < raw.size(); index++) {
+      out.add(manifestString(raw.get(index), label + "[" + index + "]"));
+    }
+    return Collections.unmodifiableList(out);
+  }
+
+  private static boolean manifestBoolean(final Object value, final String label) {
+    if (!(value instanceof Boolean)) {
+      throw new IllegalArgumentException(label + " must be a boolean");
+    }
+    return (Boolean) value;
+  }
+
+  private static int manifestDomain(final Object value, final String label) {
+    if (value instanceof Integer
+        || value instanceof Long
+        || value instanceof Short
+        || value instanceof Byte) {
+      final long numeric = ((Number) value).longValue();
+      if (numeric < 0 || numeric > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException(label + " must fit u32");
+      }
+      return (int) numeric;
+    }
+    if (value instanceof BigInteger) {
+      final BigInteger numeric = (BigInteger) value;
+      if (numeric.signum() < 0 || numeric.bitLength() > 31) {
+        throw new IllegalArgumentException(label + " must fit u32");
+      }
+      return numeric.intValue();
+    }
+    if (value instanceof String) {
+      final String text = (String) value;
+      if (!isCanonicalDecimalText(text)) {
+        throw new IllegalArgumentException(label + " must be a canonical decimal integer");
+      }
+      final BigInteger numeric = new BigInteger(text);
+      if (numeric.signum() < 0 || numeric.bitLength() > 31) {
+        throw new IllegalArgumentException(label + " must fit u32");
+      }
+      return numeric.intValue();
+    }
+    throw new IllegalArgumentException(label + " must be an integer");
+  }
+
+  private static Map<String, String> manifestStringMap(final Object value, final String label) {
+    if (!(value instanceof Map)) {
+      throw new IllegalArgumentException(label + " must be an object");
+    }
+    final Map<String, Object> raw = expectManifestObject(value, label);
+    if (raw.isEmpty()) {
+      throw new IllegalArgumentException(label + " must be non-empty");
+    }
+    final LinkedHashMap<String, String> out = new LinkedHashMap<>();
+    final ArrayList<String> keys = new ArrayList<>(raw.keySet());
+    Collections.sort(keys);
+    for (final String key : keys) {
+      out.put(key, manifestString(raw.get(key), label + "." + key));
+    }
+    return Collections.unmodifiableMap(out);
+  }
+
+  private static List<EthereumMainnetNativeEvmProverBundleSdkArtifact> manifestSdkArtifacts(
+      final Object value, final String proofArtifactHash, final String provingKeyHash) {
+    if (!(value instanceof List)) {
+      throw new IllegalArgumentException("nativeSdkArtifacts must be an array");
+    }
+    final List<?> raw = (List<?>) value;
+    if (raw.isEmpty()) {
+      throw new IllegalArgumentException("nativeSdkArtifacts must be non-empty");
+    }
+    final String normalizedProofArtifactHash =
+        normalizeNativeEvmProverBundleHex32(proofArtifactHash, "proofArtifactHash");
+    final String normalizedProvingKeyHash =
+        normalizeNativeEvmProverBundleHex32(provingKeyHash, "provingKeyHash");
+    final ArrayList<EthereumMainnetNativeEvmProverBundleSdkArtifact> out =
+        new ArrayList<>(raw.size());
+    for (int index = 0; index < raw.size(); index++) {
+      final Map<String, Object> artifact =
+          expectManifestObject(raw.get(index), "nativeSdkArtifacts[" + index + "]");
+      requireManifestKeys(
+          artifact,
+          "nativeSdkArtifacts[" + index + "]",
+          NATIVE_EVM_PROVER_BUNDLE_SDK_ARTIFACT_KEYS);
+      final String sdkProofArtifactHash =
+          manifestString(
+              manifestField(
+                  artifact,
+                  "nativeSdkArtifacts[" + index + "].proofArtifactHash",
+                  "proofArtifactHash",
+                  "proof_artifact_hash",
+                  "proverArtifactHash",
+                  "prover_artifact_hash"),
+              "nativeSdkArtifacts[" + index + "].proofArtifactHash");
+      if (!Objects.equals(
+          normalizeNativeEvmProverBundleHex32(
+              sdkProofArtifactHash, "nativeSdkArtifacts[" + index + "].proofArtifactHash"),
+          normalizedProofArtifactHash)) {
+        throw new IllegalArgumentException(
+            "nativeSdkArtifacts[" + index + "].proofArtifactHash must match bundle");
+      }
+      final String sdkProvingKeyHash =
+          manifestString(
+              manifestField(
+                  artifact,
+                  "nativeSdkArtifacts[" + index + "].provingKeyHash",
+                  "provingKeyHash",
+                  "proving_key_hash"),
+              "nativeSdkArtifacts[" + index + "].provingKeyHash");
+      if (!Objects.equals(
+          normalizeNativeEvmProverBundleHex32(
+              sdkProvingKeyHash, "nativeSdkArtifacts[" + index + "].provingKeyHash"),
+          normalizedProvingKeyHash)) {
+        throw new IllegalArgumentException(
+            "nativeSdkArtifacts[" + index + "].provingKeyHash must match bundle");
+      }
+      out.add(
+          new EthereumMainnetNativeEvmProverBundleSdkArtifact(
+              manifestString(
+                  manifestField(artifact, "nativeSdkArtifacts[" + index + "].sdk", "sdk"),
+                  "nativeSdkArtifacts[" + index + "].sdk"),
+              manifestString(
+                  manifestField(
+                      artifact,
+                      "nativeSdkArtifacts[" + index + "].implementation",
+                      "implementation"),
+                  "nativeSdkArtifacts[" + index + "].implementation"),
+              sdkProofArtifactHash,
+              sdkProvingKeyHash,
+              manifestString(
+                  manifestField(
+                      artifact,
+                      "nativeSdkArtifacts[" + index + "].implementationArtifact",
+                      "implementationArtifact",
+                      "implementation_artifact",
+                      "implementationPath",
+                      "implementation_path"),
+                  "nativeSdkArtifacts[" + index + "].implementationArtifact"),
+              manifestString(
+                  manifestField(
+                      artifact,
+                      "nativeSdkArtifacts[" + index + "].implementationHash",
+                      "implementationHash",
+                      "implementation_hash"),
+                  "nativeSdkArtifacts[" + index + "].implementationHash")));
+    }
+    return Collections.unmodifiableList(out);
+  }
+
+  private record Groth16ProverArtifacts(String proofArtifactHash, String provingKeyHash) {}
+
   public interface ProofEngine {
     byte[] prove(ProofRequest request);
   }
@@ -1085,7 +2917,31 @@ public final class EvmSccpProver {
       String destinationBindingHash,
       String backend,
       int sourceDomain,
-      SourceSccpProofs.EvmDestinationBinding destinationBinding) {
+      SourceSccpProofs.EvmDestinationBinding destinationBinding,
+      String proofArtifactHash,
+      String provingKeyHash) {
+    public ProofRequestInput(
+        final PublicInputsInput publicInputs,
+        final byte[] bundleBytes,
+        final byte[] sourceProofBytes,
+        final String statementHash,
+        final String destinationBindingHash,
+        final String backend,
+        final int sourceDomain,
+        final SourceSccpProofs.EvmDestinationBinding destinationBinding) {
+      this(
+          publicInputs,
+          bundleBytes,
+          sourceProofBytes,
+          statementHash,
+          destinationBindingHash,
+          backend,
+          sourceDomain,
+          destinationBinding,
+          null,
+          null);
+    }
+
     public ProofRequestInput(
         final PublicInputsInput publicInputs,
         final byte[] bundleBytes,
@@ -1102,6 +2958,8 @@ public final class EvmSccpProver {
           destinationBindingHash,
           backend,
           sourceDomain,
+          null,
+          null,
           null);
     }
 
@@ -1118,7 +2976,32 @@ public final class EvmSccpProver {
           destinationBindingHash,
           GROTH16_BN254_PROOF_BACKEND_V1,
           DOMAIN_SORA,
+          null,
+          null,
           null);
+    }
+
+    public ProofRequestInput(
+        final PublicInputsInput publicInputs,
+        final byte[] bundleBytes,
+        final byte[] sourceProofBytes,
+        final String statementHash,
+        final SourceSccpProofs.EvmDestinationBinding destinationBinding,
+        final String backend,
+        final int sourceDomain,
+        final String proofArtifactHash,
+        final String provingKeyHash) {
+      this(
+          publicInputs,
+          bundleBytes,
+          sourceProofBytes,
+          statementHash,
+          requireDestinationBindingHash(publicInputs, destinationBinding, backend, sourceDomain),
+          backend,
+          sourceDomain,
+          destinationBinding,
+          proofArtifactHash,
+          provingKeyHash);
     }
 
     public ProofRequestInput(
@@ -1134,10 +3017,11 @@ public final class EvmSccpProver {
           bundleBytes,
           sourceProofBytes,
           statementHash,
-          requireDestinationBindingHash(publicInputs, destinationBinding, backend, sourceDomain),
+          destinationBinding,
           backend,
           sourceDomain,
-          destinationBinding);
+          null,
+          null);
     }
 
     public ProofRequestInput(
@@ -1153,7 +3037,9 @@ public final class EvmSccpProver {
           statementHash,
           destinationBinding,
           GROTH16_BN254_PROOF_BACKEND_V1,
-          DOMAIN_SORA);
+          DOMAIN_SORA,
+          null,
+          null);
     }
 
     public ProofRequestInput(
@@ -1168,7 +3054,9 @@ public final class EvmSccpProver {
           statementHash,
           destinationBinding,
           GROTH16_BN254_PROOF_BACKEND_V1,
-          DOMAIN_SORA);
+          DOMAIN_SORA,
+          null,
+          null);
     }
   }
 
@@ -1188,7 +3076,9 @@ public final class EvmSccpProver {
       String statementHash,
       String destinationBindingHash,
       String requestHash,
-      SourceSccpProofs.EvmDestinationBinding destinationBinding) {
+      SourceSccpProofs.EvmDestinationBinding destinationBinding,
+      String proofArtifactHash,
+      String provingKeyHash) {
     public ProofRequest(
         final int version,
         final String backend,
@@ -1217,6 +3107,42 @@ public final class EvmSccpProver {
           statementHash,
           destinationBindingHash,
           requestHash,
+          null,
+          null,
+          null);
+    }
+
+    public ProofRequest(
+        final int version,
+        final String backend,
+        final int sourceDomain,
+        final int targetDomain,
+        final PublicInputsInput publicInputs,
+        final byte[] publicInputsBytes,
+        final List<String> publicSignalWords,
+        final byte[] bundleBytes,
+        final byte[] sourceProofBytes,
+        final ProofContext proofContext,
+        final String statementHash,
+        final String destinationBindingHash,
+        final String requestHash,
+        final SourceSccpProofs.EvmDestinationBinding destinationBinding) {
+      this(
+          version,
+          backend,
+          sourceDomain,
+          targetDomain,
+          publicInputs,
+          publicInputsBytes,
+          publicSignalWords,
+          bundleBytes,
+          sourceProofBytes,
+          proofContext,
+          statementHash,
+          destinationBindingHash,
+          requestHash,
+          destinationBinding,
+          null,
           null);
     }
 
@@ -1266,7 +3192,9 @@ public final class EvmSccpProver {
       String destinationBindingHash,
       String requestHash,
       String envelopeHash,
-      SourceSccpProofs.EvmDestinationBinding destinationBinding) {
+      SourceSccpProofs.EvmDestinationBinding destinationBinding,
+      String proofArtifactHash,
+      String provingKeyHash) {
     public ProofResult(
         final int version,
         final String backend,
@@ -1295,6 +3223,42 @@ public final class EvmSccpProver {
           destinationBindingHash,
           requestHash,
           envelopeHash,
+          null,
+          null,
+          null);
+    }
+
+    public ProofResult(
+        final int version,
+        final String backend,
+        final byte[] proofBytes,
+        final String proofBase64,
+        final PublicInputsInput publicInputs,
+        final List<String> publicSignalWords,
+        final byte[] bundleBytes,
+        final byte[] sourceProofBytes,
+        final ProofContext proofContext,
+        final String statementHash,
+        final String destinationBindingHash,
+        final String requestHash,
+        final String envelopeHash,
+        final SourceSccpProofs.EvmDestinationBinding destinationBinding) {
+      this(
+          version,
+          backend,
+          proofBytes,
+          proofBase64,
+          publicInputs,
+          publicSignalWords,
+          bundleBytes,
+          sourceProofBytes,
+          proofContext,
+          statementHash,
+          destinationBindingHash,
+          requestHash,
+          envelopeHash,
+          destinationBinding,
+          null,
           null);
     }
 

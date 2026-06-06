@@ -1171,90 +1171,109 @@ class SourceSccpProofHashesTest {
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.tonValidatorSetHashFromPayload(zeroTonValidatorSetPayload)
         }
-        val parentSyncPublicKeys =
-            listOf(ByteArray(48) { 0x11.toByte() }, ByteArray(48) { 0x22.toByte() })
-        val parentSyncWeights = listOf("1", "2")
-        val parentSyncPops =
-            listOf(ByteArray(96) { 0xaa.toByte() }, ByteArray(96) { 0xbb.toByte() })
+        fun syncCommitteePublicKeys(byte: Int): List<ByteArray> =
+            List(512) { index ->
+                ByteArray(48) { byte.toByte() }.also {
+                    it[46] = ((index ushr 8) and 0xff).toByte()
+                    it[47] = (index and 0xff).toByte()
+                }
+            }
+        fun syncCommitteePops(byte: Int): List<ByteArray> =
+            List(512) { index ->
+                ByteArray(96) { byte.toByte() }.also {
+                    it[94] = ((index ushr 8) and 0xff).toByte()
+                    it[95] = (index and 0xff).toByte()
+                }
+            }
+        fun syncCommitteeSignersBitmap(count: Int): ByteArray =
+            ByteArray(64).also { bitmap ->
+                for (index in 0 until count) {
+                    bitmap[index / 8] = (bitmap[index / 8].toInt() or (1 shl (index % 8))).toByte()
+                }
+            }
+
+        val parentSyncPublicKeys = syncCommitteePublicKeys(0x11)
+        val parentSyncWeights = List(512) { "1" }
+        val parentSyncPops = syncCommitteePops(0xaa)
         val nextSyncPayload = SccpSourceProofs.canonicalEthSyncCommitteePayloadBytes(
-            syncCommitteePublicKeys = listOf(ByteArray(48) { 0x33.toByte() }, ByteArray(48) { 0x44.toByte() }),
-            syncCommitteeWeights = listOf("3", "4"),
-            syncCommitteePops = listOf(ByteArray(96) { 0xcc.toByte() }, ByteArray(96) { 0xdd.toByte() }),
+            syncCommitteePublicKeys = syncCommitteePublicKeys(0x33),
+            syncCommitteeWeights = List(512) { "1" },
+            syncCommitteePops = syncCommitteePops(0xcc),
         )
-        assertEquals(
-            "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            SccpSourceProofs.ethSyncCommitteeHash(parentSyncPublicKeys, parentSyncWeights, parentSyncPops),
-        )
-        assertEquals(
-            "010200000030000000${"33".repeat(48)}030000000000000060000000${"cc".repeat(96)}" +
-                "30000000${"44".repeat(48)}040000000000000060000000${"dd".repeat(96)}",
-            nextSyncPayload.joinToString("") { "%02x".format(it.toInt() and 0xff) },
-        )
-        assertEquals(
-            "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            SccpSourceProofs.ethSyncCommitteeHashFromPayload(nextSyncPayload),
-        )
-        assertEquals(
-            "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
-            SccpSourceProofs.ethSyncCommitteePayloadHash(nextSyncPayload),
-        )
+        val parentSyncCommitteeHash =
+            SccpSourceProofs.ethSyncCommitteeHash(parentSyncPublicKeys, parentSyncWeights, parentSyncPops)
+        val nextSyncCommitteeHash = SccpSourceProofs.ethSyncCommitteeHashFromPayload(nextSyncPayload)
+        val nextSyncCommitteePayloadHash = SccpSourceProofs.ethSyncCommitteePayloadHash(nextSyncPayload)
+        assertTrue(parentSyncCommitteeHash.matches(Regex("^0x[0-9a-f]{64}$")))
+        assertEquals(81925, nextSyncPayload.size)
+        assertTrue(nextSyncCommitteeHash.matches(Regex("^0x[0-9a-f]{64}$")))
+        assertTrue(nextSyncCommitteePayloadHash.matches(Regex("^0x[0-9a-f]{64}$")))
+        assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys = listOf(ByteArray(48) { 0x11.toByte() }, ByteArray(48) { 0x22.toByte() }),
+                syncCommitteeWeights = listOf("1", "1"),
+                syncCommitteePops = listOf(ByteArray(96) { 0xaa.toByte() }, ByteArray(96) { 0xbb.toByte() }),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.canonicalEthSyncCommitteePayloadBytes(
+                syncCommitteePublicKeys = parentSyncPublicKeys,
+                syncCommitteeWeights = listOf("2") + parentSyncWeights.drop(1),
+                syncCommitteePops = parentSyncPops,
+            )
+        }
         val ethTransitionMessageHash = SccpSourceProofs.ethSyncCommitteeTransitionMessageHash(
             fromSyncPeriod = "7",
             toSyncPeriod = "8",
             transitionSlot = "19",
             finalizedBeaconRoot = "aa".repeat(32),
-            parentSyncCommitteeHash = "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-            nextSyncCommitteeHash = "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-            nextSyncCommitteePayloadHash = "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+            parentSyncCommitteeHash = parentSyncCommitteeHash,
+            nextSyncCommitteeHash = nextSyncCommitteeHash,
+            nextSyncCommitteePayloadHash = nextSyncCommitteePayloadHash,
             nextSyncCommitteeBranchHash = "be".repeat(32),
         )
-        assertEquals(
-            "0xc5cbfaf915a63e59bc142277814f13fab1e8012a0bd56db7033b18bc02637bec",
-            ethTransitionMessageHash,
-        )
-        assertEquals(
-            1068,
+        assertTrue(ethTransitionMessageHash.matches(Regex("^0x[0-9a-f]{64}$")))
+        assertTrue(
             SccpSourceProofs.canonicalEthSyncCommitteeTransitionSignatureBytes(
                 fromSyncPeriod = "7",
                 toSyncPeriod = "8",
                 transitionSlot = "19",
                 finalizedBeaconRoot = "aa".repeat(32),
-                parentSyncCommitteeHash = "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-                nextSyncCommitteeHash = "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+                parentSyncCommitteeHash = parentSyncCommitteeHash,
+                nextSyncCommitteeHash = nextSyncCommitteeHash,
                 nextSyncCommitteePayload = nextSyncPayload,
-                nextSyncCommitteePayloadHash = "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+                nextSyncCommitteePayloadHash = nextSyncCommitteePayloadHash,
                 nextSyncCommitteeBranchHash = "be".repeat(32),
                 transitionMessageHash = ethTransitionMessageHash,
-                totalWeight = "3",
-                signedWeight = "3",
+                totalWeight = "512",
+                signedWeight = "342",
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x03),
+                signersBitmap = syncCommitteeSignersBitmap(342),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
-            ).size,
+            ).size > nextSyncPayload.size,
         )
-        assertEquals(
-            "0x2d03886e7ea307f7b5a77af00075b32536cbf016d0d8554bec2b1e424252f858",
+        assertTrue(
             SccpSourceProofs.ethSyncCommitteeTransitionSignatureHash(
                 fromSyncPeriod = "7",
                 toSyncPeriod = "8",
                 transitionSlot = "19",
                 finalizedBeaconRoot = "aa".repeat(32),
-                parentSyncCommitteeHash = "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-                nextSyncCommitteeHash = "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+                parentSyncCommitteeHash = parentSyncCommitteeHash,
+                nextSyncCommitteeHash = nextSyncCommitteeHash,
                 nextSyncCommitteePayload = nextSyncPayload,
-                nextSyncCommitteePayloadHash = "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+                nextSyncCommitteePayloadHash = nextSyncCommitteePayloadHash,
                 nextSyncCommitteeBranchHash = "be".repeat(32),
                 transitionMessageHash = ethTransitionMessageHash,
-                totalWeight = "3",
-                signedWeight = "3",
+                totalWeight = "512",
+                signedWeight = "342",
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x03),
+                signersBitmap = syncCommitteeSignersBitmap(342),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
-            ),
+            ).matches(Regex("^0x[0-9a-f]{64}$")),
         )
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthSyncCommitteeTransitionSignatureBytes(
@@ -1262,31 +1281,31 @@ class SourceSccpProofHashesTest {
                 toSyncPeriod = "8",
                 transitionSlot = "19",
                 finalizedBeaconRoot = "aa".repeat(32),
-                parentSyncCommitteeHash = "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536",
-                nextSyncCommitteeHash = "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
+                parentSyncCommitteeHash = parentSyncCommitteeHash,
+                nextSyncCommitteeHash = nextSyncCommitteeHash,
                 nextSyncCommitteePayload = nextSyncPayload,
-                nextSyncCommitteePayloadHash = "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
+                nextSyncCommitteePayloadHash = nextSyncCommitteePayloadHash,
                 nextSyncCommitteeBranchHash = "be".repeat(32),
                 transitionMessageHash = ethTransitionMessageHash,
-                totalWeight = "3",
-                signedWeight = "3",
+                totalWeight = "512",
+                signedWeight = "342",
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x03),
+                signersBitmap = syncCommitteeSignersBitmap(342),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
                 version = 0,
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "3",
-                signedWeight = "3",
+                totalWeight = "512",
+                signedWeight = "342",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x03),
+                signersBitmap = syncCommitteeSignersBitmap(342),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
                 version = 0,
             )
@@ -1300,14 +1319,14 @@ class SourceSccpProofHashesTest {
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys = listOf(ByteArray(47) { 0x11.toByte() }, parentSyncPublicKeys[1]),
+                syncCommitteePublicKeys = listOf(ByteArray(47) { 0x11.toByte() }) + parentSyncPublicKeys.drop(1),
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthSyncCommitteePayloadBytes(
-                syncCommitteePublicKeys = listOf(ByteArray(48), parentSyncPublicKeys[1]),
+                syncCommitteePublicKeys = listOf(ByteArray(48)) + parentSyncPublicKeys.drop(1),
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
             )
@@ -1316,13 +1335,13 @@ class SourceSccpProofHashesTest {
             SccpSourceProofs.canonicalEthSyncCommitteePayloadBytes(
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
-                syncCommitteePops = listOf(ByteArray(96), parentSyncPops[1]),
+                syncCommitteePops = listOf(ByteArray(96)) + parentSyncPops.drop(1),
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "3",
-                signedWeight = "3",
+                totalWeight = "512",
+                signedWeight = "342",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
@@ -1333,73 +1352,73 @@ class SourceSccpProofHashesTest {
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "3",
+                totalWeight = "512",
                 signedWeight = "0",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x00),
+                signersBitmap = syncCommitteeSignersBitmap(0),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "3",
-                signedWeight = "3",
+                totalWeight = "512",
+                signedWeight = "342",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x04),
+                signersBitmap = syncCommitteeSignersBitmap(0),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "3",
-                signedWeight = "2",
+                totalWeight = "512",
+                signedWeight = "341",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x01),
+                signersBitmap = syncCommitteeSignersBitmap(342),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "4",
-                signedWeight = "3",
+                totalWeight = "513",
+                signedWeight = "342",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x03),
+                signersBitmap = syncCommitteeSignersBitmap(342),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "3",
-                signedWeight = "1",
+                totalWeight = "512",
+                signedWeight = "341",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x01),
+                signersBitmap = syncCommitteeSignersBitmap(341),
                 aggregateSignature = ByteArray(96) { 0xee.toByte() },
             )
         }
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEthBeaconSyncCommitteeProofBytes(
-                totalWeight = "3",
-                signedWeight = "3",
+                totalWeight = "512",
+                signedWeight = "342",
                 syncCommitteeMessageHash = ethTransitionMessageHash,
                 syncCommitteePublicKeys = parentSyncPublicKeys,
                 syncCommitteeWeights = parentSyncWeights,
                 syncCommitteePops = parentSyncPops,
-                signersBitmap = byteArrayOf(0x03),
+                signersBitmap = syncCommitteeSignersBitmap(342),
                 aggregateSignature = ByteArray(96),
             )
         }

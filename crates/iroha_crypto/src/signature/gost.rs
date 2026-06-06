@@ -11,7 +11,8 @@ use std::sync::LazyLock;
 
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
-use rand::RngCore;
+use rand::{RngCore, rngs::OsRng};
+use rand_core::TryRngCore;
 use streebog::{Digest, Streebog256, Streebog512};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -1023,10 +1024,7 @@ fn streebog_hash(digest_len: usize, parts: &[&[u8]]) -> Vec<u8> {
     }
 }
 
-use crate::{
-    Algorithm, Error, ParseError,
-    rng::{os_rng, rng_from_seed},
-};
+use crate::{Algorithm, Error, ParseError, rng::rng_from_seed};
 
 /// Parsed GOST private key (little-endian scalar).
 #[derive(Clone, PartialEq, Eq)]
@@ -1643,9 +1641,26 @@ fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> BigUint {
     }
 }
 
+fn random_scalar_from_os(params: &CurveParams) -> Result<BigUint, Error> {
+    const MAX_RANDOM_SCALAR_ATTEMPTS: usize = 1024;
+
+    let mut buf = Zeroizing::new(vec![0u8; params.scalar_len]);
+    for _ in 0..MAX_RANDOM_SCALAR_ATTEMPTS {
+        OsRng
+            .try_fill_bytes(buf.as_mut_slice())
+            .map_err(|err| Error::KeyGen(format!("GOST OS RNG failed: {err}")))?;
+        let scalar = BigUint::from_bytes_le(buf.as_slice());
+        if !scalar.is_zero() && scalar < params.q {
+            return Ok(scalar);
+        }
+    }
+    Err(Error::KeyGen(
+        "GOST OS RNG did not produce a valid scalar".to_owned(),
+    ))
+}
+
 fn keypair_random_impl(params: &CurveParams) -> Result<(PublicKey, PrivateKey), Error> {
-    let mut rng = os_rng();
-    let scalar = random_scalar(params, &mut rng);
+    let scalar = random_scalar_from_os(params)?;
     let private = PrivateKey {
         bytes_le: Zeroizing::new(scalar_to_le_bytes(&scalar, params.scalar_len)),
     };
@@ -1736,9 +1751,10 @@ pub fn sign(algorithm: Algorithm, message: &[u8], private: &PrivateKey) -> Resul
     let params = params_for_algorithm(algorithm).map_err(|err| Error::KeyGen(err.to_string()))?;
     let curve = params.curve();
     let mut nonce_gen = StreebogNonceGenerator::new();
-    let mut rng = os_rng();
     let mut entropy = Zeroizing::new(vec![0u8; curve.scalar_len]);
-    rng.fill_bytes(entropy.as_mut_slice());
+    OsRng
+        .try_fill_bytes(entropy.as_mut_slice())
+        .map_err(|err| Error::KeyGen(format!("GOST OS RNG failed: {err}")))?;
     sign_impl(
         curve,
         message,
@@ -2046,6 +2062,22 @@ mod tests {
             generate_seeded_keypair(Algorithm::Gost3410_2012_256ParamSetB, seed).unwrap();
         assert_eq!(public1.as_bytes(), public2.as_bytes());
         assert_eq!(private1.as_bytes(), private2.as_bytes());
+    }
+
+    #[test]
+    fn random_keypair_signs_and_verifies() {
+        let (public, private) = generate_random_keypair(Algorithm::Gost3410_2012_256ParamSetA)
+            .expect("checked random keypair");
+        let message = b"checked GOST random keypair";
+        let signature = sign(Algorithm::Gost3410_2012_256ParamSetA, message, &private)
+            .expect("checked random signing entropy");
+        verify(
+            Algorithm::Gost3410_2012_256ParamSetA,
+            message,
+            &signature,
+            &public,
+        )
+        .expect("verify");
     }
 
     #[test]

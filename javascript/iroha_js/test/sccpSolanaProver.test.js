@@ -59,6 +59,7 @@ import {
   SCCP_TAIRA_CHAIN_ID_V1,
   SCCP_TAIRA_NETWORK_PREFIX_V1,
   SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+  SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
   SCCP_TAIRA_XOR_ASSET_KEY_V1,
   SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
   SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
@@ -318,25 +319,40 @@ import {
   tronSccpDestinationBindingHash,
   SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1,
   tairaXorRouteIdHash,
+  tairaXorBscRouteIdHash,
   tairaXorAssetKeyHash,
   buildTairaXorTransferPayload,
+  buildTairaXorBscTransferPayload,
   buildTairaXorTronToTairaTransferPayload,
+  buildTairaXorBscToTairaTransferPayload,
   buildTairaXorSccpRecordDescriptor,
+  buildTairaXorBscSccpRecordDescriptor,
   buildRecordSccpMessageInstructionBytes,
   buildTairaXorSccpBurnRecordContractPayload,
+  buildTairaXorBscSccpBurnRecordContractPayload,
   buildTairaXorSccpBurnRecordZkIvmRequest,
+  buildTairaXorBscSccpBurnRecordZkIvmRequest,
   tairaXorCanonicalTransferPayloadBytes,
+  tairaXorBscCanonicalTransferPayloadBytes,
+  tairaXorBscToTairaCanonicalTransferPayloadBytes,
   tairaXorTransferMessageId,
+  tairaXorBscTransferMessageId,
   tairaXorTronToTairaCanonicalTransferPayloadBytes,
   tairaXorTronToTairaTransferMessageId,
+  tairaXorBscToTairaTransferMessageId,
+  tairaXorBscToTairaTransferPayloadHash,
   tairaXorTransferPayloadHash,
   tairaXorBurnSourceEventDigest,
+  tairaXorBscBurnSourceEventDigest,
   tairaXorFinalizeFromTairaCallData,
   tairaXorBurnToTairaCallData,
   tairaXorBurnToTairaAccountCallData,
+  tairaXorBscBurnToTairaCallData,
+  tairaXorBscBurnToTairaAccountCallData,
   isTairaXorTronBurnStartedEventName,
   bindTairaXorTronBurnStartedEvent,
   bindTairaXorTronToTairaSourceProofPackage,
+  bindTairaXorBscToTairaSourceProofPackage,
   tronSccpReceiptProofHash,
   tronSccpReceiptStateProofHash,
   tronSccpSourceMessageCallData,
@@ -380,7 +396,9 @@ function testBytesToHex(bytes) {
 
 function testSccpTransferMessageIdFromBytes(bytes) {
   return testBytesToHex(
-    keccak_256(testConcatBytes(testTextEncoder.encode("sccp:transfer:v1"), bytes)),
+    keccak_256(
+      testConcatBytes(testTextEncoder.encode("sccp:transfer:v1"), bytes),
+    ),
   );
 }
 
@@ -397,10 +415,14 @@ function testHexToBytes(value, byteLength = null) {
 }
 
 const TAIRA_ACCOUNT_ID = AccountAddress.fromAccount({
-  publicKey: testHexToBytes("641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201"),
+  publicKey: testHexToBytes(
+    "641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
+  ),
 }).toI105(SCCP_TAIRA_NETWORK_PREFIX_V1);
 const TAIRA_OTHER_ACCOUNT_ID = AccountAddress.fromAccount({
-  publicKey: testHexToBytes("3b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8"),
+  publicKey: testHexToBytes(
+    "3b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8",
+  ),
 }).toI105(SCCP_TAIRA_NETWORK_PREFIX_V1);
 
 function testConcatBytes(...parts) {
@@ -497,12 +519,14 @@ const sampleSolanaRouteCanaryEvidence = (overrides = {}) => ({
   sourceVerifierMaterialHash: `0x${"33".repeat(32)}`,
   sourceAdapterEngineDeploymentHash: `0x${"34".repeat(32)}`,
   verifierIdentity: "3JF3sEqM796hk5WFqA6EtmEwJQ9quALszsfJyvXNQKy3",
-  verifierCodeHash: "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
+  verifierCodeHash:
+    "0xc81178d11a4de525782fe7ac6f5accc2056fa15d1b8c2bfd819eb2ef179c3411",
   solanaRpcCommitment: "finalized",
   solanaProgramOwner: "BPFLoaderUpgradeab1e11111111111111111111111",
   solanaProgramdataOwner: "BPFLoaderUpgradeab1e11111111111111111111111",
   solanaProgramImmutable: true,
-  solanaProgramAccountDataBase64: "AgAAABERERERERERERERERERERERERERERERERERERERERER",
+  solanaProgramAccountDataBase64:
+    "AgAAABERERERERERERERERERERERERERERERERERERERERER",
   solanaProgramdataAddress: "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
   solanaProgramdataSlot: "4321",
   solanaExpectedProgramdataSlot: "4321",
@@ -539,7 +563,8 @@ const sampleTronRouteCanaryEvidence = (overrides = {}) => {
     routeAllowlistHash: TRON_ROUTE_ALLOWLIST_HASH_VECTOR,
     destinationBindingHash: destinationBinding.bindingHash,
     sourceVerifierMaterialHash: TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR,
-    sourceAdapterEngineDeploymentHash: TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR,
+    sourceAdapterEngineDeploymentHash:
+      TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR,
     networkId: destinationBinding.networkId,
     verifierAddress: destinationBinding.verifierAddress,
     verifierCodeHash: destinationBinding.verifierCodeHash,
@@ -593,20 +618,27 @@ const assertImmutableFastpqProofRequest = (request, byteFields) => {
 const mutableFastpqProofRequest = (request) => {
   const mutable = { ...request };
   if (request.publicInputColumns) {
-    mutable.publicInputColumns = request.publicInputColumns.map((column) => [...column]);
+    mutable.publicInputColumns = request.publicInputColumns.map((column) => [
+      ...column,
+    ]);
   }
   if (request.fastpqPublicInputs) {
     mutable.fastpqPublicInputs = { ...request.fastpqPublicInputs };
   }
   if (request.fastpqTransitions) {
-    mutable.fastpqTransitions = request.fastpqTransitions.map((transition) => ({ ...transition }));
+    mutable.fastpqTransitions = request.fastpqTransitions.map((transition) => ({
+      ...transition,
+    }));
   }
   return mutable;
 };
 
 test("derives Solana ProgramData route canary evidence hash", () => {
   const evidence = sampleSolanaRouteCanaryEvidence();
-  assert.equal(canonicalSolanaSccpRouteCanaryEvidenceBytes(evidence).length, 475);
+  assert.equal(
+    canonicalSolanaSccpRouteCanaryEvidenceBytes(evidence).length,
+    475,
+  );
   assert.equal(
     solanaSccpRouteCanaryEvidenceHash(evidence),
     "0x77296e47d5681f97136dc79d66dbda4478c3c5ec80271bfd4f1f3b3dbb8e15ca",
@@ -621,7 +653,9 @@ test("derives Solana ProgramData route canary evidence hash", () => {
   assert.throws(
     () =>
       solanaSccpRouteCanaryEvidenceHash(
-        sampleSolanaRouteCanaryEvidence({ solanaProgramdataExecutableBase64: "AQIDBA==" }),
+        sampleSolanaRouteCanaryEvidence({
+          solanaProgramdataExecutableBase64: "AQIDBA==",
+        }),
       ),
     /BPF ELF/,
   );
@@ -635,7 +669,9 @@ test("derives Solana ProgramData route canary evidence hash", () => {
   assert.throws(
     () =>
       solanaSccpRouteCanaryEvidenceHash(
-        sampleSolanaRouteCanaryEvidence({ expectedDestinationBindingHash: HEX32_H }),
+        sampleSolanaRouteCanaryEvidence({
+          expectedDestinationBindingHash: HEX32_H,
+        }),
       ),
     /expectedDestinationBindingHash must match canonical Solana destination binding/,
   );
@@ -658,12 +694,17 @@ test("derives TON live-account route canary evidence hash", () => {
   assert.throws(
     () =>
       tonSccpRouteCanaryEvidenceHash(
-        sampleTonRouteCanaryEvidence({ verifierContractAddress: `1:${"11".repeat(32)}` }),
+        sampleTonRouteCanaryEvidence({
+          verifierContractAddress: `1:${"11".repeat(32)}`,
+        }),
       ),
     /verifierContractAddress workchain must be basechain 0/,
   );
   assert.throws(
-    () => tonSccpRouteCanaryEvidenceHash(sampleTonRouteCanaryEvidence({ accountStatus: "uninit" })),
+    () =>
+      tonSccpRouteCanaryEvidenceHash(
+        sampleTonRouteCanaryEvidence({ accountStatus: "uninit" }),
+      ),
     /accountStatus must be active/,
   );
   assert.throws(
@@ -676,14 +717,19 @@ test("derives TON live-account route canary evidence hash", () => {
   assert.throws(
     () =>
       tonSccpRouteCanaryEvidenceHash(
-        sampleTonRouteCanaryEvidence({ verifierCodeBocRootHash: `0x${"45".repeat(32)}` }),
+        sampleTonRouteCanaryEvidence({
+          verifierCodeBocRootHash: `0x${"45".repeat(32)}`,
+        }),
       ),
     /verifierCodeBocRootHash must match verifierCodeHash/,
   );
   assert.throws(
     () =>
       tonSccpRouteCanaryEvidenceHash(
-        sampleTonRouteCanaryEvidence({ accountStatus: "active", account_status: "active" }),
+        sampleTonRouteCanaryEvidence({
+          accountStatus: "active",
+          account_status: "active",
+        }),
       ),
     /accountStatus must not use multiple aliases/,
   );
@@ -692,7 +738,10 @@ test("derives TON live-account route canary evidence hash", () => {
 test("derives TRON transaction route canary evidence hash", () => {
   const evidence = sampleTronRouteCanaryEvidence();
   assert.equal(canonicalTronSccpRouteCanaryEvidenceBytes(evidence).length, 551);
-  assert.equal(tronSccpRouteCanaryEvidenceHash(evidence), TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR);
+  assert.equal(
+    tronSccpRouteCanaryEvidenceHash(evidence),
+    TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR,
+  );
   assert.throws(
     () =>
       tronSccpRouteCanaryEvidenceHash(
@@ -708,11 +757,17 @@ test("derives TRON transaction route canary evidence hash", () => {
     /destinationBinding\.bindingHash must match destinationBinding/,
   );
   assert.throws(
-    () => tronSccpRouteCanaryEvidenceHash(sampleTronRouteCanaryEvidence({ targetDomain: SCCP_DOMAIN_ETH })),
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ targetDomain: SCCP_DOMAIN_ETH }),
+      ),
     /targetDomain must be TRON/,
   );
   assert.throws(
-    () => tronSccpRouteCanaryEvidenceHash(sampleTronRouteCanaryEvidence({ blockNumber: 0 })),
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ blockNumber: 0 }),
+      ),
     /blockNumber must be positive/,
   );
   assert.throws(
@@ -725,7 +780,9 @@ test("derives TRON transaction route canary evidence hash", () => {
   assert.throws(
     () =>
       tronSccpRouteCanaryEvidenceHash(
-        sampleTronRouteCanaryEvidence({ rawDataOwnerMatchesTransaction: false }),
+        sampleTronRouteCanaryEvidence({
+          rawDataOwnerMatchesTransaction: false,
+        }),
       ),
     /rawDataOwnerMatchesTransaction must be true/,
   );
@@ -739,14 +796,19 @@ test("derives TRON transaction route canary evidence hash", () => {
   assert.throws(
     () =>
       tronSccpRouteCanaryEvidenceHash(
-        sampleTronRouteCanaryEvidence({ signatureRecoveredAddress: `0x41${"12".repeat(20)}` }),
+        sampleTronRouteCanaryEvidence({
+          signatureRecoveredAddress: `0x41${"12".repeat(20)}`,
+        }),
       ),
     /signatureRecoveredAddress must match/,
   );
   assert.throws(
     () =>
       tronSccpRouteCanaryEvidenceHash(
-        sampleTronRouteCanaryEvidence({ targetDomain: SCCP_DOMAIN_TRON, target_domain: SCCP_DOMAIN_TRON }),
+        sampleTronRouteCanaryEvidence({
+          targetDomain: SCCP_DOMAIN_TRON,
+          target_domain: SCCP_DOMAIN_TRON,
+        }),
       ),
     /targetDomain must not use multiple aliases/,
   );
@@ -822,19 +884,6 @@ const BSC_COMMIT_SIGNATURES = [
 ];
 const BSC_COMMIT_SEAL_HASH =
   "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172";
-const ETH_SYNC_COMMITTEE_HASH =
-  "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536";
-const ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX =
-  `010200000030000000${"33".repeat(48)}030000000000000060000000${"cc".repeat(96)}` +
-  `30000000${"44".repeat(48)}040000000000000060000000${"dd".repeat(96)}`;
-const ETH_NEXT_SYNC_COMMITTEE_HASH =
-  "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445";
-const ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH =
-  "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17";
-const ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH =
-  "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e";
-const ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH =
-  "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d";
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HEX = `010200000041${"11".repeat(20)}010000000000000041${"22".repeat(20)}0200000000000000`;
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HASH =
   "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429";
@@ -889,7 +938,11 @@ const sampleSolanaVoteStateAccount = (hasLatency = true) => {
   writeRepeated(0x71, 32);
   writeU8(7);
   writeU64(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH);
-  for (let index = 0; index < Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH); index += 1) {
+  for (
+    let index = 0;
+    index < Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH);
+    index += 1
+  ) {
     if (hasLatency) writeU8(0);
     writeU64(11n + BigInt(index));
     writeU32(Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) - index);
@@ -904,7 +957,10 @@ const sampleSolanaVoteStateAccount = (hasLatency = true) => {
   return data;
 };
 
-const sampleSolanaVoteStateV4Account = (withBls = true, authorizedVoterCount = 2) => {
+const sampleSolanaVoteStateV4Account = (
+  withBls = true,
+  authorizedVoterCount = 2,
+) => {
   const data = new Uint8Array(3_762);
   const view = new DataView(data.buffer);
   let offset = 0;
@@ -942,7 +998,11 @@ const sampleSolanaVoteStateV4Account = (withBls = true, authorizedVoterCount = 2
     writeRepeated(0xa5, 48);
   }
   writeU64(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH);
-  for (let index = 0; index < Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH); index += 1) {
+  for (
+    let index = 0;
+    index < Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH);
+    index += 1
+  ) {
     writeU8(0);
     writeU64(11n + BigInt(index));
     writeU32(Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) - index);
@@ -993,19 +1053,16 @@ const tronHeaderSignature = (recoveryId) => {
   return signature;
 };
 const TRON_RECEIPT_STATE_MPT_NODE_HEX = `0xe4822080a0${"bb".repeat(32)}`;
-const EVM_RECEIPT_ROOT_MPT_VALUE_HEX =
-  `0xf8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`;
+const EVM_RECEIPT_ROOT_MPT_VALUE_HEX = `0xf8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`;
 const EVM_RECEIPT_STATE_MPT_NODE_HEX = `0xf847822080b842${EVM_RECEIPT_ROOT_MPT_VALUE_HEX.slice(2)}`;
 const EVM_RECEIPT_STATE_TRANSACTION_ROOT =
   "0x6438aaabb78989f2803c6b0f227ee0f94beecde07cdd9c737e258e4faf581b68";
-const TRON_RECEIPT_ROOT_MPT_VALUE_HEX =
-  `0xf8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`;
+const TRON_RECEIPT_ROOT_MPT_VALUE_HEX = `0xf8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`;
 const TRON_RECEIPT_STATE_TRANSACTION_ROOT =
   "0x21789ae4e9fb0f13a9d7ef876ccbc90ee2fe1d1eddeec5c35e33e0a09c768079";
 const TRON_RECEIPT_STATE_PROOF_HASH =
   "0x847c5ee3e6f4f83fef4d754a9aed93fae38c6677011cae03b10228c17c60b13b";
-const TRON_SOURCE_MESSAGE_CALL_DATA_HEX =
-  `06841e30${"0".repeat(63)}5${"0".repeat(64)}${"34".repeat(32)}`;
+const TRON_SOURCE_MESSAGE_CALL_DATA_HEX = `06841e30${"0".repeat(63)}5${"0".repeat(64)}${"34".repeat(32)}`;
 const TRON_TRANSACTION_SOURCE_RAW_DATA_HEX =
   "0x0a02123418b9602208565656565656565640959aef3a5acf01081f12ca" +
   "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e" +
@@ -1053,8 +1110,7 @@ const SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_HASH =
   "0x9528bad2f181eb20a86a9c106cf529e60abf5db81f05cce9c9c3027b78c6cf01";
 const TON_VALIDATOR_SET_HASH =
   "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938";
-const TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX =
-  `0102000000${"33".repeat(32)}0300000000000000${"44".repeat(32)}0400000000000000`;
+const TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX = `0102000000${"33".repeat(32)}0300000000000000${"44".repeat(32)}0400000000000000`;
 const TON_NEXT_VALIDATOR_SET_HASH =
   "0x26bfcffe8913e5e4f09e56076d5a237cbc5b890d31b8912bd7eacc5d3805691f";
 const TON_NEXT_VALIDATOR_SET_PAYLOAD_HASH =
@@ -1068,24 +1124,63 @@ const TON_VALIDATOR_SET_PAYLOAD_HASH =
 const TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH =
   "0x540205f876591604ccf39f72a051ac5e82647c9e48dbd48cb129d2543971a34f";
 const TON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES = new Map([
-  ["sourceTrustAnchorHash", "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c"],
-  ["consensusVerifierHash", "0xb0225e16477ea3420f7d0de76b87b6e99a43ab97f445d8565a384d4b655bc473"],
-  ["messageInclusionVerifierHash", "0x89254256421c15da8c92842c7d6f448ef6c1d5ca1e2a173754643425fcee6353"],
+  [
+    "sourceTrustAnchorHash",
+    "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c",
+  ],
+  [
+    "consensusVerifierHash",
+    "0xb0225e16477ea3420f7d0de76b87b6e99a43ab97f445d8565a384d4b655bc473",
+  ],
+  [
+    "messageInclusionVerifierHash",
+    "0x89254256421c15da8c92842c7d6f448ef6c1d5ca1e2a173754643425fcee6353",
+  ],
   ["sourceStateVerifierHash", TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH],
-  ["finalityPolicyHash", "0x50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43"],
+  [
+    "finalityPolicyHash",
+    "0x50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43",
+  ],
 ]);
 const SOLANA_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES = new Map([
-  ["sourceTrustAnchorHash", "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3"],
-  ["consensusVerifierHash", "0x97ea89019e6c79305d06dfc27640ee14a6b42ba6eaf86e1835ee9b433dba48ba"],
-  ["messageInclusionVerifierHash", "0xb8358bfef1e428a6a7e9115687cb2b88d9c21dad4021bea3e11d43489eb3dcb0"],
-  ["sourceStateVerifierHash", SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1],
-  ["finalityPolicyHash", "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56"],
+  [
+    "sourceTrustAnchorHash",
+    "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3",
+  ],
+  [
+    "consensusVerifierHash",
+    "0x97ea89019e6c79305d06dfc27640ee14a6b42ba6eaf86e1835ee9b433dba48ba",
+  ],
+  [
+    "messageInclusionVerifierHash",
+    "0xb8358bfef1e428a6a7e9115687cb2b88d9c21dad4021bea3e11d43489eb3dcb0",
+  ],
+  [
+    "sourceStateVerifierHash",
+    SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+  ],
+  [
+    "finalityPolicyHash",
+    "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56",
+  ],
 ]);
 const TRON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES = new Map([
-  ["sourceTrustAnchorHash", "0x3550934cbdfe49449ec4aa383dcea7674541fedf66ab6159b1ed2f2c0be4755c"],
-  ["consensusVerifierHash", "0x8a1de96a869b2f28f197a7835597f17cf77ff45f7cbb77da2f7c48e87df8c5ea"],
-  ["messageInclusionVerifierHash", "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc"],
-  ["finalityPolicyHash", "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864"],
+  [
+    "sourceTrustAnchorHash",
+    "0x3550934cbdfe49449ec4aa383dcea7674541fedf66ab6159b1ed2f2c0be4755c",
+  ],
+  [
+    "consensusVerifierHash",
+    "0x8a1de96a869b2f28f197a7835597f17cf77ff45f7cbb77da2f7c48e87df8c5ea",
+  ],
+  [
+    "messageInclusionVerifierHash",
+    "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc",
+  ],
+  [
+    "finalityPolicyHash",
+    "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864",
+  ],
 ]);
 const TON_MASTERCHAIN_CONFIG_LEAF_HASH =
   "0xed92ba8082850092da7cc296a2184cc4576877aaee08c72748d96ea449b16e39";
@@ -1146,16 +1241,22 @@ function minimalBeLengthBytes(length) {
 
 function rlpString(bytes) {
   if (bytes.length === 1 && bytes[0] < 0x80) return Uint8Array.from(bytes);
-  if (bytes.length < 56) return Uint8Array.from([0x80 + bytes.length, ...bytes]);
+  if (bytes.length < 56)
+    return Uint8Array.from([0x80 + bytes.length, ...bytes]);
   const lengthBytes = minimalBeLengthBytes(bytes.length);
   return Uint8Array.from([0xb7 + lengthBytes.length, ...lengthBytes, ...bytes]);
 }
 
 function rlpList(fields) {
   const payload = Buffer.concat(fields.map((field) => Buffer.from(field)));
-  if (payload.length < 56) return Uint8Array.from([0xc0 + payload.length, ...payload]);
+  if (payload.length < 56)
+    return Uint8Array.from([0xc0 + payload.length, ...payload]);
   const lengthBytes = minimalBeLengthBytes(payload.length);
-  return Uint8Array.from([0xf7 + lengthBytes.length, ...lengthBytes, ...payload]);
+  return Uint8Array.from([
+    0xf7 + lengthBytes.length,
+    ...lengthBytes,
+    ...payload,
+  ]);
 }
 
 function sampleBscParliaExtra() {
@@ -1190,7 +1291,9 @@ function sampleBscParliaHeaderRlp(extraData) {
   ]);
 }
 
-function sampleEthExecutionHeaderRlp(receiptsRoot = Uint8Array.from(Array(32).fill(0x15))) {
+function sampleEthExecutionHeaderRlp(
+  receiptsRoot = Uint8Array.from(Array(32).fill(0x15)),
+) {
   return rlpList([
     rlpString(Uint8Array.from(Array(32).fill(0x10))),
     rlpString(Uint8Array.from(Array(32).fill(0x11))),
@@ -1288,7 +1391,8 @@ test("rejects boolean SCCP domains in web portal payload helpers", () => {
   assert.equal(isSupportedSccpDomain(true), false);
   assert.equal(isSupportedSccpDomain(false), false);
   assert.throws(
-    () => canonicalSccpBurnPayloadBytes({ ...burnPayload, source_domain: true }),
+    () =>
+      canonicalSccpBurnPayloadBytes({ ...burnPayload, source_domain: true }),
     /payload\.source_domain must be a u32 domain id/,
   );
   assert.throws(
@@ -1296,15 +1400,27 @@ test("rejects boolean SCCP domains in web portal payload helpers", () => {
     /payload\.dest_domain must be a u32 domain id/,
   );
   assert.throws(
-    () => canonicalSccpTokenAddPayloadBytes({ ...tokenPayload, target_domain: true }),
+    () =>
+      canonicalSccpTokenAddPayloadBytes({
+        ...tokenPayload,
+        target_domain: true,
+      }),
     /payload\.target_domain must be a u32 domain id/,
   );
   assert.throws(
-    () => canonicalSccpTokenControlPayloadBytes({ ...tokenPayload, target_domain: false }),
+    () =>
+      canonicalSccpTokenControlPayloadBytes({
+        ...tokenPayload,
+        target_domain: false,
+      }),
     /payload\.target_domain must be a u32 domain id/,
   );
   assert.throws(
-    () => sccpTokenMessageTargetDomain({ kind: "TokenPause", value: { ...tokenPayload, target_domain: true } }),
+    () =>
+      sccpTokenMessageTargetDomain({
+        kind: "TokenPause",
+        value: { ...tokenPayload, target_domain: true },
+      }),
     /payload\.target_domain must be a u32 domain id/,
   );
   assert.throws(
@@ -1334,7 +1450,7 @@ test("rejects boolean SCCP domains in web portal payload helpers", () => {
         destinationBinding: { key: "sora:ton", bindingHash: HEX32_H },
         publicInputs: sampleTonPublicInputs,
         statementHash: HEX32_G,
-    }),
+      }),
     /manifest\.counterpartyDomain must be a u32 domain id/,
   );
   const tonSubmissionManifest = {
@@ -1476,7 +1592,10 @@ test("rejects boolean SCCP domains in web portal payload helpers", () => {
   assert.throws(
     () =>
       canonicalSccpTonSubmissionMetadataBytes({
-        manifest: { ...tonSubmissionManifest, counterpartyDomain: SCCP_DOMAIN_SOL },
+        manifest: {
+          ...tonSubmissionManifest,
+          counterpartyDomain: SCCP_DOMAIN_SOL,
+        },
         destinationBinding: tonSubmissionManifest.destinationBinding,
         publicInputs: sampleTonPublicInputs,
         statementHash: HEX32_G,
@@ -1496,7 +1615,10 @@ test("rejects boolean SCCP domains in web portal payload helpers", () => {
   assert.throws(
     () =>
       canonicalSccpTonSubmissionMetadataBytes({
-        manifest: { ...tonSubmissionManifest, verifierBackendKey: "debug-ton-contract" },
+        manifest: {
+          ...tonSubmissionManifest,
+          verifierBackendKey: "debug-ton-contract",
+        },
         destinationBinding: tonSubmissionManifest.destinationBinding,
         publicInputs: sampleTonPublicInputs,
         statementHash: HEX32_G,
@@ -1507,7 +1629,10 @@ test("rejects boolean SCCP domains in web portal payload helpers", () => {
     () =>
       canonicalSccpTonSubmissionMetadataBytes({
         manifest: tonSubmissionManifest,
-        destinationBinding: { ...tonSubmissionManifest.destinationBinding, bindingHash: HEX32_A },
+        destinationBinding: {
+          ...tonSubmissionManifest.destinationBinding,
+          bindingHash: HEX32_A,
+        },
         publicInputs: sampleTonPublicInputs,
         statementHash: HEX32_G,
       }),
@@ -1518,7 +1643,10 @@ test("rejects boolean SCCP domains in web portal payload helpers", () => {
       canonicalSccpTonSubmissionMetadataBytes({
         manifest: tonSubmissionManifest,
         destinationBinding: tonSubmissionManifest.destinationBinding,
-        publicInputs: { ...sampleTonPublicInputs, targetDomain: SCCP_DOMAIN_SOL },
+        publicInputs: {
+          ...sampleTonPublicInputs,
+          targetDomain: SCCP_DOMAIN_SOL,
+        },
         statementHash: HEX32_G,
       }),
     /publicInputs\.targetDomain must be TON/,
@@ -1574,17 +1702,21 @@ function sampleWitness(overrides = {}) {
     ...overrides,
   };
   const hasInclusionBranch =
-    overrides.inclusionBranch !== undefined || overrides.inclusion_branch !== undefined;
+    overrides.inclusionBranch !== undefined ||
+    overrides.inclusion_branch !== undefined;
   const hasTransactionStatusRoot =
-    overrides.transactionStatusRoot !== undefined || overrides.transaction_status_root !== undefined;
+    overrides.transactionStatusRoot !== undefined ||
+    overrides.transaction_status_root !== undefined;
   if (hasInclusionBranch && !hasTransactionStatusRoot) {
-    witness.transactionStatusRoot = solanaSccpTransactionStatusRootFromBranch(witness);
+    witness.transactionStatusRoot =
+      solanaSccpTransactionStatusRootFromBranch(witness);
   }
   return witness;
 }
 
 function sampleProductionWitness(overrides = {}) {
-  const inclusionBranch = overrides.inclusionBranch ?? overrides.inclusion_branch ?? [HEX32_G];
+  const inclusionBranch = overrides.inclusionBranch ??
+    overrides.inclusion_branch ?? [HEX32_G];
   const blockhash = "0x" + "9a".repeat(32);
   const accountsLtHash = Uint8Array.from(
     { length: 2048 },
@@ -1718,8 +1850,9 @@ function sampleSolanaFullLightClientAuditProofInput(overrides = {}) {
     commitmentRoot: HEX32_F,
     epoch: 3n,
     rootedSlot: 1_296_065n,
-    towerVoteSlots: Array.from({ length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) }, (_, index) =>
-      1_296_066n + BigInt(index),
+    towerVoteSlots: Array.from(
+      { length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) },
+      (_, index) => 1_296_066n + BigInt(index),
     ),
     epochStakeRoot: `0x${"13".repeat(32)}`,
     stakeActivationHash: `0x${"14".repeat(32)}`,
@@ -1738,7 +1871,8 @@ function sampleSolanaFullLightClientAuditProofInput(overrides = {}) {
     overrides.sourceAdapterDeploymentHash === undefined &&
     overrides.source_adapter_deployment_hash === undefined
   ) {
-    input.sourceAdapterDeploymentHash = sccpSourceAdapterEngineDeploymentHash(input);
+    input.sourceAdapterDeploymentHash =
+      sccpSourceAdapterEngineDeploymentHash(input);
   }
   if (
     overrides.sourceAdapterDeploymentReceiptHash === undefined &&
@@ -1763,11 +1897,14 @@ test("normalizes Solana SCCP witness input for local proof requests", () => {
   assert.match(witness.blockhash, /^0x[0-9a-f]{64}$/);
   assert.deepEqual(
     canonicalSolanaSccpWitnessBytes(sampleWitness()),
-    canonicalSolanaSccpWitnessBytes(sampleWitness({ blockhash: witness.blockhash })),
+    canonicalSolanaSccpWitnessBytes(
+      sampleWitness({ blockhash: witness.blockhash }),
+    ),
   );
   assert.equal(
     buildSolanaSccpProofRequest(sampleWitness()).witnessHash,
-    buildSolanaSccpProofRequest(sampleWitness({ blockhash: witness.blockhash })).witnessHash,
+    buildSolanaSccpProofRequest(sampleWitness({ blockhash: witness.blockhash }))
+      .witnessHash,
   );
   assert.equal(
     witness.accountsLtHashProofPublicInputsHash,
@@ -1775,7 +1912,10 @@ test("normalizes Solana SCCP witness input for local proof requests", () => {
   );
   assert.equal(witness.messageId, HEX32_D);
   assert.equal(witness.sourceEventDigest, `0x${"34".repeat(32)}`);
-  assert.equal(witness.sourceStateVerifierId, SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1);
+  assert.equal(
+    witness.sourceStateVerifierId,
+    SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  );
   assert.equal(witness.sourceStateVerifierHash, SCCP_ZERO_HASH_V1);
   assert.equal(witness.sourceAdapterDeploymentHash, SCCP_ZERO_HASH_V1);
   assert.equal(witness.sourceAdapterDeploymentReceiptHash, SCCP_ZERO_HASH_V1);
@@ -1784,7 +1924,10 @@ test("normalizes Solana SCCP witness input for local proof requests", () => {
     ["sourceStateVerifierId", /sourceStateVerifierId/],
     ["sourceStateVerifierHash", /sourceStateVerifierHash/],
     ["sourceAdapterDeploymentHash", /sourceAdapterDeploymentHash/],
-    ["sourceAdapterDeploymentReceiptHash", /sourceAdapterDeploymentReceiptHash/],
+    [
+      "sourceAdapterDeploymentReceiptHash",
+      /sourceAdapterDeploymentReceiptHash/,
+    ],
   ]) {
     assert.throws(
       () => normalizeSolanaSccpWitness(sampleWitness({ [field]: "" })),
@@ -1795,7 +1938,10 @@ test("normalizes Solana SCCP witness input for local proof requests", () => {
 
 test("requires caller-supplied Solana source event digest", () => {
   assert.throws(
-    () => normalizeSolanaSccpWitness(sampleWitness({ sourceEventDigest: undefined })),
+    () =>
+      normalizeSolanaSccpWitness(
+        sampleWitness({ sourceEventDigest: undefined }),
+      ),
     /sourceEventDigest must be a hex string/,
   );
   assert.throws(
@@ -1821,7 +1967,8 @@ test("derives Solana message proof hash from inclusion witness", () => {
     ...solanaLeafInput,
     inclusionBranch,
   };
-  const transactionStatusRoot = solanaSccpTransactionStatusRootFromBranch(solanaRootInput);
+  const transactionStatusRoot =
+    solanaSccpTransactionStatusRootFromBranch(solanaRootInput);
   assert.equal(
     transactionStatusRoot,
     "0xb048ca31d8ad7b2a0d15cbeb81d536350743483d44dd93136e859df93d3863b2",
@@ -1837,24 +1984,60 @@ test("derives Solana message proof hash from inclusion witness", () => {
     "0x4e12efed6d53466de0596f05aa6cc767df1efd6a4d1549276c4ec8b69118515d",
   );
   for (const [patch, pattern] of [
-    [{ source_event_digest: `0x${"34".repeat(32)}` }, /sourceEventDigest must not use multiple aliases/u],
-    [{ transaction_signature: SOLANA_SIGNATURE_55 }, /transactionSignature must not use multiple aliases/u],
-    [{ emitter_program_id: SOLANA_PROGRAM_42 }, /emitterProgramId must not use multiple aliases/u],
+    [
+      { source_event_digest: `0x${"34".repeat(32)}` },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
+    [
+      { transaction_signature: SOLANA_SIGNATURE_55 },
+      /transactionSignature must not use multiple aliases/u,
+    ],
+    [
+      { emitter_program_id: SOLANA_PROGRAM_42 },
+      /emitterProgramId must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => solanaSccpTransactionStatusLeafHash({ ...solanaLeafInput, ...patch }), pattern);
+    assert.throws(
+      () =>
+        solanaSccpTransactionStatusLeafHash({ ...solanaLeafInput, ...patch }),
+      pattern,
+    );
   }
   assert.throws(
-    () => solanaSccpTransactionStatusRootFromBranch({ ...solanaRootInput, inclusion_branch: inclusionBranch }),
+    () =>
+      solanaSccpTransactionStatusRootFromBranch({
+        ...solanaRootInput,
+        inclusion_branch: inclusionBranch,
+      }),
     /inclusionBranch must not use multiple aliases/u,
   );
   for (const [patch, pattern] of [
-    [{ source_event_digest: `0x${"34".repeat(32)}` }, /sourceEventDigest must not use multiple aliases/u],
-    [{ receipt_or_message_root: transactionStatusRoot }, /transactionStatusRoot must not use multiple aliases/u],
-    [{ transaction_signature: SOLANA_SIGNATURE_55 }, /transactionSignature must not use multiple aliases/u],
-    [{ emitter_program_id: SOLANA_PROGRAM_42 }, /emitterProgramId must not use multiple aliases/u],
-    [{ inclusion_branch: inclusionBranch }, /inclusionBranch must not use multiple aliases/u],
+    [
+      { source_event_digest: `0x${"34".repeat(32)}` },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
+    [
+      { receipt_or_message_root: transactionStatusRoot },
+      /transactionStatusRoot must not use multiple aliases/u,
+    ],
+    [
+      { transaction_signature: SOLANA_SIGNATURE_55 },
+      /transactionSignature must not use multiple aliases/u,
+    ],
+    [
+      { emitter_program_id: SOLANA_PROGRAM_42 },
+      /emitterProgramId must not use multiple aliases/u,
+    ],
+    [
+      { inclusion_branch: inclusionBranch },
+      /inclusionBranch must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => solanaSccpMessageProofHash({ ...solanaMessageProofInput, ...patch }), pattern);
+    assert.throws(
+      () =>
+        solanaSccpMessageProofHash({ ...solanaMessageProofInput, ...patch }),
+      pattern,
+    );
   }
   assert.throws(
     () =>
@@ -1943,8 +2126,9 @@ test("derives Solana message proof hash from inclusion witness", () => {
     }),
   );
   assert.equal(
-    normalizeSolanaSccpWitness(sampleWitness({ messageProofHash: undefined, inclusionBranch }))
-      .messageProofHash,
+    normalizeSolanaSccpWitness(
+      sampleWitness({ messageProofHash: undefined, inclusionBranch }),
+    ).messageProofHash,
     derived,
   );
   const normalized = normalizeSolanaSccpWitness(
@@ -1955,26 +2139,38 @@ test("derives Solana message proof hash from inclusion witness", () => {
   assert.throws(
     () =>
       normalizeSolanaSccpWitness(
-        sampleWitness({ sourceEventDigest: `0x${"00".repeat(32)}`, inclusionBranch }),
+        sampleWitness({
+          sourceEventDigest: `0x${"00".repeat(32)}`,
+          inclusionBranch,
+        }),
       ),
     /sourceEventDigest must not be zero/,
   );
   assert.throws(
     () =>
       normalizeSolanaSccpWitness(
-        sampleWitness({ transactionSignature: SOLANA_ZERO_SIGNATURE, inclusionBranch }),
+        sampleWitness({
+          transactionSignature: SOLANA_ZERO_SIGNATURE,
+          inclusionBranch,
+        }),
       ),
     /transactionSignature must not decode to zero/,
   );
   assert.throws(
     () =>
       normalizeSolanaSccpWitness(
-        sampleWitness({ emitterProgramId: SOLANA_ZERO_PROGRAM, inclusionBranch }),
+        sampleWitness({
+          emitterProgramId: SOLANA_ZERO_PROGRAM,
+          inclusionBranch,
+        }),
       ),
     /emitterProgramId must not decode to zero/,
   );
   assert.throws(
-    () => normalizeSolanaSccpWitness(sampleWitness({ messageProofHash: HEX32_C, inclusionBranch })),
+    () =>
+      normalizeSolanaSccpWitness(
+        sampleWitness({ messageProofHash: HEX32_C, inclusionBranch }),
+      ),
     /messageProofHash must match inclusionBranch/,
   );
   assert.ok(
@@ -2074,14 +2270,18 @@ test("derives Solana epoch stake root for finalized-slot vote witnesses", () => 
   );
   const oversizedValidatorPublicKeys = Array.from(
     { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
-    (_, index) => `0x${"00".repeat(24)}${(index + 1).toString(16).padStart(16, "0")}`,
+    (_, index) =>
+      `0x${"00".repeat(24)}${(index + 1).toString(16).padStart(16, "0")}`,
   );
   assert.throws(
     () =>
       solanaSccpEpochStakeRoot({
         ...input,
         validatorPublicKeys: oversizedValidatorPublicKeys,
-        validatorStakes: Array.from({ length: oversizedValidatorPublicKeys.length }, () => 1n),
+        validatorStakes: Array.from(
+          { length: oversizedValidatorPublicKeys.length },
+          () => 1n,
+        ),
       }),
     /validatorPublicKeys must contain 1\.\.8192 entries/,
   );
@@ -2102,7 +2302,8 @@ test("derives Solana stake activation hash for active vote witnesses", () => {
     "0xdb418c62a1aeb8ae15cb26e3a198d46890cefa3545df8e1921be2e83f57dabf3",
   );
   assert.throws(
-    () => solanaSccpStakeActivationHash({ ...input, validator_epoch: input.epoch }),
+    () =>
+      solanaSccpStakeActivationHash({ ...input, validator_epoch: input.epoch }),
     /epoch must not use multiple aliases/,
   );
   assert.throws(
@@ -2122,23 +2323,42 @@ test("derives Solana stake activation hash for active vote witnesses", () => {
     /validatorDeactivationEpochs must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpStakeActivationHash({ ...input, validatorActivationEpochs: [4n, 2n] }),
+    () =>
+      solanaSccpStakeActivationHash({
+        ...input,
+        validatorActivationEpochs: [4n, 2n],
+      }),
     /validatorActivationEpochs\[0\] must be less than epoch/,
   );
   assert.throws(
-    () => solanaSccpStakeActivationHash({ ...input, validatorActivationEpochs: [3n, 2n] }),
+    () =>
+      solanaSccpStakeActivationHash({
+        ...input,
+        validatorActivationEpochs: [3n, 2n],
+      }),
     /validatorActivationEpochs\[0\] must be less than epoch/,
   );
   assert.throws(
-    () => solanaSccpStakeActivationHash({ ...input, validatorDeactivationEpochs: [(1n << 64n) - 1n, 2n] }),
+    () =>
+      solanaSccpStakeActivationHash({
+        ...input,
+        validatorDeactivationEpochs: [(1n << 64n) - 1n, 2n],
+      }),
     /validatorDeactivationEpochs\[1\] must be greater than activation epoch/,
   );
   assert.equal(
-    solanaSccpStakeActivationHash({ ...input, validatorDeactivationEpochs: [(1n << 64n) - 1n, 3n] }).length,
+    solanaSccpStakeActivationHash({
+      ...input,
+      validatorDeactivationEpochs: [(1n << 64n) - 1n, 3n],
+    }).length,
     66,
   );
   assert.throws(
-    () => solanaSccpStakeActivationHash({ ...input, validatorActivationEpochs: [0n] }),
+    () =>
+      solanaSccpStakeActivationHash({
+        ...input,
+        validatorActivationEpochs: [0n],
+      }),
     /validator activation epochs must match/,
   );
 });
@@ -2156,18 +2376,30 @@ test("derives Solana account opening hash for vote and stake account metadata", 
   assert.equal(canonicalSolanaSccpAccountOpeningBytes(input).length, 122);
   const hash = solanaSccpAccountOpeningHash(input);
   assert.match(hash, /^0x[0-9a-f]{64}$/);
-  assert.notEqual(hash, solanaSccpAccountOpeningHash({ ...input, owner: SCCP_SOLANA_STAKE_PROGRAM_ID }));
-  assert.notEqual(hash, solanaSccpAccountOpeningHash({ ...input, executable: true }));
+  assert.notEqual(
+    hash,
+    solanaSccpAccountOpeningHash({
+      ...input,
+      owner: SCCP_SOLANA_STAKE_PROGRAM_ID,
+    }),
+  );
+  assert.notEqual(
+    hash,
+    solanaSccpAccountOpeningHash({ ...input, executable: true }),
+  );
   assert.throws(
-    () => solanaSccpAccountOpeningHash({ ...input, accountAddress: input.address }),
+    () =>
+      solanaSccpAccountOpeningHash({ ...input, accountAddress: input.address }),
     /address must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountOpeningHash({ ...input, ownerProgramId: input.owner }),
+    () =>
+      solanaSccpAccountOpeningHash({ ...input, ownerProgramId: input.owner }),
     /owner must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountOpeningHash({ ...input, rent_epoch: input.rentEpoch }),
+    () =>
+      solanaSccpAccountOpeningHash({ ...input, rent_epoch: input.rentEpoch }),
     /rentEpoch must not use multiple aliases/,
   );
   assert.throws(
@@ -2193,13 +2425,19 @@ test("derives Solana Agave account lattice hash helpers", () => {
 
   const accountLtHash = solanaSccpAccountLtHash(opening, rawData);
   assert.equal(accountLtHash.length, 2048);
-  assert.match(solanaSccpAccountsLtHashChecksum(accountLtHash), /^0x[0-9a-f]{64}$/);
+  assert.match(
+    solanaSccpAccountsLtHashChecksum(accountLtHash),
+    /^0x[0-9a-f]{64}$/,
+  );
   assert.deepEqual(
     solanaSccpAccountLtHash({ ...opening, rentEpoch: 1n }, rawData),
     accountLtHash,
   );
   assert.notDeepEqual(
-    solanaSccpAccountLtHash({ ...opening, lamports: opening.lamports + 1n }, rawData),
+    solanaSccpAccountLtHash(
+      { ...opening, lamports: opening.lamports + 1n },
+      rawData,
+    ),
     accountLtHash,
   );
   assert.deepEqual(
@@ -2211,7 +2449,11 @@ test("derives Solana Agave account lattice hash helpers", () => {
     /executable must be a boolean/,
   );
   assert.throws(
-    () => solanaSccpAccountLtHash({ ...opening, accountAddress: opening.address }, rawData),
+    () =>
+      solanaSccpAccountLtHash(
+        { ...opening, accountAddress: opening.address },
+        rawData,
+      ),
     /address must not use multiple aliases/,
   );
   assert.equal(
@@ -2282,7 +2524,10 @@ test("derives opened Solana AccountsLtHash contribution and residual bindings", 
     stakeHistorySysvarRawData: stakeHistoryRawData,
   };
 
-  assert.deepEqual(solanaSccpAccountsLtHashOpenedResidual(input), unopenedLtHash);
+  assert.deepEqual(
+    solanaSccpAccountsLtHashOpenedResidual(input),
+    unopenedLtHash,
+  );
   assert.equal(
     solanaSccpAccountsLtHashOpenedResidualChecksum(input),
     solanaSccpAccountsLtHashChecksum(unopenedLtHash),
@@ -2303,90 +2548,101 @@ test("derives opened Solana AccountsLtHash contribution and residual bindings", 
     solanaSccpAccountsLtHashOpenedContributionsHash(input),
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      accountsLtHashChecksum: `0x${"88".repeat(32)}`,
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        accountsLtHashChecksum: `0x${"88".repeat(32)}`,
+      }),
     /accountsLtHashChecksum must match accountsLtHash/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      finalized_slot: input.finalizedSlot,
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        finalized_slot: input.finalizedSlot,
+      }),
     /finalizedSlot must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      accounts_root: input.accountInclusionRoot,
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        accounts_root: input.accountInclusionRoot,
+      }),
     /accountInclusionRoot must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      accounts_lt_hash_root: input.accountsLtHashChecksum,
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        accounts_lt_hash_root: input.accountsLtHashChecksum,
+      }),
     /accountsLtHashChecksum must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      accounts_lt_hash: input.accountsLtHash,
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        accounts_lt_hash: input.accountsLtHash,
+      }),
     /accountsLtHash must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      vote_account_openings: input.validatorVoteAccountOpenings,
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        vote_account_openings: input.validatorVoteAccountOpenings,
+      }),
     /validatorVoteAccountOpenings must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      stake_history_sysvar_opening: input.stakeHistorySysvarOpening,
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        stake_history_sysvar_opening: input.stakeHistorySysvarOpening,
+      }),
     /stakeHistorySysvarOpening must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      accountsLtHash: openedLtHash,
-      accountsLtHashChecksum: solanaSccpAccountsLtHashChecksum(openedLtHash),
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        accountsLtHash: openedLtHash,
+        accountsLtHashChecksum: solanaSccpAccountsLtHashChecksum(openedLtHash),
+      }),
     /openedAccountsLtHashResidual must not be zero/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      validatorStakeAccountOpenings: [
-        { ...stakeOpening, address: voteOpening.address },
-      ],
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        validatorStakeAccountOpenings: [
+          { ...stakeOpening, address: voteOpening.address },
+        ],
+      }),
     /opened account addresses must be unique/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      validatorVoteAccountOpenings: [{ ...voteOpening, lamports: 0n }],
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        validatorVoteAccountOpenings: [{ ...voteOpening, lamports: 0n }],
+      }),
     /lamports must be greater than zero/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashOpenedContributionsHash({
-      ...input,
-      validatorVoteAccountOpenings: Array.from(
-        { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
-        () => voteOpening,
-      ),
-      validatorVoteAccountRawData: Array.from(
-        { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
-        () => voteRawData,
-      ),
-    }),
+    () =>
+      solanaSccpAccountsLtHashOpenedContributionsHash({
+        ...input,
+        validatorVoteAccountOpenings: Array.from(
+          { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
+          () => voteOpening,
+        ),
+        validatorVoteAccountRawData: Array.from(
+          { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
+          () => voteRawData,
+        ),
+      }),
     /validatorVoteAccountOpenings.*at most/,
   );
 });
@@ -2428,9 +2684,15 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
   ]);
   assert.equal(request.version, 1);
   assert.equal(request.proofFamily, "stark-fri-v1");
-  assert.equal(request.circuitId, SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1);
+  assert.equal(
+    request.circuitId,
+    SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
   assert.equal(request.parameterSet, "fastpq-lane-balanced");
-  assert.equal(request.sourceStateVerifierId, SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1);
+  assert.equal(
+    request.sourceStateVerifierId,
+    SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  );
   assert.equal(request.sourceStateVerifierHash, HEX32_A);
   assert.equal(
     request.accountsLtHashProofPublicInputsHash,
@@ -2489,7 +2751,11 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
     canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(input),
   );
   assert.throws(
-    () => canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes({ ...input, bankHash: HEX32_C }),
+    () =>
+      canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes({
+        ...input,
+        bankHash: HEX32_C,
+      }),
     /bankHash must match Agave bank hash inputs/,
   );
   assert.throws(
@@ -2545,7 +2811,10 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
     request.publicInputColumns,
     solanaSccpAccountsLtHashPublicInputColumns(input),
   );
-  assert.equal(request.publicInputColumns[1][0], SOLANA_MAINNET_GENESIS_PUBLIC_INPUT);
+  assert.equal(
+    request.publicInputColumns[1][0],
+    SOLANA_MAINNET_GENESIS_PUBLIC_INPUT,
+  );
   assert.equal(
     request.publicInputColumns.at(-2)[0],
     request.openedAccountsLtHashContributionsHash,
@@ -2563,16 +2832,30 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
       Buffer.from("opened_accounts_lt_hash_residual_checksum"),
     ),
   );
-  assert.ok(Buffer.from(request.schemaDescriptor).includes(Buffer.from("source_state_verifier_id")));
-  assert.ok(Buffer.from(request.schemaDescriptor).includes(Buffer.from("mainnet_genesis_hash")));
+  assert.ok(
+    Buffer.from(request.schemaDescriptor).includes(
+      Buffer.from("source_state_verifier_id"),
+    ),
+  );
+  assert.ok(
+    Buffer.from(request.schemaDescriptor).includes(
+      Buffer.from("mainnet_genesis_hash"),
+    ),
+  );
   assert.ok(
     Buffer.from(request.schemaDescriptor).includes(
       Buffer.from(SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1),
     ),
   );
-  assert.ok(Buffer.from(request.schemaDescriptor).includes(Buffer.from("source_state_verifier_hash")));
   assert.ok(
-    Buffer.from(request.schemaDescriptor).includes(Buffer.from(HEX32_A.slice(2), "hex")),
+    Buffer.from(request.schemaDescriptor).includes(
+      Buffer.from("source_state_verifier_hash"),
+    ),
+  );
+  assert.ok(
+    Buffer.from(request.schemaDescriptor).includes(
+      Buffer.from(HEX32_A.slice(2), "hex"),
+    ),
   );
   assert.deepEqual(
     request.fastpqTransitions.map((transition) => transition.key),
@@ -2593,10 +2876,16 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
   assert.equal(Object.isFrozen(proofCapsule), true);
   assert.equal(proofCapsule.version, 1);
   assert.equal(proofCapsule.proofFamily, SCCP_STARK_FRI_PROOF_FAMILY_V1);
-  assert.equal(proofCapsule.circuitId, SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1);
+  assert.equal(
+    proofCapsule.circuitId,
+    SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
   assert.deepEqual(proofCapsule.proofBytes, new Uint8Array([1, 2, 3]));
   assert.equal(proofCapsule.proofBase64, "AQID");
-  assert.match(solanaSccpAccountsLtHashProofHash(proofCapsule), /^0x[0-9a-f]{64}$/);
+  assert.match(
+    solanaSccpAccountsLtHashProofHash(proofCapsule),
+    /^0x[0-9a-f]{64}$/,
+  );
   assert.throws(
     () =>
       canonicalSolanaSccpSourceStateVerificationProofBytes({
@@ -2633,12 +2922,19 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
   exposedProofBytes[0] = 9;
   assert.deepEqual(proofCapsule.proofBytes, new Uint8Array([1, 2, 3]));
   assert.throws(
-    () => wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([0, 0]), request),
+    () =>
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([0, 0]),
+        request,
+      ),
     /all zero/,
   );
-  const oversizedProofBytes = new Uint8Array(SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1).fill(1);
+  const oversizedProofBytes = new Uint8Array(
+    SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
+  ).fill(1);
   assert.throws(
-    () => wrapSolanaSccpSourceStateVerificationProof(oversizedProofBytes, request),
+    () =>
+      wrapSolanaSccpSourceStateVerificationProof(oversizedProofBytes, request),
     /at most/,
   );
   assert.throws(
@@ -2672,39 +2968,57 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
   const wrongGenesisRequest = mutableFastpqProofRequest(request);
   wrongGenesisRequest.publicInputColumns[1][0] = HEX32_A;
   assert.throws(
-    () => wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), wrongGenesisRequest),
+    () =>
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1]),
+        wrongGenesisRequest,
+      ),
     /mainnet_genesis_hash/,
   );
   const wrongResidualColumnRequest = mutableFastpqProofRequest(request);
   wrongResidualColumnRequest.publicInputColumns.at(-1)[0] = HEX32_C;
   assert.throws(
     () =>
-      wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), wrongResidualColumnRequest),
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1]),
+        wrongResidualColumnRequest,
+      ),
     /opened_accounts_lt_hash_residual_checksum/,
   );
   const staleAccountsHashRequest = mutableFastpqProofRequest(request);
   staleAccountsHashRequest.accountsLtHashProofPublicInputsHash = HEX32_C;
   assert.throws(
     () =>
-      wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), staleAccountsHashRequest),
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1]),
+        staleAccountsHashRequest,
+      ),
     /accountsLtHashProofPublicInputsHash must match request\.statementBytes/,
   );
   const wrongAccountsDsidRequest = mutableFastpqProofRequest(request);
-  wrongAccountsDsidRequest.fastpqPublicInputs.dsid = "0x00000000000000000000000000000000";
+  wrongAccountsDsidRequest.fastpqPublicInputs.dsid =
+    "0x00000000000000000000000000000000";
   assert.throws(
     () =>
-      wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), wrongAccountsDsidRequest),
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1]),
+        wrongAccountsDsidRequest,
+      ),
     /fastpqPublicInputs\.dsid/,
   );
   const wrongAccountsTxSetRequest = mutableFastpqProofRequest(request);
   wrongAccountsTxSetRequest.fastpqPublicInputs.txSetHash = HEX32_C;
   assert.throws(
     () =>
-      wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), wrongAccountsTxSetRequest),
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1]),
+        wrongAccountsTxSetRequest,
+      ),
     /fastpqPublicInputs\.txSetHash/,
   );
   const duplicateSourceDomainAliasRequest = mutableFastpqProofRequest(request);
-  duplicateSourceDomainAliasRequest.source_domain = duplicateSourceDomainAliasRequest.sourceDomain;
+  duplicateSourceDomainAliasRequest.source_domain =
+    duplicateSourceDomainAliasRequest.sourceDomain;
   assert.throws(
     () =>
       wrapSolanaSccpSourceStateVerificationProof(
@@ -2738,7 +3052,11 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
   const wrongTransitionRequest = mutableFastpqProofRequest(request);
   wrongTransitionRequest.fastpqTransitions[0].newValue = "0x00";
   assert.throws(
-    () => wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), wrongTransitionRequest),
+    () =>
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1]),
+        wrongTransitionRequest,
+      ),
     /canonical Solana source-state request/,
   );
   const wrongOldValueTransitionRequest = mutableFastpqProofRequest(request);
@@ -2773,7 +3091,10 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
   delete requestWithoutStatement.statementBytes;
   assert.throws(
     () =>
-      wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), requestWithoutStatement),
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([1]),
+        requestWithoutStatement,
+      ),
     /request\.statementBytes is required/,
   );
   assert.throws(
@@ -2788,7 +3109,8 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
     () =>
       wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([1]), {
         ...request,
-        sourceStateVerifierHash: SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+        sourceStateVerifierHash:
+          SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
       }),
     /Solana template verifier hash/,
   );
@@ -2810,7 +3132,8 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
   );
 
   const zeroAccountsLtHash = new Uint8Array(2048);
-  const zeroAccountsLtHashChecksum = solanaSccpAccountsLtHashChecksum(zeroAccountsLtHash);
+  const zeroAccountsLtHashChecksum =
+    solanaSccpAccountsLtHashChecksum(zeroAccountsLtHash);
   assert.match(zeroAccountsLtHashChecksum, /^0x[0-9a-f]{64}$/);
   assert.throws(
     () =>
@@ -2844,18 +3167,27 @@ test("builds Solana AccountsLtHash source-state proof requests", () => {
     () =>
       buildSolanaSccpAccountsLtHashProofRequest({
         ...input,
-        sourceStateVerifierHash: SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+        sourceStateVerifierHash:
+          SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
       }),
     /Solana template verifier hash/,
   );
   assert.throws(
-    () => buildSolanaSccpAccountsLtHashProofRequest({ ...input, bankHash: HEX32_C }),
+    () =>
+      buildSolanaSccpAccountsLtHashProofRequest({
+        ...input,
+        bankHash: HEX32_C,
+      }),
     /bankHash must match Agave bank hash inputs/,
   );
-  const snakeAccountsLtHashInput = { ...input, accounts_lt_hash: input.accountsLtHash };
+  const snakeAccountsLtHashInput = {
+    ...input,
+    accounts_lt_hash: input.accountsLtHash,
+  };
   delete snakeAccountsLtHashInput.accountsLtHash;
-  const snakeAccountsLtHashRequest =
-    buildSolanaSccpAccountsLtHashProofRequest(snakeAccountsLtHashInput);
+  const snakeAccountsLtHashRequest = buildSolanaSccpAccountsLtHashProofRequest(
+    snakeAccountsLtHashInput,
+  );
   assert.equal(
     snakeAccountsLtHashRequest.openedAccountsLtHashContributionsHash,
     request.openedAccountsLtHashContributionsHash,
@@ -2877,7 +3209,8 @@ test("builds Solana full light-client audit role proof requests", () => {
     () =>
       buildSolanaSccpTowerReplayProofRequest(
         sampleSolanaFullLightClientAuditProofInput({
-          solanaTowerReplayVerifierHash: requests.towerReplay.auditStatementHash,
+          solanaTowerReplayVerifierHash:
+            requests.towerReplay.auditStatementHash,
         }),
       ),
     /role-separated/,
@@ -2908,16 +3241,21 @@ test("builds Solana full light-client audit role proof requests", () => {
       }),
     /sourceVerifierMaterial must not use multiple aliases/,
   );
-  const snakeAccountsLtHashInput = { ...input, accounts_lt_hash: input.accountsLtHash };
+  const snakeAccountsLtHashInput = {
+    ...input,
+    accounts_lt_hash: input.accountsLtHash,
+  };
   delete snakeAccountsLtHashInput.accountsLtHash;
   const snakeAccountsLtHashRequests =
     buildSolanaSccpFullLightClientAuditProofRequests(snakeAccountsLtHashInput);
   assert.equal(
-    snakeAccountsLtHashRequests.towerReplay.openedAccountsLtHashContributionsHash,
+    snakeAccountsLtHashRequests.towerReplay
+      .openedAccountsLtHashContributionsHash,
     requests.towerReplay.openedAccountsLtHashContributionsHash,
   );
   assert.equal(
-    snakeAccountsLtHashRequests.towerReplay.openedAccountsLtHashResidualChecksum,
+    snakeAccountsLtHashRequests.towerReplay
+      .openedAccountsLtHashResidualChecksum,
     requests.towerReplay.openedAccountsLtHashResidualChecksum,
   );
   assert.equal(
@@ -2926,7 +3264,8 @@ test("builds Solana full light-client audit role proof requests", () => {
   );
   const expectedVectors = {
     towerReplay: {
-      statementHash: "0x2ead9384eaa2351b45a81bb22384a9bc9ed7c0793b06d0d3eb15424ef28929e3",
+      statementHash:
+        "0x2ead9384eaa2351b45a81bb22384a9bc9ed7c0793b06d0d3eb15424ef28929e3",
       statementLength: 777,
       publicInputColumns: [
         ["0x0100000000000000000000000000000000000000000000000000000000000000"],
@@ -2956,7 +3295,8 @@ test("builds Solana full light-client audit role proof requests", () => {
       ],
     },
     fullAccountsdbLattice: {
-      statementHash: "0x016d361178fe1ed787add1eb9b75b5cc37453995e24b0acd845bd977e1cc9df0",
+      statementHash:
+        "0x016d361178fe1ed787add1eb9b75b5cc37453995e24b0acd845bd977e1cc9df0",
       statementLength: 440,
       publicInputColumns: [
         ["0x0200000000000000000000000000000000000000000000000000000000000000"],
@@ -2983,7 +3323,8 @@ test("builds Solana full light-client audit role proof requests", () => {
       ],
     },
     bankForkChoice: {
-      statementHash: "0x0c6a73bb4622acbb67c562c0a890237ca77619b33fececb645ee33b2028ed6a8",
+      statementHash:
+        "0x0c6a73bb4622acbb67c562c0a890237ca77619b33fececb645ee33b2028ed6a8",
       statementLength: 509,
       publicInputColumns: [
         ["0x0300000000000000000000000000000000000000000000000000000000000000"],
@@ -3016,7 +3357,9 @@ test("builds Solana full light-client audit role proof requests", () => {
   };
 
   assert.ok(
-    canonicalSolanaSccpSourceStateVerificationProofBytes(input.accountsLtHashProof).length > 0,
+    canonicalSolanaSccpSourceStateVerificationProofBytes(
+      input.accountsLtHashProof,
+    ).length > 0,
   );
   assert.ok(canonicalSolanaSccpFinalityContextBytes(input).length > 0);
   const witness = normalizeSolanaSccpWitness(input);
@@ -3037,7 +3380,8 @@ test("builds Solana full light-client audit role proof requests", () => {
     stake_history_sysvar_account_hash: input.stakeHistorySysvarAccountHash,
     account_inclusion_root: witness.accountInclusionRoot,
     accounts_lt_hash_checksum: witness.accountsLtHashChecksum,
-    accounts_lt_hash_proof_public_inputs_hash: witness.accountsLtHashProofPublicInputsHash,
+    accounts_lt_hash_proof_public_inputs_hash:
+      witness.accountsLtHashProofPublicInputsHash,
     tower_lockout_hash: solanaSccpTowerLockoutHash(input),
     tower_replay_hash: solanaSccpTowerReplayHash({ ...input, bankForkHash }),
     bank_fork_hash: bankForkHash,
@@ -3070,10 +3414,11 @@ test("builds Solana full light-client audit role proof requests", () => {
       }),
     /bankForkHash must not use multiple aliases/,
   );
-  assert.deepEqual(
-    Object.keys(requests),
-    ["towerReplay", "fullAccountsdbLattice", "bankForkChoice"],
-  );
+  assert.deepEqual(Object.keys(requests), [
+    "towerReplay",
+    "fullAccountsdbLattice",
+    "bankForkChoice",
+  ]);
   assert.deepEqual(
     Object.values(requests).map((request) => request.role),
     ["tower_replay", "full_accountsdb_lattice", "bank_fork_choice"],
@@ -3101,8 +3446,14 @@ test("builds Solana full light-client audit role proof requests", () => {
       "verificationContextBytes",
       "schemaDescriptor",
     ]);
-    assert.equal(request.auditStatementHash, expectedVectors[requestKey].statementHash);
-    assert.equal(request.statementBytes.length, expectedVectors[requestKey].statementLength);
+    assert.equal(
+      request.auditStatementHash,
+      expectedVectors[requestKey].statementHash,
+    );
+    assert.equal(
+      request.statementBytes.length,
+      expectedVectors[requestKey].statementLength,
+    );
     assert.deepEqual(
       request.publicInputColumns,
       expectedVectors[requestKey].publicInputColumns,
@@ -3112,12 +3463,22 @@ test("builds Solana full light-client audit role proof requests", () => {
     assert.equal(request.parameterSet, "fastpq-lane-balanced");
     assert.equal(request.finalityContextHash, finalityContextHash);
     assert.equal(request.accountsLtHashProofHash, accountsLtHashProofHash);
-    assert.equal(request.fullLightClientGateHash, sccpSolanaFullLightClientGateHash(input));
+    assert.equal(
+      request.fullLightClientGateHash,
+      sccpSolanaFullLightClientGateHash(input),
+    );
     assert.equal(request.fastpqTransitions.length, 3);
-    assert.ok(request.fastpqTransitions.every((transition) => transition.key.startsWith("0x")));
+    assert.ok(
+      request.fastpqTransitions.every((transition) =>
+        transition.key.startsWith("0x"),
+      ),
+    );
     assert.deepEqual(
       request.schemaDescriptor,
-      solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, request.role),
+      solanaSccpFullLightClientAuditOpenVerifySchemaDescriptor(
+        input,
+        request.role,
+      ),
     );
     assert.deepEqual(
       request.publicInputColumns,
@@ -3129,7 +3490,10 @@ test("builds Solana full light-client audit role proof requests", () => {
     );
     assert.deepEqual(
       request.statementBytes,
-      canonicalSolanaSccpFullLightClientAuditStatementBytes(input, request.role),
+      canonicalSolanaSccpFullLightClientAuditStatementBytes(
+        input,
+        request.role,
+      ),
     );
     if (requestKey === "fullAccountsdbLattice") {
       assert.deepEqual(
@@ -3138,7 +3502,12 @@ test("builds Solana full light-client audit role proof requests", () => {
       );
       assert.notDeepEqual(
         request.statementBytes.slice(-32),
-        Uint8Array.from(Buffer.from(witness.accountsLtHashProofPublicInputsHash.slice(2), "hex")),
+        Uint8Array.from(
+          Buffer.from(
+            witness.accountsLtHashProofPublicInputsHash.slice(2),
+            "hex",
+          ),
+        ),
       );
     }
     const proofCapsule = wrapSolanaSccpSourceStateVerificationProof(
@@ -3149,19 +3518,30 @@ test("builds Solana full light-client audit role proof requests", () => {
     assert.equal(proofCapsule.proofFamily, request.proofFamily);
     assert.deepEqual(proofCapsule.proofBytes, new Uint8Array([9, 8, 7]));
     assert.equal(proofCapsule.proofBase64, "CQgH");
-    assert.ok(canonicalSolanaSccpSourceStateVerificationProofBytes(proofCapsule).length > 0);
+    assert.ok(
+      canonicalSolanaSccpSourceStateVerificationProofBytes(proofCapsule)
+        .length > 0,
+    );
     assert.throws(
       () => solanaSccpAccountsLtHashProofHash(proofCapsule),
       /Solana AccountsLtHash/,
     );
   }
-  const wrongAuditGenesisRequest = mutableFastpqProofRequest(requests.bankForkChoice);
+  const wrongAuditGenesisRequest = mutableFastpqProofRequest(
+    requests.bankForkChoice,
+  );
   wrongAuditGenesisRequest.publicInputColumns[2][0] = HEX32_A;
   assert.throws(
-    () => wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([9, 8, 7]), wrongAuditGenesisRequest),
+    () =>
+      wrapSolanaSccpSourceStateVerificationProof(
+        new Uint8Array([9, 8, 7]),
+        wrongAuditGenesisRequest,
+      ),
     /mainnet_genesis_hash/,
   );
-  const wrongAuditStatementColumnRequest = mutableFastpqProofRequest(requests.towerReplay);
+  const wrongAuditStatementColumnRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
   wrongAuditStatementColumnRequest.publicInputColumns[5][0] = HEX32_C;
   assert.throws(
     () =>
@@ -3182,7 +3562,8 @@ test("builds Solana full light-client audit role proof requests", () => {
     /auditStatementHash must match request\.statementBytes/,
   );
   const wrongAuditDsidRequest = mutableFastpqProofRequest(requests.towerReplay);
-  wrongAuditDsidRequest.fastpqPublicInputs.dsid = "0x00000000000000000000000000000000";
+  wrongAuditDsidRequest.fastpqPublicInputs.dsid =
+    "0x00000000000000000000000000000000";
   assert.throws(
     () =>
       wrapSolanaSccpSourceStateVerificationProof(
@@ -3191,7 +3572,9 @@ test("builds Solana full light-client audit role proof requests", () => {
       ),
     /fastpqPublicInputs\.dsid/,
   );
-  const wrongAuditTxSetRequest = mutableFastpqProofRequest(requests.towerReplay);
+  const wrongAuditTxSetRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
   wrongAuditTxSetRequest.fastpqPublicInputs.txSetHash = HEX32_C;
   assert.throws(
     () =>
@@ -3201,8 +3584,11 @@ test("builds Solana full light-client audit role proof requests", () => {
       ),
     /fastpqPublicInputs\.txSetHash/,
   );
-  const duplicateAuditRoleAliasRequest = mutableFastpqProofRequest(requests.towerReplay);
-  duplicateAuditRoleAliasRequest.audit_role = duplicateAuditRoleAliasRequest.role;
+  const duplicateAuditRoleAliasRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
+  duplicateAuditRoleAliasRequest.audit_role =
+    duplicateAuditRoleAliasRequest.role;
   assert.throws(
     () =>
       wrapSolanaSccpSourceStateVerificationProof(
@@ -3211,7 +3597,9 @@ test("builds Solana full light-client audit role proof requests", () => {
       ),
     /request\.role.*multiple aliases/,
   );
-  const duplicateAuditFastpqAliasRequest = mutableFastpqProofRequest(requests.towerReplay);
+  const duplicateAuditFastpqAliasRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
   duplicateAuditFastpqAliasRequest.fastpqPublicInputs.old_root =
     duplicateAuditFastpqAliasRequest.fastpqPublicInputs.oldRoot;
   assert.throws(
@@ -3222,7 +3610,9 @@ test("builds Solana full light-client audit role proof requests", () => {
       ),
     /request\.fastpqPublicInputs\.oldRoot.*multiple aliases/,
   );
-  const wrongAuditTransitionRequest = mutableFastpqProofRequest(requests.towerReplay);
+  const wrongAuditTransitionRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
   wrongAuditTransitionRequest.fastpqTransitions[0].newValue = "0x00";
   assert.throws(
     () =>
@@ -3232,7 +3622,9 @@ test("builds Solana full light-client audit role proof requests", () => {
       ),
     /canonical Solana source-state request/,
   );
-  const wrongAuditOldValueTransitionRequest = mutableFastpqProofRequest(requests.towerReplay);
+  const wrongAuditOldValueTransitionRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
   wrongAuditOldValueTransitionRequest.fastpqTransitions[0].oldValue = "0x00";
   assert.throws(
     () =>
@@ -3258,7 +3650,9 @@ test("builds Solana full light-client audit role proof requests", () => {
       }),
     /request\.verifierHash must not be zero/,
   );
-  const reusedSourceStateVerifierRequest = mutableFastpqProofRequest(requests.towerReplay);
+  const reusedSourceStateVerifierRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
   reusedSourceStateVerifierRequest.verifierHash =
     reusedSourceStateVerifierRequest.sourceStateVerifierHash;
   assert.throws(
@@ -3269,8 +3663,11 @@ test("builds Solana full light-client audit role proof requests", () => {
       ),
     /role-separated/,
   );
-  const reusedAuditStatementRequest = mutableFastpqProofRequest(requests.towerReplay);
-  reusedAuditStatementRequest.verifierHash = reusedAuditStatementRequest.auditStatementHash;
+  const reusedAuditStatementRequest = mutableFastpqProofRequest(
+    requests.towerReplay,
+  );
+  reusedAuditStatementRequest.verifierHash =
+    reusedAuditStatementRequest.auditStatementHash;
   assert.throws(
     () =>
       wrapSolanaSccpSourceStateVerificationProof(
@@ -3283,7 +3680,8 @@ test("builds Solana full light-client audit role proof requests", () => {
     () =>
       wrapSolanaSccpSourceStateVerificationProof(new Uint8Array([9, 8, 7]), {
         ...requests.towerReplay,
-        sourceStateVerifierHash: SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+        sourceStateVerifierHash:
+          SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
       }),
     /Solana template verifier hash/,
   );
@@ -3311,10 +3709,9 @@ test("builds Solana full light-client audit role proof requests", () => {
     requests.fullAccountsdbLattice.publicInputColumns.at(-1)[0],
     accountsLtHashProofHash,
   );
-  assert.deepEqual(
-    requests.bankForkChoice.publicInputColumns[19],
-    [input.accountInclusionRoot],
-  );
+  assert.deepEqual(requests.bankForkChoice.publicInputColumns[19], [
+    input.accountInclusionRoot,
+  ]);
   assert.ok(
     Buffer.from(requests.towerReplay.schemaDescriptor).includes(
       Buffer.from("mainnet_genesis_hash"),
@@ -3325,18 +3722,15 @@ test("builds Solana full light-client audit role proof requests", () => {
       Buffer.from("full_light_client_gate_hash"),
     ),
   );
-  assert.deepEqual(
-    requests.towerReplay.publicInputColumns[20],
-    [input.stakeAccountStateHash],
-  );
-  assert.deepEqual(
-    requests.towerReplay.publicInputColumns[22],
-    [input.stakeHistorySysvarAccountHash],
-  );
-  assert.deepEqual(
-    requests.towerReplay.publicInputColumns[23],
-    [input.accountInclusionRoot],
-  );
+  assert.deepEqual(requests.towerReplay.publicInputColumns[20], [
+    input.stakeAccountStateHash,
+  ]);
+  assert.deepEqual(requests.towerReplay.publicInputColumns[22], [
+    input.stakeHistorySysvarAccountHash,
+  ]);
+  assert.deepEqual(requests.towerReplay.publicInputColumns[23], [
+    input.accountInclusionRoot,
+  ]);
   assert.ok(
     Buffer.from(requests.towerReplay.schemaDescriptor).includes(
       Buffer.from("stake_account_state_hash"),
@@ -3367,7 +3761,11 @@ test("builds Solana full light-client audit role proof requests", () => {
     requests.bankForkChoice.auditStatementHash,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({ ...input, accountsLtHashProof: undefined }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        accountsLtHashProof: undefined,
+      }),
     /accountsLtHashProofHash/,
   );
   const proofHashOnlyInput = { ...input, accountsLtHashProof: undefined };
@@ -3377,66 +3775,75 @@ test("builds Solana full light-client audit role proof requests", () => {
     /accountsLtHashProof is required/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashProofHash({
-      ...input.accountsLtHashProof,
-      proofBytes: new Uint8Array([0, 0, 0]),
-    }),
+    () =>
+      solanaSccpAccountsLtHashProofHash({
+        ...input.accountsLtHashProof,
+        proofBytes: new Uint8Array([0, 0, 0]),
+      }),
     /proofBytes must not be all zero/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashProofHash({
-      ...input.accountsLtHashProof,
-      proof_base64: "AAAA",
-    }),
+    () =>
+      solanaSccpAccountsLtHashProofHash({
+        ...input.accountsLtHashProof,
+        proof_base64: "AAAA",
+      }),
     /accountsLtHashProof\.proofBase64 must match accountsLtHashProof\.proofBytes/,
   );
   assert.throws(
-    () => solanaSccpAccountsLtHashProofHash({
-      ...input.accountsLtHashProof,
-      version: 0,
-    }),
+    () =>
+      solanaSccpAccountsLtHashProofHash({
+        ...input.accountsLtHashProof,
+        version: 0,
+      }),
     /accountsLtHashProof\.version must be 1/,
   );
   assert.throws(
-    () => canonicalSolanaSccpSourceStateVerificationProofBytes({
-      ...input.accountsLtHashProof,
-      version: null,
-    }),
+    () =>
+      canonicalSolanaSccpSourceStateVerificationProofBytes({
+        ...input.accountsLtHashProof,
+        version: null,
+      }),
     /sourceStateProof\.version must be 1/,
   );
   assert.throws(
-    () => canonicalSolanaSccpSourceStateVerificationProofBytes({
-      ...input.accountsLtHashProof,
-      proofFamily: null,
-    }),
+    () =>
+      canonicalSolanaSccpSourceStateVerificationProofBytes({
+        ...input.accountsLtHashProof,
+        proofFamily: null,
+      }),
     /sourceStateProof\.proofFamily/,
   );
   assert.throws(
-    () => canonicalSolanaSccpSourceStateVerificationProofBytes({
-      ...input.accountsLtHashProof,
-      circuitId: SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
-    }),
+    () =>
+      canonicalSolanaSccpSourceStateVerificationProofBytes({
+        ...input.accountsLtHashProof,
+        circuitId: SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+      }),
     /Solana source-state/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      accountsLtHashProofHash: HEX32_A,
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        accountsLtHashProofHash: HEX32_A,
+      }),
     /accountsLtHashProofHash must match/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      sourceVerifierMaterialHash: HEX32_A,
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        sourceVerifierMaterialHash: HEX32_A,
+      }),
     /sourceVerifierMaterialHash must match sourceVerifierMaterial/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      sourceAdapterDeploymentHash: HEX32_B,
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        sourceAdapterDeploymentHash: HEX32_B,
+      }),
     /sourceAdapterDeploymentHash must match sourceAdapterDeployment/,
   );
   const missingWitnessDeploymentHash = {
@@ -3450,40 +3857,48 @@ test("builds Solana full light-client audit role proof requests", () => {
     /sourceAdapterDeploymentHash must match witness/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      fullLightClientGateHash: HEX32_B,
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        fullLightClientGateHash: HEX32_B,
+      }),
     /fullLightClientGateHash must match sourceAdapterDeployment/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      sourceAdapterDeployment: { ...input },
-      sourceAdapterDeploymentReceiptHash: HEX32_B,
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        sourceAdapterDeployment: { ...input },
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
     /sourceAdapterDeploymentReceiptHash must match witness/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      solanaTowerReplayVerifierHash: input.solanaFullAccountsdbLatticeVerifierHash,
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        solanaTowerReplayVerifierHash:
+          input.solanaFullAccountsdbLatticeVerifierHash,
+      }),
     /role-separated/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      solanaTowerReplayVerifierHash: input.sourceStateVerifierHash,
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        solanaTowerReplayVerifierHash: input.sourceStateVerifierHash,
+      }),
     /must not reuse/,
   );
   assert.throws(
-    () => buildSolanaSccpTowerReplayProofRequest({
-      ...input,
-      solanaTowerReplayVerifierHash:
-        SOLANA_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.get("sourceTrustAnchorHash"),
-    }),
+    () =>
+      buildSolanaSccpTowerReplayProofRequest({
+        ...input,
+        solanaTowerReplayVerifierHash:
+          SOLANA_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.get(
+            "sourceTrustAnchorHash",
+          ),
+      }),
     /template material/,
   );
 });
@@ -3493,7 +3908,10 @@ test("Solana source-state prover wraps linked AccountsLtHash proof bytes", async
   const prover = new SolanaSccpSourceStateProver({
     async prove(request, options) {
       seen.push({ request, options });
-      assert.equal(request.circuitId, SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1);
+      assert.equal(
+        request.circuitId,
+        SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+      );
       return {
         proof_bytes: new Uint8Array([1, 2, 3]),
         version: 1,
@@ -3522,18 +3940,25 @@ test("Solana source-state prover wraps linked AccountsLtHash proof bytes", async
     },
   });
 
-  const proof = await prover.proveAccountsLtHash(sampleSolanaAccountsLtHashProofInput(), {
-    source: "ui",
-  });
+  const proof = await prover.proveAccountsLtHash(
+    sampleSolanaAccountsLtHashProofInput(),
+    {
+      source: "ui",
+    },
+  );
 
   assert.equal(seen.length, 1);
   assert.equal(seen[0].options.source, "ui");
-  assert.equal(proof.circuitId, SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1);
+  assert.equal(
+    proof.circuitId,
+    SCCP_SOLANA_ACCOUNTS_LT_HASH_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
   assert.deepEqual(proof.proofBytes, new Uint8Array([1, 2, 3]));
   assert.equal(proof.proofBase64, "AQID");
   const fastpqAliasProof = await new SolanaSccpSourceStateProver({
     prove(request) {
-      const upperHex = (value) => value === "0x" ? value : value.toUpperCase();
+      const upperHex = (value) =>
+        value === "0x" ? value : value.toUpperCase();
       return {
         proofBytes: [7, 8, 9],
         fastpqPublicInputs: {
@@ -3554,7 +3979,9 @@ test("Solana source-state prover wraps linked AccountsLtHash proof bytes", async
     },
   }).proveAccountsLtHash(sampleSolanaAccountsLtHashProofInput());
   assert.deepEqual(fastpqAliasProof.proofBytes, new Uint8Array([7, 8, 9]));
-  const oversizedProofBytes = new Uint8Array(SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1).fill(1);
+  const oversizedProofBytes = new Uint8Array(
+    SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
+  ).fill(1);
   await assert.rejects(
     () =>
       new SolanaSccpSourceStateProver({
@@ -3692,7 +4119,10 @@ test("Solana source-state prover wraps linked AccountsLtHash proof bytes", async
         prove(request) {
           return {
             proofBytes: [1, 2, 3],
-            publicInputColumns: [[HEX32_C], ...request.publicInputColumns.slice(1)],
+            publicInputColumns: [
+              [HEX32_C],
+              ...request.publicInputColumns.slice(1),
+            ],
           };
         },
       }).proveAccountsLtHash(sampleSolanaAccountsLtHashProofInput()),
@@ -3725,7 +4155,8 @@ test("Solana source-state prover snapshots mutable callback requests", async () 
       assert.equal(Object.isFrozen(request.fastpqTransitions), true);
       assert.equal(Object.isFrozen(request.fastpqTransitions[0]), true);
       assert.throws(() => {
-        request.circuitId = SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1;
+        request.circuitId =
+          SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1;
       }, TypeError);
       assert.throws(() => {
         request.fastpqTransitions[0].newValue = "0x00";
@@ -3733,7 +4164,8 @@ test("Solana source-state prover snapshots mutable callback requests", async () 
       const exposedStatement = request.statementBytes;
       exposedStatement[0] ^= 0xff;
       assert.equal(request.statementBytes[0], expectedStatementByte);
-      mutableRequest.circuitId = SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1;
+      mutableRequest.circuitId =
+        SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1;
       return [4, 5, 6];
     },
   });
@@ -3768,8 +4200,10 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
         verifierHash: request.verifierHash.toUpperCase(),
         sourceStateVerifierId: request.sourceStateVerifierId,
         sourceStateVerifierHash: request.sourceStateVerifierHash.toUpperCase(),
-        sourceVerifierMaterialHash: request.sourceVerifierMaterialHash.toUpperCase(),
-        sourceAdapterDeploymentHash: request.sourceAdapterDeploymentHash.toUpperCase(),
+        sourceVerifierMaterialHash:
+          request.sourceVerifierMaterialHash.toUpperCase(),
+        sourceAdapterDeploymentHash:
+          request.sourceAdapterDeploymentHash.toUpperCase(),
         fullLightClientGateHash: request.fullLightClientGateHash.toUpperCase(),
         finalityContextHash: request.finalityContextHash.toUpperCase(),
         voteMessageHash: request.voteMessageHash.toUpperCase(),
@@ -3790,13 +4224,23 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
   );
 
   assert.equal(Object.isFrozen(proofs), true);
-  assert.deepEqual(roles, ["tower_replay", "full_accountsdb_lattice", "bank_fork_choice"]);
-  assert.equal(proofs.towerReplay.circuitId, SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1);
+  assert.deepEqual(roles, [
+    "tower_replay",
+    "full_accountsdb_lattice",
+    "bank_fork_choice",
+  ]);
+  assert.equal(
+    proofs.towerReplay.circuitId,
+    SCCP_SOLANA_TOWER_REPLAY_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
   assert.equal(
     proofs.fullAccountsdbLattice.circuitId,
     SCCP_SOLANA_FULL_ACCOUNTSDB_LATTICE_OPEN_VERIFY_CIRCUIT_ID_V1,
   );
-  assert.equal(proofs.bankForkChoice.circuitId, SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1);
+  assert.equal(
+    proofs.bankForkChoice.circuitId,
+    SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
   assert.equal(proofs.bankForkChoice.proofBase64, "CQgH");
   await assert.rejects(
     () =>
@@ -3804,7 +4248,9 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
         prove() {
           return new Uint8Array([0, 0]);
         },
-      }).proveFullLightClientAudit(sampleSolanaFullLightClientAuditProofInput()),
+      }).proveFullLightClientAudit(
+        sampleSolanaFullLightClientAuditProofInput(),
+      ),
     /all zero/,
   );
   await assert.rejects(
@@ -3813,12 +4259,15 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
         prove(request) {
           return {
             proofBytes: [1, 2, 3],
-            circuitId: request.role === "tower_replay"
-              ? SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1
-              : request.circuitId,
+            circuitId:
+              request.role === "tower_replay"
+                ? SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1
+                : request.circuitId,
           };
         },
-      }).proveFullLightClientAudit(sampleSolanaFullLightClientAuditProofInput()),
+      }).proveFullLightClientAudit(
+        sampleSolanaFullLightClientAuditProofInput(),
+      ),
     /result\.circuitId/u,
   );
   await assert.rejects(
@@ -3833,7 +4282,9 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
             version: 1,
           };
         },
-      }).proveFullLightClientAudit(sampleSolanaFullLightClientAuditProofInput()),
+      }).proveFullLightClientAudit(
+        sampleSolanaFullLightClientAuditProofInput(),
+      ),
     /result\.proofBase64/u,
   );
   await assert.rejects(
@@ -3848,7 +4299,9 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
             version: 1,
           };
         },
-      }).proveFullLightClientAudit(sampleSolanaFullLightClientAuditProofInput()),
+      }).proveFullLightClientAudit(
+        sampleSolanaFullLightClientAuditProofInput(),
+      ),
     /result\.proofBase64/u,
   );
   await assert.rejects(
@@ -3860,7 +4313,9 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
             role: ` ${request.role} `,
           };
         },
-      }).proveFullLightClientAudit(sampleSolanaFullLightClientAuditProofInput()),
+      }).proveFullLightClientAudit(
+        sampleSolanaFullLightClientAuditProofInput(),
+      ),
     /source-state prover result\.role must match request\.role/u,
   );
   await assert.rejects(
@@ -3869,10 +4324,15 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
         prove(request) {
           return {
             proofBytes: [1, 2, 3],
-            role: request.role === "tower_replay" ? "bank_fork_choice" : request.role,
+            role:
+              request.role === "tower_replay"
+                ? "bank_fork_choice"
+                : request.role,
           };
         },
-      }).proveFullLightClientAudit(sampleSolanaFullLightClientAuditProofInput()),
+      }).proveFullLightClientAudit(
+        sampleSolanaFullLightClientAuditProofInput(),
+      ),
     /source-state prover result\.role must match request\.role/u,
   );
   await assert.rejects(
@@ -3881,17 +4341,21 @@ test("Solana source-state prover wraps all full-light audit role proofs", async 
         prove(request) {
           return {
             proofBytes: [1, 2, 3],
-            verifierHash: request.role === "tower_replay" ? HEX32_A : request.verifierHash,
+            verifierHash:
+              request.role === "tower_replay" ? HEX32_A : request.verifierHash,
           };
         },
-      }).proveFullLightClientAudit(sampleSolanaFullLightClientAuditProofInput()),
+      }).proveFullLightClientAudit(
+        sampleSolanaFullLightClientAuditProofInput(),
+      ),
     /source-state prover result\.verifierHash must match request\.verifierHash/u,
   );
 });
 
 test("derives Solana vote and stake account data hashes from semantic fields", () => {
-  const towerVoteSlots = Array.from({ length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) }, (_, index) =>
-    11n + BigInt(index),
+  const towerVoteSlots = Array.from(
+    { length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) },
+    (_, index) => 11n + BigInt(index),
   );
   const voteInput = {
     nodePubkey: `0x${"51".repeat(32)}`,
@@ -3909,26 +4373,51 @@ test("derives Solana vote and stake account data hashes from semantic fields", (
   assert.equal(canonicalSolanaSccpVoteAccountDataBytes(voteInput).length, 457);
   const voteHash = solanaSccpVoteAccountDataHash(voteInput);
   assert.match(voteHash, /^0x[0-9a-f]{64}$/);
-  assert.notEqual(voteHash, solanaSccpVoteAccountDataHash({ ...voteInput, authorizedVoter: `0x${"62".repeat(32)}` }));
-  assert.notEqual(voteHash, solanaSccpVoteAccountDataHash({ ...voteInput, inflationRewardsCommissionBps: 701n }));
+  assert.notEqual(
+    voteHash,
+    solanaSccpVoteAccountDataHash({
+      ...voteInput,
+      authorizedVoter: `0x${"62".repeat(32)}`,
+    }),
+  );
+  assert.notEqual(
+    voteHash,
+    solanaSccpVoteAccountDataHash({
+      ...voteInput,
+      inflationRewardsCommissionBps: 701n,
+    }),
+  );
   assert.throws(
-    () => solanaSccpVoteAccountDataHash({ ...voteInput, node_pubkey: voteInput.nodePubkey }),
+    () =>
+      solanaSccpVoteAccountDataHash({
+        ...voteInput,
+        node_pubkey: voteInput.nodePubkey,
+      }),
     /nodePubkey must not use multiple aliases/,
   );
   assert.throws(
     () =>
       solanaSccpVoteAccountDataHash({
         ...voteInput,
-        inflation_rewards_commission_bps: voteInput.inflationRewardsCommissionBps,
+        inflation_rewards_commission_bps:
+          voteInput.inflationRewardsCommissionBps,
       }),
     /inflationRewardsCommissionBps must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpVoteAccountDataHash({ ...voteInput, tower_vote_slots: towerVoteSlots }),
+    () =>
+      solanaSccpVoteAccountDataHash({
+        ...voteInput,
+        tower_vote_slots: towerVoteSlots,
+      }),
     /towerVoteSlots must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpVoteAccountDataHash({ ...voteInput, towerVoteSlots: [10n, ...towerVoteSlots.slice(1)] }),
+    () =>
+      solanaSccpVoteAccountDataHash({
+        ...voteInput,
+        towerVoteSlots: [10n, ...towerVoteSlots.slice(1)],
+      }),
     /towerVoteSlots\[0\]/,
   );
 
@@ -3943,10 +4432,19 @@ test("derives Solana vote and stake account data hashes from semantic fields", (
     creditsObserved: 123n,
     stakeFlags: 1n,
   };
-  assert.equal(canonicalSolanaSccpStakeAccountDataBytes(stakeInput).length, 154);
+  assert.equal(
+    canonicalSolanaSccpStakeAccountDataBytes(stakeInput).length,
+    154,
+  );
   const stakeHash = solanaSccpStakeAccountDataHash(stakeInput);
   assert.match(stakeHash, /^0x[0-9a-f]{64}$/);
-  assert.notEqual(stakeHash, solanaSccpStakeAccountDataHash({ ...stakeInput, voterPubkey: `0x${"a2".repeat(32)}` }));
+  assert.notEqual(
+    stakeHash,
+    solanaSccpStakeAccountDataHash({
+      ...stakeInput,
+      voterPubkey: `0x${"a2".repeat(32)}`,
+    }),
+  );
   assert.match(
     solanaSccpStakeAccountDataHash({
       ...stakeInput,
@@ -3955,16 +4453,31 @@ test("derives Solana vote and stake account data hashes from semantic fields", (
     /^0x[0-9a-f]{64}$/,
   );
   assert.throws(
-    () => solanaSccpStakeAccountDataHash({ ...stakeInput, warmupCooldownRateBytes: new Uint8Array(8) }),
+    () =>
+      solanaSccpStakeAccountDataHash({
+        ...stakeInput,
+        warmupCooldownRateBytes: new Uint8Array(8),
+      }),
     /warmupCooldownRateBytes/,
   );
-  assert.notEqual(stakeHash, solanaSccpStakeAccountDataHash({ ...stakeInput, stakeFlags: 0n }));
+  assert.notEqual(
+    stakeHash,
+    solanaSccpStakeAccountDataHash({ ...stakeInput, stakeFlags: 0n }),
+  );
   assert.throws(
-    () => solanaSccpStakeAccountDataHash({ ...stakeInput, voter_pubkey: stakeInput.voterPubkey }),
+    () =>
+      solanaSccpStakeAccountDataHash({
+        ...stakeInput,
+        voter_pubkey: stakeInput.voterPubkey,
+      }),
     /voterPubkey must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpStakeAccountDataHash({ ...stakeInput, delegated_stake: stakeInput.delegatedStake }),
+    () =>
+      solanaSccpStakeAccountDataHash({
+        ...stakeInput,
+        delegated_stake: stakeInput.delegatedStake,
+      }),
     /delegatedStake must not use multiple aliases/,
   );
   assert.throws(
@@ -3976,7 +4489,8 @@ test("derives Solana vote and stake account data hashes from semantic fields", (
     /warmupCooldownRateBytes must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpStakeAccountDataHash({ ...stakeInput, deactivationEpoch: 2n }),
+    () =>
+      solanaSccpStakeAccountDataHash({ ...stakeInput, deactivationEpoch: 2n }),
     /deactivationEpoch/,
   );
   assert.throws(
@@ -3984,7 +4498,11 @@ test("derives Solana vote and stake account data hashes from semantic fields", (
     /stakeFlags/,
   );
   assert.throws(
-    () => solanaSccpStakeAccountDataHash({ ...stakeInput, warmupCooldownRateBytes: [1, 2, 3] }),
+    () =>
+      solanaSccpStakeAccountDataHash({
+        ...stakeInput,
+        warmupCooldownRateBytes: [1, 2, 3],
+      }),
     /warmupCooldownRateBytes/,
   );
 });
@@ -3992,41 +4510,79 @@ test("derives Solana vote and stake account data hashes from semantic fields", (
 test("derives Solana vote account data hash from raw VoteState account bytes", () => {
   const voteAccountAddress = `0x${"81".repeat(32)}`;
   const rawV3 = sampleSolanaVoteStateAccount(true);
-  const parsed = solanaSccpVoteAccountDataFromRawVoteState(rawV3, 3n, voteAccountAddress);
+  const parsed = solanaSccpVoteAccountDataFromRawVoteState(
+    rawV3,
+    3n,
+    voteAccountAddress,
+  );
   assert.deepEqual(Array.from(parsed.nodePubkey), Array(32).fill(0x51));
   assert.deepEqual(Array.from(parsed.authorizedVoter), Array(32).fill(0x61));
-  assert.deepEqual(Array.from(parsed.authorizedWithdrawer), Array(32).fill(0x71));
-  assert.deepEqual(Array.from(parsed.inflationRewardsCollector), Array(32).fill(0x81));
-  assert.deepEqual(Array.from(parsed.blockRevenueCollector), Array(32).fill(0x51));
+  assert.deepEqual(
+    Array.from(parsed.authorizedWithdrawer),
+    Array(32).fill(0x71),
+  );
+  assert.deepEqual(
+    Array.from(parsed.inflationRewardsCollector),
+    Array(32).fill(0x81),
+  );
+  assert.deepEqual(
+    Array.from(parsed.blockRevenueCollector),
+    Array(32).fill(0x51),
+  );
   assert.equal(parsed.inflationRewardsCommissionBps, 700n);
   assert.equal(parsed.blockRevenueCommissionBps, 10_000n);
   assert.equal(parsed.pendingDelegatorRewards, 0n);
   assert.equal(parsed.blsPubkeyCompressed.length, 0);
   assert.equal(parsed.rootSlot, 10n);
-  assert.deepEqual(parsed.towerVoteSlots, Array.from({ length: 31 }, (_, index) => 11n + BigInt(index)));
+  assert.deepEqual(
+    parsed.towerVoteSlots,
+    Array.from({ length: 31 }, (_, index) => 11n + BigInt(index)),
+  );
   assert.equal(
-    solanaSccpVoteAccountDataHashFromRawVoteState(rawV3, 3n, voteAccountAddress),
+    solanaSccpVoteAccountDataHashFromRawVoteState(
+      rawV3,
+      3n,
+      voteAccountAddress,
+    ),
     solanaSccpVoteAccountDataHash(parsed),
   );
   assert.equal(
-    solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(rawV3, 3n, voteAccountAddress),
+    solanaSccpVoteAccountDataHashFromRawVoteStateV1OrV3(
+      rawV3,
+      3n,
+      voteAccountAddress,
+    ),
     solanaSccpVoteAccountDataHash(parsed),
   );
 
   const rawV1 = sampleSolanaVoteStateAccount(false);
   assert.deepEqual(
-    solanaSccpVoteAccountDataFromRawVoteState(rawV1, 3n, voteAccountAddress).towerVoteSlots,
+    solanaSccpVoteAccountDataFromRawVoteState(rawV1, 3n, voteAccountAddress)
+      .towerVoteSlots,
     parsed.towerVoteSlots,
   );
 
   const rawV4 = sampleSolanaVoteStateV4Account(true);
-  const parsedV4 = solanaSccpVoteAccountDataFromRawVoteState(rawV4, 3n, voteAccountAddress);
-  assert.deepEqual(Array.from(parsedV4.inflationRewardsCollector), Array(32).fill(0x81));
-  assert.deepEqual(Array.from(parsedV4.blockRevenueCollector), Array(32).fill(0x91));
+  const parsedV4 = solanaSccpVoteAccountDataFromRawVoteState(
+    rawV4,
+    3n,
+    voteAccountAddress,
+  );
+  assert.deepEqual(
+    Array.from(parsedV4.inflationRewardsCollector),
+    Array(32).fill(0x81),
+  );
+  assert.deepEqual(
+    Array.from(parsedV4.blockRevenueCollector),
+    Array(32).fill(0x91),
+  );
   assert.equal(parsedV4.inflationRewardsCommissionBps, 1_234n);
   assert.equal(parsedV4.blockRevenueCommissionBps, 9_876n);
   assert.equal(parsedV4.pendingDelegatorRewards, 456n);
-  assert.deepEqual(Array.from(parsedV4.blsPubkeyCompressed), Array(48).fill(0xa5));
+  assert.deepEqual(
+    Array.from(parsedV4.blsPubkeyCompressed),
+    Array(48).fill(0xa5),
+  );
   const v4InflationCommissionBpsOffset = 4 + 4 * 32;
   const excessiveInflationCommissionV4 = rawV4.slice();
   new DataView(
@@ -4070,7 +4626,12 @@ test("derives Solana vote account data hash from raw VoteState account bytes", (
   const v4BlsPubkeyOffset = 4 + 4 * 32 + 2 + 2 + 8 + 1;
   allZeroBlsV4.fill(0, v4BlsPubkeyOffset, v4BlsPubkeyOffset + 48);
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(allZeroBlsV4, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        allZeroBlsV4,
+        3n,
+        voteAccountAddress,
+      ),
     /blsPubkeyCompressed/u,
   );
   const parsedV4FourAuthorized = solanaSccpVoteAccountDataFromRawVoteState(
@@ -4078,12 +4639,20 @@ test("derives Solana vote account data hash from raw VoteState account bytes", (
     3n,
     voteAccountAddress,
   );
-  assert.deepEqual(Array.from(parsedV4FourAuthorized.authorizedVoter), Array(32).fill(0x62));
+  assert.deepEqual(
+    Array.from(parsedV4FourAuthorized.authorizedVoter),
+    Array(32).fill(0x62),
+  );
 
   const wrongVoteCount = rawV3.slice();
   new DataView(wrongVoteCount.buffer).setBigUint64(4 + 32 + 32 + 1, 30n, true);
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(wrongVoteCount, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        wrongVoteCount,
+        3n,
+        voteAccountAddress,
+      ),
     /31 active post-root slots/u,
   );
 
@@ -4091,38 +4660,66 @@ test("derives Solana vote account data hash from raw VoteState account bytes", (
   const firstVoteSlotOffset = voteEntryOffset + 1;
   const firstConfirmationOffset = firstVoteSlotOffset + 8;
   const secondVoteSlotOffset = voteEntryOffset + (1 + 8 + 4) + 1;
-  const rootOptionOffset = voteEntryOffset + (31 * (1 + 8 + 4));
+  const rootOptionOffset = voteEntryOffset + 31 * (1 + 8 + 4);
 
   const wrongConfirmationCount = rawV3.slice();
-  new DataView(wrongConfirmationCount.buffer).setUint32(firstConfirmationOffset, 30, true);
+  new DataView(wrongConfirmationCount.buffer).setUint32(
+    firstConfirmationOffset,
+    30,
+    true,
+  );
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(wrongConfirmationCount, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        wrongConfirmationCount,
+        3n,
+        voteAccountAddress,
+      ),
     /invalid Tower confirmation count/u,
   );
 
   const repeatedVoteSlot = rawV3.slice();
-  new DataView(repeatedVoteSlot.buffer).setBigUint64(secondVoteSlotOffset, 11n, true);
+  new DataView(repeatedVoteSlot.buffer).setBigUint64(
+    secondVoteSlotOffset,
+    11n,
+    true,
+  );
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(repeatedVoteSlot, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        repeatedVoteSlot,
+        3n,
+        voteAccountAddress,
+      ),
     /greater than the previous slot/u,
   );
 
   const noRoot = rawV3.slice();
   noRoot[rootOptionOffset] = 0;
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(noRoot, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(noRoot, 3n, voteAccountAddress),
     /rooted vote state/u,
   );
 
   const rootOverlapsVoteStack = rawV3.slice();
-  new DataView(rootOverlapsVoteStack.buffer).setBigUint64(rootOptionOffset + 1, 11n, true);
+  new DataView(rootOverlapsVoteStack.buffer).setBigUint64(
+    rootOptionOffset + 1,
+    11n,
+    true,
+  );
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(rootOverlapsVoteStack, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        rootOverlapsVoteStack,
+        3n,
+        voteAccountAddress,
+      ),
     /greater than the previous slot/u,
   );
 
   const badPriorVoters = rawV3.slice();
-  const priorVotersOffset = rootOptionOffset + 1 + 8 + 8 + (2 * (8 + 32));
+  const priorVotersOffset = rootOptionOffset + 1 + 8 + 8 + 2 * (8 + 32);
   const zeroPriorVoterWithEpochBounds = rawV3.slice();
   new DataView(zeroPriorVoterWithEpochBounds.buffer).setBigUint64(
     priorVotersOffset + 32,
@@ -4138,16 +4735,22 @@ test("derives Solana vote account data hash from raw VoteState account bytes", (
       ),
     /priorVoters\[0\]/u,
   );
-  badPriorVoters[priorVotersOffset + (32 * (32 + 8 + 8)) + 8] = 2;
+  badPriorVoters[priorVotersOffset + 32 * (32 + 8 + 8) + 8] = 2;
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(badPriorVoters, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        badPriorVoters,
+        3n,
+        voteAccountAddress,
+      ),
     /priorVoters/u,
   );
 
-  const v4AuthorizedVotersOffset = 4 + 32 + 32 + 32 + 32 + 2 + 2 + 8 + 1 + 48 + 8
-    + (31 * (1 + 8 + 4)) + 1 + 8;
+  const v4AuthorizedVotersOffset =
+    4 + 32 + 32 + 32 + 32 + 2 + 2 + 8 + 1 + 48 + 8 + 31 * (1 + 8 + 4) + 1 + 8;
   const zeroFutureAuthorizedVoter = sampleSolanaVoteStateV4Account(true, 4);
-  const fourthAuthorizedVoterKeyOffset = v4AuthorizedVotersOffset + 8 + (3 * (8 + 32)) + 8;
+  const fourthAuthorizedVoterKeyOffset =
+    v4AuthorizedVotersOffset + 8 + 3 * (8 + 32) + 8;
   zeroFutureAuthorizedVoter.fill(
     0,
     fourthAuthorizedVoterKeyOffset,
@@ -4174,29 +4777,52 @@ test("derives Solana vote account data hash from raw VoteState account bytes", (
   );
 
   const tooManyEpochCredits = rawV4.slice();
-  const v4EpochCreditsOffset = v4AuthorizedVotersOffset + 8 + (2 * (8 + 32));
-  new DataView(tooManyEpochCredits.buffer).setBigUint64(v4EpochCreditsOffset, 65n, true);
+  const v4EpochCreditsOffset = v4AuthorizedVotersOffset + 8 + 2 * (8 + 32);
+  new DataView(tooManyEpochCredits.buffer).setBigUint64(
+    v4EpochCreditsOffset,
+    65n,
+    true,
+  );
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(tooManyEpochCredits, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        tooManyEpochCredits,
+        3n,
+        voteAccountAddress,
+      ),
     /epochCredits/u,
   );
 
-  const v3EpochCreditsOffset = priorVotersOffset + (32 * (32 + 8 + 8)) + 8 + 1;
+  const v3EpochCreditsOffset = priorVotersOffset + 32 * (32 + 8 + 8) + 8 + 1;
   const futureEpochCredit = rawV3.slice();
   const futureEpochCreditView = new DataView(futureEpochCredit.buffer);
   futureEpochCreditView.setBigUint64(v3EpochCreditsOffset, 1n, true);
   futureEpochCreditView.setBigUint64(v3EpochCreditsOffset + 8, 4n, true);
   futureEpochCreditView.setBigUint64(v3EpochCreditsOffset + 16, 1n, true);
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(futureEpochCredit, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        futureEpochCredit,
+        3n,
+        voteAccountAddress,
+      ),
     /epochCredits/u,
   );
 
   const lastTimestampSlotOffset = v3EpochCreditsOffset + 8;
   const futureLastTimestampSlot = rawV3.slice();
-  new DataView(futureLastTimestampSlot.buffer).setBigUint64(lastTimestampSlotOffset, 42n, true);
+  new DataView(futureLastTimestampSlot.buffer).setBigUint64(
+    lastTimestampSlotOffset,
+    42n,
+    true,
+  );
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(futureLastTimestampSlot, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        futureLastTimestampSlot,
+        3n,
+        voteAccountAddress,
+      ),
     /lastTimestamp/u,
   );
 
@@ -4205,19 +4831,30 @@ test("derives Solana vote account data hash from raw VoteState account bytes", (
   negativeLastTimestampView.setBigUint64(lastTimestampSlotOffset, 41n, true);
   negativeLastTimestampView.setBigInt64(lastTimestampSlotOffset + 8, -1n, true);
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(negativeLastTimestamp, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        negativeLastTimestamp,
+        3n,
+        voteAccountAddress,
+      ),
     /lastTimestamp/u,
   );
 
   const nonzeroPadding = rawV3.slice();
   nonzeroPadding[nonzeroPadding.length - 1] = 1;
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(nonzeroPadding, 3n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(
+        nonzeroPadding,
+        3n,
+        voteAccountAddress,
+      ),
     /padding/u,
   );
 
   assert.throws(
-    () => solanaSccpVoteAccountDataFromRawVoteState(rawV3, 0n, voteAccountAddress),
+    () =>
+      solanaSccpVoteAccountDataFromRawVoteState(rawV3, 0n, voteAccountAddress),
     /at or before epoch/u,
   );
 });
@@ -4244,20 +4881,35 @@ test("derives Solana stake account data hash from raw StakeStateV2 account bytes
 
   const wrongVariant = raw.slice();
   new DataView(wrongVariant.buffer).setUint32(0, 1, true);
-  assert.throws(() => solanaSccpStakeAccountDataFromRawStakeStateV2(wrongVariant), /StakeStateV2::Stake/);
-  assert.throws(() => solanaSccpStakeAccountDataFromRawStakeStateV2(raw.slice(0, 199)), /200-byte/);
+  assert.throws(
+    () => solanaSccpStakeAccountDataFromRawStakeStateV2(wrongVariant),
+    /StakeStateV2::Stake/,
+  );
+  assert.throws(
+    () => solanaSccpStakeAccountDataFromRawStakeStateV2(raw.slice(0, 199)),
+    /200-byte/,
+  );
 
   const hiddenPadding = raw.slice();
   hiddenPadding[197] = 1;
-  assert.throws(() => solanaSccpStakeAccountDataFromRawStakeStateV2(hiddenPadding), /padding/);
+  assert.throws(
+    () => solanaSccpStakeAccountDataFromRawStakeStateV2(hiddenPadding),
+    /padding/,
+  );
 
   const unknownFlags = raw.slice();
   unknownFlags[196] = 2;
-  assert.throws(() => solanaSccpStakeAccountDataFromRawStakeStateV2(unknownFlags), /StakeFlags/);
+  assert.throws(
+    () => solanaSccpStakeAccountDataFromRawStakeStateV2(unknownFlags),
+    /StakeFlags/,
+  );
 
   const zeroVoter = raw.slice();
   zeroVoter.fill(0, 124, 156);
-  assert.throws(() => solanaSccpStakeAccountDataFromRawStakeStateV2(zeroVoter), /voterPubkey/);
+  assert.throws(
+    () => solanaSccpStakeAccountDataFromRawStakeStateV2(zeroVoter),
+    /voterPubkey/,
+  );
 
   const zeroDelegation = raw.slice();
   new DataView(zeroDelegation.buffer).setBigUint64(156, 0n, true);
@@ -4267,7 +4919,10 @@ test("derives Solana stake account data hash from raw StakeStateV2 account bytes
   );
 
   const legacyWarmupCooldownRate = raw.slice();
-  legacyWarmupCooldownRate.set([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x3f], 180);
+  legacyWarmupCooldownRate.set(
+    [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x3f],
+    180,
+  );
   assert.equal(
     Array.from(
       solanaSccpStakeAccountDataFromRawStakeStateV2(legacyWarmupCooldownRate)
@@ -4298,10 +4953,22 @@ test("derives Solana stake account state hash for account openings", () => {
     validatorStakes: [1n, 2n],
     validatorActivationEpochs: [0n, 2n],
     validatorDeactivationEpochs: [(1n << 64n) - 1n, 9n],
-    validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
-    validatorStakeAccountAddresses: [`0x${"55".repeat(32)}`, `0x${"66".repeat(32)}`],
-    validatorVoteAccountHashes: [`0x${"77".repeat(32)}`, `0x${"88".repeat(32)}`],
-    validatorStakeAccountHashes: [`0x${"99".repeat(32)}`, `0x${"aa".repeat(32)}`],
+    validatorVoteAccountAddresses: [
+      `0x${"33".repeat(32)}`,
+      `0x${"44".repeat(32)}`,
+    ],
+    validatorStakeAccountAddresses: [
+      `0x${"55".repeat(32)}`,
+      `0x${"66".repeat(32)}`,
+    ],
+    validatorVoteAccountHashes: [
+      `0x${"77".repeat(32)}`,
+      `0x${"88".repeat(32)}`,
+    ],
+    validatorStakeAccountHashes: [
+      `0x${"99".repeat(32)}`,
+      `0x${"aa".repeat(32)}`,
+    ],
   };
 
   assert.equal(canonicalSolanaSccpStakeAccountStateBytes(input).length, 437);
@@ -4310,7 +4977,11 @@ test("derives Solana stake account state hash for account openings", () => {
     "0x34f6086dd8c1770770802be17b833ed7c973fdaa002c866c0462c33d6938f5b5",
   );
   assert.throws(
-    () => solanaSccpStakeAccountStateHash({ ...input, validator_epoch: input.epoch }),
+    () =>
+      solanaSccpStakeAccountStateHash({
+        ...input,
+        validator_epoch: input.epoch,
+      }),
     /epoch must not use multiple aliases/,
   );
   assert.throws(
@@ -4330,14 +5001,21 @@ test("derives Solana stake account state hash for account openings", () => {
     /validatorVoteAccountHashes must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpStakeAccountStateHash({ ...input, validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`] }),
+    () =>
+      solanaSccpStakeAccountStateHash({
+        ...input,
+        validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`],
+      }),
     /validatorVoteAccountAddresses must match validatorPublicKeys/,
   );
   assert.throws(
     () =>
       solanaSccpStakeAccountStateHash({
         ...input,
-        validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`, `0x${"33".repeat(32)}`],
+        validatorVoteAccountAddresses: [
+          `0x${"33".repeat(32)}`,
+          `0x${"33".repeat(32)}`,
+        ],
       }),
     /validatorVoteAccountAddresses must not contain duplicates/,
   );
@@ -4345,7 +5023,10 @@ test("derives Solana stake account state hash for account openings", () => {
     () =>
       solanaSccpStakeAccountStateHash({
         ...input,
-        validatorStakeAccountAddresses: [`0x${"55".repeat(32)}`, `0x${"44".repeat(32)}`],
+        validatorStakeAccountAddresses: [
+          `0x${"55".repeat(32)}`,
+          `0x${"44".repeat(32)}`,
+        ],
       }),
     /validatorStakeAccountAddresses\[1\] must differ from vote account/,
   );
@@ -4353,7 +5034,10 @@ test("derives Solana stake account state hash for account openings", () => {
     () =>
       solanaSccpStakeAccountStateHash({
         ...input,
-        validatorVoteAccountAddresses: [`0x${"66".repeat(32)}`, `0x${"44".repeat(32)}`],
+        validatorVoteAccountAddresses: [
+          `0x${"66".repeat(32)}`,
+          `0x${"44".repeat(32)}`,
+        ],
       }),
     /validatorVoteAccountAddresses\[0\] must not overlap stake accounts/,
   );
@@ -4361,7 +5045,10 @@ test("derives Solana stake account state hash for account openings", () => {
     () =>
       solanaSccpStakeAccountStateHash({
         ...input,
-        validatorVoteAccountHashes: [`0x${"77".repeat(32)}`, `0x${"00".repeat(32)}`],
+        validatorVoteAccountHashes: [
+          `0x${"77".repeat(32)}`,
+          `0x${"00".repeat(32)}`,
+        ],
       }),
     /validatorVoteAccountHashes\[1\] must not be zero/,
   );
@@ -4375,10 +5062,22 @@ test("derives Solana stake history hash for delegated and effective stake", () =
     validatorDelegatedStakes: [1n, 3n],
     validatorActivationEpochs: [0n, 2n],
     validatorDeactivationEpochs: [(1n << 64n) - 1n, 9n],
-    validatorVoteAccountAddresses: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
-    validatorStakeAccountAddresses: [`0x${"55".repeat(32)}`, `0x${"66".repeat(32)}`],
-    validatorVoteAccountHashes: [`0x${"77".repeat(32)}`, `0x${"88".repeat(32)}`],
-    validatorStakeAccountHashes: [`0x${"99".repeat(32)}`, `0x${"aa".repeat(32)}`],
+    validatorVoteAccountAddresses: [
+      `0x${"33".repeat(32)}`,
+      `0x${"44".repeat(32)}`,
+    ],
+    validatorStakeAccountAddresses: [
+      `0x${"55".repeat(32)}`,
+      `0x${"66".repeat(32)}`,
+    ],
+    validatorVoteAccountHashes: [
+      `0x${"77".repeat(32)}`,
+      `0x${"88".repeat(32)}`,
+    ],
+    validatorStakeAccountHashes: [
+      `0x${"99".repeat(32)}`,
+      `0x${"aa".repeat(32)}`,
+    ],
     stakeHistoryEntries: [
       { epoch: 2n, effective: 23n, activating: 3n, deactivating: 0n },
       { epoch: 3n, effective: 3n, activating: 1n, deactivating: 0n },
@@ -4423,7 +5122,11 @@ test("derives Solana stake history hash for delegated and effective stake", () =
     /validatorActivationEpochs must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpStakeHistoryHash({ ...input, validatorDelegatedStakes: [0n, 3n] }),
+    () =>
+      solanaSccpStakeHistoryHash({
+        ...input,
+        validatorDelegatedStakes: [0n, 3n],
+      }),
     /validatorDelegatedStakes\[0\] must be at least validatorStakes\[0\]/,
   );
   assert.throws(
@@ -4442,11 +5145,19 @@ test("derives Solana stake history hash for delegated and effective stake", () =
     /signed epoch StakeHistory effective stake must equal replayed validator effective stake/,
   );
   assert.throws(
-    () => solanaSccpStakeHistoryHash({ ...input, stakeHistoryEntries: input.stakeHistoryEntries.slice(0, 1) }),
+    () =>
+      solanaSccpStakeHistoryHash({
+        ...input,
+        stakeHistoryEntries: input.stakeHistoryEntries.slice(0, 1),
+      }),
     /stakeHistoryEntries must include the signed epoch/,
   );
   assert.throws(
-    () => solanaSccpStakeHistoryHash({ ...input, stakeHistoryEntries: [...input.stakeHistoryEntries].reverse() }),
+    () =>
+      solanaSccpStakeHistoryHash({
+        ...input,
+        stakeHistoryEntries: [...input.stakeHistoryEntries].reverse(),
+      }),
     /stakeHistoryEntries must be sorted by strictly increasing epoch/,
   );
 });
@@ -4469,7 +5180,10 @@ test("derives Solana StakeHistory sysvar data hash from sorted entries", () => {
   assert.equal(newestEpoch, 3n);
   const hash = solanaSccpStakeHistorySysvarDataHash(input);
   assert.match(hash, /^0x[0-9a-f]{64}$/u);
-  assert.equal(solanaSccpStakeHistorySysvarDataHashFromRawData(canonical), hash);
+  assert.equal(
+    solanaSccpStakeHistorySysvarDataHashFromRawData(canonical),
+    hash,
+  );
   assert.throws(
     () =>
       solanaSccpStakeHistorySysvarDataHash({
@@ -4495,11 +5209,16 @@ test("derives Solana StakeHistory sysvar data hash from sorted entries", () => {
     /stakeHistoryEntries must be sorted by strictly increasing epoch/u,
   );
   assert.throws(
-    () => solanaSccpStakeHistorySysvarDataHashFromRawData(canonical.slice(0, 9)),
+    () =>
+      solanaSccpStakeHistorySysvarDataHashFromRawData(canonical.slice(0, 9)),
     /bincode Vec/u,
   );
   const wrongCount = canonical.slice();
-  new DataView(wrongCount.buffer, wrongCount.byteOffset, wrongCount.byteLength).setBigUint64(0, 3n, true);
+  new DataView(
+    wrongCount.buffer,
+    wrongCount.byteOffset,
+    wrongCount.byteLength,
+  ).setBigUint64(0, 3n, true);
   assert.throws(
     () => solanaSccpStakeHistorySysvarDataHashFromRawData(wrongCount),
     /1..512/u,
@@ -4532,19 +5251,29 @@ test("derives Solana tower lockout hash for finalized-slot context", () => {
     solanaSccpTowerLockoutHash(input),
   );
   assert.throws(
-    () => solanaSccpTowerLockoutHash({ ...input, finalized_slot: input.finalizedSlot }),
+    () =>
+      solanaSccpTowerLockoutHash({
+        ...input,
+        finalized_slot: input.finalizedSlot,
+      }),
     /finalizedSlot must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpTowerLockoutHash({ ...input, epoch: 3n, validatorEpoch: 3n }),
+    () =>
+      solanaSccpTowerLockoutHash({ ...input, epoch: 3n, validatorEpoch: 3n }),
     /epoch must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpTowerLockoutHash({ ...input, rooted_slot: input.rootedSlot }),
+    () =>
+      solanaSccpTowerLockoutHash({ ...input, rooted_slot: input.rootedSlot }),
     /rootedSlot must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpTowerLockoutHash({ ...input, parent_bank_hash: input.parentBankHash }),
+    () =>
+      solanaSccpTowerLockoutHash({
+        ...input,
+        parent_bank_hash: input.parentBankHash,
+      }),
     /parentBankHash must not use multiple aliases/,
   );
   assert.throws(
@@ -4560,7 +5289,11 @@ test("derives Solana tower lockout hash for finalized-slot context", () => {
     /parentSlot must be the direct parent/,
   );
   assert.throws(
-    () => solanaSccpTowerLockoutHash({ ...input, parentBankHash: `0x${"00".repeat(32)}` }),
+    () =>
+      solanaSccpTowerLockoutHash({
+        ...input,
+        parentBankHash: `0x${"00".repeat(32)}`,
+      }),
     /parentBankHash must not be zero/,
   );
 });
@@ -4571,8 +5304,9 @@ test("derives Solana tower replay hash for finalized-slot vote stack", () => {
     rootedSlot: 1_296_065n,
     parentSlot: 1_296_095n,
     bankForkHash: HEX32_A,
-    towerVoteSlots: Array.from({ length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) }, (_, index) =>
-      1_296_066n + BigInt(index),
+    towerVoteSlots: Array.from(
+      { length: Number(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH) },
+      (_, index) => 1_296_066n + BigInt(index),
     ),
   };
 
@@ -4587,19 +5321,29 @@ test("derives Solana tower replay hash for finalized-slot vote stack", () => {
     solanaSccpTowerReplayHash(input),
   );
   assert.throws(
-    () => solanaSccpTowerReplayHash({ ...input, finalized_slot: input.finalizedSlot }),
+    () =>
+      solanaSccpTowerReplayHash({
+        ...input,
+        finalized_slot: input.finalizedSlot,
+      }),
     /finalizedSlot must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpTowerReplayHash({ ...input, bank_fork_hash: input.bankForkHash }),
+    () =>
+      solanaSccpTowerReplayHash({
+        ...input,
+        bank_fork_hash: input.bankForkHash,
+      }),
     /bankForkHash must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpTowerReplayHash({ ...input, voteSlots: input.towerVoteSlots }),
+    () =>
+      solanaSccpTowerReplayHash({ ...input, voteSlots: input.towerVoteSlots }),
     /towerVoteSlots must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpTowerReplayHash({ ...input, bankForkHash: SCCP_ZERO_HASH_V1 }),
+    () =>
+      solanaSccpTowerReplayHash({ ...input, bankForkHash: SCCP_ZERO_HASH_V1 }),
     /bankForkHash must not be zero/,
   );
   assert.throws(
@@ -4607,19 +5351,34 @@ test("derives Solana tower replay hash for finalized-slot vote stack", () => {
     /epoch must match Solana mainnet finalizedSlot/,
   );
   assert.throws(
-    () => solanaSccpTowerReplayHash({ ...input, towerVoteSlots: input.towerVoteSlots.slice(1) }),
+    () =>
+      solanaSccpTowerReplayHash({
+        ...input,
+        towerVoteSlots: input.towerVoteSlots.slice(1),
+      }),
     /towerVoteSlots must contain 31 active post-root slots/,
   );
   const unsortedVoteSlots = input.towerVoteSlots.slice();
-  [unsortedVoteSlots[0], unsortedVoteSlots[1]] = [unsortedVoteSlots[1], unsortedVoteSlots[0]];
+  [unsortedVoteSlots[0], unsortedVoteSlots[1]] = [
+    unsortedVoteSlots[1],
+    unsortedVoteSlots[0],
+  ];
   assert.throws(
-    () => solanaSccpTowerReplayHash({ ...input, towerVoteSlots: unsortedVoteSlots }),
+    () =>
+      solanaSccpTowerReplayHash({
+        ...input,
+        towerVoteSlots: unsortedVoteSlots,
+      }),
     /towerVoteSlots must be strictly increasing/,
   );
   const wrongLastVoteSlots = input.towerVoteSlots.slice();
   wrongLastVoteSlots[wrongLastVoteSlots.length - 1] -= 1n;
   assert.throws(
-    () => solanaSccpTowerReplayHash({ ...input, towerVoteSlots: wrongLastVoteSlots }),
+    () =>
+      solanaSccpTowerReplayHash({
+        ...input,
+        towerVoteSlots: wrongLastVoteSlots,
+      }),
     /last towerVoteSlots entry must equal finalizedSlot/,
   );
 });
@@ -4635,7 +5394,8 @@ test("derives Solana bank-fork hash for finalized-bank context", () => {
     blockhash,
     accountsLtHash,
   });
-  const accountsLtHashChecksum = solanaSccpAccountsLtHashChecksum(accountsLtHash);
+  const accountsLtHashChecksum =
+    solanaSccpAccountsLtHashChecksum(accountsLtHash);
   const input = {
     finalizedSlot: 1_296_096n,
     parentSlot: 1_296_095n,
@@ -4664,7 +5424,8 @@ test("derives Solana bank-fork hash for finalized-bank context", () => {
     solanaSccpBankForkHash(input),
   );
   assert.throws(
-    () => solanaSccpBankForkHash({ ...input, finalized_slot: input.finalizedSlot }),
+    () =>
+      solanaSccpBankForkHash({ ...input, finalized_slot: input.finalizedSlot }),
     /finalizedSlot must not use multiple aliases/,
   );
   assert.throws(
@@ -4680,10 +5441,11 @@ test("derives Solana bank-fork hash for finalized-bank context", () => {
     /bankHash must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpBankForkHash({
-      ...input,
-      receiptOrMessageRoot: input.transactionStatusRoot,
-    }),
+    () =>
+      solanaSccpBankForkHash({
+        ...input,
+        receiptOrMessageRoot: input.transactionStatusRoot,
+      }),
     /transactionStatusRoot must not use multiple aliases/,
   );
   assert.throws(
@@ -4699,67 +5461,89 @@ test("derives Solana bank-fork hash for finalized-bank context", () => {
     /parentBankHash must differ from bankHash/,
   );
   assert.throws(
-    () => solanaSccpBankForkHash({ ...input, bankHash: `0x${"44".repeat(32)}` }),
+    () =>
+      solanaSccpBankForkHash({ ...input, bankHash: `0x${"44".repeat(32)}` }),
     /bankHash must match Agave bank hash inputs/,
   );
   assert.throws(
-    () => solanaSccpBankForkHash({ ...input, blockhash: `0x${"00".repeat(32)}` }),
+    () =>
+      solanaSccpBankForkHash({ ...input, blockhash: `0x${"00".repeat(32)}` }),
     /blockhash must not be zero/,
   );
   assert.throws(
-    () => solanaSccpBankForkHash({ ...input, accountInclusionRoot: `0x${"00".repeat(32)}` }),
+    () =>
+      solanaSccpBankForkHash({
+        ...input,
+        accountInclusionRoot: `0x${"00".repeat(32)}`,
+      }),
     /accountInclusionRoot must not be zero/,
   );
   assert.throws(
-    () => solanaSccpBankForkHash({ ...input, accountsLtHashChecksum: `0x${"00".repeat(32)}` }),
+    () =>
+      solanaSccpBankForkHash({
+        ...input,
+        accountsLtHashChecksum: `0x${"00".repeat(32)}`,
+      }),
     /accountsLtHashChecksum must not be zero/,
   );
   assert.throws(
-    () => solanaSccpBankForkHash({ ...input, accountsLtHashChecksum: `0x${"88".repeat(32)}` }),
+    () =>
+      solanaSccpBankForkHash({
+        ...input,
+        accountsLtHashChecksum: `0x${"88".repeat(32)}`,
+      }),
     /accountsLtHashChecksum must match accountsLtHash/,
   );
   assert.throws(
-    () => solanaSccpAgaveBankHash({
-      parentBankHash,
-      parent_bank_hash: parentBankHash,
-      bankSignatureCount,
-      blockhash,
-      accountsLtHash,
-    }),
+    () =>
+      solanaSccpAgaveBankHash({
+        parentBankHash,
+        parent_bank_hash: parentBankHash,
+        bankSignatureCount,
+        blockhash,
+        accountsLtHash,
+      }),
     /parentBankHash must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAgaveBankHash({
-      parentBankHash,
-      bankSignatureCount,
-      bank_signature_count: bankSignatureCount,
-      blockhash,
-      accountsLtHash,
-    }),
+    () =>
+      solanaSccpAgaveBankHash({
+        parentBankHash,
+        bankSignatureCount,
+        bank_signature_count: bankSignatureCount,
+        blockhash,
+        accountsLtHash,
+      }),
     /bankSignatureCount must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAgaveBankHash({
-      parentBankHash,
-      bankSignatureCount,
-      blockhash,
-      blockhashBytes: Buffer.from(blockhash.slice(2), "hex"),
-      accountsLtHash,
-    }),
+    () =>
+      solanaSccpAgaveBankHash({
+        parentBankHash,
+        bankSignatureCount,
+        blockhash,
+        blockhashBytes: Buffer.from(blockhash.slice(2), "hex"),
+        accountsLtHash,
+      }),
     /blockhash must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAgaveBankHash({
-      parentBankHash,
-      bankSignatureCount,
-      blockhash,
-      accountsLtHash,
-      accounts_lt_hash: accountsLtHash,
-    }),
+    () =>
+      solanaSccpAgaveBankHash({
+        parentBankHash,
+        bankSignatureCount,
+        blockhash,
+        accountsLtHash,
+        accounts_lt_hash: accountsLtHash,
+      }),
     /accountsLtHash must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpAgaveBankHash({ ...input, bankHashHardForkData: new Uint8Array(1025) }),
+    () =>
+      solanaSccpAgaveBankHash({
+        ...input,
+        bankHashHardForkData: new Uint8Array(1025),
+      }),
     /bankHashHardForkData is too large/,
   );
 });
@@ -4802,7 +5586,10 @@ test("derives Solana account inclusion leaves, branches, and roots", () => {
     opening,
     rawData: rawData[index],
   }));
-  assert.equal(canonicalSolanaSccpAccountInclusionLeafBytes(leafInputs[0]).length, 109);
+  assert.equal(
+    canonicalSolanaSccpAccountInclusionLeafBytes(leafInputs[0]).length,
+    109,
+  );
   assert.match(solanaSccpAccountRawDataHash(rawData[0]), /^0x[0-9a-f]{64}$/);
   assert.throws(
     () =>
@@ -4840,23 +5627,41 @@ test("derives Solana account inclusion leaves, branches, and roots", () => {
     () =>
       canonicalSolanaSccpAccountInclusionLeafBytes({
         ...leafInputs[0],
-        opening: { ...leafInputs[0].opening, accountAddress: leafInputs[0].opening.address },
+        opening: {
+          ...leafInputs[0].opening,
+          accountAddress: leafInputs[0].opening.address,
+        },
       }),
     /opening\.address must not use multiple aliases/,
   );
   const leaves = leafInputs.map(solanaSccpAccountInclusionLeafHash);
-  assert.equal(canonicalSolanaSccpAccountInclusionNodeBytes(leaves[0], leaves[1]).length, 65);
-  assert.match(solanaSccpAccountInclusionNodeHash(leaves[0], leaves[1]), /^0x[0-9a-f]{64}$/);
+  assert.equal(
+    canonicalSolanaSccpAccountInclusionNodeBytes(leaves[0], leaves[1]).length,
+    65,
+  );
+  assert.match(
+    solanaSccpAccountInclusionNodeHash(leaves[0], leaves[1]),
+    /^0x[0-9a-f]{64}$/,
+  );
 
   const { root, branches } = solanaSccpAccountInclusionRootAndBranches(leaves);
   assert.match(root, /^0x[0-9a-f]{64}$/);
   assert.equal(branches.length, leaves.length);
-  assert.equal(solanaSccpAccountInclusionRootFromBranch(leaves[0], branches[0]), root);
-  assert.equal(solanaSccpAccountInclusionRootFromBranch(leaves[1], branches[1]), root);
+  assert.equal(
+    solanaSccpAccountInclusionRootFromBranch(leaves[0], branches[0]),
+    root,
+  );
+  assert.equal(
+    solanaSccpAccountInclusionRootFromBranch(leaves[1], branches[1]),
+    root,
+  );
   assert.ok(Object.isFrozen(branches));
   assert.ok(Object.isFrozen(branches[0]));
   assert.throws(() => branches.push([]), /object is not extensible|read only/);
-  assert.throws(() => branches[0].push(HEX32_E), /object is not extensible|read only/);
+  assert.throws(
+    () => branches[0].push(HEX32_E),
+    /object is not extensible|read only/,
+  );
 
   const openedWitness = solanaSccpOpenedAccountInclusionWitness({
     finalizedSlot,
@@ -4875,84 +5680,98 @@ test("derives Solana account inclusion leaves, branches, and roots", () => {
   assert.ok(Object.isFrozen(openedWitness));
   assert.ok(Object.isFrozen(openedWitness.branches));
   assert.ok(Object.isFrozen(openedWitness.branches[0]));
-  assert.throws(() => openedWitness.branches.push([]), /object is not extensible|read only/);
-  assert.throws(() => openedWitness.branches[0].push(HEX32_E), /object is not extensible|read only/);
   assert.throws(
-    () => solanaSccpOpenedAccountInclusionWitness({
-      finalizedSlot,
-      finalized_slot: finalizedSlot,
-      validatorVoteAccountOpenings: [openings[0]],
-      validatorVoteAccountRawData: [rawData[0]],
-      validatorStakeAccountOpenings: [openings[1]],
-      validatorStakeAccountRawData: [rawData[1]],
-      stakeHistorySysvarOpening: openings[2],
-      stakeHistorySysvarRawData: rawData[2],
-    }),
+    () => openedWitness.branches.push([]),
+    /object is not extensible|read only/,
+  );
+  assert.throws(
+    () => openedWitness.branches[0].push(HEX32_E),
+    /object is not extensible|read only/,
+  );
+  assert.throws(
+    () =>
+      solanaSccpOpenedAccountInclusionWitness({
+        finalizedSlot,
+        finalized_slot: finalizedSlot,
+        validatorVoteAccountOpenings: [openings[0]],
+        validatorVoteAccountRawData: [rawData[0]],
+        validatorStakeAccountOpenings: [openings[1]],
+        validatorStakeAccountRawData: [rawData[1]],
+        stakeHistorySysvarOpening: openings[2],
+        stakeHistorySysvarRawData: rawData[2],
+      }),
     /finalizedSlot must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpOpenedAccountInclusionWitness({
-      finalizedSlot,
-      validatorVoteAccountOpenings: [openings[0]],
-      vote_account_openings: [openings[0]],
-      validatorVoteAccountRawData: [rawData[0]],
-      validatorStakeAccountOpenings: [openings[1]],
-      validatorStakeAccountRawData: [rawData[1]],
-      stakeHistorySysvarOpening: openings[2],
-      stakeHistorySysvarRawData: rawData[2],
-    }),
+    () =>
+      solanaSccpOpenedAccountInclusionWitness({
+        finalizedSlot,
+        validatorVoteAccountOpenings: [openings[0]],
+        vote_account_openings: [openings[0]],
+        validatorVoteAccountRawData: [rawData[0]],
+        validatorStakeAccountOpenings: [openings[1]],
+        validatorStakeAccountRawData: [rawData[1]],
+        stakeHistorySysvarOpening: openings[2],
+        stakeHistorySysvarRawData: rawData[2],
+      }),
     /validatorVoteAccountOpenings must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpOpenedAccountInclusionWitness({
-      finalizedSlot,
-      validatorVoteAccountOpenings: [openings[0]],
-      validatorVoteAccountRawData: [rawData[0]],
-      validatorStakeAccountOpenings: [openings[1]],
-      validatorStakeAccountRawData: [rawData[1]],
-      stakeHistorySysvarOpening: openings[2],
-      stake_history_sysvar_opening: openings[2],
-      stakeHistorySysvarRawData: rawData[2],
-    }),
+    () =>
+      solanaSccpOpenedAccountInclusionWitness({
+        finalizedSlot,
+        validatorVoteAccountOpenings: [openings[0]],
+        validatorVoteAccountRawData: [rawData[0]],
+        validatorStakeAccountOpenings: [openings[1]],
+        validatorStakeAccountRawData: [rawData[1]],
+        stakeHistorySysvarOpening: openings[2],
+        stake_history_sysvar_opening: openings[2],
+        stakeHistorySysvarRawData: rawData[2],
+      }),
     /stakeHistorySysvarOpening must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpOpenedAccountInclusionWitness({
-      finalizedSlot,
-      validatorVoteAccountOpenings: [openings[0]],
-      validatorVoteAccountRawData: [rawData[0]],
-      validatorStakeAccountOpenings: [openings[1]],
-      validatorStakeAccountRawData: [rawData[1]],
-      stakeHistorySysvarOpening: openings[2],
-      stakeHistorySysvarRawData: rawData[2],
-      accountInclusionRoot: root,
-      accountsRoot: root,
-    }),
+    () =>
+      solanaSccpOpenedAccountInclusionWitness({
+        finalizedSlot,
+        validatorVoteAccountOpenings: [openings[0]],
+        validatorVoteAccountRawData: [rawData[0]],
+        validatorStakeAccountOpenings: [openings[1]],
+        validatorStakeAccountRawData: [rawData[1]],
+        stakeHistorySysvarOpening: openings[2],
+        stakeHistorySysvarRawData: rawData[2],
+        accountInclusionRoot: root,
+        accountsRoot: root,
+      }),
     /accountInclusionRoot must not use multiple aliases/,
   );
   assert.throws(
-    () => solanaSccpOpenedAccountInclusionWitness({
-      finalizedSlot,
-      validatorVoteAccountOpenings: [openings[0]],
-      validatorVoteAccountRawData: [rawData[0]],
-      validatorStakeAccountOpenings: [{ ...openings[1], address: openings[0].address }],
-      validatorStakeAccountRawData: [rawData[1]],
-      stakeHistorySysvarOpening: openings[2],
-      stakeHistorySysvarRawData: rawData[2],
-    }),
+    () =>
+      solanaSccpOpenedAccountInclusionWitness({
+        finalizedSlot,
+        validatorVoteAccountOpenings: [openings[0]],
+        validatorVoteAccountRawData: [rawData[0]],
+        validatorStakeAccountOpenings: [
+          { ...openings[1], address: openings[0].address },
+        ],
+        validatorStakeAccountRawData: [rawData[1]],
+        stakeHistorySysvarOpening: openings[2],
+        stakeHistorySysvarRawData: rawData[2],
+      }),
     /opened account addresses must be unique/,
   );
   assert.throws(
-    () => solanaSccpOpenedAccountInclusionWitness({
-      finalizedSlot,
-      validatorVoteAccountOpenings: [openings[0]],
-      validatorVoteAccountRawData: [rawData[0]],
-      validatorStakeAccountOpenings: [openings[1]],
-      validatorStakeAccountRawData: [rawData[1]],
-      stakeHistorySysvarOpening: openings[2],
-      stakeHistorySysvarRawData: rawData[2],
-      accountInclusionRoot: `0x${"77".repeat(32)}`,
-    }),
+    () =>
+      solanaSccpOpenedAccountInclusionWitness({
+        finalizedSlot,
+        validatorVoteAccountOpenings: [openings[0]],
+        validatorVoteAccountRawData: [rawData[0]],
+        validatorStakeAccountOpenings: [openings[1]],
+        validatorStakeAccountRawData: [rawData[1]],
+        stakeHistorySysvarOpening: openings[2],
+        stakeHistorySysvarRawData: rawData[2],
+        accountInclusionRoot: `0x${"77".repeat(32)}`,
+      }),
     /accountInclusionRoot must match opened account inclusion witness/,
   );
 
@@ -4961,7 +5780,10 @@ test("derives Solana account inclusion leaves, branches, and roots", () => {
     opening: openings[0],
     rawData: `0x${"04".repeat(64)}`,
   });
-  assert.notEqual(solanaSccpAccountInclusionRootFromBranch(mutatedLeaf, branches[0]), root);
+  assert.notEqual(
+    solanaSccpAccountInclusionRootFromBranch(mutatedLeaf, branches[0]),
+    root,
+  );
   assert.throws(
     () => solanaSccpAccountInclusionRootFromBranch(`0x${"00".repeat(32)}`, []),
     /leaf/,
@@ -4975,25 +5797,29 @@ test("derives Solana account inclusion leaves, branches, and roots", () => {
     /at most 64/,
   );
   assert.throws(
-    () => solanaSccpOpenedAccountInclusionWitness({
-      finalizedSlot,
-      validatorVoteAccountOpenings: Array.from(
-        { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
-        () => openings[0],
-      ),
-      validatorVoteAccountRawData: Array.from(
-        { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
-        () => rawData[0],
-      ),
-      validatorStakeAccountOpenings: [openings[1]],
-      validatorStakeAccountRawData: [rawData[1]],
-      stakeHistorySysvarOpening: openings[2],
-      stakeHistorySysvarRawData: rawData[2],
-    }),
+    () =>
+      solanaSccpOpenedAccountInclusionWitness({
+        finalizedSlot,
+        validatorVoteAccountOpenings: Array.from(
+          { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
+          () => openings[0],
+        ),
+        validatorVoteAccountRawData: Array.from(
+          { length: SCCP_SOLANA_MAX_VALIDATORS + 1 },
+          () => rawData[0],
+        ),
+        validatorStakeAccountOpenings: [openings[1]],
+        validatorStakeAccountRawData: [rawData[1]],
+        stakeHistorySysvarOpening: openings[2],
+        stakeHistorySysvarRawData: rawData[2],
+      }),
     /validatorVoteAccountOpenings.*at most/,
   );
   assert.throws(() => solanaSccpAccountRawDataHash("0x"), /rawData/);
-  assert.throws(() => solanaSccpAccountInclusionRootAndBranches([leaves[0], leaves[0]]), /unique/);
+  assert.throws(
+    () => solanaSccpAccountInclusionRootAndBranches([leaves[0], leaves[0]]),
+    /unique/,
+  );
 });
 
 test("derives Groth16 BN254 public signal words for EVM and TRON provers", () => {
@@ -5162,8 +5988,14 @@ test("binds TRON Groth16 proof requests to public signals and relay context", ()
         publicInputs: sampleTronPublicInputs,
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
-        proofContext: { statementHash: HEX32_G, destinationBindingHash: HEX32_H },
-        proof_context: { statementHash: HEX32_G, destinationBindingHash: HEX32_H },
+        proofContext: {
+          statementHash: HEX32_G,
+          destinationBindingHash: HEX32_H,
+        },
+        proof_context: {
+          statementHash: HEX32_G,
+          destinationBindingHash: HEX32_H,
+        },
       }),
     /proofContext must not use multiple aliases/,
   );
@@ -5173,13 +6005,16 @@ test("binds TRON Groth16 proof requests to public signals and relay context", ()
         publicInputs: sampleTronPublicInputs,
         bundleBytes: [5, 6, 7],
         destinationBindingHash: HEX32_H,
-    }),
+      }),
     /statementHash must be a hex string/,
   );
   assert.throws(
     () =>
       buildTronSccpProofRequest({
-        publicInputs: { ...sampleTronPublicInputs, payloadHash: SCCP_ZERO_HASH_V1 },
+        publicInputs: {
+          ...sampleTronPublicInputs,
+          payloadHash: SCCP_ZERO_HASH_V1,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -5190,7 +6025,10 @@ test("binds TRON Groth16 proof requests to public signals and relay context", ()
   assert.throws(
     () =>
       buildTronSccpProofRequest({
-        publicInputs: { ...sampleTronPublicInputs, payloadHash: `${sampleTronPublicInputs.payloadHash} ` },
+        publicInputs: {
+          ...sampleTronPublicInputs,
+          payloadHash: `${sampleTronPublicInputs.payloadHash} `,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -5223,7 +6061,10 @@ test("binds TRON Groth16 proof requests to public signals and relay context", ()
   assert.throws(
     () =>
       buildTronSccpProofRequest({
-        publicInputs: { ...sampleTronPublicInputs, targetDomain: SCCP_DOMAIN_TON },
+        publicInputs: {
+          ...sampleTronPublicInputs,
+          targetDomain: SCCP_DOMAIN_TON,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -5325,7 +6166,10 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
   assert.equal(bscRequest.backend, SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1);
   assert.equal(bscRequest.targetDomain, SCCP_DOMAIN_BSC);
   assert.notEqual(bscRequest.requestHash, request.requestHash);
-  assert.notEqual(bscRequest.publicSignalWords[2], request.publicSignalWords[2]);
+  assert.notEqual(
+    bscRequest.publicSignalWords[2],
+    request.publicSignalWords[2],
+  );
 
   assert.notEqual(
     request.requestHash,
@@ -5429,8 +6273,14 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
-        proofContext: { statementHash: HEX32_G, destinationBindingHash: HEX32_H },
-        proof_context: { statementHash: HEX32_G, destinationBindingHash: HEX32_H },
+        proofContext: {
+          statementHash: HEX32_G,
+          destinationBindingHash: HEX32_H,
+        },
+        proof_context: {
+          statementHash: HEX32_G,
+          destinationBindingHash: HEX32_H,
+        },
       }),
     /proofContext must not use multiple aliases/,
   );
@@ -5440,7 +6290,7 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
         publicInputs: sampleEvmPublicInputs,
         bundleBytes: [5, 6, 7],
         destinationBindingHash: HEX32_H,
-    }),
+      }),
     /statementHash must be a hex string/,
   );
   assert.throws(
@@ -5512,7 +6362,10 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
   assert.throws(
     () =>
       buildEvmSccpProofRequest({
-        publicInputs: { ...sampleEvmPublicInputs, targetDomain: SCCP_DOMAIN_TON },
+        publicInputs: {
+          ...sampleEvmPublicInputs,
+          targetDomain: SCCP_DOMAIN_TON,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -5586,11 +6439,17 @@ test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () =>
     destinationBinding: binding,
   };
   const request = buildBscMainnetSccpDestinationProofRequest(input);
-  const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+  const proofResult = wrapBscMainnetSccpDestinationProofResult(
+    GROTH16_PROOF_BYTES,
+    request,
+  );
   const submission = buildBscMainnetSccpDestinationSubmission({ proofResult });
 
   assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
-  assert.equal(request.destinationBinding.networkId, SCCP_BSC_MAINNET_NETWORK_ID);
+  assert.equal(
+    request.destinationBinding.networkId,
+    SCCP_BSC_MAINNET_NETWORK_ID,
+  );
   assert.equal(proofResult.destinationBindingHash, binding.bindingHash);
   assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
   assert.equal(submission.destinationBindingHash, binding.bindingHash);
@@ -5598,7 +6457,10 @@ test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () =>
   const prover = new BscMainnetSccpProver({
     async prove(callbackRequest) {
       assert.equal(callbackRequest.targetDomain, SCCP_DOMAIN_BSC);
-      assert.equal(callbackRequest.destinationBinding.networkId, SCCP_BSC_MAINNET_NETWORK_ID);
+      assert.equal(
+        callbackRequest.destinationBinding.networkId,
+        SCCP_BSC_MAINNET_NETWORK_ID,
+      );
       return { proofBytes: GROTH16_PROOF_BYTES };
     },
   });
@@ -5627,7 +6489,10 @@ test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () =>
   assert.throws(
     () =>
       buildBscMainnetSccpDestinationSubmission({
-        proofResult: { ...proofResult, destinationBinding: sampleEvmDestinationBinding() },
+        proofResult: {
+          ...proofResult,
+          destinationBinding: sampleEvmDestinationBinding(),
+        },
       }),
     /chain id 56|targetDomain must be BSC/u,
   );
@@ -5656,18 +6521,39 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     publicSignalWords: [...request.publicSignalWords],
     proofContext: { ...request.proofContext },
   };
-  const mutableRequestResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, mutableRequest);
+  const mutableRequestResult = wrapEvmSccpProofResult(
+    GROTH16_PROOF_BYTES,
+    mutableRequest,
+  );
   mutableRequest.publicInputs.messageId = HEX32_D;
   mutableRequest.publicSignalWords[0] = HEX32_D;
   mutableRequest.proofContext.statementHash = HEX32_D;
-  assert.equal(mutableRequestResult.publicInputs.messageId, request.publicInputs.messageId);
-  assert.equal(mutableRequestResult.publicSignalWords[0], request.publicSignalWords[0]);
-  assert.equal(mutableRequestResult.proofContext.statementHash, request.proofContext.statementHash);
-  assert.equal(submission.envelopeEncoding, SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1);
+  assert.equal(
+    mutableRequestResult.publicInputs.messageId,
+    request.publicInputs.messageId,
+  );
+  assert.equal(
+    mutableRequestResult.publicSignalWords[0],
+    request.publicSignalWords[0],
+  );
+  assert.equal(
+    mutableRequestResult.proofContext.statementHash,
+    request.proofContext.statementHash,
+  );
+  assert.equal(
+    submission.envelopeEncoding,
+    SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1,
+  );
   assert.equal(submission.platformPayload, "evm_groth16_contract_call");
   assert.equal(submission.submissionKind, "contract_call");
-  assert.equal(submission.contractMethod, "submitSccpMessageProof(bytes,bytes32[6],bytes32)");
-  assert.equal(submission.functionSelector, SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1);
+  assert.equal(
+    submission.contractMethod,
+    "submitSccpMessageProof(bytes,bytes32[6],bytes32)",
+  );
+  assert.equal(
+    submission.functionSelector,
+    SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1,
+  );
   assert.equal(submission.callDataHex, submission.envelopeHex);
   assert.equal(submission.callData.length, 676);
   assert.equal(submission.publicInputWordsBytes.length, 6 * 32);
@@ -5709,7 +6595,10 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.throws(
     () =>
       buildEvmSccpSubmission({
-        proofResult: { ...proofResult, envelope_hash: proofResult.envelopeHash },
+        proofResult: {
+          ...proofResult,
+          envelope_hash: proofResult.envelopeHash,
+        },
       }),
     /proofResult\.envelopeHash must not use multiple aliases/u,
   );
@@ -5745,12 +6634,17 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.notEqual(proofResult.proofBytes[0], 255);
   assert.deepEqual(Array.from(proofResult.bundleBytes), [5, 6, 7]);
   assert.deepEqual(Array.from(proofResult.sourceProofBytes), [9, 10]);
-  assert.equal(submission.callDataHex.startsWith(SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1), true);
+  assert.equal(
+    submission.callDataHex.startsWith(SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1),
+    true,
+  );
   assert.equal(submission.callDataHex.slice(10, 74), `${"0".repeat(61)}100`);
   assert.equal(submission.callDataHex.slice(522, 586), `${"0".repeat(61)}180`);
   assert.equal(
     submission.callDataHex.slice(586),
-    Array.from(GROTH16_PROOF_BYTES, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+    Array.from(GROTH16_PROOF_BYTES, (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join(""),
   );
   const omittedSourceProofResult = wrapEvmSccpProofResult(
     GROTH16_PROOF_BYTES,
@@ -5766,7 +6660,10 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     proofResult: omittedSourceProofResult,
   });
   assert.equal(omittedSourceProofResult.sourceProofBytes.length, 0);
-  assert.deepEqual(Array.from(omittedSourceSubmission.proofBytes), Array.from(GROTH16_PROOF_BYTES));
+  assert.deepEqual(
+    Array.from(omittedSourceSubmission.proofBytes),
+    Array.from(GROTH16_PROOF_BYTES),
+  );
   const exposedCallData = submission.callData;
   exposedCallData[0] = 0;
   assert.notEqual(submission.callData[0], 0);
@@ -5780,7 +6677,10 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     statementHash: HEX32_G,
     destinationBinding: tronBinding,
   });
-  const tronProofResult = wrapTronSccpProofResult(GROTH16_PROOF_BYTES, tronRequest);
+  const tronProofResult = wrapTronSccpProofResult(
+    GROTH16_PROOF_BYTES,
+    tronRequest,
+  );
   const tronSubmission = buildTronSccpSubmission({
     proofResult: tronProofResult,
   });
@@ -5788,7 +6688,10 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.equal(Object.isFrozen(tronProofResult.publicInputs), true);
   assert.equal(Object.isFrozen(tronProofResult.publicSignalWords), true);
   assert.equal(Object.isFrozen(tronProofResult.proofContext), true);
-  assert.equal(tronSubmission.envelopeEncoding, SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1);
+  assert.equal(
+    tronSubmission.envelopeEncoding,
+    SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1,
+  );
   assert.equal(tronSubmission.platformPayload, "tron_contract_call");
   assert.equal(tronSubmission.targetDomain, SCCP_DOMAIN_TRON);
   assert.equal(tronSubmission.publicInputWords[2], `0x${"00".repeat(31)}05`);
@@ -5815,7 +6718,12 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
       }),
     /proofResult must be a wrapped Groth16 SCCP proof result/,
   );
-  assert.equal(tronSubmission.callDataHex.startsWith(SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1), true);
+  assert.equal(
+    tronSubmission.callDataHex.startsWith(
+      SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1,
+    ),
+    true,
+  );
   assert.equal(tronSubmission.callData.length, 676);
   assert.deepEqual(
     tronSubmission.callData,
@@ -5839,7 +6747,10 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     proofResult: omittedTronSourceProofResult,
   });
   assert.equal(omittedTronSourceProofResult.sourceProofBytes.length, 0);
-  assert.deepEqual(Array.from(omittedTronSourceSubmission.proofBytes), Array.from(GROTH16_PROOF_BYTES));
+  assert.deepEqual(
+    Array.from(omittedTronSourceSubmission.proofBytes),
+    Array.from(GROTH16_PROOF_BYTES),
+  );
   assert.throws(
     () =>
       buildEvmSccpSubmission({
@@ -5865,7 +6776,9 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
 
   const changedProof = Uint8Array.from(GROTH16_PROOF_BYTES);
   changedProof.set(
-    abiWord(0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd45n),
+    abiWord(
+      0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd45n,
+    ),
     11 * 32,
   );
   assert.throws(
@@ -5897,11 +6810,17 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     /bundleBytes must be bytes or hex/,
   );
   assert.throws(
-    () => buildEvmSccpSubmission({ proofResult: { ...proofResult, envelopeHash: HEX32_A } }),
+    () =>
+      buildEvmSccpSubmission({
+        proofResult: { ...proofResult, envelopeHash: HEX32_A },
+      }),
     /proofResult\.envelopeHash must match wrapped proof bytes/,
   );
   assert.throws(
-    () => buildEvmSccpSubmission({ proofResult: { ...proofResult, proofBase64: "AAAA" } }),
+    () =>
+      buildEvmSccpSubmission({
+        proofResult: { ...proofResult, proofBase64: "AAAA" },
+      }),
     /proofResult\.proofBase64 must match proofResult\.proofBytes/,
   );
   assert.throws(
@@ -5912,7 +6831,10 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     /proofResult\.requestHash must match bundleBytes and sourceProofBytes/,
   );
   assert.throws(
-    () => buildTronSccpSubmission({ proofResult: { ...tronProofResult, envelopeHash: HEX32_A } }),
+    () =>
+      buildTronSccpSubmission({
+        proofResult: { ...tronProofResult, envelopeHash: HEX32_A },
+      }),
     /proofResult\.envelopeHash must match wrapped proof bytes/,
   );
   assert.throws(
@@ -5930,7 +6852,11 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     /proofResult\.requestHash must match bundleBytes and sourceProofBytes/,
   );
   assert.throws(
-    () => buildEvmSccpSubmission({ proofResult, publicSignalWords: Array(9).fill(HEX32_A) }),
+    () =>
+      buildEvmSccpSubmission({
+        proofResult,
+        publicSignalWords: Array(9).fill(HEX32_A),
+      }),
     /publicSignalWords must match publicInputs and proof context/,
   );
   assert.throws(
@@ -5941,7 +6867,10 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     () =>
       buildEvmSccpSubmission({
         proofBytes: GROTH16_PROOF_BYTES,
-        publicInputs: { ...sampleEvmPublicInputs, targetDomain: SCCP_DOMAIN_TON },
+        publicInputs: {
+          ...sampleEvmPublicInputs,
+          targetDomain: SCCP_DOMAIN_TON,
+        },
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
       }),
@@ -6062,8 +6991,14 @@ test("binds Substrate runtime proof requests to relay context", () => {
         publicInputs: sampleSubstratePublicInputs,
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
-        proofContext: { statementHash: HEX32_G, destinationBindingHash: HEX32_H },
-        proof_context: { statementHash: HEX32_G, destinationBindingHash: HEX32_H },
+        proofContext: {
+          statementHash: HEX32_G,
+          destinationBindingHash: HEX32_H,
+        },
+        proof_context: {
+          statementHash: HEX32_G,
+          destinationBindingHash: HEX32_H,
+        },
       }),
     /proofContext must not use multiple aliases/,
   );
@@ -6105,7 +7040,10 @@ test("binds Substrate runtime proof requests to relay context", () => {
   assert.throws(
     () =>
       buildSubstrateSccpProofRequest({
-        publicInputs: { ...sampleSubstratePublicInputs, targetDomain: SCCP_DOMAIN_TON },
+        publicInputs: {
+          ...sampleSubstratePublicInputs,
+          targetDomain: SCCP_DOMAIN_TON,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -6139,7 +7077,9 @@ test("binds Substrate runtime proof requests to relay context", () => {
     () =>
       buildSubstrateSccpProofRequest({
         publicInputs: sampleSubstratePublicInputs,
-        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array(
+          SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -6173,9 +7113,15 @@ test("builds Substrate SCCP runtime-call submissions", () => {
   const submission = buildSubstrateSccpSubmission({ proofResult });
 
   assert.equal(submission.proofFamily, SCCP_STARK_FRI_PROOF_FAMILY_V1);
-  assert.equal(submission.verifierBackend, SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1);
+  assert.equal(
+    submission.verifierBackend,
+    SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
+  );
   assert.equal(submission.platformPayload, "substrate_runtime_call");
-  assert.equal(submission.envelopeEncoding, SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1);
+  assert.equal(
+    submission.envelopeEncoding,
+    SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
+  );
   assert.equal(submission.submissionKind, "runtime_call");
   assert.equal(
     submission.verifierEntrypoint,
@@ -6197,7 +7143,10 @@ test("builds Substrate SCCP runtime-call submissions", () => {
     true,
   );
   assert.deepEqual(Array.from(submission.proofBytes), [1, 2, 3, 4]);
-  assert.deepEqual(Array.from(submission.publicInputsBytes), Array.from(request.publicInputsBytes));
+  assert.deepEqual(
+    Array.from(submission.publicInputsBytes),
+    Array.from(request.publicInputsBytes),
+  );
   assert.deepEqual(Array.from(submission.bundleBytes), [5, 6, 7]);
 
   const exposedRuntimeCall = submission.runtimeCall;
@@ -6205,7 +7154,8 @@ test("builds Substrate SCCP runtime-call submissions", () => {
   assert.notEqual(submission.runtimeCall[0], 0);
 
   assert.throws(
-    () => buildSubstrateSccpSubmission({ proofResult, proof_result: proofResult }),
+    () =>
+      buildSubstrateSccpSubmission({ proofResult, proof_result: proofResult }),
     /proofResult must not use multiple aliases/u,
   );
   assert.throws(
@@ -6244,7 +7194,10 @@ test("builds Substrate SCCP runtime-call submissions", () => {
   assert.throws(
     () =>
       buildSubstrateSccpSubmission({
-        proofResult: { ...proofResult, envelope_hash: proofResult.envelopeHash },
+        proofResult: {
+          ...proofResult,
+          envelope_hash: proofResult.envelopeHash,
+        },
       }),
     /proofResult\.envelopeHash must not use multiple aliases/u,
   );
@@ -6327,18 +7280,29 @@ test("builds deterministic Solana SCCP proof requests", () => {
   );
   assert.equal(request.publicInputs.statementHash, HEX32_G);
   assert.equal(request.publicInputs.destinationBindingHash, HEX32_H);
-  assert.equal(request.sourceStateVerifierId, SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1);
+  assert.equal(
+    request.sourceStateVerifierId,
+    SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
+  );
   assert.equal(request.sourceStateVerifierHash, SCCP_ZERO_HASH_V1);
   assert.equal(
     request.publicInputs.sourceStateVerifierId,
     SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1,
   );
   assert.equal(request.publicInputs.sourceStateVerifierHash, SCCP_ZERO_HASH_V1);
-  assert.equal(request.publicInputs.sourceAdapterDeploymentHash, SCCP_ZERO_HASH_V1);
-  assert.equal(request.publicInputs.sourceAdapterDeploymentReceiptHash, SCCP_ZERO_HASH_V1);
+  assert.equal(
+    request.publicInputs.sourceAdapterDeploymentHash,
+    SCCP_ZERO_HASH_V1,
+  );
+  assert.equal(
+    request.publicInputs.sourceAdapterDeploymentReceiptHash,
+    SCCP_ZERO_HASH_V1,
+  );
   assert.equal(
     request.sourceAdapterDeploymentBindingHash,
-    sccpSourceAdapterDeploymentBindingHash(request.sourceAdapterDeploymentBinding),
+    sccpSourceAdapterDeploymentBindingHash(
+      request.sourceAdapterDeploymentBinding,
+    ),
   );
   assert.deepEqual(request.proofContext, {
     version: 1,
@@ -6348,14 +7312,20 @@ test("builds deterministic Solana SCCP proof requests", () => {
   assert.match(request.witnessHash, /^0x[0-9a-f]{64}$/);
   assert.match(request.proofContextHash, /^0x[0-9a-f]{64}$/);
   assert.match(request.sourceAdapterDeploymentBindingHash, /^0x[0-9a-f]{64}$/);
-  assert.ok(canonicalSolanaSccpProofContextBytes(request.proofContext).length > 0);
-  assert.ok(canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(request.witness).length > 250);
+  assert.ok(
+    canonicalSolanaSccpProofContextBytes(request.proofContext).length > 0,
+  );
+  assert.ok(
+    canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes(request.witness)
+      .length > 250,
+  );
   assert.throws(
     () => buildSolanaSccpProofRequest(sampleWitness({ finalized_slot: 321n })),
     /finalizedSlot.*multiple aliases/,
   );
   assert.throws(
-    () => buildSolanaSccpProofRequest(sampleWitness({ blockhashBytes: HEX32_A })),
+    () =>
+      buildSolanaSccpProofRequest(sampleWitness({ blockhashBytes: HEX32_A })),
     /blockhash.*multiple aliases/,
   );
   assert.throws(
@@ -6379,15 +7349,22 @@ test("builds deterministic Solana SCCP proof requests", () => {
 
 test("requires Solana SCCP proof context for local proof requests", () => {
   assert.throws(
-    () => buildSolanaSccpProofRequest(sampleWitness({ statementHash: undefined })),
+    () =>
+      buildSolanaSccpProofRequest(sampleWitness({ statementHash: undefined })),
     /statementHash must be a hex string/,
   );
   assert.throws(
-    () => buildSolanaSccpProofRequest(sampleWitness({ statementHash: SCCP_ZERO_HASH_V1 })),
+    () =>
+      buildSolanaSccpProofRequest(
+        sampleWitness({ statementHash: SCCP_ZERO_HASH_V1 }),
+      ),
     /statementHash must not be zero/,
   );
   assert.throws(
-    () => buildSolanaSccpProofRequest(sampleWitness({ targetDomain: SCCP_DOMAIN_TON })),
+    () =>
+      buildSolanaSccpProofRequest(
+        sampleWitness({ targetDomain: SCCP_DOMAIN_TON }),
+      ),
     /targetDomain must be SORA/,
   );
   assert.throws(
@@ -6413,14 +7390,21 @@ test("binds source adapter deployment context for UI provers", () => {
   );
 
   assert.equal(request.publicInputs.sourceAdapterDeploymentHash, HEX32_A);
-  assert.equal(request.publicInputs.sourceAdapterDeploymentReceiptHash, HEX32_B);
   assert.equal(
-    canonicalSccpSourceAdapterDeploymentBindingBytes(request.sourceAdapterDeploymentBinding).length,
+    request.publicInputs.sourceAdapterDeploymentReceiptHash,
+    HEX32_B,
+  );
+  assert.equal(
+    canonicalSccpSourceAdapterDeploymentBindingBytes(
+      request.sourceAdapterDeploymentBinding,
+    ).length,
     73,
   );
   assert.equal(
     request.sourceAdapterDeploymentBindingHash,
-    sccpSourceAdapterDeploymentBindingHash(request.sourceAdapterDeploymentBinding),
+    sccpSourceAdapterDeploymentBindingHash(
+      request.sourceAdapterDeploymentBinding,
+    ),
   );
   assert.throws(
     () =>
@@ -6450,20 +7434,48 @@ test("binds source adapter deployment context for UI provers", () => {
 
 test("derives canonical source adapter verifier VK hashes for UI tooling", () => {
   const vectors = new Map([
-    [SCCP_DOMAIN_ETH, "0x2140903293411cad0f0eb217d8beb18d3a188edf7bba455098589a2409445e46"],
-    [SCCP_DOMAIN_BSC, "0x12536f25748a6520f10ebd42a7bcccd6ec181b9d53129795c8e186dc6e8b18cc"],
-    [SCCP_DOMAIN_SOL, "0xe7bc29d06bf56184183c3fc59a0e934cd1d8e16751f1eda2efaaf88aa350b9d6"],
-    [SCCP_DOMAIN_TON, "0xf03f70e8cb504e69b0611df224c2783d04d8f4ee93beae7a62e1cd0a49703bad"],
-    [SCCP_DOMAIN_TRON, "0x0e12ad03def9d75887d4d6437e63539cef97c54db4769881eeda757a88826364"],
-    [SCCP_DOMAIN_SORA_KUSAMA, "0xf7768653132995511594e6e7edb4af22f78bba615650d9dda72f14bb18984daf"],
-    [SCCP_DOMAIN_SORA_POLKADOT, "0x4f8456bf8626436a16d763c40bf23dffb962232f0766c4ae33d6e594f8be1635"],
-    [SCCP_DOMAIN_SORA2, "0x96bbfa08489249b28a1444d0dcb9d5b4023bd688091f31c0b435601dad48dbb4"],
+    [
+      SCCP_DOMAIN_ETH,
+      "0x2140903293411cad0f0eb217d8beb18d3a188edf7bba455098589a2409445e46",
+    ],
+    [
+      SCCP_DOMAIN_BSC,
+      "0x12536f25748a6520f10ebd42a7bcccd6ec181b9d53129795c8e186dc6e8b18cc",
+    ],
+    [
+      SCCP_DOMAIN_SOL,
+      "0xe7bc29d06bf56184183c3fc59a0e934cd1d8e16751f1eda2efaaf88aa350b9d6",
+    ],
+    [
+      SCCP_DOMAIN_TON,
+      "0xf03f70e8cb504e69b0611df224c2783d04d8f4ee93beae7a62e1cd0a49703bad",
+    ],
+    [
+      SCCP_DOMAIN_TRON,
+      "0x0e12ad03def9d75887d4d6437e63539cef97c54db4769881eeda757a88826364",
+    ],
+    [
+      SCCP_DOMAIN_SORA_KUSAMA,
+      "0xf7768653132995511594e6e7edb4af22f78bba615650d9dda72f14bb18984daf",
+    ],
+    [
+      SCCP_DOMAIN_SORA_POLKADOT,
+      "0x4f8456bf8626436a16d763c40bf23dffb962232f0766c4ae33d6e594f8be1635",
+    ],
+    [
+      SCCP_DOMAIN_SORA2,
+      "0x96bbfa08489249b28a1444d0dcb9d5b4023bd688091f31c0b435601dad48dbb4",
+    ],
   ]);
   for (const [sourceDomain, expected] of vectors.entries()) {
     assert.equal(sccpSourceAdapterVerifierVkHash({ sourceDomain }), expected);
   }
   assert.throws(
-    () => sccpSourceAdapterVerifierVkHash({ sourceDomain: SCCP_DOMAIN_TON, targetDomain: SCCP_DOMAIN_TON }),
+    () =>
+      sccpSourceAdapterVerifierVkHash({
+        sourceDomain: SCCP_DOMAIN_TON,
+        targetDomain: SCCP_DOMAIN_TON,
+      }),
     /targetDomain must be SORA/,
   );
 });
@@ -6565,11 +7577,23 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   assert.equal(evmSubmitPayload.public_key_hex, "ed0123");
   assert.equal(evmSubmitPayload.signature_b64, "sig");
   assert.equal(evmSubmitPayload.network_id_hex, evmBinding.networkId);
-  assert.equal(evmSubmitPayload.verifier_address_hex, evmBinding.verifierAddress);
+  assert.equal(
+    evmSubmitPayload.verifier_address_hex,
+    evmBinding.verifierAddress,
+  );
   assert.equal(evmSubmitPayload.bridge_address_hex, evmBinding.bridgeAddress);
-  assert.equal(evmSubmitPayload.verifier_code_hash_hex, evmBinding.verifierCodeHash);
-  assert.equal(evmSubmitPayload.verifier_key_hash_hex, evmBinding.verifierKeyHash);
-  assert.equal(evmSubmitPayload.expected_destination_binding_hash_hex, evmBinding.bindingHash);
+  assert.equal(
+    evmSubmitPayload.verifier_code_hash_hex,
+    evmBinding.verifierCodeHash,
+  );
+  assert.equal(
+    evmSubmitPayload.verifier_key_hash_hex,
+    evmBinding.verifierKeyHash,
+  );
+  assert.equal(
+    evmSubmitPayload.expected_destination_binding_hash_hex,
+    evmBinding.bindingHash,
+  );
   assert.equal(evmSubmitPayload.creation_time_ms, 123);
   assert.equal(
     evmSubmitPayload.proof_bytes_hex,
@@ -6606,7 +7630,10 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
       buildEvmSccpBridgeProofSubmitPayload({
         authority: "alice@sora",
         messageBundle: {},
-        submission: { ...evmSubmissionForSubmit, destinationBindingHash: HEX32_A },
+        submission: {
+          ...evmSubmissionForSubmit,
+          destinationBindingHash: HEX32_A,
+        },
         destinationBinding: evmBinding,
       }),
     /submission destinationBindingHash must match destinationBinding/,
@@ -6661,19 +7688,36 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     /destinationBinding\.bindingHash must match/,
   );
   assert.throws(
-    () => evmSccpDestinationBinding({ ...evmInput, network_id: evmInput.networkId }),
+    () =>
+      evmSccpDestinationBinding({
+        ...evmInput,
+        network_id: evmInput.networkId,
+      }),
     /destinationBinding\.networkId must not use multiple aliases/,
   );
   assert.throws(
-    () => evmSccpDestinationBinding({ ...evmInput, verifier_address: evmInput.verifierAddress }),
+    () =>
+      evmSccpDestinationBinding({
+        ...evmInput,
+        verifier_address: evmInput.verifierAddress,
+      }),
     /destinationBinding\.verifierAddress must not use multiple aliases/,
   );
   assert.throws(
-    () => evmSccpDestinationBinding({ ...evmInput, bindingHash: evmBinding.bindingHash, binding_hash: evmBinding.bindingHash }),
+    () =>
+      evmSccpDestinationBinding({
+        ...evmInput,
+        bindingHash: evmBinding.bindingHash,
+        binding_hash: evmBinding.bindingHash,
+      }),
     /destinationBinding\.bindingHash must not use multiple aliases/,
   );
   assert.throws(
-    () => evmSccpDestinationBinding({ ...evmInput, bridgeAddress: evmInput.verifierAddress }),
+    () =>
+      evmSccpDestinationBinding({
+        ...evmInput,
+        bridgeAddress: evmInput.verifierAddress,
+      }),
     /verifierAddress must differ from bridgeAddress/,
   );
 
@@ -6692,7 +7736,10 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     tronBinding.bindingHash,
     "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
   );
-  assert.equal(tronSccpDestinationBindingHash(tronInput), tronBinding.bindingHash);
+  assert.equal(
+    tronSccpDestinationBindingHash(tronInput),
+    tronBinding.bindingHash,
+  );
   const tronRequest = buildTronSccpProofRequest({
     publicInputs: sampleTronPublicInputs,
     bundleBytes: [5, 6, 7],
@@ -6717,12 +7764,24 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   });
   assert.equal(Object.isFrozen(tronSubmitPayload), true);
   assert.equal(tronSubmitPayload.network_id_hex, tronBinding.networkId);
-  assert.equal(tronSubmitPayload.tron_verifier_address, tronBinding.verifierAddress);
+  assert.equal(
+    tronSubmitPayload.tron_verifier_address,
+    tronBinding.verifierAddress,
+  );
   assert.equal(tronSubmitPayload.verifier_address_hex, undefined);
   assert.equal(tronSubmitPayload.bridge_address_hex, undefined);
-  assert.equal(tronSubmitPayload.verifier_code_hash_hex, tronBinding.verifierCodeHash);
-  assert.equal(tronSubmitPayload.verifier_key_hash_hex, tronBinding.verifierKeyHash);
-  assert.equal(tronSubmitPayload.expected_destination_binding_hash_hex, tronBinding.bindingHash);
+  assert.equal(
+    tronSubmitPayload.verifier_code_hash_hex,
+    tronBinding.verifierCodeHash,
+  );
+  assert.equal(
+    tronSubmitPayload.verifier_key_hash_hex,
+    tronBinding.verifierKeyHash,
+  );
+  assert.equal(
+    tronSubmitPayload.expected_destination_binding_hash_hex,
+    tronBinding.bindingHash,
+  );
   assert.equal(
     tronSubmitPayload.proof_bytes_hex,
     `0x${Array.from(GROTH16_PROOF_BYTES, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
@@ -6745,7 +7804,10 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
       buildTronSccpBridgeProofSubmitPayload({
         authority: "alice@sora",
         messageBundle: {},
-        submission: { ...tronSubmissionForSubmit, targetDomain: SCCP_DOMAIN_ETH },
+        submission: {
+          ...tronSubmissionForSubmit,
+          targetDomain: SCCP_DOMAIN_ETH,
+        },
         destinationBinding: tronBinding,
       }),
     /submission targetDomain must match destinationBinding/,
@@ -6777,15 +7839,28 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     /destinationBinding\.bindingHash must match/,
   );
   assert.throws(
-    () => tronSccpDestinationBinding({ ...tronInput, network_id: tronInput.networkId }),
+    () =>
+      tronSccpDestinationBinding({
+        ...tronInput,
+        network_id: tronInput.networkId,
+      }),
     /destinationBinding\.networkId must not use multiple aliases/,
   );
   assert.throws(
-    () => tronSccpDestinationBinding({ ...tronInput, verifier_address: tronInput.verifierAddress }),
+    () =>
+      tronSccpDestinationBinding({
+        ...tronInput,
+        verifier_address: tronInput.verifierAddress,
+      }),
     /destinationBinding\.verifierAddress must not use multiple aliases/,
   );
   assert.throws(
-    () => tronSccpDestinationBinding({ ...tronInput, backend: SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1, verifierBackend: SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1 }),
+    () =>
+      tronSccpDestinationBinding({
+        ...tronInput,
+        backend: SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+        verifierBackend: SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
+      }),
     /destinationBinding\.verifierBackend must not use multiple aliases/,
   );
   assert.throws(
@@ -6815,13 +7890,16 @@ const sampleSourceRecordInput = (sourceDomain) => {
     finalityPolicyHash: `0x${"88".repeat(32)}`,
     deploymentReceiptHash: `0x${"aa".repeat(32)}`,
   };
-  if ([SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, SCCP_DOMAIN_TRON].includes(sourceDomain)) {
+  if (
+    [SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, SCCP_DOMAIN_TRON].includes(sourceDomain)
+  ) {
     input.bridgeAddress = `0x${"11".repeat(20)}`;
     input.sourceBridgeEmitterCodeHash = `0x${"77".repeat(32)}`;
   }
   if (sourceDomain === SCCP_DOMAIN_ETH) {
     input.networkId = SCCP_ETH_MAINNET_NETWORK_ID;
-    input.configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b";
+    input.configHash =
+      "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b";
   }
   if (
     [
@@ -6837,41 +7915,99 @@ const sampleSourceRecordInput = (sourceDomain) => {
   if (sourceDomain === SCCP_DOMAIN_TRON) {
     input.networkId = `0x${"33".repeat(32)}`;
     input.ownerAddress = `0x${"22".repeat(20)}`;
-    input.configHash = "0xe986dd67bfa2307b4e00cf46bde41a88003a55c5b7fea311fa106614b2252f9d";
+    input.configHash =
+      "0xe986dd67bfa2307b4e00cf46bde41a88003a55c5b7fea311fa106614b2252f9d";
   }
   return input;
 };
 
 test("derives SCCP source material and deployment record hashes for UI tooling", () => {
   const materialVectors = new Map([
-    [SCCP_DOMAIN_ETH, "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77"],
-    [SCCP_DOMAIN_BSC, "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a"],
-    [SCCP_DOMAIN_SOL, "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331"],
-    [SCCP_DOMAIN_TON, "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc"],
-    [SCCP_DOMAIN_TRON, "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8"],
-    [SCCP_DOMAIN_SORA_KUSAMA, "0x012c66498a85190d6075c441fad30fe01816796ee1713838fe8bb97f2ad1c924"],
-    [SCCP_DOMAIN_SORA_POLKADOT, "0x40cd55d64e92d688b839242e170f1722485cddf2e42b4ff22e53c5e7723e570d"],
-    [SCCP_DOMAIN_SORA2, "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d"],
+    [
+      SCCP_DOMAIN_ETH,
+      "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
+    ],
+    [
+      SCCP_DOMAIN_BSC,
+      "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a",
+    ],
+    [
+      SCCP_DOMAIN_SOL,
+      "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331",
+    ],
+    [
+      SCCP_DOMAIN_TON,
+      "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc",
+    ],
+    [
+      SCCP_DOMAIN_TRON,
+      "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+    ],
+    [
+      SCCP_DOMAIN_SORA_KUSAMA,
+      "0x012c66498a85190d6075c441fad30fe01816796ee1713838fe8bb97f2ad1c924",
+    ],
+    [
+      SCCP_DOMAIN_SORA_POLKADOT,
+      "0x40cd55d64e92d688b839242e170f1722485cddf2e42b4ff22e53c5e7723e570d",
+    ],
+    [
+      SCCP_DOMAIN_SORA2,
+      "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d",
+    ],
   ]);
   const deploymentVectors = new Map([
-    [SCCP_DOMAIN_ETH, "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4"],
-    [SCCP_DOMAIN_BSC, "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d"],
-    [SCCP_DOMAIN_SOL, "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc"],
-    [SCCP_DOMAIN_TON, "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887"],
-    [SCCP_DOMAIN_TRON, "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8"],
-    [SCCP_DOMAIN_SORA_KUSAMA, "0xda47a31715813ef5bff0882cd0e0e8b0cc89d426e005e37e0f94a2bdba2043cd"],
-    [SCCP_DOMAIN_SORA_POLKADOT, "0x2a57fe4beb69e8201299f2c01259a025cafc8388bb38e2a727c2fc872893e13a"],
-    [SCCP_DOMAIN_SORA2, "0xdac819bff0aa57f7596f06297dfec39027aaab63213497020b772c355a6eaecb"],
+    [
+      SCCP_DOMAIN_ETH,
+      "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
+    ],
+    [
+      SCCP_DOMAIN_BSC,
+      "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d",
+    ],
+    [
+      SCCP_DOMAIN_SOL,
+      "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc",
+    ],
+    [
+      SCCP_DOMAIN_TON,
+      "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887",
+    ],
+    [
+      SCCP_DOMAIN_TRON,
+      "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+    ],
+    [
+      SCCP_DOMAIN_SORA_KUSAMA,
+      "0xda47a31715813ef5bff0882cd0e0e8b0cc89d426e005e37e0f94a2bdba2043cd",
+    ],
+    [
+      SCCP_DOMAIN_SORA_POLKADOT,
+      "0x2a57fe4beb69e8201299f2c01259a025cafc8388bb38e2a727c2fc872893e13a",
+    ],
+    [
+      SCCP_DOMAIN_SORA2,
+      "0xdac819bff0aa57f7596f06297dfec39027aaab63213497020b772c355a6eaecb",
+    ],
   ]);
   for (const [sourceDomain, materialHash] of materialVectors.entries()) {
     const input = sampleSourceRecordInput(sourceDomain);
     const material = normalizeSccpSourceVerifierMaterial(input);
     const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
     assert.equal(material.placeholderMaterial, false);
-    assert.equal(canonicalSccpSourceVerifierMaterialBytes(material).length > 0, true);
-    assert.equal(canonicalSccpSourceAdapterEngineDeploymentBytes(deployment).length > 0, true);
+    assert.equal(
+      canonicalSccpSourceVerifierMaterialBytes(material).length > 0,
+      true,
+    );
+    assert.equal(
+      canonicalSccpSourceAdapterEngineDeploymentBytes(deployment).length > 0,
+      true,
+    );
     assert.equal(sccpSourceVerifierMaterialHash(input), materialHash);
-    assert.equal(sccpSourceAdapterEngineDeploymentHash(input), deploymentVectors.get(sourceDomain));
+    assert.equal(
+      sccpSourceAdapterEngineDeploymentHash(input),
+      deploymentVectors.get(sourceDomain),
+    );
   }
   assert.throws(
     () =>
@@ -6988,7 +8124,10 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
       }),
     /deploymentReceiptHash must not use multiple aliases/,
   );
-  for (const [field, templateHash] of TON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.entries()) {
+  for (const [
+    field,
+    templateHash,
+  ] of TON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.entries()) {
     assert.throws(
       () =>
         normalizeSccpSourceVerifierMaterial({
@@ -6998,7 +8137,10 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
       /TON template (verifier|component) hash/,
     );
   }
-  for (const [field, templateHash] of TRON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.entries()) {
+  for (const [
+    field,
+    templateHash,
+  ] of TRON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.entries()) {
     assert.throws(
       () =>
         normalizeSccpSourceVerifierMaterial({
@@ -7008,7 +8150,10 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
       /TRON template component hash/,
     );
   }
-  for (const [field, templateHash] of SOLANA_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.entries()) {
+  for (const [
+    field,
+    templateHash,
+  ] of SOLANA_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.entries()) {
     assert.throws(
       () =>
         normalizeSccpSourceVerifierMaterial({
@@ -7077,7 +8222,10 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
     "0x2c94b86a665bb68708b762c678661f5e9879bd588627e93a640796eeaef970f9",
   );
   assert.throws(
-    () => sccpSolanaFullLightClientGateHash(sampleSourceRecordInput(SCCP_DOMAIN_SOL)),
+    () =>
+      sccpSolanaFullLightClientGateHash(
+        sampleSourceRecordInput(SCCP_DOMAIN_SOL),
+      ),
     /audited Solana -> SORA deployment/,
   );
   assert.throws(
@@ -7133,7 +8281,9 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
       sccpSolanaFullLightClientGateHash({
         ...sampleSourceRecordInput(SCCP_DOMAIN_SOL),
         solanaTowerReplayVerifierHash:
-          SOLANA_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.get("sourceTrustAnchorHash"),
+          SOLANA_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.get(
+            "sourceTrustAnchorHash",
+          ),
         solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
         solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
       }),
@@ -7165,7 +8315,8 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
     "0xc32d8cfc2e273646abb00911b9a15e7ee0ab1721b04a6e89a060422dd3cc4596",
   );
   assert.throws(
-    () => sccpTonFullLightClientGateHash(sampleSourceRecordInput(SCCP_DOMAIN_TON)),
+    () =>
+      sccpTonFullLightClientGateHash(sampleSourceRecordInput(SCCP_DOMAIN_TON)),
     /audited TON -> SORA deployment/,
   );
   assert.throws(
@@ -7213,7 +8364,10 @@ const sampleTonFullLightClientAuditProofInput = (overrides = {}) => {
     configLeafHash,
     configLeafIndex: SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
     configValueHash: TON_MASTERCHAIN_CONFIG_VALUE_HASH,
-    configDictionaryProofBoc: Buffer.from(TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX, "hex"),
+    configDictionaryProofBoc: Buffer.from(
+      TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX,
+      "hex",
+    ),
     configInclusionBranch: [],
   };
   return {
@@ -7249,10 +8403,17 @@ const sampleTonFullLightClientAuditProofInput = (overrides = {}) => {
     shardStateDictionaryRoot: TON_SHARD_ACCOUNTS_ROOT_HASH,
     shardStateDictionaryKeyBitLen: 256,
     shardStateDictionaryKey: TON_SHARD_ACCOUNT_KEY,
-    shardStateDictionaryProofBoc: Buffer.from(TON_SHARD_ACCOUNTS_BOC_HEX, "hex"),
+    shardStateDictionaryProofBoc: Buffer.from(
+      TON_SHARD_ACCOUNTS_BOC_HEX,
+      "hex",
+    ),
     masterchainSignatureHash: TON_MASTERCHAIN_SIGNATURES_HASH,
-    shardProofHash: "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf",
-    configDictionaryProofBoc: Buffer.from(TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX, "hex"),
+    shardProofHash:
+      "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf",
+    configDictionaryProofBoc: Buffer.from(
+      TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX,
+      "hex",
+    ),
     validatorSetTransitionProofs: [],
     shardStateVerificationProof: {
       version: 1,
@@ -7267,21 +8428,28 @@ const sampleTonFullLightClientAuditProofInput = (overrides = {}) => {
 test("builds TON full light-client audit role proof requests", () => {
   const input = sampleTonFullLightClientAuditProofInput();
   const requests = buildTonSccpFullLightClientAuditProofRequests(input);
-  const shardStateProofPublicInputsHash = tonShardStateProofPublicInputsHash(input);
-  const shardStateVerificationProofHash = tonSccpShardStateVerificationProofHash(
-    input.shardStateVerificationProof,
-  );
+  const shardStateProofPublicInputsHash =
+    tonShardStateProofPublicInputsHash(input);
+  const shardStateVerificationProofHash =
+    tonSccpShardStateVerificationProofHash(input.shardStateVerificationProof);
   assert.ok(
-    canonicalTonSccpSourceStateVerificationProofBytes(input.shardStateVerificationProof).length > 0,
+    canonicalTonSccpSourceStateVerificationProofBytes(
+      input.shardStateVerificationProof,
+    ).length > 0,
   );
 
-  assert.deepEqual(
-    Object.keys(requests),
-    ["masterchainConfig", "validatorSetTransition", "shardAccountsDictionary"],
-  );
+  assert.deepEqual(Object.keys(requests), [
+    "masterchainConfig",
+    "validatorSetTransition",
+    "shardAccountsDictionary",
+  ]);
   assert.deepEqual(
     Object.values(requests).map((request) => request.role),
-    ["masterchain_config", "validator_set_transition", "shard_accounts_dictionary"],
+    [
+      "masterchain_config",
+      "validator_set_transition",
+      "shard_accounts_dictionary",
+    ],
   );
   assert.equal(Object.isFrozen(requests), true);
   assert.equal(
@@ -7300,7 +8468,12 @@ test("builds TON full light-client audit role proof requests", () => {
     new Set(Object.values(requests).map((request) => request.circuitId)).size,
     3,
   );
-  assert.ok(canonicalTonSccpFullLightClientAuditStatementBytes(input, "masterchainConfig").length > 0);
+  assert.ok(
+    canonicalTonSccpFullLightClientAuditStatementBytes(
+      input,
+      "masterchainConfig",
+    ).length > 0,
+  );
   for (const request of Object.values(requests)) {
     assertImmutableFastpqProofRequest(request, [
       "statementBytes",
@@ -7313,33 +8486,66 @@ test("builds TON full light-client audit role proof requests", () => {
     assert.equal(request.sourceDomain, SCCP_DOMAIN_TON);
     assert.equal(request.masterchainSeqno, "19");
     assert.equal(request.shardSeqno, "7");
-    assert.equal(request.sourceStateVerifierId, SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1);
-    assert.equal(request.fullLightClientGateHash, sccpTonFullLightClientGateHash(input));
-    assert.equal(request.shardStateProofPublicInputsHash, shardStateProofPublicInputsHash);
-    assert.equal(request.shardStateVerificationProofHash, shardStateVerificationProofHash);
+    assert.equal(
+      request.sourceStateVerifierId,
+      SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+    );
+    assert.equal(
+      request.fullLightClientGateHash,
+      sccpTonFullLightClientGateHash(input),
+    );
+    assert.equal(
+      request.shardStateProofPublicInputsHash,
+      shardStateProofPublicInputsHash,
+    );
+    assert.equal(
+      request.shardStateVerificationProofHash,
+      shardStateVerificationProofHash,
+    );
     assert.equal(
       request.auditStatementHash,
       tonSccpFullLightClientAuditStatementHash(input, request.role),
     );
     assert.deepEqual(
       request.schemaDescriptor,
-      tonSccpFullLightClientAuditOpenVerifySchemaDescriptor(input, request.role),
+      tonSccpFullLightClientAuditOpenVerifySchemaDescriptor(
+        input,
+        request.role,
+      ),
     );
     assert.deepEqual(
       request.publicInputColumns,
       tonSccpFullLightClientAuditPublicInputColumns(input, request.role),
     );
-    assert.equal(request.publicInputColumns.length, request.role === "validator_set_transition" ? 16 : 17);
+    assert.equal(
+      request.publicInputColumns.length,
+      request.role === "validator_set_transition" ? 16 : 17,
+    );
     assert.equal(request.fastpqTransitions.length, 3);
     assert.deepEqual(
       request.fastpqTransitions,
-      [...request.fastpqTransitions].sort((left, right) => left.key.localeCompare(right.key)),
+      [...request.fastpqTransitions].sort((left, right) =>
+        left.key.localeCompare(right.key),
+      ),
     );
-    assert.ok(request.fastpqTransitions.every((transition) => transition.key.startsWith("0x")));
+    assert.ok(
+      request.fastpqTransitions.every((transition) =>
+        transition.key.startsWith("0x"),
+      ),
+    );
   }
-  assert.equal(requests.masterchainConfig.fastpqPublicInputs.oldRoot, TON_MASTERCHAIN_CONFIG_ROOT);
-  assert.equal(requests.validatorSetTransition.fastpqPublicInputs.oldRoot, TON_VALIDATOR_SET_HASH);
-  assert.equal(requests.shardAccountsDictionary.fastpqPublicInputs.newRoot, TON_HASHMAP_E_VALUE_HASH);
+  assert.equal(
+    requests.masterchainConfig.fastpqPublicInputs.oldRoot,
+    TON_MASTERCHAIN_CONFIG_ROOT,
+  );
+  assert.equal(
+    requests.validatorSetTransition.fastpqPublicInputs.oldRoot,
+    TON_VALIDATOR_SET_HASH,
+  );
+  assert.equal(
+    requests.shardAccountsDictionary.fastpqPublicInputs.newRoot,
+    TON_HASHMAP_E_VALUE_HASH,
+  );
   assert.throws(
     () =>
       buildTonSccpFullLightClientAuditProofRequests(
@@ -7376,7 +8582,10 @@ test("builds TON full light-client audit role proof requests", () => {
     () =>
       buildTonSccpFullLightClientAuditProofRequests(
         sampleTonFullLightClientAuditProofInput({
-          tonMasterchainConfigVerifierHash: TON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.get("sourceTrustAnchorHash"),
+          tonMasterchainConfigVerifierHash:
+            TON_TEMPLATE_SOURCE_MATERIAL_COMPONENT_HASHES.get(
+              "sourceTrustAnchorHash",
+            ),
         }),
       ),
     /built-in template material/,
@@ -7418,8 +8627,12 @@ test("builds TON full light-client audit role proof requests", () => {
     () =>
       canonicalTonSccpSourceStateVerificationProofBytes({
         ...input.shardStateVerificationProof,
-        proofBase64: Buffer.from(input.shardStateVerificationProof.proofBytes).toString("base64"),
-        proof_base64: Buffer.from(input.shardStateVerificationProof.proofBytes).toString("base64"),
+        proofBase64: Buffer.from(
+          input.shardStateVerificationProof.proofBytes,
+        ).toString("base64"),
+        proof_base64: Buffer.from(
+          input.shardStateVerificationProof.proofBytes,
+        ).toString("base64"),
       }),
     /sourceStateProof\.proofBase64 must not use multiple aliases/,
   );
@@ -7527,9 +8740,14 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
     Uint8Array.from([9, 8, 7]),
     shardRequest,
   );
-  assert.equal(wrappedShard.circuitId, SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1);
+  assert.equal(
+    wrappedShard.circuitId,
+    SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
   assert.equal(wrappedShard.proofBase64, "CQgH");
-  assert.ok(canonicalTonSccpSourceStateVerificationProofBytes(wrappedShard).length > 0);
+  assert.ok(
+    canonicalTonSccpSourceStateVerificationProofBytes(wrappedShard).length > 0,
+  );
 
   const auditRequests = buildTonSccpFullLightClientAuditProofRequests(input);
   const wrappedAudit = wrapTonSccpSourceStateVerificationProof(
@@ -7540,61 +8758,105 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
     wrappedAudit.circuitId,
     SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1,
   );
-  assert.ok(canonicalTonSccpSourceStateVerificationProofBytes(wrappedAudit).length > 0);
+  assert.ok(
+    canonicalTonSccpSourceStateVerificationProofBytes(wrappedAudit).length > 0,
+  );
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([0, 0]), shardRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([0, 0]),
+        shardRequest,
+      ),
     /proofBytes must not be all zero/,
   );
   const tamperedShardRequest = mutableFastpqProofRequest(shardRequest);
   tamperedShardRequest.fastpqTransitions[0].newValue = "0x00";
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([9, 8, 7]), tamperedShardRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        tamperedShardRequest,
+      ),
     /canonical TON source-state request/u,
   );
   const tamperedShardHashRequest = mutableFastpqProofRequest(shardRequest);
   tamperedShardHashRequest.shardStateProofPublicInputsHash = HEX32_A;
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([9, 8, 7]), tamperedShardHashRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        tamperedShardHashRequest,
+      ),
     /statementBytes/u,
   );
   const tamperedShardDsidRequest = mutableFastpqProofRequest(shardRequest);
-  tamperedShardDsidRequest.fastpqPublicInputs.dsid = "0x00000000000000000000000000000000";
+  tamperedShardDsidRequest.fastpqPublicInputs.dsid =
+    "0x00000000000000000000000000000000";
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([9, 8, 7]), tamperedShardDsidRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        tamperedShardDsidRequest,
+      ),
     /fastpqPublicInputs\.dsid/u,
   );
   const duplicateShardAliasRequest = mutableFastpqProofRequest(shardRequest);
-  duplicateShardAliasRequest.source_domain = duplicateShardAliasRequest.sourceDomain;
+  duplicateShardAliasRequest.source_domain =
+    duplicateShardAliasRequest.sourceDomain;
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([9, 8, 7]), duplicateShardAliasRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        duplicateShardAliasRequest,
+      ),
     /multiple aliases/u,
   );
-  const duplicateShardFastpqAliasRequest = mutableFastpqProofRequest(shardRequest);
+  const duplicateShardFastpqAliasRequest =
+    mutableFastpqProofRequest(shardRequest);
   duplicateShardFastpqAliasRequest.fastpqPublicInputs.tx_set_hash =
     duplicateShardFastpqAliasRequest.fastpqPublicInputs.txSetHash;
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(
-      Uint8Array.from([9, 8, 7]),
-      duplicateShardFastpqAliasRequest,
-    ),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        duplicateShardFastpqAliasRequest,
+      ),
     /multiple aliases/u,
   );
-  const tamperedAuditRequest = mutableFastpqProofRequest(auditRequests.masterchainConfig);
+  const tamperedAuditRequest = mutableFastpqProofRequest(
+    auditRequests.masterchainConfig,
+  );
   tamperedAuditRequest.fastpqTransitions[0].newValue = "0x00";
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([9, 8, 7]), tamperedAuditRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        tamperedAuditRequest,
+      ),
     /canonical TON source-state request/u,
   );
-  const tamperedAuditHashRequest = mutableFastpqProofRequest(auditRequests.masterchainConfig);
+  const tamperedAuditHashRequest = mutableFastpqProofRequest(
+    auditRequests.masterchainConfig,
+  );
   tamperedAuditHashRequest.auditStatementHash = HEX32_A;
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([9, 8, 7]), tamperedAuditHashRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        tamperedAuditHashRequest,
+      ),
     /statementBytes/u,
   );
-  const tamperedAuditTxRequest = mutableFastpqProofRequest(auditRequests.masterchainConfig);
+  const tamperedAuditTxRequest = mutableFastpqProofRequest(
+    auditRequests.masterchainConfig,
+  );
   tamperedAuditTxRequest.fastpqPublicInputs.txSetHash = HEX32_A;
   assert.throws(
-    () => wrapTonSccpSourceStateVerificationProof(Uint8Array.from([9, 8, 7]), tamperedAuditTxRequest),
+    () =>
+      wrapTonSccpSourceStateVerificationProof(
+        Uint8Array.from([9, 8, 7]),
+        tamperedAuditTxRequest,
+      ),
     /fastpqPublicInputs\.txSetHash/u,
   );
 
@@ -7632,7 +8894,8 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
         shardSeqno: request.shardSeqno,
         sourceStateVerifierId: request.sourceStateVerifierId,
         sourceStateVerifierHash: request.sourceStateVerifierHash,
-        shardStateProofPublicInputsHash: request.shardStateProofPublicInputsHash,
+        shardStateProofPublicInputsHash:
+          request.shardStateProofPublicInputsHash,
         publicInputColumns: request.publicInputColumns,
         fastpqPublicInputs: request.fastpqPublicInputs,
         fastpqTransitions: request.fastpqTransitions,
@@ -7646,9 +8909,11 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
         result.verifierId = request.verifierId;
         result.verifierHash = request.verifierHash;
         result.sourceVerifierMaterialHash = request.sourceVerifierMaterialHash;
-        result.sourceAdapterDeploymentHash = request.sourceAdapterDeploymentHash;
+        result.sourceAdapterDeploymentHash =
+          request.sourceAdapterDeploymentHash;
         result.fullLightClientGateHash = request.fullLightClientGateHash;
-        result.shardStateVerificationProofHash = request.shardStateVerificationProofHash;
+        result.shardStateVerificationProofHash =
+          request.shardStateVerificationProofHash;
         result.auditStatementHash = request.auditStatementHash;
       } else {
         result.witnessCommitmentBytes = request.witnessCommitmentBytes;
@@ -7658,7 +8923,10 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
   });
   const shardProof = await prover.proveShardState(input);
   const auditProofs = await prover.proveFullLightClientAudit(input);
-  assert.equal(shardProof.circuitId, SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1);
+  assert.equal(
+    shardProof.circuitId,
+    SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
+  );
   assert.deepEqual(roles, [
     "shard_state",
     "masterchain_config",
@@ -7730,7 +8998,9 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
         prove(request) {
           return {
             proofBytes: [1, 2, 3],
-            masterchainSeqno: (BigInt(request.masterchainSeqno) + 1n).toString(),
+            masterchainSeqno: (
+              BigInt(request.masterchainSeqno) + 1n
+            ).toString(),
           };
         },
       }).proveShardState(input),
@@ -7743,7 +9013,9 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
           return {
             proofBytes: [1, 2, 3],
             shardStateVerificationProofHash:
-              request.shardStateVerificationProofHash === HEX32_A ? HEX32_B : HEX32_A,
+              request.shardStateVerificationProofHash === HEX32_A
+                ? HEX32_B
+                : HEX32_A,
           };
         },
       }).proveFullLightClientAudit(input),
@@ -7752,7 +9024,9 @@ test("wraps TON source-state proof requests with user-side proof bytes", async (
 });
 
 test("TON source-state prover snapshots mutable callback requests", async () => {
-  const builtRequest = buildTonShardStateProofRequest(sampleTonFullLightClientAuditProofInput());
+  const builtRequest = buildTonShardStateProofRequest(
+    sampleTonFullLightClientAuditProofInput(),
+  );
   const mutableRequest = mutableFastpqProofRequest(builtRequest);
   const expectedStatementByte = mutableRequest.statementBytes[0];
   const prover = new TonSccpSourceStateProver({
@@ -7762,7 +9036,8 @@ test("TON source-state prover snapshots mutable callback requests", async () => 
       assert.equal(Object.isFrozen(request.fastpqTransitions), true);
       assert.equal(Object.isFrozen(request.fastpqTransitions[0]), true);
       assert.throws(() => {
-        request.circuitId = SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1;
+        request.circuitId =
+          SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1;
       }, TypeError);
       assert.throws(() => {
         request.fastpqTransitions[0].newValue = "0x00";
@@ -7770,7 +9045,8 @@ test("TON source-state prover snapshots mutable callback requests", async () => 
       const exposedStatement = request.statementBytes;
       exposedStatement[0] ^= 0xff;
       assert.equal(request.statementBytes[0], expectedStatementByte);
-      mutableRequest.circuitId = SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1;
+      mutableRequest.circuitId =
+        SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1;
       return [4, 5, 6];
     },
   });
@@ -7782,9 +9058,12 @@ test("TON source-state prover snapshots mutable callback requests", async () => 
 });
 
 test("builds Solana SCCP program instruction submission data", () => {
-  const solanaDestinationBindingHash = sccpDestinationBindingHash(SCCP_DOMAIN_SOL);
+  const solanaDestinationBindingHash =
+    sccpDestinationBindingHash(SCCP_DOMAIN_SOL);
   const proofRequest = buildSolanaSccpProofRequest(
-    sampleProductionWitness({ destinationBindingHash: solanaDestinationBindingHash }),
+    sampleProductionWitness({
+      destinationBindingHash: solanaDestinationBindingHash,
+    }),
   );
   const proofResult = wrapSolanaSccpProofResult(
     Uint8Array.from([1, 2, 3, 4]),
@@ -8241,7 +9520,9 @@ test("builds Solana SCCP program instruction submission data", () => {
         publicInputs: submission.publicInputs,
         proofResult,
         proofBytes: [1],
-        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array(
+          SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
         statementHash: HEX32_G,
         destinationBindingHash: solanaDestinationBindingHash,
       }),
@@ -8330,8 +9611,12 @@ test("rejects malformed EVM-family and TRON Groth16 proof tuples", () => {
   [
     abiWord(0),
     abiWord(1),
-    abiWord(0x0cf32d3c49a2cb8a092f24ec3201e68dc299b6216e6321ee60573e3a7f596ea8n),
-    abiWord(0x07bca656753ef8cbee60335acbffe3def91636952d4ab9eb0b839c7f3566c0e2n),
+    abiWord(
+      0x0cf32d3c49a2cb8a092f24ec3201e68dc299b6216e6321ee60573e3a7f596ea8n,
+    ),
+    abiWord(
+      0x07bca656753ef8cbee60335acbffe3def91636952d4ab9eb0b839c7f3566c0e2n,
+    ),
   ].forEach((word, offset) => nonSubgroupB.set(word, (6 + offset) * 32));
   assert.throws(
     () => wrapEvmSccpProofResult(nonSubgroupB, evmRequest),
@@ -8356,7 +9641,12 @@ test("rejects malformed EVM-family and TRON Groth16 proof tuples", () => {
     /proofBytes\.sourceDomain must match sourceDomain/,
   );
   assert.throws(
-    () => sccpSubmitMessageProofCallData(wrongSourceDomain, sampleTronPublicInputs, HEX32_G),
+    () =>
+      sccpSubmitMessageProofCallData(
+        wrongSourceDomain,
+        sampleTronPublicInputs,
+        HEX32_G,
+      ),
     /proofBytes\.sourceDomain must match sourceDomain/,
   );
   assert.throws(
@@ -8415,7 +9705,8 @@ test("wraps externally generated Solana SCCP proof bytes", async () => {
         sourceAdapterDeploymentBinding: request.sourceAdapterDeploymentBinding,
         witnessHash: request.witnessHash,
         proofContextHash: request.proofContextHash,
-        sourceAdapterDeploymentBindingHash: request.sourceAdapterDeploymentBindingHash,
+        sourceAdapterDeploymentBindingHash:
+          request.sourceAdapterDeploymentBindingHash,
         envelopeHash: wrapped.envelopeHash,
       };
     },
@@ -8423,7 +9714,10 @@ test("wraps externally generated Solana SCCP proof bytes", async () => {
 
   const result = await prover.prove(productionWitness);
   const request = buildSolanaSccpProofRequest(productionWitness);
-  const directResult = wrapSolanaSccpProofResult(Uint8Array.from([1, 2, 3, 4]), request);
+  const directResult = wrapSolanaSccpProofResult(
+    Uint8Array.from([1, 2, 3, 4]),
+    request,
+  );
 
   assert.notEqual(callbackRequest, request);
   assert.deepEqual(callbackRequest, request);
@@ -8573,7 +9867,8 @@ test("wraps externally generated Solana SCCP proof bytes", async () => {
         },
       }).prove(
         sampleProductionWitness({
-          sourceStateVerifierHash: SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
+          sourceStateVerifierHash:
+            SCCP_SOLANA_TEMPLATE_SOURCE_STATE_VERIFIER_HASH_V1,
         }),
       ),
     /Solana template verifier hash/,
@@ -8624,15 +9919,25 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     sourceAdapterDeploymentHash: HEX32_A,
     sourceAdapterDeploymentReceiptHash: HEX32_D,
   });
-  const proofResult = wrapTonSccpProofResult(Uint8Array.from([1, 2, 3, 4]), request);
+  const proofResult = wrapTonSccpProofResult(
+    Uint8Array.from([1, 2, 3, 4]),
+    request,
+  );
   const messageBodyBoc = buildSccpTonMessageBodyBoc({
     proofResult,
     bundleBytes: Uint8Array.from([5, 6, 7]),
     metadataBytes: Uint8Array.from([8, 9]),
   });
 
-  assert.deepEqual(Array.from(messageBodyBoc.slice(0, 4)), [0xb5, 0xee, 0x9c, 0x72]);
-  assert.ok(messageBodyBoc.length > canonicalSccpMessageTransparentPublicInputsBytes(sampleTonPublicInputs).length);
+  assert.deepEqual(
+    Array.from(messageBodyBoc.slice(0, 4)),
+    [0xb5, 0xee, 0x9c, 0x72],
+  );
+  assert.ok(
+    messageBodyBoc.length >
+      canonicalSccpMessageTransparentPublicInputsBytes(sampleTonPublicInputs)
+        .length,
+  );
 
   const submission = buildTonSccpSubmission({
     proofResult,
@@ -8690,7 +9995,10 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   assert.throws(
     () =>
       buildTonSccpSubmission({
-        proofResult: { ...proofResult, proof_context: proofResult.proofContext },
+        proofResult: {
+          ...proofResult,
+          proof_context: proofResult.proofContext,
+        },
         bundleBytes: Uint8Array.from([5, 6, 7]),
       }),
     /proofResult\.proofContext must not use multiple aliases/,
@@ -8758,7 +10066,10 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     metadataBytes: Uint8Array.from([8, 9]),
   });
   assert.equal(omittedSourceProofResult.sourceProofBytes.length, 0);
-  assert.equal(omittedSourceProofSubmission.envelopeHex, submission.envelopeHex);
+  assert.equal(
+    omittedSourceProofSubmission.envelopeHex,
+    submission.envelopeHex,
+  );
   for (const badMetadataBytes of [false, 0, ""]) {
     assert.throws(
       () =>
@@ -8834,7 +10145,10 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   assert.throws(
     () =>
       buildTonSccpSubmission({
-        proofResult: { ...proofResult, sourceStateVerifierHash: SCCP_ZERO_HASH_V1 },
+        proofResult: {
+          ...proofResult,
+          sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
+        },
         bundleBytes: Uint8Array.from([5, 6, 7]),
       }),
     /proofResult\.sourceStateVerifierHash must not be zero/,
@@ -8857,7 +10171,10 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult,
-        publicInputs: { ...sampleTonPublicInputs, targetDomain: SCCP_DOMAIN_SOL },
+        publicInputs: {
+          ...sampleTonPublicInputs,
+          targetDomain: SCCP_DOMAIN_SOL,
+        },
         proofBytes: Uint8Array.from([1, 2, 3, 4]),
         bundleBytes: Uint8Array.from([5, 6, 7]),
         statementHash: HEX32_B,
@@ -8885,7 +10202,9 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult,
-        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array(
+          SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
       }),
     /bundleBytes must be at most/,
   );
@@ -8899,7 +10218,10 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     /proofBytes must not be all zero/,
   );
   const oversizedTonMessageProof = new Uint8Array(4096 * 127).fill(1);
-  const oversizedTonMessageResult = wrapTonSccpProofResult(oversizedTonMessageProof, request);
+  const oversizedTonMessageResult = wrapTonSccpProofResult(
+    oversizedTonMessageProof,
+    request,
+  );
   assert.throws(
     () =>
       buildTonSccpSubmission({
@@ -8951,24 +10273,41 @@ test("binds TON proof requests to relay context and source adapter deployment", 
 
   assert.equal(request.backend, SCCP_TON_CONTRACT_PROOF_BACKEND_V1);
   assert.equal(request.sourceDomain, SCCP_DOMAIN_TON);
-  assert.equal(request.sourceStateVerifierId, SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1);
+  assert.equal(
+    request.sourceStateVerifierId,
+    SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+  );
   assert.equal(request.sourceStateVerifierHash, HEX32_C);
   assert.deepEqual(request.proofContext, {
     version: 1,
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
   });
-  assert.equal(request.sourceAdapterDeploymentBinding.sourceDomain, SCCP_DOMAIN_TON);
-  assert.equal(request.sourceAdapterDeploymentBinding.targetDomain, SCCP_DOMAIN_SORA);
-  assert.equal(request.sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash, HEX32_A);
-  assert.equal(request.sourceAdapterDeploymentBinding.sourceAdapterDeploymentReceiptHash, HEX32_B);
+  assert.equal(
+    request.sourceAdapterDeploymentBinding.sourceDomain,
+    SCCP_DOMAIN_TON,
+  );
+  assert.equal(
+    request.sourceAdapterDeploymentBinding.targetDomain,
+    SCCP_DOMAIN_SORA,
+  );
+  assert.equal(
+    request.sourceAdapterDeploymentBinding.sourceAdapterDeploymentHash,
+    HEX32_A,
+  );
+  assert.equal(
+    request.sourceAdapterDeploymentBinding.sourceAdapterDeploymentReceiptHash,
+    HEX32_B,
+  );
   assert.equal(Object.isFrozen(request), true);
   assert.equal(Object.isFrozen(request.publicInputs), true);
   assert.equal(Object.isFrozen(request.proofContext), true);
   assert.equal(Object.isFrozen(request.sourceAdapterDeploymentBinding), true);
   assert.equal(
     request.sourceAdapterDeploymentBindingHash,
-    sccpSourceAdapterDeploymentBindingHash(request.sourceAdapterDeploymentBinding),
+    sccpSourceAdapterDeploymentBindingHash(
+      request.sourceAdapterDeploymentBinding,
+    ),
   );
   assert.match(request.requestHash, /^0x[0-9a-f]{64}$/);
   assert.notEqual(
@@ -9213,7 +10552,9 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        bundleBytes: new Uint8Array(
+          SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9227,7 +10568,9 @@ test("binds TON proof requests to relay context and source adapter deployment", 
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
         bundleBytes: [5, 6, 7],
-        sourceProofBytes: new Uint8Array(SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1).fill(1),
+        sourceProofBytes: new Uint8Array(
+          SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
+        ).fill(1),
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9251,7 +10594,10 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   assert.throws(
     () =>
       buildTonSccpProofRequest({
-        publicInputs: { ...sampleTonPublicInputs, targetDomain: SCCP_DOMAIN_SOL },
+        publicInputs: {
+          ...sampleTonPublicInputs,
+          targetDomain: SCCP_DOMAIN_SOL,
+        },
         bundleBytes: [5, 6, 7],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -9390,7 +10736,10 @@ test("matches TON proof request hash golden vector across SDKs", () => {
     "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b",
   );
 
-  const proofResult = wrapTonSccpProofResult([0x91, 0x92, 0x93, 0x94, 0x95], request);
+  const proofResult = wrapTonSccpProofResult(
+    [0x91, 0x92, 0x93, 0x94, 0x95],
+    request,
+  );
   assert.equal(
     proofResult.envelopeHash,
     "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab",
@@ -9529,23 +10878,48 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
   assert.equal(bytes[0], 1);
 
   const hash = tonSccpShardProofHash(input);
-  assert.equal(hash, "0x09c63ca1185b537f0a37b7b248600a0992e5b7ed64ace9d1d437db7caae00686");
-  assert.notEqual(hash, tonSccpShardProofHash({ ...input, shardStateInclusionBranch: [HEX32_E] }));
-  assert.notEqual(hash, tonSccpShardProofHash({ ...input, inclusionBranch: [HEX32_F] }));
+  assert.equal(
+    hash,
+    "0x09c63ca1185b537f0a37b7b248600a0992e5b7ed64ace9d1d437db7caae00686",
+  );
+  assert.notEqual(
+    hash,
+    tonSccpShardProofHash({ ...input, shardStateInclusionBranch: [HEX32_E] }),
+  );
+  assert.notEqual(
+    hash,
+    tonSccpShardProofHash({ ...input, inclusionBranch: [HEX32_F] }),
+  );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...input, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...input,
+        sourceEventDigest: SCCP_ZERO_HASH_V1,
+      }),
     /sourceEventDigest must not be zero/u,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...input, masterchain_seqno: input.masterchainSeqno }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...input,
+        masterchain_seqno: input.masterchainSeqno,
+      }),
     /masterchainSeqno must not use multiple aliases/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...input, receiptOrMessageRoot: input.transactionRoot }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...input,
+        receiptOrMessageRoot: input.transactionRoot,
+      }),
     /transactionRoot must not use multiple aliases/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...input, inclusion_branch: input.inclusionBranch }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...input,
+        inclusion_branch: input.inclusionBranch,
+      }),
     /inclusionBranch must not use multiple aliases/,
   );
 
@@ -9557,7 +10931,10 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
     shardStateDictionaryRoot: TON_SHARD_ACCOUNTS_ROOT_HASH,
     shardStateDictionaryKeyBitLen: 256,
     shardStateDictionaryKey: TON_SHARD_ACCOUNT_KEY,
-    shardStateDictionaryProofBoc: Buffer.from(TON_SHARD_ACCOUNTS_BOC_HEX, "hex"),
+    shardStateDictionaryProofBoc: Buffer.from(
+      TON_SHARD_ACCOUNTS_BOC_HEX,
+      "hex",
+    ),
     shardStateInclusionBranch: [],
   };
   assert.equal(
@@ -9582,7 +10959,10 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
   const dictionaryBytes = canonicalTonSccpShardProofBytes(dictionaryInput);
   const dictionaryHash = tonSccpShardProofHash(dictionaryInput);
   assert.equal(dictionaryBytes.length, 662);
-  assert.equal(dictionaryHash, "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf");
+  assert.equal(
+    dictionaryHash,
+    "0x32d8b496320e6a1ce5ccf671f2bd6f0d09cb53afed8c123b86cb9327b77c88cf",
+  );
   assert.notEqual(dictionaryHash, hash);
   const shardStateSourceStateInput = {
     sourceDomain: 4,
@@ -9606,24 +10986,45 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
     shardStateDictionaryRoot: TON_SHARD_ACCOUNTS_ROOT_HASH,
     shardStateDictionaryKeyBitLen: 256,
     shardStateDictionaryKey: TON_SHARD_ACCOUNT_KEY,
-    shardStateDictionaryProofBoc: Buffer.from(TON_SHARD_ACCOUNTS_BOC_HEX, "hex"),
+    shardStateDictionaryProofBoc: Buffer.from(
+      TON_SHARD_ACCOUNTS_BOC_HEX,
+      "hex",
+    ),
     masterchainSignatureHash: TON_MASTERCHAIN_SIGNATURES_HASH,
     shardProofHash: dictionaryHash,
-    configDictionaryProofBoc: Buffer.from(TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX, "hex"),
+    configDictionaryProofBoc: Buffer.from(
+      TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX,
+      "hex",
+    ),
     sourceStateVerifierHash: `0x${"d4".repeat(32)}`,
     sourceTrustAnchorHash: TON_VALIDATOR_SET_HASH,
     consensusVerifierHash: `0x${"b2".repeat(32)}`,
     messageInclusionVerifierHash: `0x${"c3".repeat(32)}`,
     finalityPolicyHash: `0x${"c4".repeat(32)}`,
   };
-  assert.equal(canonicalTonShardStateProofPublicInputsBytes(shardStateSourceStateInput).length, 603);
+  assert.equal(
+    canonicalTonShardStateProofPublicInputsBytes(shardStateSourceStateInput)
+      .length,
+    603,
+  );
   assert.equal(
     tonShardStateProofPublicInputsHash(shardStateSourceStateInput),
     "0x82bdedb87242c4bb073b7c97cb339b7f1300e3692e327c5bc8233bd105cafb19",
   );
-  assert.equal(canonicalTonShardStateWitnessCommitmentBytes(shardStateSourceStateInput).length, 480);
-  assert.equal(canonicalTonShardStateVerificationContextBytes(shardStateSourceStateInput).length, 467);
-  assert.equal(tonShardStateOpenVerifySchemaDescriptor(shardStateSourceStateInput).length, 436);
+  assert.equal(
+    canonicalTonShardStateWitnessCommitmentBytes(shardStateSourceStateInput)
+      .length,
+    480,
+  );
+  assert.equal(
+    canonicalTonShardStateVerificationContextBytes(shardStateSourceStateInput)
+      .length,
+    467,
+  );
+  assert.equal(
+    tonShardStateOpenVerifySchemaDescriptor(shardStateSourceStateInput).length,
+    436,
+  );
   const request = buildTonShardStateProofRequest(shardStateSourceStateInput);
   assertImmutableFastpqProofRequest(request, [
     "statementBytes",
@@ -9638,7 +11039,8 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
     oldRoot: TON_MASTERCHAIN_CONFIG_ROOT,
     newRoot: TON_SHARD_STATE_ROOT_HASH,
     permRoot: TON_SHARD_ACCOUNTS_ROOT_HASH,
-    txSetHash: "0x82bdedb87242c4bb073b7c97cb339b7f1300e3692e327c5bc8233bd105cafb19",
+    txSetHash:
+      "0x82bdedb87242c4bb073b7c97cb339b7f1300e3692e327c5bc8233bd105cafb19",
   });
   assert.deepEqual(
     request.fastpqTransitions.map((transition) => transition.key),
@@ -9660,7 +11062,8 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
     () =>
       canonicalTonShardStateProofPublicInputsBytes({
         ...shardStateSourceStateInput,
-        shard_state_dictionary_proof_boc: shardStateSourceStateInput.shardStateDictionaryProofBoc,
+        shard_state_dictionary_proof_boc:
+          shardStateSourceStateInput.shardStateDictionaryProofBoc,
       }),
     /shardStateDictionaryProofBoc must not use multiple aliases/,
   );
@@ -9669,7 +11072,8 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       buildTonShardStateProofRequest({
         ...shardStateSourceStateInput,
         masterchainConfigProof: {
-          configDictionaryProofBoc: shardStateSourceStateInput.configDictionaryProofBoc,
+          configDictionaryProofBoc:
+            shardStateSourceStateInput.configDictionaryProofBoc,
         },
       }),
     /configDictionaryProofBoc must not use multiple aliases/,
@@ -9678,7 +11082,8 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
     () =>
       canonicalTonShardStateWitnessCommitmentBytes({
         ...shardStateSourceStateInput,
-        source_state_verifier_hash: shardStateSourceStateInput.sourceStateVerifierHash,
+        source_state_verifier_hash:
+          shardStateSourceStateInput.sourceStateVerifierHash,
       }),
     /sourceStateVerifierHash must not use multiple aliases/,
   );
@@ -9694,7 +11099,10 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
     masterchainFileHash: `0x${"a5".repeat(32)}`,
     parentValidatorSetHash: TON_VALIDATOR_SET_HASH,
     nextValidatorSetHash: TON_NEXT_VALIDATOR_SET_HASH,
-    nextValidatorSetPayload: Buffer.from(TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX, "hex"),
+    nextValidatorSetPayload: Buffer.from(
+      TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX,
+      "hex",
+    ),
     nextValidatorSetPayloadHash: TON_NEXT_VALIDATOR_SET_PAYLOAD_HASH,
     nextValidatorSetConfigHash: HEX32_C,
     transitionMessageHash: TON_VALIDATOR_SET_TRANSITION_MESSAGE_HASH,
@@ -9707,7 +11115,10 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
       validatorWeights: [1n, 2n],
       signersBitmap: [0x03],
-      signatures: [new Uint8Array(64).fill(0xab), new Uint8Array(64).fill(0xcd)],
+      signatures: [
+        new Uint8Array(64).fill(0xab),
+        new Uint8Array(64).fill(0xcd),
+      ],
     },
   };
   const transitionBoundInput = {
@@ -9719,33 +11130,36 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
   );
   tamperedTransitionSignature[0] ^= 0x01;
   assert.throws(
-    () => canonicalTonShardStateProofPublicInputsBytes({
-      ...transitionBoundInput,
-      validatorSetTransitionProofs: [
-        {
-          ...transitionProof,
-          validatorSignatureProof: {
-            ...transitionProof.validatorSignatureProof,
-            signatures: [
-              tamperedTransitionSignature,
-              transitionProof.validatorSignatureProof.signatures[1],
-            ],
+    () =>
+      canonicalTonShardStateProofPublicInputsBytes({
+        ...transitionBoundInput,
+        validatorSetTransitionProofs: [
+          {
+            ...transitionProof,
+            validatorSignatureProof: {
+              ...transitionProof.validatorSignatureProof,
+              signatures: [
+                tamperedTransitionSignature,
+                transitionProof.validatorSignatureProof.signatures[1],
+              ],
+            },
           },
-        },
-      ],
-    }),
+        ],
+      }),
     /transitionSignatureHash/,
   );
   assert.throws(
-    () => buildTonShardStateProofRequest({
-      ...transitionBoundInput,
-      validatorSetTransitionProofs: [
-        {
-          ...transitionProof,
-          transition_signature_hash: TON_VALIDATOR_SET_TRANSITION_SIGNATURE_HASH,
-        },
-      ],
-    }),
+    () =>
+      buildTonShardStateProofRequest({
+        ...transitionBoundInput,
+        validatorSetTransitionProofs: [
+          {
+            ...transitionProof,
+            transition_signature_hash:
+              TON_VALIDATOR_SET_TRANSITION_SIGNATURE_HASH,
+          },
+        ],
+      }),
     /transitionSignatureHash must not use multiple aliases/,
   );
   assert.throws(
@@ -9756,31 +11170,56 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       }),
     /TON template verifier hash/,
   );
-  assert.deepEqual(tonShardStatePublicInputColumns(shardStateSourceStateInput)[15], [
-    "0x82bdedb87242c4bb073b7c97cb339b7f1300e3692e327c5bc8233bd105cafb19",
-  ]);
+  assert.deepEqual(
+    tonShardStatePublicInputColumns(shardStateSourceStateInput)[15],
+    ["0x82bdedb87242c4bb073b7c97cb339b7f1300e3692e327c5bc8233bd105cafb19"],
+  );
   assert.throws(
-    () => tonShardStateProofPublicInputsHash({ ...shardStateSourceStateInput, transactionRoot: HEX32_C }),
+    () =>
+      tonShardStateProofPublicInputsHash({
+        ...shardStateSourceStateInput,
+        transactionRoot: HEX32_C,
+      }),
     /last transaction hash/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...dictionaryInput, shardStateInclusionBranch: [HEX32_F] }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...dictionaryInput,
+        shardStateInclusionBranch: [HEX32_F],
+      }),
     /must be empty/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...dictionaryInput, shardStateProofBoc: new Uint8Array() }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...dictionaryInput,
+        shardStateProofBoc: new Uint8Array(),
+      }),
     /must not be empty/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...dictionaryInput, shardStateRoot: `0x${"66".repeat(32)}` }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...dictionaryInput,
+        shardStateRoot: `0x${"66".repeat(32)}`,
+      }),
     /root must match shardStateRoot/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...dictionaryInput, transactionRoot: `0x${"66".repeat(32)}` }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...dictionaryInput,
+        transactionRoot: `0x${"66".repeat(32)}`,
+      }),
     /ShardAccount last transaction hash must match transactionRoot/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...dictionaryInput, transactionLt: 8n }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...dictionaryInput,
+        transactionLt: 8n,
+      }),
     /ShardAccount last transaction lt must match transactionLt/,
   );
   assert.throws(
@@ -9799,11 +11238,23 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       }),
     /must not be zero/,
   );
-  const wrongGlobalIdProofBoc = Buffer.from(TON_SHARD_STATE_PROOF_BOC_HEX, "hex");
-  const wrongGlobalIdTagOffset = wrongGlobalIdProofBoc.indexOf(Buffer.from([0x90, 0x23, 0xaf, 0xe2]));
+  const wrongGlobalIdProofBoc = Buffer.from(
+    TON_SHARD_STATE_PROOF_BOC_HEX,
+    "hex",
+  );
+  const wrongGlobalIdTagOffset = wrongGlobalIdProofBoc.indexOf(
+    Buffer.from([0x90, 0x23, 0xaf, 0xe2]),
+  );
   assert.notEqual(wrongGlobalIdTagOffset, -1);
-  wrongGlobalIdProofBoc.fill(0, wrongGlobalIdTagOffset + 4, wrongGlobalIdTagOffset + 8);
-  assert.equal(tonShardStateAccountsRootHash(wrongGlobalIdProofBoc), TON_SHARD_ACCOUNTS_ROOT_HASH);
+  wrongGlobalIdProofBoc.fill(
+    0,
+    wrongGlobalIdTagOffset + 4,
+    wrongGlobalIdTagOffset + 8,
+  );
+  assert.equal(
+    tonShardStateAccountsRootHash(wrongGlobalIdProofBoc),
+    TON_SHARD_ACCOUNTS_ROOT_HASH,
+  );
   assert.throws(
     () =>
       canonicalTonSccpShardProofBytes({
@@ -9813,12 +11264,24 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       }),
     /global_id/,
   );
-  const wrongWorkchainIdProofBoc = Buffer.from(TON_SHARD_STATE_PROOF_BOC_HEX, "hex");
-  const wrongWorkchainIdTagOffset = wrongWorkchainIdProofBoc.indexOf(Buffer.from([0x90, 0x23, 0xaf, 0xe2]));
+  const wrongWorkchainIdProofBoc = Buffer.from(
+    TON_SHARD_STATE_PROOF_BOC_HEX,
+    "hex",
+  );
+  const wrongWorkchainIdTagOffset = wrongWorkchainIdProofBoc.indexOf(
+    Buffer.from([0x90, 0x23, 0xaf, 0xe2]),
+  );
   assert.notEqual(wrongWorkchainIdTagOffset, -1);
   const wrongWorkchainShardIdentOffset = wrongWorkchainIdTagOffset + 8;
-  wrongWorkchainIdProofBoc.fill(0xff, wrongWorkchainShardIdentOffset + 1, wrongWorkchainShardIdentOffset + 5);
-  assert.equal(tonShardStateAccountsRootHash(wrongWorkchainIdProofBoc), TON_SHARD_ACCOUNTS_ROOT_HASH);
+  wrongWorkchainIdProofBoc.fill(
+    0xff,
+    wrongWorkchainShardIdentOffset + 1,
+    wrongWorkchainShardIdentOffset + 5,
+  );
+  assert.equal(
+    tonShardStateAccountsRootHash(wrongWorkchainIdProofBoc),
+    TON_SHARD_ACCOUNTS_ROOT_HASH,
+  );
   assert.throws(
     () =>
       canonicalTonSccpShardProofBytes({
@@ -9828,10 +11291,19 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       }),
     /workchain_id/,
   );
-  const zeroGenUtimeProofBoc = Buffer.from(TON_SHARD_STATE_PROOF_BOC_HEX, "hex");
-  const zeroGenUtimeTagOffset = zeroGenUtimeProofBoc.indexOf(Buffer.from([0x90, 0x23, 0xaf, 0xe2]));
+  const zeroGenUtimeProofBoc = Buffer.from(
+    TON_SHARD_STATE_PROOF_BOC_HEX,
+    "hex",
+  );
+  const zeroGenUtimeTagOffset = zeroGenUtimeProofBoc.indexOf(
+    Buffer.from([0x90, 0x23, 0xaf, 0xe2]),
+  );
   assert.notEqual(zeroGenUtimeTagOffset, -1);
-  zeroGenUtimeProofBoc.fill(0, zeroGenUtimeTagOffset + 29, zeroGenUtimeTagOffset + 33);
+  zeroGenUtimeProofBoc.fill(
+    0,
+    zeroGenUtimeTagOffset + 29,
+    zeroGenUtimeTagOffset + 33,
+  );
   assert.throws(
     () =>
       canonicalTonSccpShardProofBytes({
@@ -9841,7 +11313,10 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       }),
     /gen_utime/,
   );
-  const futureMinRefMcSeqnoProofBoc = Buffer.from(TON_SHARD_STATE_PROOF_BOC_HEX, "hex");
+  const futureMinRefMcSeqnoProofBoc = Buffer.from(
+    TON_SHARD_STATE_PROOF_BOC_HEX,
+    "hex",
+  );
   const futureMinRefMcSeqnoTagOffset = futureMinRefMcSeqnoProofBoc.indexOf(
     Buffer.from([0x90, 0x23, 0xaf, 0xe2]),
   );
@@ -9856,18 +11331,28 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       }),
     /min_ref_mc_seqno/,
   );
-  const mismatchedShardPrefixProofBoc = Buffer.from(TON_SHARD_STATE_PROOF_BOC_HEX, "hex");
-  const shardStateTagOffset = mismatchedShardPrefixProofBoc.indexOf(Buffer.from([0x90, 0x23, 0xaf, 0xe2]));
+  const mismatchedShardPrefixProofBoc = Buffer.from(
+    TON_SHARD_STATE_PROOF_BOC_HEX,
+    "hex",
+  );
+  const shardStateTagOffset = mismatchedShardPrefixProofBoc.indexOf(
+    Buffer.from([0x90, 0x23, 0xaf, 0xe2]),
+  );
   assert.notEqual(shardStateTagOffset, -1);
   const shardIdentOffset = shardStateTagOffset + 8;
   mismatchedShardPrefixProofBoc[shardIdentOffset] = 0x08;
   mismatchedShardPrefixProofBoc[shardIdentOffset + 5] = 0x12;
-  assert.equal(tonShardStateAccountsRootHash(mismatchedShardPrefixProofBoc), TON_SHARD_ACCOUNTS_ROOT_HASH);
+  assert.equal(
+    tonShardStateAccountsRootHash(mismatchedShardPrefixProofBoc),
+    TON_SHARD_ACCOUNTS_ROOT_HASH,
+  );
   assert.throws(
     () =>
       canonicalTonSccpShardProofBytes({
         ...dictionaryInput,
-        shardStateRoot: tonShardStateProofRootHash(mismatchedShardPrefixProofBoc),
+        shardStateRoot: tonShardStateProofRootHash(
+          mismatchedShardPrefixProofBoc,
+        ),
         shardStateProofBoc: mismatchedShardPrefixProofBoc,
         shardShard: 0x1280000000000000n,
       }),
@@ -9883,7 +11368,11 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
     /key bit length must be 256/,
   );
   assert.throws(
-    () => canonicalTonSccpShardProofBytes({ ...input, inclusionBranch: [Uint8Array.from([1, 2, 3])] }),
+    () =>
+      canonicalTonSccpShardProofBytes({
+        ...input,
+        inclusionBranch: [Uint8Array.from([1, 2, 3])],
+      }),
     /must be 32 bytes/,
   );
   assert.throws(
@@ -9913,7 +11402,8 @@ test("derives TON validator-set transition transcript hashes from UI witness mat
     validatorPublicKeys: [`0x${"33".repeat(32)}`, `0x${"44".repeat(32)}`],
     validatorWeights: [3n, 4n],
   };
-  const nextValidatorSetPayload = canonicalTonValidatorSetPayloadBytes(nextValidatorSet);
+  const nextValidatorSetPayload =
+    canonicalTonValidatorSetPayloadBytes(nextValidatorSet);
   const transitionMessage = {
     sourceDomain: SCCP_DOMAIN_TON,
     fromValidatorSetSeqno: 7n,
@@ -9940,21 +11430,40 @@ test("derives TON validator-set transition transcript hashes from UI witness mat
       blockMessageHash: TON_VALIDATOR_SET_TRANSITION_MESSAGE_HASH,
       ...validatorSet,
       signersBitmap: [0x03],
-      signatures: [new Uint8Array(64).fill(0xab), new Uint8Array(64).fill(0xcd)],
+      signatures: [
+        new Uint8Array(64).fill(0xab),
+        new Uint8Array(64).fill(0xcd),
+      ],
     },
   };
 
   assert.equal(canonicalTonValidatorSetBytes(validatorSet).length, 85);
   assert.equal(tonValidatorSetHash(validatorSet), TON_VALIDATOR_SET_HASH);
-  assert.equal(Buffer.from(nextValidatorSetPayload).toString("hex"), TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX);
-  assert.equal(tonValidatorSetPayloadHash(nextValidatorSetPayload), TON_NEXT_VALIDATOR_SET_PAYLOAD_HASH);
-  assert.equal(tonValidatorSetHashFromPayload(nextValidatorSetPayload), TON_NEXT_VALIDATOR_SET_HASH);
-  assert.equal(canonicalTonValidatorSetTransitionMessageBytes(transitionMessage).length, 233);
+  assert.equal(
+    Buffer.from(nextValidatorSetPayload).toString("hex"),
+    TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX,
+  );
+  assert.equal(
+    tonValidatorSetPayloadHash(nextValidatorSetPayload),
+    TON_NEXT_VALIDATOR_SET_PAYLOAD_HASH,
+  );
+  assert.equal(
+    tonValidatorSetHashFromPayload(nextValidatorSetPayload),
+    TON_NEXT_VALIDATOR_SET_HASH,
+  );
+  assert.equal(
+    canonicalTonValidatorSetTransitionMessageBytes(transitionMessage).length,
+    233,
+  );
   assert.equal(
     tonValidatorSetTransitionMessageHash(transitionMessage),
     TON_VALIDATOR_SET_TRANSITION_MESSAGE_HASH,
   );
-  assert.equal(canonicalTonValidatorSetTransitionSignatureBytes(transitionSignature).length, 676);
+  assert.equal(
+    canonicalTonValidatorSetTransitionSignatureBytes(transitionSignature)
+      .length,
+    676,
+  );
   assert.equal(
     tonValidatorSetTransitionSignatureHash(transitionSignature),
     TON_VALIDATOR_SET_TRANSITION_SIGNATURE_HASH,
@@ -9995,11 +11504,19 @@ test("derives TON validator-set transition transcript hashes from UI witness mat
     /totalWeight must not use multiple aliases/,
   );
   assert.throws(
-    () => canonicalTonValidatorSetTransitionMessageBytes({ ...transitionMessage, version: 0 }),
+    () =>
+      canonicalTonValidatorSetTransitionMessageBytes({
+        ...transitionMessage,
+        version: 0,
+      }),
     /TON validator-set transition version/,
   );
   assert.throws(
-    () => canonicalTonValidatorSetTransitionSignatureBytes({ ...transitionSignature, version: 0 }),
+    () =>
+      canonicalTonValidatorSetTransitionSignatureBytes({
+        ...transitionSignature,
+        version: 0,
+      }),
     /TON validator-set transition proof version/,
   );
   assert.throws(
@@ -10056,18 +11573,26 @@ test("derives TON validator-set transition transcript hashes from UI witness mat
     /blockMessageHash/,
   );
   assert.throws(
-    () => canonicalTonValidatorSetBytes({ ...validatorSet, validatorWeights: [1n, 0n] }),
+    () =>
+      canonicalTonValidatorSetBytes({
+        ...validatorSet,
+        validatorWeights: [1n, 0n],
+      }),
     /must not be zero/,
   );
   assert.throws(
     () =>
       canonicalTonValidatorSetBytes({
         ...validatorSet,
-        validatorPublicKeys: [new Uint8Array(32), validatorSet.validatorPublicKeys[1]],
+        validatorPublicKeys: [
+          new Uint8Array(32),
+          validatorSet.validatorPublicKeys[1],
+        ],
       }),
     /must not be zero/,
   );
-  const zeroKeyValidatorSetPayload = canonicalTonValidatorSetPayloadBytes(validatorSet);
+  const zeroKeyValidatorSetPayload =
+    canonicalTonValidatorSetPayloadBytes(validatorSet);
   zeroKeyValidatorSetPayload.fill(0, 5, 37);
   assert.throws(
     () => tonValidatorSetHashFromPayload(zeroKeyValidatorSetPayload),
@@ -10087,7 +11612,9 @@ test("derives TON validator-set transition transcript hashes from UI witness mat
     /1..1024/,
   );
   const oversizedTonValidatorSetPayload = new Uint8Array(5 + 1025 * 40);
-  const oversizedTonValidatorSetPayloadView = new DataView(oversizedTonValidatorSetPayload.buffer);
+  const oversizedTonValidatorSetPayloadView = new DataView(
+    oversizedTonValidatorSetPayload.buffer,
+  );
   oversizedTonValidatorSetPayloadView.setUint8(0, 1);
   oversizedTonValidatorSetPayloadView.setUint32(1, 1025, true);
   for (let index = 0; index < 1025; index += 1) {
@@ -10157,51 +11684,99 @@ test("derives TON validator-set transition transcript hashes from UI witness mat
 });
 
 test("derives ETH sync-committee transition transcript hashes from UI witness material", () => {
+  const syncCommitteeFixture = (publicKeyByte, popByte) => ({
+    syncCommitteePublicKeys: Array.from({ length: 512 }, (_, index) => {
+      const publicKey = new Uint8Array(48).fill(publicKeyByte);
+      publicKey[46] = (index >> 8) & 0xff;
+      publicKey[47] = index & 0xff;
+      return publicKey;
+    }),
+    syncCommitteeWeights: Array.from({ length: 512 }, () => 1n),
+    syncCommitteePops: Array.from({ length: 512 }, (_, index) => {
+      const pop = new Uint8Array(96).fill(popByte);
+      pop[94] = (index >> 8) & 0xff;
+      pop[95] = index & 0xff;
+      return pop;
+    }),
+  });
+  const signersBitmap = (count) => {
+    const bitmap = new Uint8Array(64);
+    for (let index = 0; index < count; index += 1) {
+      bitmap[Math.floor(index / 8)] |= 1 << (index % 8);
+    }
+    return bitmap;
+  };
   const parent = {
-    syncCommitteePublicKeys: [`0x${"11".repeat(48)}`, `0x${"22".repeat(48)}`],
-    syncCommitteeWeights: [1n, 2n],
-    syncCommitteePops: [`0x${"aa".repeat(96)}`, `0x${"bb".repeat(96)}`],
+    ...syncCommitteeFixture(0x11, 0xaa),
   };
   const nextCommittee = {
-    syncCommitteePublicKeys: [`0x${"33".repeat(48)}`, `0x${"44".repeat(48)}`],
-    syncCommitteeWeights: [3n, 4n],
-    syncCommitteePops: [`0x${"cc".repeat(96)}`, `0x${"dd".repeat(96)}`],
+    ...syncCommitteeFixture(0x33, 0xcc),
   };
-  const nextSyncCommitteePayload = canonicalEthSyncCommitteePayloadBytes(nextCommittee);
+  const nextSyncCommitteePayload =
+    canonicalEthSyncCommitteePayloadBytes(nextCommittee);
+  const parentSyncCommitteeHash = ethSyncCommitteeHash(parent);
+  const nextSyncCommitteeHash = ethSyncCommitteeHashFromPayload(
+    nextSyncCommitteePayload,
+  );
+  const nextSyncCommitteePayloadHash = ethSyncCommitteePayloadHash(
+    nextSyncCommitteePayload,
+  );
   const transitionMessage = {
     sourceDomain: SCCP_DOMAIN_ETH,
     fromSyncPeriod: 0n,
     toSyncPeriod: 1n,
     transitionSlot: 19n,
     finalizedBeaconRoot: HEX32_A,
-    parentSyncCommitteeHash: ETH_SYNC_COMMITTEE_HASH,
-    nextSyncCommitteeHash: ETH_NEXT_SYNC_COMMITTEE_HASH,
-    nextSyncCommitteePayloadHash: ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH,
+    parentSyncCommitteeHash,
+    nextSyncCommitteeHash,
+    nextSyncCommitteePayloadHash,
     nextSyncCommitteeBranchHash: `0x${"be".repeat(32)}`,
   };
+  const transitionMessageHash =
+    ethSyncCommitteeTransitionMessageHash(transitionMessage);
   const transitionSignature = {
     version: 1,
     ...transitionMessage,
     nextSyncCommitteePayload,
-    transitionMessageHash: ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+    transitionMessageHash,
     syncCommitteeProof: {
       version: 1,
-      totalWeight: 3n,
-      signedWeight: 3n,
-      syncCommitteeMessageHash: ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+      totalWeight: 512n,
+      signedWeight: 342n,
+      syncCommitteeMessageHash: transitionMessageHash,
       ...parent,
-      signersBitmap: [0x03],
+      signersBitmap: signersBitmap(342),
       aggregateSignature: new Uint8Array(96).fill(0xee),
     },
   };
 
-  assert.equal(ethSyncCommitteeHash(parent), ETH_SYNC_COMMITTEE_HASH);
-  assert.equal(Buffer.from(nextSyncCommitteePayload).toString("hex"), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX);
-  assert.equal(ethSyncCommitteeHashFromPayload(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_HASH);
-  assert.equal(ethSyncCommitteePayloadHash(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH);
+  assert.match(parentSyncCommitteeHash, /^0x[0-9a-f]{64}$/u);
+  assert.equal(nextSyncCommitteePayload.length, 81925);
+  assert.match(nextSyncCommitteeHash, /^0x[0-9a-f]{64}$/u);
+  assert.match(nextSyncCommitteePayloadHash, /^0x[0-9a-f]{64}$/u);
   assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteePayloadBytes({
+        syncCommitteePublicKeys: [
+          `0x${"11".repeat(48)}`,
+          `0x${"22".repeat(48)}`,
+        ],
+        syncCommitteeWeights: [1n, 1n],
+        syncCommitteePops: [`0x${"aa".repeat(96)}`, `0x${"bb".repeat(96)}`],
+      }),
+    /exactly 512/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteePayloadBytes({
+        ...parent,
+        syncCommitteeWeights: [2n, ...parent.syncCommitteeWeights.slice(1)],
+      }),
+    /must be 1/u,
+  );
   assert.throws(
     () =>
       canonicalEthSyncCommitteePayloadBytes({
@@ -10210,11 +11785,11 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
       }),
     /syncCommitteePublicKeys must not use multiple aliases/u,
   );
-  assert.equal(canonicalEthSyncCommitteeTransitionMessageBytes(transitionMessage).length, 189);
   assert.equal(
-    ethSyncCommitteeTransitionMessageHash(transitionMessage),
-    ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+    canonicalEthSyncCommitteeTransitionMessageBytes(transitionMessage).length,
+    189,
   );
+  assert.match(transitionMessageHash, /^0x[0-9a-f]{64}$/u);
   assert.throws(
     () =>
       canonicalEthSyncCommitteeTransitionMessageBytes({
@@ -10268,14 +11843,17 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     () =>
       canonicalEthSyncCommitteeTransitionMessageBytes({
         ...transitionMessage,
-        next_sync_committee_payload_hash: ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH,
+        next_sync_committee_payload_hash: nextSyncCommitteePayloadHash,
       }),
     /nextSyncCommitteePayloadHash must not use multiple aliases/u,
   );
-  assert.equal(canonicalEthSyncCommitteeTransitionSignatureBytes(transitionSignature).length, 1068);
-  assert.equal(
+  assert(
+    canonicalEthSyncCommitteeTransitionSignatureBytes(transitionSignature)
+      .length > nextSyncCommitteePayload.length,
+  );
+  assert.match(
     ethSyncCommitteeTransitionSignatureHash(transitionSignature),
-    ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH,
+    /^0x[0-9a-f]{64}$/u,
   );
   assert.throws(
     () =>
@@ -10297,7 +11875,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     () =>
       canonicalEthSyncCommitteeTransitionSignatureBytes({
         ...transitionSignature,
-        transition_message_hash: ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+        transition_message_hash: transitionMessageHash,
       }),
     /transitionMessageHash must not use multiple aliases/u,
   );
@@ -10313,7 +11891,11 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     /signersBitmap must not use multiple aliases/u,
   );
   assert.throws(
-    () => canonicalEthSyncCommitteeTransitionSignatureBytes({ ...transitionSignature, version: 0 }),
+    () =>
+      canonicalEthSyncCommitteeTransitionSignatureBytes({
+        ...transitionSignature,
+        version: 0,
+      }),
     /ETH sync-committee transition signature version/,
   );
   assert.throws(
@@ -10341,36 +11923,42 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
   assert.throws(
     () =>
       canonicalEthSyncCommitteePayloadBytes({
-        syncCommitteePublicKeys: Array.from({ length: 513 }, () => `0x${"11".repeat(48)}`),
+        syncCommitteePublicKeys: Array.from(
+          { length: 513 },
+          () => `0x${"11".repeat(48)}`,
+        ),
         syncCommitteeWeights: Array.from({ length: 513 }, () => 1n),
-        syncCommitteePops: Array.from({ length: 513 }, () => `0x${"aa".repeat(96)}`),
+        syncCommitteePops: Array.from(
+          { length: 513 },
+          () => `0x${"aa".repeat(96)}`,
+        ),
       }),
-    /at most 512/,
+    /exactly 512/u,
   );
-  assert.throws(
-    () =>
-      canonicalEthSyncCommitteePayloadBytes({
-        ...parent,
-        syncCommitteePublicKeys: [`0x${"11".repeat(47)}`, `0x${"22".repeat(48)}`],
-      }),
-    /48 bytes/,
-  );
-  assert.throws(
-    () =>
-      canonicalEthSyncCommitteePayloadBytes({
-        ...parent,
-        syncCommitteePublicKeys: [`0x${"00".repeat(48)}`, `0x${"22".repeat(48)}`],
-      }),
-    /must not be zero/,
-  );
-  assert.throws(
-    () =>
-      canonicalEthSyncCommitteePayloadBytes({
-        ...parent,
-        syncCommitteePops: [new Uint8Array(96), `0x${"bb".repeat(96)}`],
-      }),
-    /must not be zero/,
-  );
+  assert.throws(() => {
+    const malformedPublicKeys = parent.syncCommitteePublicKeys.slice();
+    malformedPublicKeys[0] = `0x${"11".repeat(47)}`;
+    canonicalEthSyncCommitteePayloadBytes({
+      ...parent,
+      syncCommitteePublicKeys: malformedPublicKeys,
+    });
+  }, /48 bytes/);
+  assert.throws(() => {
+    const zeroPublicKeys = parent.syncCommitteePublicKeys.slice();
+    zeroPublicKeys[0] = `0x${"00".repeat(48)}`;
+    canonicalEthSyncCommitteePayloadBytes({
+      ...parent,
+      syncCommitteePublicKeys: zeroPublicKeys,
+    });
+  }, /must not be zero/);
+  assert.throws(() => {
+    const zeroPops = parent.syncCommitteePops.slice();
+    zeroPops[0] = new Uint8Array(96);
+    canonicalEthSyncCommitteePayloadBytes({
+      ...parent,
+      syncCommitteePops: zeroPops,
+    });
+  }, /must not be zero/);
   assert.throws(
     () =>
       canonicalEthSyncCommitteeTransitionSignatureBytes({
@@ -10388,18 +11976,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          signersBitmap: [0x04],
-        },
-      }),
-    /padding bits/,
-  );
-  assert.throws(
-    () =>
-      canonicalEthSyncCommitteeTransitionSignatureBytes({
-        ...transitionSignature,
-        syncCommitteeProof: {
-          ...transitionSignature.syncCommitteeProof,
-          signersBitmap: [0x00],
+          signersBitmap: signersBitmap(0),
         },
       }),
     /select at least one/,
@@ -10410,7 +11987,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          totalWeight: 4n,
+          totalWeight: 513n,
         },
       }),
     /totalWeight/,
@@ -10421,7 +11998,7 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          signedWeight: 2n,
+          signedWeight: 341n,
         },
       }),
     /signedWeight/,
@@ -10432,8 +12009,8 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
         ...transitionSignature,
         syncCommitteeProof: {
           ...transitionSignature.syncCommitteeProof,
-          signedWeight: 1n,
-          signersBitmap: [0x01],
+          signedWeight: 341n,
+          signersBitmap: signersBitmap(341),
         },
       }),
     /greater than two thirds/,
@@ -10517,11 +12094,16 @@ test("derives ETH beacon execution payload SSZ roots from UI witness material", 
     /slot must not use multiple aliases/u,
   );
   assert.throws(
-    () => ethBeaconBlockHeaderRoot({ ...beaconHeaderInput, proposerIndex: 17n }),
+    () =>
+      ethBeaconBlockHeaderRoot({ ...beaconHeaderInput, proposerIndex: 17n }),
     /proposerIndex must not use multiple aliases/u,
   );
   assert.throws(
-    () => ethBeaconBlockHeaderRoot({ ...beaconHeaderInput, body_root: beaconBodyRoot }),
+    () =>
+      ethBeaconBlockHeaderRoot({
+        ...beaconHeaderInput,
+        body_root: beaconBodyRoot,
+      }),
     /bodyRoot must not use multiple aliases/u,
   );
   assert.notEqual(
@@ -10534,7 +12116,10 @@ test("derives ETH beacon execution payload SSZ roots from UI witness material", 
     beaconBodyRoot,
   );
   assert.throws(
-    () => ethBeaconBodyRootFromExecutionPayloadBranch(executionPayloadRoot, [HEX32_E]),
+    () =>
+      ethBeaconBodyRootFromExecutionPayloadBranch(executionPayloadRoot, [
+        HEX32_E,
+      ]),
     /executionPayloadBranch/,
   );
   assert.throws(
@@ -10548,7 +12133,8 @@ test("derives TON masterchain config proof hashes from UI witness material", () 
     validatorPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
     validatorWeights: [1n, 2n],
   };
-  const validatorSetPayload = canonicalTonValidatorSetPayloadBytes(validatorSet);
+  const validatorSetPayload =
+    canonicalTonValidatorSetPayloadBytes(validatorSet);
   const leafInput = {
     sourceDomain: SCCP_DOMAIN_TON,
     masterchainSeqno: 19n,
@@ -10563,38 +12149,70 @@ test("derives TON masterchain config proof hashes from UI witness material", () 
     configLeafHash: TON_MASTERCHAIN_CONFIG_LEAF_HASH,
     configLeafIndex: SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
     configValueHash: TON_MASTERCHAIN_CONFIG_VALUE_HASH,
-    configDictionaryProofBoc: Buffer.from(TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX, "hex"),
+    configDictionaryProofBoc: Buffer.from(
+      TON_MASTERCHAIN_CONFIG_PROOF_BOC_HEX,
+      "hex",
+    ),
     configInclusionBranch: [],
   };
 
-  assert.equal(tonValidatorSetPayloadHash(validatorSetPayload), TON_VALIDATOR_SET_PAYLOAD_HASH);
+  assert.equal(
+    tonValidatorSetPayloadHash(validatorSetPayload),
+    TON_VALIDATOR_SET_PAYLOAD_HASH,
+  );
   assert.deepEqual(
-    tonConfigValidatorSetPayloadFromProofBoc(proofInput.configDictionaryProofBoc),
+    tonConfigValidatorSetPayloadFromProofBoc(
+      proofInput.configDictionaryProofBoc,
+    ),
     validatorSetPayload,
   );
   assert.equal(
-    tonConfigValidatorSetPayloadHashFromProofBoc(proofInput.configDictionaryProofBoc),
+    tonConfigValidatorSetPayloadHashFromProofBoc(
+      proofInput.configDictionaryProofBoc,
+    ),
     TON_VALIDATOR_SET_PAYLOAD_HASH,
   );
-  assert.equal(tonHashmapEProofRootHash(proofInput.configDictionaryProofBoc), TON_MASTERCHAIN_CONFIG_ROOT);
+  assert.equal(
+    tonHashmapEProofRootHash(proofInput.configDictionaryProofBoc),
+    TON_MASTERCHAIN_CONFIG_ROOT,
+  );
   assert.equal(
     tonHashmapECellRefValueHash(
       proofInput.configDictionaryProofBoc,
-      Uint8Array.from([0, 0, 0, Number(SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM)]),
+      Uint8Array.from([
+        0,
+        0,
+        0,
+        Number(SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM),
+      ]),
       32,
     ),
     TON_MASTERCHAIN_CONFIG_VALUE_HASH,
   );
   assert.equal(canonicalTonMasterchainConfigLeafBytes(leafInput).length, 141);
-  assert.equal(tonMasterchainConfigLeafHash(leafInput), TON_MASTERCHAIN_CONFIG_LEAF_HASH);
+  assert.equal(
+    tonMasterchainConfigLeafHash(leafInput),
+    TON_MASTERCHAIN_CONFIG_LEAF_HASH,
+  );
   assert.equal(canonicalTonMasterchainConfigProofBytes(proofInput).length, 411);
-  assert.equal(tonMasterchainConfigProofHash(proofInput), TON_MASTERCHAIN_CONFIG_PROOF_HASH);
+  assert.equal(
+    tonMasterchainConfigProofHash(proofInput),
+    TON_MASTERCHAIN_CONFIG_PROOF_HASH,
+  );
   assert.throws(
-    () => canonicalTonMasterchainConfigLeafBytes({ ...leafInput, source_domain: SCCP_DOMAIN_TON }),
+    () =>
+      canonicalTonMasterchainConfigLeafBytes({
+        ...leafInput,
+        source_domain: SCCP_DOMAIN_TON,
+      }),
     /sourceDomain must not use multiple aliases/,
   );
   assert.throws(
-    () => canonicalTonMasterchainConfigProofBytes({ ...proofInput, config_root: TON_MASTERCHAIN_CONFIG_ROOT }),
+    () =>
+      canonicalTonMasterchainConfigProofBytes({
+        ...proofInput,
+        config_root: TON_MASTERCHAIN_CONFIG_ROOT,
+      }),
     /configRoot must not use multiple aliases/,
   );
   assert.throws(
@@ -10602,7 +12220,8 @@ test("derives TON masterchain config proof hashes from UI witness material", () 
     /TON masterchain config leaf version/,
   );
   assert.throws(
-    () => canonicalTonMasterchainConfigProofBytes({ ...proofInput, version: 0 }),
+    () =>
+      canonicalTonMasterchainConfigProofBytes({ ...proofInput, version: 0 }),
     /TON masterchain config proof version/,
   );
   assert.throws(
@@ -10702,48 +12321,99 @@ test("derives TON masterchain block-message and signature hashes from UI witness
     signatures: [new Uint8Array(64).fill(0xab), new Uint8Array(64).fill(0xcd)],
   };
 
-  assert.equal(canonicalTonMasterchainBlockMessageBytes(blockMessage).length, 365);
-  assert.equal(tonMasterchainBlockMessageHash(blockMessage), TON_MASTERCHAIN_BLOCK_MESSAGE_HASH);
-  assert.equal(canonicalTonMasterchainValidatorSignaturesBytes(signatures).length, 322);
-  assert.equal(tonMasterchainValidatorSignaturesHash(signatures), TON_MASTERCHAIN_SIGNATURES_HASH);
+  assert.equal(
+    canonicalTonMasterchainBlockMessageBytes(blockMessage).length,
+    365,
+  );
+  assert.equal(
+    tonMasterchainBlockMessageHash(blockMessage),
+    TON_MASTERCHAIN_BLOCK_MESSAGE_HASH,
+  );
+  assert.equal(
+    canonicalTonMasterchainValidatorSignaturesBytes(signatures).length,
+    322,
+  );
+  assert.equal(
+    tonMasterchainValidatorSignaturesHash(signatures),
+    TON_MASTERCHAIN_SIGNATURES_HASH,
+  );
   assert.notEqual(
-    tonMasterchainBlockMessageHash({ ...blockMessage, shardProofHash: HEX32_F }),
+    tonMasterchainBlockMessageHash({
+      ...blockMessage,
+      shardProofHash: HEX32_F,
+    }),
     TON_MASTERCHAIN_BLOCK_MESSAGE_HASH,
   );
   assert.throws(
-    () => canonicalTonMasterchainBlockMessageBytes({ ...blockMessage, shard_proof_hash: HEX32_E }),
+    () =>
+      canonicalTonMasterchainBlockMessageBytes({
+        ...blockMessage,
+        shard_proof_hash: HEX32_E,
+      }),
     /shardProofHash must not use multiple aliases/,
   );
   assert.throws(
-    () => canonicalTonMasterchainValidatorSignaturesBytes({ ...signatures, validator_set_hash: TON_VALIDATOR_SET_HASH }),
+    () =>
+      canonicalTonMasterchainValidatorSignaturesBytes({
+        ...signatures,
+        validator_set_hash: TON_VALIDATOR_SET_HASH,
+      }),
     /validatorSetHash must not use multiple aliases/,
   );
   assert.throws(
-    () => canonicalTonMasterchainBlockMessageBytes({ ...blockMessage, masterchainWorkchainId: 0 }),
+    () =>
+      canonicalTonMasterchainBlockMessageBytes({
+        ...blockMessage,
+        masterchainWorkchainId: 0,
+      }),
     /masterchainWorkchainId/,
   );
   assert.throws(
-    () => canonicalTonMasterchainBlockMessageBytes({ ...blockMessage, masterchainShard: 0n }),
+    () =>
+      canonicalTonMasterchainBlockMessageBytes({
+        ...blockMessage,
+        masterchainShard: 0n,
+      }),
     /masterchainShard/,
   );
   assert.throws(
-    () => canonicalTonMasterchainBlockMessageBytes({ ...blockMessage, masterchainFileHash: `0x${"00".repeat(32)}` }),
+    () =>
+      canonicalTonMasterchainBlockMessageBytes({
+        ...blockMessage,
+        masterchainFileHash: `0x${"00".repeat(32)}`,
+      }),
     /masterchainFileHash/,
   );
   assert.throws(
-    () => canonicalTonMasterchainBlockMessageBytes({ ...blockMessage, shardWorkchainId: -1 }),
+    () =>
+      canonicalTonMasterchainBlockMessageBytes({
+        ...blockMessage,
+        shardWorkchainId: -1,
+      }),
     /shardWorkchainId/,
   );
   assert.throws(
-    () => canonicalTonMasterchainBlockMessageBytes({ ...blockMessage, shardSeqno: 0n }),
+    () =>
+      canonicalTonMasterchainBlockMessageBytes({
+        ...blockMessage,
+        shardSeqno: 0n,
+      }),
     /shardSeqno/,
   );
   assert.throws(
-    () => canonicalTonMasterchainBlockMessageBytes({ ...blockMessage, shardFileHash: `0x${"00".repeat(32)}` }),
+    () =>
+      canonicalTonMasterchainBlockMessageBytes({
+        ...blockMessage,
+        shardFileHash: `0x${"00".repeat(32)}`,
+      }),
     /shardFileHash/,
   );
   assert.throws(
-    () => canonicalTonMasterchainValidatorSignaturesBytes({ ...signatures, validatorSetHash: HEX32_B }),
+    () =>
+      canonicalTonMasterchainValidatorSignaturesBytes({
+        ...signatures,
+        validatorSetHash: HEX32_B,
+      }),
     /validatorSetHash/,
   );
   assert.throws(
@@ -10772,7 +12442,10 @@ test("derives TON BoC root hashes for UI proof material", () => {
 
   const changedChild = Uint8Array.from(boc);
   changedChild[changedChild.length - 1] ^= 0x01;
-  assert.notEqual(tonBocSingleRootHash(changedChild), TON_ORDINARY_BOC_ROOT_HASH);
+  assert.notEqual(
+    tonBocSingleRootHash(changedChild),
+    TON_ORDINARY_BOC_ROOT_HASH,
+  );
 
   const cyclicRef = Uint8Array.from(boc);
   cyclicRef[14] = 0;
@@ -10780,7 +12453,10 @@ test("derives TON BoC root hashes for UI proof material", () => {
 
   const explicitHashDescriptor = Uint8Array.from(boc);
   explicitHashDescriptor[11] |= 0x10;
-  assert.throws(() => tonBocSingleRootHash(explicitHashDescriptor), /descriptor/);
+  assert.throws(
+    () => tonBocSingleRootHash(explicitHashDescriptor),
+    /descriptor/,
+  );
 
   const invalidPartialData = Uint8Array.from(boc);
   invalidPartialData[16] = 1;
@@ -10801,53 +12477,96 @@ test("derives TON BoC root hashes for UI proof material", () => {
   );
   const mismatchedMerkleProof = Buffer.from(TON_MERKLE_PROOF_BOC_HEX, "hex");
   mismatchedMerkleProof[14] ^= 0x01;
-  assert.throws(() => tonBocSingleRootHash(mismatchedMerkleProof), /Merkle proof/);
+  assert.throws(
+    () => tonBocSingleRootHash(mismatchedMerkleProof),
+    /Merkle proof/,
+  );
 });
 
 test("derives TON HashmapE cell-ref value hashes for UI proof material", () => {
   assert.equal(
-    tonHashmapECellRefValueHash(Buffer.from(TON_HASHMAP_E_CELL_REF_BOC_HEX, "hex"), Uint8Array.from([17]), 8),
+    tonHashmapECellRefValueHash(
+      Buffer.from(TON_HASHMAP_E_CELL_REF_BOC_HEX, "hex"),
+      Uint8Array.from([17]),
+      8,
+    ),
     TON_HASHMAP_E_VALUE_HASH,
   );
   assert.equal(
-    tonHashmapECellRefValueHash(Buffer.from(TON_HASHMAP_E_CELL_REF_BOC_HEX, "hex"), Uint8Array.from([18]), 8),
+    tonHashmapECellRefValueHash(
+      Buffer.from(TON_HASHMAP_E_CELL_REF_BOC_HEX, "hex"),
+      Uint8Array.from([18]),
+      8,
+    ),
     null,
   );
   assert.throws(
-    () => tonHashmapECellRefValueHash(Buffer.from(TON_HASHMAP_E_CELL_REF_BOC_HEX, "hex"), Uint8Array.from([17]), 7),
+    () =>
+      tonHashmapECellRefValueHash(
+        Buffer.from(TON_HASHMAP_E_CELL_REF_BOC_HEX, "hex"),
+        Uint8Array.from([17]),
+        7,
+      ),
     /key length/,
   );
   assert.equal(
-    tonHashmapECellRefValueHash(Buffer.from(TON_HASHMAP_E_DIRECT_PROOF_BOC_HEX, "hex"), Uint8Array.from([17]), 8),
+    tonHashmapECellRefValueHash(
+      Buffer.from(TON_HASHMAP_E_DIRECT_PROOF_BOC_HEX, "hex"),
+      Uint8Array.from([17]),
+      8,
+    ),
     TON_HASHMAP_E_VALUE_HASH,
   );
   assert.equal(
-    tonHashmapECellRefValueHash(Buffer.from(TON_HASHMAP_E_DIRECT_PROOF_BOC_HEX, "hex"), Uint8Array.from([1]), 8),
+    tonHashmapECellRefValueHash(
+      Buffer.from(TON_HASHMAP_E_DIRECT_PROOF_BOC_HEX, "hex"),
+      Uint8Array.from([1]),
+      8,
+    ),
     null,
   );
   assert.equal(
-    tonHashmapECellRefValueHash(Buffer.from(TON_HASHMAP_E_MERKLE_PROOF_BOC_HEX, "hex"), Uint8Array.from([17]), 8),
+    tonHashmapECellRefValueHash(
+      Buffer.from(TON_HASHMAP_E_MERKLE_PROOF_BOC_HEX, "hex"),
+      Uint8Array.from([17]),
+      8,
+    ),
     TON_HASHMAP_E_VALUE_HASH,
   );
 });
 
 test("derives TON ShardStateUnsplit accounts roots for UI proof material", () => {
   const shardStateProofBoc = Buffer.from(TON_SHARD_STATE_PROOF_BOC_HEX, "hex");
-  assert.equal(tonShardStateProofRootHash(shardStateProofBoc), TON_SHARD_STATE_ROOT_HASH);
-  assert.equal(tonShardStateAccountsRootHash(shardStateProofBoc), TON_SHARD_ACCOUNTS_ROOT_HASH);
+  assert.equal(
+    tonShardStateProofRootHash(shardStateProofBoc),
+    TON_SHARD_STATE_ROOT_HASH,
+  );
+  assert.equal(
+    tonShardStateAccountsRootHash(shardStateProofBoc),
+    TON_SHARD_ACCOUNTS_ROOT_HASH,
+  );
 
   const badTag = Buffer.from(shardStateProofBoc);
   const tagOffset = badTag.indexOf(Buffer.from("9023afe2", "hex"));
   assert.notEqual(tagOffset, -1);
   badTag[tagOffset] ^= 0x01;
-  assert.throws(() => tonShardStateAccountsRootHash(badTag), /ShardStateUnsplit/);
+  assert.throws(
+    () => tonShardStateAccountsRootHash(badTag),
+    /ShardStateUnsplit/,
+  );
   const shardIdentOffset = tagOffset + 8;
   const badShardIdentTag = Buffer.from(shardStateProofBoc);
   badShardIdentTag[shardIdentOffset] |= 0x80;
-  assert.throws(() => tonShardStateAccountsRootHash(badShardIdentTag), /ShardIdent/);
+  assert.throws(
+    () => tonShardStateAccountsRootHash(badShardIdentTag),
+    /ShardIdent/,
+  );
   const badShardIdentPrefixLen = Buffer.from(shardStateProofBoc);
   badShardIdentPrefixLen[shardIdentOffset] = 0x3d;
-  assert.throws(() => tonShardStateAccountsRootHash(badShardIdentPrefixLen), /ShardIdent/);
+  assert.throws(
+    () => tonShardStateAccountsRootHash(badShardIdentPrefixLen),
+    /ShardIdent/,
+  );
   const basechainCustom = Buffer.from(shardStateProofBoc);
   basechainCustom[tagOffset + 45] |= 0x40;
   assert.throws(() => tonShardStateAccountsRootHash(basechainCustom), /custom/);
@@ -10885,31 +12604,43 @@ test("parses and binds canonical TRON TriggerSmartContract raw_data bytes", () =
   );
   assert.throws(
     () =>
-      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
-        expectedOwnerAddress: `0x${"22".repeat(20)}`,
-      }),
+      parseTronTriggerSmartContractRawData(
+        TRON_TRANSACTION_SOURCE_RAW_DATA_HEX,
+        {
+          expectedOwnerAddress: `0x${"22".repeat(20)}`,
+        },
+      ),
     /owner_address/u,
   );
   assert.throws(
     () =>
-      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
-        expectedContractAddress: `0x${"46".repeat(20)}`,
-      }),
+      parseTronTriggerSmartContractRawData(
+        TRON_TRANSACTION_SOURCE_RAW_DATA_HEX,
+        {
+          expectedContractAddress: `0x${"46".repeat(20)}`,
+        },
+      ),
     /contract_address/u,
   );
   assert.throws(
     () =>
-      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
-        expectedCallData: `0x${"00".repeat(4)}`,
-      }),
+      parseTronTriggerSmartContractRawData(
+        TRON_TRANSACTION_SOURCE_RAW_DATA_HEX,
+        {
+          expectedCallData: `0x${"00".repeat(4)}`,
+        },
+      ),
     /call data/u,
   );
   assert.throws(
     () =>
-      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
-        owner_address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
-        expectedOwnerAddress: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
-      }),
+      parseTronTriggerSmartContractRawData(
+        TRON_TRANSACTION_SOURCE_RAW_DATA_HEX,
+        {
+          owner_address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+          expectedOwnerAddress: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        },
+      ),
     /expectedOwnerAddress must not use multiple aliases/u,
   );
   assert.throws(
@@ -10991,73 +12722,177 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
 
   assert.equal(canonicalEvmSccpReceiptProofBytes(evmInput).length, 306);
   assert.throws(
-    () => canonicalEvmSccpReceiptProofBytes({ ...evmInput, sourceDomain: SCCP_DOMAIN_BSC }),
+    () =>
+      canonicalEvmSccpReceiptProofBytes({
+        ...evmInput,
+        sourceDomain: SCCP_DOMAIN_BSC,
+      }),
     /sourceDomain/,
   );
   assert.throws(
-    () => canonicalEvmSccpReceiptProofBytes({ ...evmInput, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    () =>
+      canonicalEvmSccpReceiptProofBytes({
+        ...evmInput,
+        sourceEventDigest: SCCP_ZERO_HASH_V1,
+      }),
     /sourceEventDigest must not be zero/u,
   );
   for (const [patch, pattern] of [
-    [{ sourceDomain: SCCP_DOMAIN_ETH, source_domain: SCCP_DOMAIN_ETH }, /sourceDomain must not use multiple aliases/u],
-    [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],
+    [
+      { sourceDomain: SCCP_DOMAIN_ETH, source_domain: SCCP_DOMAIN_ETH },
+      /sourceDomain must not use multiple aliases/u,
+    ],
+    [
+      { source_event_digest: sourceEventDigest },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
     [{ beacon_slot: 11n }, /beaconSlot must not use multiple aliases/u],
-    [{ finalityHeight: 12n }, /executionBlockNumber must not use multiple aliases/u],
-    [{ finalityBlockHash: HEX32_A }, /executionBlockHash must not use multiple aliases/u],
-    [{ receipt_or_message_root: EVM_RECEIPT_STATE_TRANSACTION_ROOT }, /executionReceiptsRoot must not use multiple aliases/u],
-    [{ beacon_finalized_root: HEX32_C }, /beaconFinalizedRoot must not use multiple aliases/u],
-    [{ sync_committee_root: HEX32_D }, /syncCommitteeRoot must not use multiple aliases/u],
-    [{ receipt_root_index: 0n }, /receiptRootIndex must not use multiple aliases/u],
-    [{ receipt_trie_proof_nodes: [EVM_RECEIPT_STATE_MPT_NODE_HEX] }, /receiptTrieProofNodes must not use multiple aliases/u],
-    [{ inclusion_branch: inclusionBranch }, /inclusionBranch must not use multiple aliases/u],
+    [
+      { finalityHeight: 12n },
+      /executionBlockNumber must not use multiple aliases/u,
+    ],
+    [
+      { finalityBlockHash: HEX32_A },
+      /executionBlockHash must not use multiple aliases/u,
+    ],
+    [
+      { receipt_or_message_root: EVM_RECEIPT_STATE_TRANSACTION_ROOT },
+      /executionReceiptsRoot must not use multiple aliases/u,
+    ],
+    [
+      { beacon_finalized_root: HEX32_C },
+      /beaconFinalizedRoot must not use multiple aliases/u,
+    ],
+    [
+      { sync_committee_root: HEX32_D },
+      /syncCommitteeRoot must not use multiple aliases/u,
+    ],
+    [
+      { receipt_root_index: 0n },
+      /receiptRootIndex must not use multiple aliases/u,
+    ],
+    [
+      { receipt_trie_proof_nodes: [EVM_RECEIPT_STATE_MPT_NODE_HEX] },
+      /receiptTrieProofNodes must not use multiple aliases/u,
+    ],
+    [
+      { inclusion_branch: inclusionBranch },
+      /inclusionBranch must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalEvmSccpReceiptProofBytes({ ...evmInput, ...patch }), pattern);
+    assert.throws(
+      () => canonicalEvmSccpReceiptProofBytes({ ...evmInput, ...patch }),
+      pattern,
+    );
   }
   assert.equal(canonicalBscSccpReceiptProofBytes(bscInput).length, 306);
   assert.throws(
-    () => canonicalBscSccpReceiptProofBytes({ ...bscInput, sourceDomain: SCCP_DOMAIN_ETH }),
+    () =>
+      canonicalBscSccpReceiptProofBytes({
+        ...bscInput,
+        sourceDomain: SCCP_DOMAIN_ETH,
+      }),
     /sourceDomain/,
   );
   assert.throws(
-    () => canonicalBscSccpReceiptProofBytes({ ...bscInput, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    () =>
+      canonicalBscSccpReceiptProofBytes({
+        ...bscInput,
+        sourceEventDigest: SCCP_ZERO_HASH_V1,
+      }),
     /sourceEventDigest must not be zero/u,
   );
   for (const [patch, pattern] of [
-    [{ sourceDomain: SCCP_DOMAIN_BSC, source_domain: SCCP_DOMAIN_BSC }, /sourceDomain must not use multiple aliases/u],
-    [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],
+    [
+      { sourceDomain: SCCP_DOMAIN_BSC, source_domain: SCCP_DOMAIN_BSC },
+      /sourceDomain must not use multiple aliases/u,
+    ],
+    [
+      { source_event_digest: sourceEventDigest },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
     [{ finalityHeight: 22n }, /blockNumber must not use multiple aliases/u],
-    [{ finalityBlockHash: HEX32_A }, /blockHash must not use multiple aliases/u],
-    [{ receipt_or_message_root: EVM_RECEIPT_STATE_TRANSACTION_ROOT }, /receiptsRoot must not use multiple aliases/u],
-    [{ validator_set_hash: HEX32_C }, /validatorSetHash must not use multiple aliases/u],
-    [{ commit_seal_hash: HEX32_D }, /commitSealHash must not use multiple aliases/u],
-    [{ receipt_root_index: 0n }, /receiptRootIndex must not use multiple aliases/u],
-    [{ receipt_trie_proof_nodes: [EVM_RECEIPT_STATE_MPT_NODE_HEX] }, /receiptTrieProofNodes must not use multiple aliases/u],
-    [{ inclusion_branch: inclusionBranch }, /inclusionBranch must not use multiple aliases/u],
+    [
+      { finalityBlockHash: HEX32_A },
+      /blockHash must not use multiple aliases/u,
+    ],
+    [
+      { receipt_or_message_root: EVM_RECEIPT_STATE_TRANSACTION_ROOT },
+      /receiptsRoot must not use multiple aliases/u,
+    ],
+    [
+      { validator_set_hash: HEX32_C },
+      /validatorSetHash must not use multiple aliases/u,
+    ],
+    [
+      { commit_seal_hash: HEX32_D },
+      /commitSealHash must not use multiple aliases/u,
+    ],
+    [
+      { receipt_root_index: 0n },
+      /receiptRootIndex must not use multiple aliases/u,
+    ],
+    [
+      { receipt_trie_proof_nodes: [EVM_RECEIPT_STATE_MPT_NODE_HEX] },
+      /receiptTrieProofNodes must not use multiple aliases/u,
+    ],
+    [
+      { inclusion_branch: inclusionBranch },
+      /inclusionBranch must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalBscSccpReceiptProofBytes({ ...bscInput, ...patch }), pattern);
+    assert.throws(
+      () => canonicalBscSccpReceiptProofBytes({ ...bscInput, ...patch }),
+      pattern,
+    );
   }
   assert.equal(
     `0x${Buffer.from(canonicalEvmReceiptRootMptValue(HEX32_B)).toString("hex")}`,
     EVM_RECEIPT_ROOT_MPT_VALUE_HEX,
   );
   assert.throws(() => canonicalEvmReceiptRootMptValue("0x1234"), /32 bytes/);
-  assert.throws(() => canonicalEvmReceiptRootMptValue(SCCP_ZERO_HASH_V1), /must not be zero/);
+  assert.throws(
+    () => canonicalEvmReceiptRootMptValue(SCCP_ZERO_HASH_V1),
+    /must not be zero/,
+  );
   assert.equal(
     `0x${Buffer.from(canonicalTronReceiptRootMptValue(HEX32_B)).toString("hex")}`,
     TRON_RECEIPT_ROOT_MPT_VALUE_HEX,
   );
   assert.throws(() => canonicalTronReceiptRootMptValue("0x1234"), /32 bytes/);
-  assert.throws(() => canonicalTronReceiptRootMptValue(SCCP_ZERO_HASH_V1), /must not be zero/);
+  assert.throws(
+    () => canonicalTronReceiptRootMptValue(SCCP_ZERO_HASH_V1),
+    /must not be zero/,
+  );
   assert.equal(canonicalTronSccpReceiptProofBytes(tronInput).length, 133);
   for (const [patch, pattern] of [
-    [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],
-    [{ receipt_or_message_root: HEX32_B }, /receiptRoot must not use multiple aliases/u],
-    [{ transaction_root: HEX32_D }, /transactionRoot must not use multiple aliases/u],
-    [{ inclusion_branch: inclusionBranch }, /inclusionBranch must not use multiple aliases/u],
+    [
+      { source_event_digest: sourceEventDigest },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
+    [
+      { receipt_or_message_root: HEX32_B },
+      /receiptRoot must not use multiple aliases/u,
+    ],
+    [
+      { transaction_root: HEX32_D },
+      /transactionRoot must not use multiple aliases/u,
+    ],
+    [
+      { inclusion_branch: inclusionBranch },
+      /inclusionBranch must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalTronSccpReceiptProofBytes({ ...tronInput, ...patch }), pattern);
+    assert.throws(
+      () => canonicalTronSccpReceiptProofBytes({ ...tronInput, ...patch }),
+      pattern,
+    );
   }
-  for (const fieldName of ["sourceEventDigest", "receiptRoot", "transactionRoot"]) {
+  for (const fieldName of [
+    "sourceEventDigest",
+    "receiptRoot",
+    "transactionRoot",
+  ]) {
     assert.throws(
       () =>
         canonicalTronSccpReceiptProofBytes({
@@ -11068,21 +12903,54 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     );
   }
   assert.throws(
-    () => canonicalTronSccpReceiptProofBytes({ ...tronInput, inclusionBranch: [] }),
+    () =>
+      canonicalTronSccpReceiptProofBytes({ ...tronInput, inclusionBranch: [] }),
     /inclusionBranch must not be empty/,
   );
-  assert.equal(canonicalTronSccpReceiptStateProofBytes(tronReceiptStateInput).length, 186);
+  assert.equal(
+    canonicalTronSccpReceiptStateProofBytes(tronReceiptStateInput).length,
+    186,
+  );
   for (const [patch, pattern] of [
-    [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],
-    [{ receipt_or_message_root: HEX32_B }, /receiptRoot must not use multiple aliases/u],
-    [{ transaction_root: TRON_RECEIPT_STATE_TRANSACTION_ROOT }, /transactionRoot must not use multiple aliases/u],
-    [{ receipt_root_index: 0n }, /receiptRootIndex must not use multiple aliases/u],
-    [{ receipt_trie_proof_nodes: [TRON_RECEIPT_STATE_MPT_NODE_HEX] }, /receiptTrieProofNodes must not use multiple aliases/u],
-    [{ inclusion_branch: inclusionBranch }, /inclusionBranch must not use multiple aliases/u],
+    [
+      { source_event_digest: sourceEventDigest },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
+    [
+      { receipt_or_message_root: HEX32_B },
+      /receiptRoot must not use multiple aliases/u,
+    ],
+    [
+      { transaction_root: TRON_RECEIPT_STATE_TRANSACTION_ROOT },
+      /transactionRoot must not use multiple aliases/u,
+    ],
+    [
+      { receipt_root_index: 0n },
+      /receiptRootIndex must not use multiple aliases/u,
+    ],
+    [
+      { receipt_trie_proof_nodes: [TRON_RECEIPT_STATE_MPT_NODE_HEX] },
+      /receiptTrieProofNodes must not use multiple aliases/u,
+    ],
+    [
+      { inclusion_branch: inclusionBranch },
+      /inclusionBranch must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalTronSccpReceiptStateProofBytes({ ...tronReceiptStateInput, ...patch }), pattern);
+    assert.throws(
+      () =>
+        canonicalTronSccpReceiptStateProofBytes({
+          ...tronReceiptStateInput,
+          ...patch,
+        }),
+      pattern,
+    );
   }
-  for (const fieldName of ["sourceEventDigest", "receiptRoot", "transactionRoot"]) {
+  for (const fieldName of [
+    "sourceEventDigest",
+    "receiptRoot",
+    "transactionRoot",
+  ]) {
     assert.throws(
       () =>
         canonicalTronSccpReceiptStateProofBytes({
@@ -11093,12 +12961,21 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     );
   }
   assert.throws(
-    () => canonicalTronSccpReceiptStateProofBytes({ ...tronReceiptStateInput, inclusionBranch: [] }),
+    () =>
+      canonicalTronSccpReceiptStateProofBytes({
+        ...tronReceiptStateInput,
+        inclusionBranch: [],
+      }),
     /inclusionBranch must not be empty/,
   );
-  assert.equal(tronSccpReceiptStateProofHash(tronReceiptStateInput), TRON_RECEIPT_STATE_PROOF_HASH);
   assert.equal(
-    Buffer.from(tronSccpSourceMessageCallData(5, 0, sourceEventDigest)).toString("hex"),
+    tronSccpReceiptStateProofHash(tronReceiptStateInput),
+    TRON_RECEIPT_STATE_PROOF_HASH,
+  );
+  assert.equal(
+    Buffer.from(
+      tronSccpSourceMessageCallData(5, 0, sourceEventDigest),
+    ).toString("hex"),
     TRON_SOURCE_MESSAGE_CALL_DATA_HEX,
   );
   assert.throws(
@@ -11113,7 +12990,11 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     () => tronSccpSourceMessageCallData(5, 0, `0x${"00".repeat(32)}`),
     /sourceEventDigest/,
   );
-  assert.equal(canonicalTronSccpTransactionSourceProofBytes(tronTransactionSourceInput).length, 476);
+  assert.equal(
+    canonicalTronSccpTransactionSourceProofBytes(tronTransactionSourceInput)
+      .length,
+    476,
+  );
   assert.deepEqual(
     canonicalTronSccpTransactionSourceProofBytes({
       ...tronTransactionSourceInput,
@@ -11123,16 +13004,43 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     canonicalTronSccpTransactionSourceProofBytes(tronTransactionSourceInput),
   );
   for (const [patch, pattern] of [
-    [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],
-    [{ receipt_or_message_root: HEX32_B }, /receiptRoot must not use multiple aliases/u],
-    [{ transaction_root: TRON_TRANSACTION_SOURCE_ROOT }, /transactionRoot must not use multiple aliases/u],
-    [{ transaction_index: 0n }, /transactionIndex must not use multiple aliases/u],
-    [{ transaction_count: 1n }, /transactionCount must not use multiple aliases/u],
-    [{ transaction_bytes: TRON_TRANSACTION_SOURCE_BYTES_HEX }, /transactionBytes must not use multiple aliases/u],
-    [{ transaction_merkle_branch: [] }, /transactionMerkleBranch must not use multiple aliases/u],
-    [{ inclusion_branch: [`0x${"aa".repeat(32)}`] }, /inclusionBranch must not use multiple aliases/u],
     [
-      { bridgeAddress: `0x${"45".repeat(20)}`, sourceBridgeEmitterAddress: `0x${"45".repeat(20)}` },
+      { source_event_digest: sourceEventDigest },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
+    [
+      { receipt_or_message_root: HEX32_B },
+      /receiptRoot must not use multiple aliases/u,
+    ],
+    [
+      { transaction_root: TRON_TRANSACTION_SOURCE_ROOT },
+      /transactionRoot must not use multiple aliases/u,
+    ],
+    [
+      { transaction_index: 0n },
+      /transactionIndex must not use multiple aliases/u,
+    ],
+    [
+      { transaction_count: 1n },
+      /transactionCount must not use multiple aliases/u,
+    ],
+    [
+      { transaction_bytes: TRON_TRANSACTION_SOURCE_BYTES_HEX },
+      /transactionBytes must not use multiple aliases/u,
+    ],
+    [
+      { transaction_merkle_branch: [] },
+      /transactionMerkleBranch must not use multiple aliases/u,
+    ],
+    [
+      { inclusion_branch: [`0x${"aa".repeat(32)}`] },
+      /inclusionBranch must not use multiple aliases/u,
+    ],
+    [
+      {
+        bridgeAddress: `0x${"45".repeat(20)}`,
+        sourceBridgeEmitterAddress: `0x${"45".repeat(20)}`,
+      },
       /sourceBridgeEmitterAddress must not use multiple aliases/u,
     ],
     [
@@ -11144,7 +13052,11 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     ],
   ]) {
     assert.throws(
-      () => canonicalTronSccpTransactionSourceProofBytes({ ...tronTransactionSourceInput, ...patch }),
+      () =>
+        canonicalTronSccpTransactionSourceProofBytes({
+          ...tronTransactionSourceInput,
+          ...patch,
+        }),
       pattern,
     );
   }
@@ -11154,11 +13066,17 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   );
   const omittedDefaultRetTransactionSourceInput = {
     ...tronTransactionSourceInput,
-    transactionRoot: "0x62489e5ad22dd0fc7a4b8444c2b17ef28c2c885a01bd0f97fd7f63fbfb1552bd",
-    transactionBytes: TRON_TRANSACTION_SOURCE_BYTES_HEX.replace("2a0410001801", "2a021801"),
+    transactionRoot:
+      "0x62489e5ad22dd0fc7a4b8444c2b17ef28c2c885a01bd0f97fd7f63fbfb1552bd",
+    transactionBytes: TRON_TRANSACTION_SOURCE_BYTES_HEX.replace(
+      "2a0410001801",
+      "2a021801",
+    ),
   };
   assert.equal(
-    canonicalTronSccpTransactionSourceProofBytes(omittedDefaultRetTransactionSourceInput).length,
+    canonicalTronSccpTransactionSourceProofBytes(
+      omittedDefaultRetTransactionSourceInput,
+    ).length,
     474,
   );
   assert.equal(
@@ -11206,7 +13124,11 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     /successful TRON TriggerSmartContract source call/,
   );
   assert.throws(
-    () => canonicalTronSccpTransactionSourceProofBytes({ ...tronTransactionSourceInput, transactionIndex: 1n }),
+    () =>
+      canonicalTronSccpTransactionSourceProofBytes({
+        ...tronTransactionSourceInput,
+        transactionIndex: 1n,
+      }),
     /transactionIndex/,
   );
   assert.throws(
@@ -11219,38 +13141,81 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     /transactionMerkleBranch/,
   );
   assert.throws(
-    () => canonicalTronSccpTransactionSourceProofBytes({ ...tronTransactionSourceInput, transactionRoot: HEX32_C }),
+    () =>
+      canonicalTronSccpTransactionSourceProofBytes({
+        ...tronTransactionSourceInput,
+        transactionRoot: HEX32_C,
+      }),
     /transactionRoot/,
   );
   assert.throws(
     () =>
       canonicalTronSccpTransactionSourceProofBytes({
         ...tronTransactionSourceInput,
-        transactionRoot: "0xe4a77765ae41dc30b8bf3f7d9847170e0646e3dd0189433d2e3c88296221c942",
+        transactionRoot:
+          "0xe4a77765ae41dc30b8bf3f7d9847170e0646e3dd0189433d2e3c88296221c942",
         transactionIndex: 1n,
         transactionCount: 3n,
         transactionBytes: "0x123456",
-        transactionMerkleBranch: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
+        transactionMerkleBranch: [
+          `0x${"11".repeat(32)}`,
+          `0x${"22".repeat(32)}`,
+        ],
       }),
     /truncated protobuf bytes field/,
   );
-  assert.equal(canonicalSubstrateSccpStorageProofBytes(substrateInput).length, 225);
+  assert.equal(
+    canonicalSubstrateSccpStorageProofBytes(substrateInput).length,
+    225,
+  );
   assert.throws(
-    () => canonicalSubstrateSccpStorageProofBytes({ ...substrateInput, sourceEventDigest: SCCP_ZERO_HASH_V1 }),
+    () =>
+      canonicalSubstrateSccpStorageProofBytes({
+        ...substrateInput,
+        sourceEventDigest: SCCP_ZERO_HASH_V1,
+      }),
     /sourceEventDigest must not be zero/u,
   );
   for (const [patch, pattern] of [
-    [{ source_domain: SCCP_DOMAIN_SORA_KUSAMA }, /sourceDomain must not use multiple aliases/u],
-    [{ source_event_digest: sourceEventDigest }, /sourceEventDigest must not use multiple aliases/u],
+    [
+      { source_domain: SCCP_DOMAIN_SORA_KUSAMA },
+      /sourceDomain must not use multiple aliases/u,
+    ],
+    [
+      { source_event_digest: sourceEventDigest },
+      /sourceEventDigest must not use multiple aliases/u,
+    ],
     [{ leaf_index: 0n }, /sourceEventLeafIndex must not use multiple aliases/u],
-    [{ finality_height: 31n }, /finalizedBlockNumber must not use multiple aliases/u],
+    [
+      { finality_height: 31n },
+      /finalizedBlockNumber must not use multiple aliases/u,
+    ],
     [{ grandpa_set_id: 32n }, /grandpaSetId must not use multiple aliases/u],
-    [{ finality_block_hash: HEX32_A }, /blockHash must not use multiple aliases/u],
-    [{ authority_set_hash: HEX32_C }, /authoritySetHash must not use multiple aliases/u],
-    [{ receipt_or_message_root: HEX32_B }, /eventsRoot must not use multiple aliases/u],
-    [{ inclusion_branch: inclusionBranch }, /inclusionBranch must not use multiple aliases/u],
+    [
+      { finality_block_hash: HEX32_A },
+      /blockHash must not use multiple aliases/u,
+    ],
+    [
+      { authority_set_hash: HEX32_C },
+      /authoritySetHash must not use multiple aliases/u,
+    ],
+    [
+      { receipt_or_message_root: HEX32_B },
+      /eventsRoot must not use multiple aliases/u,
+    ],
+    [
+      { inclusion_branch: inclusionBranch },
+      /inclusionBranch must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalSubstrateSccpStorageProofBytes({ ...substrateInput, ...patch }), pattern);
+    assert.throws(
+      () =>
+        canonicalSubstrateSccpStorageProofBytes({
+          ...substrateInput,
+          ...patch,
+        }),
+      pattern,
+    );
   }
   assert.equal(
     Buffer.from(
@@ -11258,10 +13223,14 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
         substrateRuntimeStorageInput,
       ),
     ).toString("hex"),
-    Buffer.from(canonicalSubstrateSccpStorageProofBytes(substrateInput)).toString("hex"),
+    Buffer.from(
+      canonicalSubstrateSccpStorageProofBytes(substrateInput),
+    ).toString("hex"),
   );
   const substrateRuntimeStoragePublicInputsHash =
-    substrateSccpRuntimeStorageProofPublicInputsHash(substrateRuntimeStorageInput);
+    substrateSccpRuntimeStorageProofPublicInputsHash(
+      substrateRuntimeStorageInput,
+    );
   assert.match(substrateRuntimeStoragePublicInputsHash, /^0x[0-9a-f]{64}$/);
   const substrateRuntimeStorageColumns =
     substrateSccpRuntimeStoragePublicInputColumns(substrateRuntimeStorageInput);
@@ -11290,10 +13259,11 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   );
   const substrateRuntimeStorageRequest =
     buildSubstrateSccpRuntimeStorageProofRequest(substrateRuntimeStorageInput);
-  assertImmutableFastpqProofRequest(
-    substrateRuntimeStorageRequest,
-    ["statementBytes", "verificationContextBytes", "schemaDescriptor"],
-  );
+  assertImmutableFastpqProofRequest(substrateRuntimeStorageRequest, [
+    "statementBytes",
+    "verificationContextBytes",
+    "schemaDescriptor",
+  ]);
   assert.equal(
     substrateRuntimeStorageRequest.circuitId,
     SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
@@ -11304,7 +13274,9 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   );
   assert.equal(substrateRuntimeStorageRequest.fastpqPublicInputs.slot, "31");
   assert.deepEqual(
-    substrateRuntimeStorageRequest.fastpqTransitions.map((transition) => transition.key),
+    substrateRuntimeStorageRequest.fastpqTransitions.map(
+      (transition) => transition.key,
+    ),
     [
       "sccp:substrate:runtime-storage:v1:context",
       "sccp:substrate:runtime-storage:v1:statement",
@@ -11389,7 +13361,8 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     headerVersion: 1,
     timestampMs: 1700000012344n,
   };
-  const parentRawHeader = canonicalTronRawBlockHeaderBytes(parentRawHeaderInput);
+  const parentRawHeader =
+    canonicalTronRawBlockHeaderBytes(parentRawHeaderInput);
   const rawHeaderInput = {
     number: 12345n,
     txTrieRoot: HEX32_D,
@@ -11400,24 +13373,54 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     timestampMs: 1700000012345n,
   };
   const rawHeader = canonicalTronRawBlockHeaderBytes(rawHeaderInput);
-  assert.equal(Buffer.from(parentRawHeader).toString("hex"), TRON_PARENT_RAW_HEADER_HEX);
+  assert.equal(
+    Buffer.from(parentRawHeader).toString("hex"),
+    TRON_PARENT_RAW_HEADER_HEX,
+  );
   assert.equal(Buffer.from(rawHeader).toString("hex"), TRON_RAW_HEADER_HEX);
   for (const [patch, pattern] of [
     [{ blockNumber: 12345n }, /number must not use multiple aliases/u],
     [{ tx_trie_root: HEX32_D }, /txTrieRoot must not use multiple aliases/u],
-    [{ account_state_root: `0x${"ee".repeat(32)}` }, /accountStateRoot must not use multiple aliases/u],
-    [{ parent_block_id: TRON_PARENT_BLOCK_ID }, /parentBlockId must not use multiple aliases/u],
-    [{ witness_address: `0x41${"11".repeat(20)}` }, /witnessAddress must not use multiple aliases/u],
+    [
+      { account_state_root: `0x${"ee".repeat(32)}` },
+      /accountStateRoot must not use multiple aliases/u,
+    ],
+    [
+      { parent_block_id: TRON_PARENT_BLOCK_ID },
+      /parentBlockId must not use multiple aliases/u,
+    ],
+    [
+      { witness_address: `0x41${"11".repeat(20)}` },
+      /witnessAddress must not use multiple aliases/u,
+    ],
     [{ header_version: 1 }, /headerVersion must not use multiple aliases/u],
-    [{ timestamp_ms: 1700000012345n }, /timestampMs must not use multiple aliases/u],
+    [
+      { timestamp_ms: 1700000012345n },
+      /timestampMs must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalTronRawBlockHeaderBytes({ ...rawHeaderInput, ...patch }), pattern);
+    assert.throws(
+      () => canonicalTronRawBlockHeaderBytes({ ...rawHeaderInput, ...patch }),
+      pattern,
+    );
   }
-  assert.equal(tronRawBlockHeaderHash(parentRawHeader), TRON_PARENT_RAW_HEADER_HASH);
+  assert.equal(
+    tronRawBlockHeaderHash(parentRawHeader),
+    TRON_PARENT_RAW_HEADER_HASH,
+  );
   assert.equal(tronRawBlockHeaderHash(rawHeader), TRON_RAW_HEADER_HASH);
-  assert.equal(tronBlockIdFromRawDataHash(12344n, TRON_PARENT_RAW_HEADER_HASH), TRON_PARENT_BLOCK_ID);
-  assert.equal(tronBlockIdFromRawDataHash("12344", TRON_PARENT_RAW_HEADER_HASH), TRON_PARENT_BLOCK_ID);
-  assert.equal(tronBlockIdFromRawDataHash(12345n, TRON_RAW_HEADER_HASH), TRON_BLOCK_ID);
+  assert.equal(
+    tronBlockIdFromRawDataHash(12344n, TRON_PARENT_RAW_HEADER_HASH),
+    TRON_PARENT_BLOCK_ID,
+  );
+  assert.equal(
+    tronBlockIdFromRawDataHash("12344", TRON_PARENT_RAW_HEADER_HASH),
+    TRON_PARENT_BLOCK_ID,
+  );
+  assert.equal(
+    tronBlockIdFromRawDataHash(12345n, TRON_RAW_HEADER_HASH),
+    TRON_BLOCK_ID,
+  );
   for (const blockNumber of ["012345", "0x3039", "+12345", " 12345", 12345.5]) {
     assert.throws(
       () => tronBlockIdFromRawDataHash(blockNumber, TRON_RAW_HEADER_HASH),
@@ -11452,24 +13455,64 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     timestampMs: 1700000012345n,
     headerVersion: 1,
   };
-  assert.equal(canonicalTronSolidBlockHeaderProofBytes(solidHeaderProof).length, 650);
-  assert.equal(tronSolidBlockHeaderProofHash(solidHeaderProof), TRON_SOLID_BLOCK_HEADER_PROOF_HASH);
+  assert.equal(
+    canonicalTronSolidBlockHeaderProofBytes(solidHeaderProof).length,
+    650,
+  );
+  assert.equal(
+    tronSolidBlockHeaderProofHash(solidHeaderProof),
+    TRON_SOLID_BLOCK_HEADER_PROOF_HASH,
+  );
   for (const [patch, pattern] of [
     [{ raw_data: rawHeader }, /rawData must not use multiple aliases/u],
-    [{ witness_signature: tronHeaderSignature(0) }, /witnessSignature must not use multiple aliases/u],
-    [{ parent_raw_data: parentRawHeader }, /parentRawData must not use multiple aliases/u],
-    [{ parent_witness_signature: tronHeaderSignature(27) }, /parentWitnessSignature must not use multiple aliases/u],
-    [{ raw_data_hash: TRON_RAW_HEADER_HASH }, /rawDataHash must not use multiple aliases/u],
-    [{ parent_raw_data_hash: TRON_PARENT_RAW_HEADER_HASH }, /parentRawDataHash must not use multiple aliases/u],
+    [
+      { witness_signature: tronHeaderSignature(0) },
+      /witnessSignature must not use multiple aliases/u,
+    ],
+    [
+      { parent_raw_data: parentRawHeader },
+      /parentRawData must not use multiple aliases/u,
+    ],
+    [
+      { parent_witness_signature: tronHeaderSignature(27) },
+      /parentWitnessSignature must not use multiple aliases/u,
+    ],
+    [
+      { raw_data_hash: TRON_RAW_HEADER_HASH },
+      /rawDataHash must not use multiple aliases/u,
+    ],
+    [
+      { parent_raw_data_hash: TRON_PARENT_RAW_HEADER_HASH },
+      /parentRawDataHash must not use multiple aliases/u,
+    ],
     [{ block_id: TRON_BLOCK_ID }, /blockId must not use multiple aliases/u],
     [{ tx_trie_root: HEX32_D }, /txTrieRoot must not use multiple aliases/u],
-    [{ account_state_root: `0x${"ee".repeat(32)}` }, /accountStateRoot must not use multiple aliases/u],
-    [{ parent_block_id: TRON_PARENT_BLOCK_ID }, /parentBlockId must not use multiple aliases/u],
-    [{ witness_address: `0x41${"11".repeat(20)}` }, /witnessAddress must not use multiple aliases/u],
-    [{ timestamp_ms: 1700000012345n }, /timestampMs must not use multiple aliases/u],
+    [
+      { account_state_root: `0x${"ee".repeat(32)}` },
+      /accountStateRoot must not use multiple aliases/u,
+    ],
+    [
+      { parent_block_id: TRON_PARENT_BLOCK_ID },
+      /parentBlockId must not use multiple aliases/u,
+    ],
+    [
+      { witness_address: `0x41${"11".repeat(20)}` },
+      /witnessAddress must not use multiple aliases/u,
+    ],
+    [
+      { timestamp_ms: 1700000012345n },
+      /timestampMs must not use multiple aliases/u,
+    ],
     [{ header_version: 1 }, /headerVersion must not use multiple aliases/u],
   ]) {
-    assert.throws(() => canonicalTronSolidBlockHeaderProofBytes({ ...solidHeaderProof, ...patch }), pattern);
+    assert.throws(
+      () =>
+        canonicalTronSolidBlockHeaderProofBytes({
+          ...solidHeaderProof,
+          ...patch,
+        }),
+      pattern,
+    );
   }
   assert.throws(
     () =>
@@ -11527,7 +13570,11 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     /TRON header signatures must be canonical low-S/,
   );
   assert.throws(
-    () => canonicalTronSolidBlockHeaderProofBytes({ ...solidHeaderProof, version: 0 }),
+    () =>
+      canonicalTronSolidBlockHeaderProofBytes({
+        ...solidHeaderProof,
+        version: 0,
+      }),
     /version must be 1/,
   );
   const zeroRHeaderSignature = tronHeaderSignature(0);
@@ -11551,22 +13598,44 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     bscSccpReceiptProofHash({ ...bscInput, inclusionBranch: [HEX32_F] }),
   );
   assert.throws(
-    () => canonicalSccpMessageTransparentPublicInputsBytes({ ...sampleEvmPublicInputs, version: 0 }),
+    () =>
+      canonicalSccpMessageTransparentPublicInputsBytes({
+        ...sampleEvmPublicInputs,
+        version: 0,
+      }),
     /publicInputs\.version/,
   );
   assert.throws(
-    () => canonicalSccpMessageTransparentPublicInputsBytes({ ...sampleEvmPublicInputs, version: null }),
+    () =>
+      canonicalSccpMessageTransparentPublicInputsBytes({
+        ...sampleEvmPublicInputs,
+        version: null,
+      }),
     /publicInputs\.version must be 1/,
   );
   const validatorPayloadInput = {
     validatorAddresses: [`0x${"11".repeat(20)}`, `0x${"22".repeat(20)}`],
     validatorPowers: [1n, 2n],
   };
-  const validatorPayload = canonicalBscValidatorSetPayloadBytes(validatorPayloadInput);
-  assert.equal(Buffer.from(validatorPayload).toString("hex"), BSC_VALIDATOR_SET_PAYLOAD_HEX);
-  assert.equal(bscValidatorSetPayloadHash(validatorPayloadInput), BSC_VALIDATOR_SET_PAYLOAD_HASH);
-  assert.equal(bscValidatorSetPayloadHash(validatorPayload), BSC_VALIDATOR_SET_PAYLOAD_HASH);
-  assert.equal(bscValidatorSetHashFromPayload(validatorPayloadInput), BSC_VALIDATOR_SET_HASH);
+  const validatorPayload = canonicalBscValidatorSetPayloadBytes(
+    validatorPayloadInput,
+  );
+  assert.equal(
+    Buffer.from(validatorPayload).toString("hex"),
+    BSC_VALIDATOR_SET_PAYLOAD_HEX,
+  );
+  assert.equal(
+    bscValidatorSetPayloadHash(validatorPayloadInput),
+    BSC_VALIDATOR_SET_PAYLOAD_HASH,
+  );
+  assert.equal(
+    bscValidatorSetPayloadHash(validatorPayload),
+    BSC_VALIDATOR_SET_PAYLOAD_HASH,
+  );
+  assert.equal(
+    bscValidatorSetHashFromPayload(validatorPayloadInput),
+    BSC_VALIDATOR_SET_HASH,
+  );
   assert.throws(
     () =>
       canonicalBscValidatorSetPayloadBytes({
@@ -11586,8 +13655,9 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   assert.throws(
     () =>
       canonicalBscValidatorSetPayloadBytes({
-        validatorAddresses: Array.from({ length: 256 }, (_, index) =>
-          `0x${(index + 1).toString(16).padStart(40, "0")}`,
+        validatorAddresses: Array.from(
+          { length: 256 },
+          (_, index) => `0x${(index + 1).toString(16).padStart(40, "0")}`,
         ),
         validatorPowers: Array.from({ length: 256 }, () => 1n),
       }),
@@ -11599,14 +13669,23 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   });
   const parliaExtra = sampleBscParliaExtra();
   assert.equal(
-    Buffer.from(bscValidatorSetPayloadFromParliaExtra(parliaExtra)).toString("hex"),
+    Buffer.from(bscValidatorSetPayloadFromParliaExtra(parliaExtra)).toString(
+      "hex",
+    ),
     Buffer.from(parliaPayload).toString("hex"),
   );
   assert.equal(
-    Buffer.from(bscValidatorSetPayloadFromHeaderRlp(sampleBscParliaHeaderRlp(parliaExtra))).toString("hex"),
+    Buffer.from(
+      bscValidatorSetPayloadFromHeaderRlp(
+        sampleBscParliaHeaderRlp(parliaExtra),
+      ),
+    ).toString("hex"),
     Buffer.from(parliaPayload).toString("hex"),
   );
-  assert.throws(() => bscValidatorSetPayloadFromHeaderRlp(Uint8Array.from([0x80])), /RLP list/);
+  assert.throws(
+    () => bscValidatorSetPayloadFromHeaderRlp(Uint8Array.from([0x80])),
+    /RLP list/,
+  );
   assert.throws(
     () =>
       canonicalBscValidatorSetPayloadBytes({
@@ -11633,7 +13712,8 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   assert.equal(canonicalBscCommitMessageBytes(commitMessage).length, 117);
   assert.equal(bscCommitMessageHash(commitMessage), BSC_COMMIT_MESSAGE_HASH);
   assert.throws(
-    () => bscCommitMessageHash({ ...commitMessage, sourceDomain: SCCP_DOMAIN_ETH }),
+    () =>
+      bscCommitMessageHash({ ...commitMessage, sourceDomain: SCCP_DOMAIN_ETH }),
     /sourceDomain/,
   );
   assert.throws(
@@ -11641,7 +13721,11 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     /validatorEpoch must not use multiple aliases/u,
   );
   assert.throws(
-    () => bscCommitMessageHash({ ...commitMessage, validator_set_hash: BSC_COMMIT_VALIDATOR_SET_HASH }),
+    () =>
+      bscCommitMessageHash({
+        ...commitMessage,
+        validator_set_hash: BSC_COMMIT_VALIDATOR_SET_HASH,
+      }),
     /validatorSetHash must not use multiple aliases/u,
   );
   const commitSeal = {
@@ -11682,7 +13766,8 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     /recover/,
   );
   assert.throws(
-    () => canonicalBscCommitSealBytes({ ...commitSeal, validatorSetHash: HEX32_A }),
+    () =>
+      canonicalBscCommitSealBytes({ ...commitSeal, validatorSetHash: HEX32_A }),
     /validatorSetHash/,
   );
   assert.throws(
@@ -11714,33 +13799,49 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
         validatorIndex: 0,
         storageSlot: HEX32_D,
         storageValue: `0x94${"11".repeat(20)}`,
-        storageValueHash: bscValidatorSetStorageValueHash(`0x94${"11".repeat(20)}`),
+        storageValueHash: bscValidatorSetStorageValueHash(
+          `0x94${"11".repeat(20)}`,
+        ),
         storageProofNodes: [`0xe4822080a0${"33".repeat(32)}`],
       },
       {
         validatorIndex: 1,
         storageSlot: HEX32_E,
         storageValue: `0x94${"22".repeat(20)}`,
-        storageValueHash: bscValidatorSetStorageValueHash(`0x94${"22".repeat(20)}`),
+        storageValueHash: bscValidatorSetStorageValueHash(
+          `0x94${"22".repeat(20)}`,
+        ),
         storageProofNodes: [`0xe4822080a0${"44".repeat(32)}`],
       },
     ],
   };
-  assert.equal(canonicalBscValidatorSetMetadataProofBytes(metadataProof).length, 560);
+  assert.equal(
+    canonicalBscValidatorSetMetadataProofBytes(metadataProof).length,
+    560,
+  );
   const metadataHash = bscValidatorSetMetadataProofHash(metadataProof);
   assert.throws(
-    () => canonicalBscValidatorSetMetadataProofBytes({ ...metadataProof, version: 0 }),
+    () =>
+      canonicalBscValidatorSetMetadataProofBytes({
+        ...metadataProof,
+        version: 0,
+      }),
     /BSC ValidatorSet metadata proof version/,
   );
   assert.throws(
-    () => canonicalBscValidatorSetMetadataProofBytes({ ...metadataProof, state_root: HEX32_A }),
+    () =>
+      canonicalBscValidatorSetMetadataProofBytes({
+        ...metadataProof,
+        state_root: HEX32_A,
+      }),
     /stateRoot must not use multiple aliases/u,
   );
   assert.throws(
     () =>
       canonicalBscValidatorSetMetadataProofBytes({
         ...metadataProof,
-        validator_set_length_proof_nodes: metadataProof.validatorSetLengthProofNodes,
+        validator_set_length_proof_nodes:
+          metadataProof.validatorSetLengthProofNodes,
       }),
     /validatorSetLengthProofNodes must not use multiple aliases/u,
   );
@@ -11780,7 +13881,8 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
         validatorStorageProofs: [
           {
             ...metadataProof.validatorStorageProofs[0],
-            storage_proof_nodes: metadataProof.validatorStorageProofs[0].storageProofNodes,
+            storage_proof_nodes:
+              metadataProof.validatorStorageProofs[0].storageProofNodes,
           },
         ],
       }),
@@ -11793,7 +13895,8 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
         validatorStorageProofs: [
           {
             ...metadataProof.validatorStorageProofs[0],
-            storage_value_hash: metadataProof.validatorStorageProofs[0].storageValueHash,
+            storage_value_hash:
+              metadataProof.validatorStorageProofs[0].storageValueHash,
           },
         ],
       }),
@@ -11826,7 +13929,10 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     nextValidatorSetPayloadHash: BSC_VALIDATOR_SET_PAYLOAD_HASH,
     validatorSetMetadataProofHash: metadataHash,
   };
-  assert.equal(canonicalBscValidatorSetTransitionMessageBytes(transitionMessage).length, 189);
+  assert.equal(
+    canonicalBscValidatorSetTransitionMessageBytes(transitionMessage).length,
+    189,
+  );
   assert.throws(
     () =>
       canonicalBscValidatorSetTransitionMessageBytes({
@@ -11853,7 +13959,11 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     /nextValidatorSetPayloadHash must not use multiple aliases/u,
   );
   assert.throws(
-    () => canonicalBscValidatorSetTransitionMessageBytes({ ...transitionMessage, version: 0 }),
+    () =>
+      canonicalBscValidatorSetTransitionMessageBytes({
+        ...transitionMessage,
+        version: 0,
+      }),
     /BSC validator-set transition message version/,
   );
   assert.notEqual(
@@ -11864,38 +13974,51 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     }),
   );
   assert.throws(
-    () => bscValidatorSetTransitionMessageHash({
-      ...transitionMessage,
-      transitionBlockNumber: 8401n,
-    }),
+    () =>
+      bscValidatorSetTransitionMessageHash({
+        ...transitionMessage,
+        transitionBlockNumber: 8401n,
+      }),
     /epoch-start block/,
   );
   assert.throws(
-    () => bscValidatorSetTransitionMessageHash({
-      ...transitionMessage,
-      toValidatorEpoch: 43n,
-    }),
+    () =>
+      bscValidatorSetTransitionMessageHash({
+        ...transitionMessage,
+        toValidatorEpoch: 43n,
+      }),
     /fromValidatorEpoch/,
   );
   assert.throws(
-    () => bscValidatorSetTransitionMessageHash({
-      ...transitionMessage,
-      sourceDomain: 0,
-    }),
+    () =>
+      bscValidatorSetTransitionMessageHash({
+        ...transitionMessage,
+        sourceDomain: 0,
+      }),
     /sourceDomain/,
   );
   const witnessPayloadInput = {
     witnessAddresses: [`0x41${"11".repeat(20)}`, `0x41${"22".repeat(20)}`],
     witnessWeights: [1n, 2n],
   };
-  const witnessPayload = canonicalTronWitnessSchedulePayloadBytes(witnessPayloadInput);
-  assert.equal(Buffer.from(witnessPayload).toString("hex"), TRON_WITNESS_SCHEDULE_PAYLOAD_HEX);
+  const witnessPayload =
+    canonicalTronWitnessSchedulePayloadBytes(witnessPayloadInput);
+  assert.equal(
+    Buffer.from(witnessPayload).toString("hex"),
+    TRON_WITNESS_SCHEDULE_PAYLOAD_HEX,
+  );
   assert.equal(
     tronWitnessSchedulePayloadHash(witnessPayloadInput),
     TRON_WITNESS_SCHEDULE_PAYLOAD_HASH,
   );
-  assert.equal(tronWitnessSchedulePayloadHash(witnessPayload), TRON_WITNESS_SCHEDULE_PAYLOAD_HASH);
-  assert.equal(tronWitnessScheduleHashFromPayload(witnessPayloadInput), TRON_WITNESS_SCHEDULE_HASH);
+  assert.equal(
+    tronWitnessSchedulePayloadHash(witnessPayload),
+    TRON_WITNESS_SCHEDULE_PAYLOAD_HASH,
+  );
+  assert.equal(
+    tronWitnessScheduleHashFromPayload(witnessPayloadInput),
+    TRON_WITNESS_SCHEDULE_HASH,
+  );
   assert.throws(
     () =>
       canonicalTronWitnessSchedulePayloadBytes({
@@ -11928,7 +14051,8 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
       canonicalTronWitnessSchedulePayloadBytes({
         witnessAddresses: Array.from(
           { length: 65 },
-          (_, index) => `0x41${"11".repeat(19)}${index.toString(16).padStart(2, "0")}`,
+          (_, index) =>
+            `0x41${"11".repeat(19)}${index.toString(16).padStart(2, "0")}`,
         ),
         witnessWeights: Array.from({ length: 65 }, () => 1n),
       }),
@@ -11989,25 +14113,58 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     transactionRoot: HEX32_D,
     receiptProofHash: HEX32_C,
   };
-  assert.equal(canonicalTronSolidBlockMessageBytes(tronSolidMessage).length, 173);
-  assert.equal(tronSolidBlockMessageHash(tronSolidMessage), TRON_SOLID_BLOCK_MESSAGE_HASH);
+  assert.equal(
+    canonicalTronSolidBlockMessageBytes(tronSolidMessage).length,
+    173,
+  );
+  assert.equal(
+    tronSolidBlockMessageHash(tronSolidMessage),
+    TRON_SOLID_BLOCK_MESSAGE_HASH,
+  );
   for (const [patch, pattern] of [
-    [{ source_domain: SCCP_DOMAIN_TRON }, /sourceDomain must not use multiple aliases/u],
-    [{ solid_block_number: 12345n }, /solidBlockNumber must not use multiple aliases/u],
+    [
+      { source_domain: SCCP_DOMAIN_TRON },
+      /sourceDomain must not use multiple aliases/u,
+    ],
+    [
+      { solid_block_number: 12345n },
+      /solidBlockNumber must not use multiple aliases/u,
+    ],
     [{ block_hash: TRON_BLOCK_ID }, /blockHash must not use multiple aliases/u],
-    [{ witness_schedule_hash: TRON_WITNESS_SCHEDULE_HASH }, /witnessScheduleHash must not use multiple aliases/u],
+    [
+      { witness_schedule_hash: TRON_WITNESS_SCHEDULE_HASH },
+      /witnessScheduleHash must not use multiple aliases/u,
+    ],
     [{ receipt_root: HEX32_B }, /receiptRoot must not use multiple aliases/u],
-    [{ transaction_root: HEX32_D }, /transactionRoot must not use multiple aliases/u],
-    [{ receipt_proof_hash: HEX32_C }, /receiptProofHash must not use multiple aliases/u],
+    [
+      { transaction_root: HEX32_D },
+      /transactionRoot must not use multiple aliases/u,
+    ],
+    [
+      { receipt_proof_hash: HEX32_C },
+      /receiptProofHash must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalTronSolidBlockMessageBytes({ ...tronSolidMessage, ...patch }), pattern);
+    assert.throws(
+      () =>
+        canonicalTronSolidBlockMessageBytes({ ...tronSolidMessage, ...patch }),
+      pattern,
+    );
   }
   assert.throws(
-    () => canonicalTronSolidBlockMessageBytes({ ...tronSolidMessage, sourceDomain: SCCP_DOMAIN_ETH }),
+    () =>
+      canonicalTronSolidBlockMessageBytes({
+        ...tronSolidMessage,
+        sourceDomain: SCCP_DOMAIN_ETH,
+      }),
     /sourceDomain must be TRON/,
   );
   assert.throws(
-    () => canonicalTronSolidBlockMessageBytes({ ...tronSolidMessage, receiptRoot: SCCP_ZERO_HASH_V1 }),
+    () =>
+      canonicalTronSolidBlockMessageBytes({
+        ...tronSolidMessage,
+        receiptRoot: SCCP_ZERO_HASH_V1,
+      }),
     /receiptRoot must not be zero/,
   );
   const tronWitnessSeal = {
@@ -12025,12 +14182,29 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   for (const [patch, pattern] of [
     [{ total_weight: 1n }, /totalWeight must not use multiple aliases/u],
     [{ signed_weight: 1n }, /signedWeight must not use multiple aliases/u],
-    [{ solid_block_message_hash: `0x${TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR}` }, /solidBlockMessageHash must not use multiple aliases/u],
-    [{ witness_addresses: [TRON_TEST_OWNER_ADDRESS] }, /witnessAddresses must not use multiple aliases/u],
-    [{ witness_weights: [1n] }, /witnessWeights must not use multiple aliases/u],
-    [{ signers_bitmap: "0x01" }, /signersBitmap must not use multiple aliases/u],
+    [
+      {
+        solid_block_message_hash: `0x${TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR}`,
+      },
+      /solidBlockMessageHash must not use multiple aliases/u,
+    ],
+    [
+      { witness_addresses: [TRON_TEST_OWNER_ADDRESS] },
+      /witnessAddresses must not use multiple aliases/u,
+    ],
+    [
+      { witness_weights: [1n] },
+      /witnessWeights must not use multiple aliases/u,
+    ],
+    [
+      { signers_bitmap: "0x01" },
+      /signersBitmap must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalTronWitnessSealBytes({ ...tronWitnessSeal, ...patch }), pattern);
+    assert.throws(
+      () => canonicalTronWitnessSealBytes({ ...tronWitnessSeal, ...patch }),
+      pattern,
+    );
   }
   assert.throws(
     () => canonicalTronWitnessSealBytes({ ...tronWitnessSeal, signatures: [] }),
@@ -12048,7 +14222,9 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     authorityPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
     authorityWeights: [1n, 2n],
   };
-  const authorityPayload = canonicalSubstrateAuthoritySetPayloadBytes(authorityPayloadInput);
+  const authorityPayload = canonicalSubstrateAuthoritySetPayloadBytes(
+    authorityPayloadInput,
+  );
   assert.equal(
     Buffer.from(authorityPayload).toString("hex"),
     SUBSTRATE_AUTHORITY_SET_PAYLOAD_HEX,
@@ -12116,7 +14292,10 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   assert.throws(
     () =>
       canonicalSubstrateAuthoritySetPayloadBytes({
-        authorityPublicKeys: Array.from({ length: 2049 }, () => `0x${"11".repeat(32)}`),
+        authorityPublicKeys: Array.from(
+          { length: 2049 },
+          () => `0x${"11".repeat(32)}`,
+        ),
         authorityWeights: Array.from({ length: 2049 }, () => 1n),
       }),
     /at most 2048/,
@@ -12127,7 +14306,10 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   );
   assert.notEqual(
     tronSccpReceiptStateProofHash(tronReceiptStateInput),
-    tronSccpReceiptStateProofHash({ ...tronReceiptStateInput, receiptRootIndex: 1n }),
+    tronSccpReceiptStateProofHash({
+      ...tronReceiptStateInput,
+      receiptRootIndex: 1n,
+    }),
   );
   assert.throws(
     () =>
@@ -12147,27 +14329,46 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
   );
   assert.notEqual(
     substrateSccpStorageProofHash(substrateInput),
-    substrateSccpStorageProofHash({ ...substrateInput, inclusionBranch: [HEX32_F] }),
+    substrateSccpStorageProofHash({
+      ...substrateInput,
+      inclusionBranch: [HEX32_F],
+    }),
   );
   assert.notEqual(
     substrateSccpStorageProofHash(substrateInput),
-    substrateSccpStorageProofHash({ ...substrateInput, sourceEventLeafIndex: 1n }),
+    substrateSccpStorageProofHash({
+      ...substrateInput,
+      sourceEventLeafIndex: 1n,
+    }),
   );
   assert.throws(
-    () => canonicalSubstrateSccpStorageProofBytes({ ...substrateInput, sourceDomain: undefined }),
+    () =>
+      canonicalSubstrateSccpStorageProofBytes({
+        ...substrateInput,
+        sourceDomain: undefined,
+      }),
     /sourceDomain must be a u32 domain id/,
   );
 });
 
 test("derives TRON witness-schedule transition transcript hashes from UI witness material", () => {
-  const parentPayload = Buffer.from(TRON_PARENT_WITNESS_SCHEDULE_PAYLOAD_HEX, "hex");
+  const parentPayload = Buffer.from(
+    TRON_PARENT_WITNESS_SCHEDULE_PAYLOAD_HEX,
+    "hex",
+  );
   const nextPayload = Buffer.from(TRON_WITNESS_SCHEDULE_PAYLOAD_HEX, "hex");
   assert.equal(
     tronWitnessScheduleHashFromPayload(parentPayload),
     TRON_PARENT_WITNESS_SCHEDULE_HASH,
   );
-  assert.equal(tronWitnessScheduleHashFromPayload(nextPayload), TRON_WITNESS_SCHEDULE_HASH);
-  assert.equal(tronWitnessSchedulePayloadHash(nextPayload), TRON_WITNESS_SCHEDULE_PAYLOAD_HASH);
+  assert.equal(
+    tronWitnessScheduleHashFromPayload(nextPayload),
+    TRON_WITNESS_SCHEDULE_HASH,
+  );
+  assert.equal(
+    tronWitnessSchedulePayloadHash(nextPayload),
+    TRON_WITNESS_SCHEDULE_PAYLOAD_HASH,
+  );
 
   const messageInput = {
     sourceDomain: SCCP_DOMAIN_TRON,
@@ -12201,7 +14402,9 @@ test("derives TRON witness-schedule transition transcript hashes from UI witness
     Buffer.from(TRON_WITNESS_SCHEDULE_PAYLOAD_HASH.slice(2), "hex"),
   ]);
   assert.deepEqual(
-    Buffer.from(canonicalTronWitnessScheduleTransitionMessageBytes(messageInput)),
+    Buffer.from(
+      canonicalTronWitnessScheduleTransitionMessageBytes(messageInput),
+    ),
     expectedMessage,
   );
   assert.equal(expectedMessage.length, 157);
@@ -12210,17 +14413,45 @@ test("derives TRON witness-schedule transition transcript hashes from UI witness
     TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_HASH,
   );
   for (const [patch, pattern] of [
-    [{ source_domain: SCCP_DOMAIN_TRON }, /sourceDomain must not use multiple aliases/u],
-    [{ from_witness_schedule_epoch: 7n }, /fromWitnessScheduleEpoch must not use multiple aliases/u],
-    [{ to_witness_schedule_epoch: 8n }, /toWitnessScheduleEpoch must not use multiple aliases/u],
-    [{ transition_block_number: 12345n }, /transitionBlockNumber must not use multiple aliases/u],
-    [{ transition_block_hash: TRON_BLOCK_ID }, /transitionBlockHash must not use multiple aliases/u],
-    [{ parent_witness_schedule_hash: TRON_PARENT_WITNESS_SCHEDULE_HASH }, /parentWitnessScheduleHash must not use multiple aliases/u],
-    [{ next_witness_schedule_hash: TRON_WITNESS_SCHEDULE_HASH }, /nextWitnessScheduleHash must not use multiple aliases/u],
-    [{ next_witness_schedule_payload: nextPayload }, /nextWitnessSchedulePayload must not use multiple aliases/u],
+    [
+      { source_domain: SCCP_DOMAIN_TRON },
+      /sourceDomain must not use multiple aliases/u,
+    ],
+    [
+      { from_witness_schedule_epoch: 7n },
+      /fromWitnessScheduleEpoch must not use multiple aliases/u,
+    ],
+    [
+      { to_witness_schedule_epoch: 8n },
+      /toWitnessScheduleEpoch must not use multiple aliases/u,
+    ],
+    [
+      { transition_block_number: 12345n },
+      /transitionBlockNumber must not use multiple aliases/u,
+    ],
+    [
+      { transition_block_hash: TRON_BLOCK_ID },
+      /transitionBlockHash must not use multiple aliases/u,
+    ],
+    [
+      { parent_witness_schedule_hash: TRON_PARENT_WITNESS_SCHEDULE_HASH },
+      /parentWitnessScheduleHash must not use multiple aliases/u,
+    ],
+    [
+      { next_witness_schedule_hash: TRON_WITNESS_SCHEDULE_HASH },
+      /nextWitnessScheduleHash must not use multiple aliases/u,
+    ],
+    [
+      { next_witness_schedule_payload: nextPayload },
+      /nextWitnessSchedulePayload must not use multiple aliases/u,
+    ],
   ]) {
     assert.throws(
-      () => canonicalTronWitnessScheduleTransitionMessageBytes({ ...messageInput, ...patch }),
+      () =>
+        canonicalTronWitnessScheduleTransitionMessageBytes({
+          ...messageInput,
+          ...patch,
+        }),
       pattern,
     );
   }
@@ -12234,7 +14465,10 @@ test("derives TRON witness-schedule transition transcript hashes from UI witness
     /nextWitnessSchedulePayloadHash must not use multiple aliases/u,
   );
   assert.notEqual(
-    tronWitnessScheduleTransitionMessageHash({ ...messageInput, transitionBlockHash: HEX32_D }),
+    tronWitnessScheduleTransitionMessageHash({
+      ...messageInput,
+      transitionBlockHash: HEX32_D,
+    }),
     tronWitnessScheduleTransitionMessageHash(messageInput),
   );
   assert.throws(
@@ -12277,18 +14511,44 @@ test("derives TRON witness-schedule transition transcript hashes from UI witness
       signatures: [TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE],
     },
   };
-  assert.equal(canonicalTronWitnessScheduleTransitionSealBytes(sealInput).length, 456);
+  assert.equal(
+    canonicalTronWitnessScheduleTransitionSealBytes(sealInput).length,
+    456,
+  );
   assert.equal(
     tronWitnessScheduleTransitionSealHash(sealInput),
     TRON_WITNESS_SCHEDULE_TRANSITION_SEAL_HASH,
   );
   for (const [patch, pattern] of [
-    [{ next_witness_schedule_payload_hash: TRON_WITNESS_SCHEDULE_PAYLOAD_HASH }, /nextWitnessSchedulePayloadHash must not use multiple aliases/u],
-    [{ transition_message_hash: TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_HASH }, /transitionMessageHash must not use multiple aliases/u],
-    [{ seal_proof: sealInput.sealProof }, /sealProof must not use multiple aliases/u],
-    [{ witnessSealProof: sealInput.sealProof }, /sealProof must not use multiple aliases/u],
+    [
+      {
+        next_witness_schedule_payload_hash: TRON_WITNESS_SCHEDULE_PAYLOAD_HASH,
+      },
+      /nextWitnessSchedulePayloadHash must not use multiple aliases/u,
+    ],
+    [
+      {
+        transition_message_hash: TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_HASH,
+      },
+      /transitionMessageHash must not use multiple aliases/u,
+    ],
+    [
+      { seal_proof: sealInput.sealProof },
+      /sealProof must not use multiple aliases/u,
+    ],
+    [
+      { witnessSealProof: sealInput.sealProof },
+      /sealProof must not use multiple aliases/u,
+    ],
   ]) {
-    assert.throws(() => canonicalTronWitnessScheduleTransitionSealBytes({ ...sealInput, ...patch }), pattern);
+    assert.throws(
+      () =>
+        canonicalTronWitnessScheduleTransitionSealBytes({
+          ...sealInput,
+          ...patch,
+        }),
+      pattern,
+    );
   }
   assert.throws(
     () =>
@@ -12307,8 +14567,13 @@ test("derives TRON witness-schedule transition transcript hashes from UI witness
     /transitionMessageHash/,
   );
   const badSignature = `0x${(
-    Number.parseInt(TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE.slice(2, 4), 16) ^ 1
-  ).toString(16).padStart(2, "0")}${TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE.slice(4)}`;
+    Number.parseInt(
+      TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE.slice(2, 4),
+      16,
+    ) ^ 1
+  )
+    .toString(16)
+    .padStart(2, "0")}${TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE.slice(4)}`;
   assert.throws(
     () =>
       canonicalTronWitnessScheduleTransitionSealBytes({
@@ -12329,21 +14594,44 @@ test("derives TRON witness-schedule transition transcript hashes from UI witness
 
 test("derives Substrate authority-set transition transcript hashes from UI witness material", () => {
   const parent = {
-    authorityPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`, `0x${"33".repeat(32)}`],
+    authorityPublicKeys: [
+      `0x${"11".repeat(32)}`,
+      `0x${"22".repeat(32)}`,
+      `0x${"33".repeat(32)}`,
+    ],
     authorityWeights: [5n, 7n, 11n],
   };
   const nextSet = {
-    authorityPublicKeys: [`0x${"aa".repeat(32)}`, `0x${"bb".repeat(32)}`, `0x${"cc".repeat(32)}`],
+    authorityPublicKeys: [
+      `0x${"aa".repeat(32)}`,
+      `0x${"bb".repeat(32)}`,
+      `0x${"cc".repeat(32)}`,
+    ],
     authorityWeights: [13n, 17n, 19n],
   };
   const parentPayload = canonicalSubstrateAuthoritySetPayloadBytes(parent);
   const nextPayload = canonicalSubstrateAuthoritySetPayloadBytes(nextSet);
 
-  assert.equal(Buffer.from(parentPayload).toString("hex"), SUBSTRATE_PARENT_AUTHORITY_SET_PAYLOAD_HEX);
-  assert.equal(Buffer.from(nextPayload).toString("hex"), SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HEX);
-  assert.equal(substrateAuthoritySetHashFromPayload(parentPayload), SUBSTRATE_PARENT_AUTHORITY_SET_HASH);
-  assert.equal(substrateAuthoritySetHashFromPayload(nextPayload), SUBSTRATE_NEXT_AUTHORITY_SET_HASH);
-  assert.equal(substrateAuthoritySetPayloadHash(nextPayload), SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH);
+  assert.equal(
+    Buffer.from(parentPayload).toString("hex"),
+    SUBSTRATE_PARENT_AUTHORITY_SET_PAYLOAD_HEX,
+  );
+  assert.equal(
+    Buffer.from(nextPayload).toString("hex"),
+    SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HEX,
+  );
+  assert.equal(
+    substrateAuthoritySetHashFromPayload(parentPayload),
+    SUBSTRATE_PARENT_AUTHORITY_SET_HASH,
+  );
+  assert.equal(
+    substrateAuthoritySetHashFromPayload(nextPayload),
+    SUBSTRATE_NEXT_AUTHORITY_SET_HASH,
+  );
+  assert.equal(
+    substrateAuthoritySetPayloadHash(nextPayload),
+    SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH,
+  );
 
   const messageInput = {
     sourceDomain: SCCP_DOMAIN_SORA_KUSAMA,
@@ -12355,24 +14643,61 @@ test("derives Substrate authority-set transition transcript hashes from UI witne
     nextAuthoritySetHash: SUBSTRATE_NEXT_AUTHORITY_SET_HASH,
     nextAuthoritySetPayloadHash: SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH,
   };
-  assert.equal(canonicalSubstrateAuthoritySetTransitionMessageBytes(messageInput).length, 157);
+  assert.equal(
+    canonicalSubstrateAuthoritySetTransitionMessageBytes(messageInput).length,
+    157,
+  );
   assert.equal(
     substrateAuthoritySetTransitionMessageHash(messageInput),
     SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH,
   );
   for (const [patch, pattern] of [
-    [{ source_domain: SCCP_DOMAIN_SORA_KUSAMA }, /sourceDomain must not use multiple aliases/u],
-    [{ from_grandpa_set_id: 41n }, /fromGrandpaSetId must not use multiple aliases/u],
-    [{ to_grandpa_set_id: 42n }, /toGrandpaSetId must not use multiple aliases/u],
-    [{ transition_block_number: 9001n }, /transitionBlockNumber must not use multiple aliases/u],
-    [{ transition_block_hash: `0x${"44".repeat(32)}` }, /transitionBlockHash must not use multiple aliases/u],
-    [{ parent_authority_set_hash: SUBSTRATE_PARENT_AUTHORITY_SET_HASH }, /parentAuthoritySetHash must not use multiple aliases/u],
-    [{ next_authority_set_hash: SUBSTRATE_NEXT_AUTHORITY_SET_HASH }, /nextAuthoritySetHash must not use multiple aliases/u],
-    [{ next_authority_set_payload_hash: SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH }, /nextAuthoritySetPayloadHash must not use multiple aliases/u],
-    [{ nextAuthoritySetProofHash: SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH }, /nextAuthoritySetPayloadHash must not use multiple aliases/u],
+    [
+      { source_domain: SCCP_DOMAIN_SORA_KUSAMA },
+      /sourceDomain must not use multiple aliases/u,
+    ],
+    [
+      { from_grandpa_set_id: 41n },
+      /fromGrandpaSetId must not use multiple aliases/u,
+    ],
+    [
+      { to_grandpa_set_id: 42n },
+      /toGrandpaSetId must not use multiple aliases/u,
+    ],
+    [
+      { transition_block_number: 9001n },
+      /transitionBlockNumber must not use multiple aliases/u,
+    ],
+    [
+      { transition_block_hash: `0x${"44".repeat(32)}` },
+      /transitionBlockHash must not use multiple aliases/u,
+    ],
+    [
+      { parent_authority_set_hash: SUBSTRATE_PARENT_AUTHORITY_SET_HASH },
+      /parentAuthoritySetHash must not use multiple aliases/u,
+    ],
+    [
+      { next_authority_set_hash: SUBSTRATE_NEXT_AUTHORITY_SET_HASH },
+      /nextAuthoritySetHash must not use multiple aliases/u,
+    ],
+    [
+      {
+        next_authority_set_payload_hash:
+          SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH,
+      },
+      /nextAuthoritySetPayloadHash must not use multiple aliases/u,
+    ],
+    [
+      { nextAuthoritySetProofHash: SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH },
+      /nextAuthoritySetPayloadHash must not use multiple aliases/u,
+    ],
   ]) {
     assert.throws(
-      () => canonicalSubstrateAuthoritySetTransitionMessageBytes({ ...messageInput, ...patch }),
+      () =>
+        canonicalSubstrateAuthoritySetTransitionMessageBytes({
+          ...messageInput,
+          ...patch,
+        }),
       pattern,
     );
   }
@@ -12397,7 +14722,9 @@ test("derives Substrate authority-set transition transcript hashes from UI witne
     },
   };
   assert.equal(
-    canonicalSubstrateAuthoritySetTransitionJustificationBytes(justificationInput).length,
+    canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+      justificationInput,
+    ).length,
     752,
   );
   assert.equal(
@@ -12405,23 +14732,56 @@ test("derives Substrate authority-set transition transcript hashes from UI witne
     SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_HASH,
   );
   for (const [patch, pattern] of [
-    [{ grandpa_justification: justificationInput.grandpaJustification }, /grandpaJustification must not use multiple aliases/u],
-    [{ next_authority_set_payload: nextPayload }, /nextAuthoritySetPayload must not use multiple aliases/u],
-    [{ transition_message_hash: SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH }, /transitionMessageHash must not use multiple aliases/u],
-    [{ source_domain: SCCP_DOMAIN_SORA_KUSAMA }, /sourceDomain must not use multiple aliases/u],
+    [
+      { grandpa_justification: justificationInput.grandpaJustification },
+      /grandpaJustification must not use multiple aliases/u,
+    ],
+    [
+      { next_authority_set_payload: nextPayload },
+      /nextAuthoritySetPayload must not use multiple aliases/u,
+    ],
+    [
+      {
+        transition_message_hash:
+          SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH,
+      },
+      /transitionMessageHash must not use multiple aliases/u,
+    ],
+    [
+      { source_domain: SCCP_DOMAIN_SORA_KUSAMA },
+      /sourceDomain must not use multiple aliases/u,
+    ],
   ]) {
     assert.throws(
-      () => canonicalSubstrateAuthoritySetTransitionJustificationBytes({ ...justificationInput, ...patch }),
+      () =>
+        canonicalSubstrateAuthoritySetTransitionJustificationBytes({
+          ...justificationInput,
+          ...patch,
+        }),
       pattern,
     );
   }
   for (const [patch, pattern] of [
     [{ total_weight: 23n }, /totalWeight must not use multiple aliases/u],
     [{ signed_weight: 23n }, /signedWeight must not use multiple aliases/u],
-    [{ precommit_message_hash: SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH }, /precommitMessageHash must not use multiple aliases/u],
-    [{ authority_public_keys: parent.authorityPublicKeys }, /authorityPublicKeys must not use multiple aliases/u],
-    [{ authority_weights: parent.authorityWeights }, /authorityWeights must not use multiple aliases/u],
-    [{ signers_bitmap: Uint8Array.from([0x07]) }, /signersBitmap must not use multiple aliases/u],
+    [
+      {
+        precommit_message_hash: SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH,
+      },
+      /precommitMessageHash must not use multiple aliases/u,
+    ],
+    [
+      { authority_public_keys: parent.authorityPublicKeys },
+      /authorityPublicKeys must not use multiple aliases/u,
+    ],
+    [
+      { authority_weights: parent.authorityWeights },
+      /authorityWeights must not use multiple aliases/u,
+    ],
+    [
+      { signers_bitmap: Uint8Array.from([0x07]) },
+      /signersBitmap must not use multiple aliases/u,
+    ],
   ]) {
     assert.throws(
       () =>
@@ -12436,7 +14796,11 @@ test("derives Substrate authority-set transition transcript hashes from UI witne
     );
   }
   assert.throws(
-    () => canonicalSubstrateAuthoritySetTransitionJustificationBytes({ ...justificationInput, version: 0 }),
+    () =>
+      canonicalSubstrateAuthoritySetTransitionJustificationBytes({
+        ...justificationInput,
+        version: 0,
+      }),
     /Substrate authority-set transition justification version/,
   );
   assert.throws(
@@ -12491,7 +14855,10 @@ test("derives Substrate authority-set transition transcript hashes from UI witne
         ...justificationInput,
         grandpaJustification: {
           ...justificationInput.grandpaJustification,
-          signatures: [new Uint8Array(64).fill(0x77), new Uint8Array(64).fill(0x88)],
+          signatures: [
+            new Uint8Array(64).fill(0x77),
+            new Uint8Array(64).fill(0x88),
+          ],
         },
       }),
     /signatures length/,
@@ -12515,7 +14882,10 @@ test("derives Substrate authority-set transition transcript hashes from UI witne
           ...justificationInput.grandpaJustification,
           signedWeight: 12n,
           signersBitmap: Uint8Array.from([0x03]),
-          signatures: [new Uint8Array(64).fill(0x77), new Uint8Array(64).fill(0x88)],
+          signatures: [
+            new Uint8Array(64).fill(0x77),
+            new Uint8Array(64).fill(0x88),
+          ],
         },
       }),
     /greater than two thirds/,
@@ -12604,7 +14974,10 @@ test("accepts callable and snake_case SCCP witness providers for UI proof genera
   });
   const evmResult = await evmProver.prove(evmInput, { portal: true });
   assert.deepEqual(Array.from(evmResult.sourceProofBytes), [9, 10]);
-  assert.equal(evmInput.publicInputs.messageId, sampleEvmPublicInputs.messageId);
+  assert.equal(
+    evmInput.publicInputs.messageId,
+    sampleEvmPublicInputs.messageId,
+  );
   assert.deepEqual(Array.from(evmInput.bundleBytes), [5, 6, 7]);
 
   const tonProver = new TonSccpProver({
@@ -12714,7 +15087,8 @@ test("rejects duplicate SCCP UI prover option aliases", async () => {
 });
 
 test("resolves SCCP UI witness providers before web local prover callbacks", async () => {
-  const solanaResolvedDestinationBindingHash = sccpDestinationBindingHash(SCCP_DOMAIN_SOL);
+  const solanaResolvedDestinationBindingHash =
+    sccpDestinationBindingHash(SCCP_DOMAIN_SOL);
   const solanaExpectedRequest = buildSolanaSccpProofRequest(
     sampleProductionWitness({
       destinationBindingHash: solanaResolvedDestinationBindingHash,
@@ -12740,12 +15114,18 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
         request.proofContext.destinationBindingHash,
         solanaResolvedDestinationBindingHash,
       );
-      assert.equal(request.proofContextHash, solanaExpectedRequest.proofContextHash);
+      assert.equal(
+        request.proofContextHash,
+        solanaExpectedRequest.proofContextHash,
+      );
       return { proofBytes: [1, 2, 3, 4] };
     },
   }).prove(sampleProductionWitness(), { portal: true });
   assert.equal(solanaResult.witnessHash, solanaExpectedRequest.witnessHash);
-  assert.equal(solanaResult.proofContextHash, solanaExpectedRequest.proofContextHash);
+  assert.equal(
+    solanaResult.proofContextHash,
+    solanaExpectedRequest.proofContextHash,
+  );
 
   let tonResolved = false;
   const tonResult = await new TonSccpProver({
@@ -12849,7 +15229,10 @@ test("Solana local prover receives deep-snapshotted UI payload metadata", async 
       assert.equal(Object.isFrozen(request.witness), true);
       assert.equal(Object.isFrozen(request.witness.payload), true);
       assert.equal(Object.isFrozen(request.witness.payload.metadata), true);
-      assert.equal(Object.isFrozen(request.witness.payload.metadata.route), true);
+      assert.equal(
+        Object.isFrozen(request.witness.payload.metadata.route),
+        true,
+      );
       assert.throws(() => {
         request.witness.payload.metadata.route.push("mutated");
       }, TypeError);
@@ -12980,7 +15363,10 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
     () =>
       new EvmSccpProver({
         prove: async (linkedRequest) => {
-          const wrapped = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, linkedRequest);
+          const wrapped = wrapEvmSccpProofResult(
+            GROTH16_PROOF_BYTES,
+            linkedRequest,
+          );
           return {
             proofBytes: GROTH16_PROOF_BYTES,
             envelopeHash: wrapped.envelopeHash,
@@ -12999,7 +15385,10 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
   );
 
   assert.equal(result.backend, SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1);
-  assert.equal(result.proofBytes.length, SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
+  assert.equal(
+    result.proofBytes.length,
+    SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+  );
   assert.match(result.proofBase64, /^[A-Za-z0-9+/]+=*$/);
   assert.match(result.requestHash, /^0x[0-9a-f]{64}$/);
   assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/);
@@ -13023,7 +15412,10 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
       assert.equal(Object.isFrozen(request), true);
       assert.equal(Object.isFrozen(request.publicInputs), true);
       assert.equal(Object.isFrozen(request.proofContext), true);
-      assert.equal(Object.isFrozen(request.sourceAdapterDeploymentBinding), true);
+      assert.equal(
+        Object.isFrozen(request.sourceAdapterDeploymentBinding),
+        true,
+      );
       request.bundleBytes[0] = 99;
       request.sourceProofBytes[0] = 99;
       assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
@@ -13202,7 +15594,10 @@ test("wraps Substrate runtime proof bytes with a request-bound envelope hash", a
     () =>
       new SubstrateSccpProver({
         prove: async (linkedRequest) => {
-          const wrapped = wrapSubstrateSccpProofResult([1, 2, 3, 4], linkedRequest);
+          const wrapped = wrapSubstrateSccpProofResult(
+            [1, 2, 3, 4],
+            linkedRequest,
+          );
           return {
             proofBytes: [1, 2, 3, 4],
             envelopeHash: wrapped.envelopeHash,
@@ -13292,7 +15687,10 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
     () =>
       new TronSccpProver({
         prove: async (linkedRequest) => {
-          const wrapped = wrapTronSccpProofResult(GROTH16_PROOF_BYTES, linkedRequest);
+          const wrapped = wrapTronSccpProofResult(
+            GROTH16_PROOF_BYTES,
+            linkedRequest,
+          );
           return {
             proofBytes: GROTH16_PROOF_BYTES,
             envelopeHash: wrapped.envelopeHash,
@@ -13311,7 +15709,10 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
   );
 
   assert.equal(result.backend, SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1);
-  assert.equal(result.proofBytes.length, SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
+  assert.equal(
+    result.proofBytes.length,
+    SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+  );
   assert.match(result.proofBase64, /^[A-Za-z0-9+/]+=*$/);
   assert.equal(Object.isFrozen(result), true);
   const exposedProof = result.proofBytes;
@@ -13422,7 +15823,10 @@ test("rejects non-production EVM-family, TRON, and Substrate inputs before callb
           return { proofBytes: GROTH16_PROOF_BYTES };
         },
       }).prove({
-        publicInputs: { ...sampleEvmPublicInputs, targetDomain: SCCP_DOMAIN_TRON },
+        publicInputs: {
+          ...sampleEvmPublicInputs,
+          targetDomain: SCCP_DOMAIN_TRON,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -13440,7 +15844,10 @@ test("rejects non-production EVM-family, TRON, and Substrate inputs before callb
           return { proofBytes: GROTH16_PROOF_BYTES };
         },
       }).prove({
-        publicInputs: { ...sampleTronPublicInputs, targetDomain: SCCP_DOMAIN_ETH },
+        publicInputs: {
+          ...sampleTronPublicInputs,
+          targetDomain: SCCP_DOMAIN_ETH,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -13458,7 +15865,10 @@ test("rejects non-production EVM-family, TRON, and Substrate inputs before callb
           return { proofBytes: [1, 2, 3, 4] };
         },
       }).prove({
-        publicInputs: { ...sampleSubstratePublicInputs, targetDomain: SCCP_DOMAIN_ETH },
+        publicInputs: {
+          ...sampleSubstratePublicInputs,
+          targetDomain: SCCP_DOMAIN_ETH,
+        },
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -14039,7 +16449,10 @@ test("builds canonical TAIRA XOR outbound transfer payloads and message ids", ()
     testU8(SCCP_CODEC_TEXT_UTF8),
     testVecBytes(testTextEncoder.encode(SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1)),
   );
-  assert.deepEqual(canonicalSccpTransferPayloadBytes(payload), expectedCanonical);
+  assert.deepEqual(
+    canonicalSccpTransferPayloadBytes(payload),
+    expectedCanonical,
+  );
   assert.deepEqual(
     tairaXorCanonicalTransferPayloadBytes({
       tairaSender: sender,
@@ -14051,7 +16464,12 @@ test("builds canonical TAIRA XOR outbound transfer payloads and message ids", ()
   );
 
   const expectedMessageId = testBytesToHex(
-    keccak_256(testConcatBytes(testTextEncoder.encode("sccp:transfer:v1"), expectedCanonical)),
+    keccak_256(
+      testConcatBytes(
+        testTextEncoder.encode("sccp:transfer:v1"),
+        expectedCanonical,
+      ),
+    ),
   );
   assert.equal(sccpTransferMessageId(payload), expectedMessageId);
   assert.equal(
@@ -14062,6 +16480,250 @@ test("builds canonical TAIRA XOR outbound transfer payloads and message ids", ()
       nonce,
     }),
     expectedMessageId,
+  );
+});
+
+test("builds canonical TAIRA XOR BSC-destination transfer payloads and message ids", () => {
+  const sender = TAIRA_ACCOUNT_ID;
+  const recipient = `0x${"11".repeat(20)}`;
+  const amount = 25_000_000_000_000_000n;
+  const nonce = 42n;
+  const payload = buildTairaXorBscTransferPayload({
+    tairaAccountId: sender,
+    bscRecipient: recipient,
+    amount,
+    nonce,
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.deepEqual(payload, {
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_BSC,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender,
+    recipient_codec: SCCP_CODEC_EVM_HEX,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  });
+
+  const expectedCanonical = testConcatBytes(
+    testU8(1),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU32Le(SCCP_DOMAIN_BSC),
+    testU64Le(nonce),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_XOR_ASSET_KEY_V1)),
+    testU128Le(amount),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(sender)),
+    testU8(SCCP_CODEC_EVM_HEX),
+    testVecBytes(testTextEncoder.encode(recipient)),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1)),
+  );
+  assert.deepEqual(
+    canonicalSccpTransferPayloadBytes(payload),
+    expectedCanonical,
+  );
+  assert.deepEqual(
+    tairaXorBscCanonicalTransferPayloadBytes({
+      tairaSender: sender,
+      recipientAddress: recipient.toUpperCase(),
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+    }),
+    expectedCanonical,
+  );
+
+  const expectedMessageId = testBytesToHex(
+    keccak_256(
+      testConcatBytes(
+        testTextEncoder.encode("sccp:transfer:v1"),
+        expectedCanonical,
+      ),
+    ),
+  );
+  assert.equal(sccpTransferMessageId(payload), expectedMessageId);
+  assert.equal(
+    tairaXorBscTransferMessageId({
+      sender,
+      evmRecipient: recipient,
+      amount,
+      nonce,
+    }),
+    expectedMessageId,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+        amount,
+        nonce,
+      }),
+    /recipientAddress/u,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: `0x${"00".repeat(20)}`,
+        amount,
+        nonce,
+      }),
+    /recipientAddress/u,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: recipient,
+        amount,
+        nonce,
+        routeId: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+      }),
+    /routeId must be taira_bsc_xor/u,
+  );
+});
+
+test("builds canonical TAIRA XOR BSC-source transfer payloads, message ids, and burn calldata", () => {
+  const bscSender = `0x${"11".repeat(20)}`;
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 25_000_000_000_000_000n;
+  const nonce = 42n;
+  const payload = buildTairaXorBscToTairaTransferPayload({
+    bscSender: bscSender.toUpperCase(),
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.deepEqual(payload, {
+    version: 1,
+    source_domain: SCCP_DOMAIN_BSC,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_EVM_HEX,
+    sender: bscSender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient: tairaRecipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  });
+
+  const expectedCanonical = testConcatBytes(
+    testU8(1),
+    testU32Le(SCCP_DOMAIN_BSC),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU64Le(nonce),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_XOR_ASSET_KEY_V1)),
+    testU128Le(amount),
+    testU8(SCCP_CODEC_EVM_HEX),
+    testVecBytes(testTextEncoder.encode(bscSender)),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(tairaRecipient)),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1)),
+  );
+  assert.deepEqual(
+    canonicalSccpTransferPayloadBytes(payload),
+    expectedCanonical,
+  );
+  assert.deepEqual(
+    tairaXorBscToTairaCanonicalTransferPayloadBytes({
+      sender: bscSender,
+      tairaRecipient,
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+    }),
+    expectedCanonical,
+  );
+
+  const expectedMessageId = testBytesToHex(
+    keccak_256(
+      testConcatBytes(
+        testTextEncoder.encode("sccp:transfer:v1"),
+        expectedCanonical,
+      ),
+    ),
+  );
+  assert.equal(sccpTransferMessageId(payload), expectedMessageId);
+  assert.equal(
+    tairaXorBscToTairaTransferMessageId({
+      bscSender,
+      recipient: tairaRecipient,
+      amount,
+      nonce,
+    }),
+    expectedMessageId,
+  );
+  assert.equal(
+    tairaXorBscToTairaTransferPayloadHash({
+      bscSender,
+      tairaRecipient,
+      amount,
+      nonce,
+    }),
+    sccpPayloadHash(expectedCanonical),
+  );
+
+  const accountCallData = tairaXorBscBurnToTairaAccountCallData({
+    tairaRecipient,
+    amount,
+  });
+  assert.equal(
+    accountCallData,
+    tairaXorBscBurnToTairaCallData({
+      tairaRecipient,
+      amount,
+    }),
+  );
+  assert.notEqual(
+    accountCallData.slice(0, 10 + 64),
+    tairaXorBurnToTairaAccountCallData({
+      tairaRecipient,
+      amount,
+    }).slice(0, 10 + 64),
+  );
+  assert.equal(
+    tairaXorBscRouteIdHash(),
+    testBytesToHex(
+      keccak_256(testTextEncoder.encode(SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1)),
+    ),
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscToTairaTransferPayload({
+        bscSender: `0x${"00".repeat(20)}`,
+        tairaRecipient,
+        amount,
+        nonce,
+      }),
+    /bscSender/u,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscToTairaTransferPayload({
+        bscSender,
+        tairaRecipient,
+        amount,
+        nonce,
+        routeId: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+      }),
+    /routeId must be taira_bsc_xor/u,
   );
 });
 
@@ -14110,7 +16772,9 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
     amount,
     nonce,
   });
-  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
   const messageBundle = {
     version: 1,
     commitmentRoot: HEX32_D,
@@ -14160,6 +16824,208 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
     entrypoint: "finalize_inbound",
     route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
   });
+});
+
+test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
+  const bscSender = `0x${"11".repeat(20)}`;
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 25_000_000_000_000_000n;
+  const nonce = 42n;
+  const bridgeAddress = `0x${"22".repeat(20)}`;
+  const payload = buildTairaXorBscToTairaTransferPayload({
+    bscSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.deepEqual(payload, {
+    version: 1,
+    source_domain: SCCP_DOMAIN_BSC,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_EVM_HEX,
+    sender: bscSender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient: tairaRecipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  });
+  assert.deepEqual(
+    tairaXorBscToTairaCanonicalTransferPayloadBytes({
+      sender: bscSender,
+      recipient: tairaRecipient,
+      amount,
+      nonce,
+    }),
+    canonicalSccpTransferPayloadBytes(payload),
+  );
+
+  const messageId = tairaXorBscToTairaTransferMessageId({
+    bscSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
+  const messageBundle = {
+    version: 1,
+    commitmentRoot: HEX32_D,
+    commitment: {
+      version: 1,
+      kind: "Transfer",
+      targetDomain: SCCP_DOMAIN_SORA,
+      messageId,
+      payloadHash,
+    },
+    merkleProof: { steps: [] },
+    payload: { kind: "Transfer", value: payload },
+    finalityProof: "0x010203",
+  };
+  const sourceEventDigest = tairaXorBscBurnSourceEventDigest({
+    bridgeAddress,
+    burnerAddress: bscSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const proofPackage = {
+    messageBundle,
+    settlement: {
+      entrypoint: "finalize_inbound",
+      route: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    },
+    sourceEventDigest,
+    txId: `0x${"11".repeat(32)}`,
+    messageId,
+    commitmentRoot: HEX32_D,
+  };
+
+  const bound = bindTairaXorBscToTairaSourceProofPackage({
+    proofPackage,
+    settlementDefaults: { contract_alias: "sccp.taira_bsc_xor" },
+    txId: `0x${"11".repeat(32)}`,
+    bscSender,
+    tairaRecipient,
+    amount,
+    bridgeAddress,
+  });
+
+  assert.equal(bound.txId, `0x${"11".repeat(32)}`);
+  assert.equal(bound.messageId, messageId);
+  assert.equal(bound.commitmentRoot, HEX32_D);
+  assert.equal(bound.sourceEventDigest, sourceEventDigest);
+  assert.equal(bound.amount, amount.toString());
+  assert.deepEqual(bound.settlement, {
+    contract_alias: "sccp.taira_bsc_xor",
+    entrypoint: "finalize_inbound",
+    route: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  });
+
+  const bind = (mutate = () => {}, inputOverrides = {}) => {
+    const candidate = structuredClone(proofPackage);
+    mutate(candidate);
+    return bindTairaXorBscToTairaSourceProofPackage({
+      proofPackage: candidate,
+      txId: `0x${"11".repeat(32)}`,
+      bscSender,
+      tairaRecipient,
+      amount,
+      bridgeAddress,
+      ...inputOverrides,
+    });
+  };
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.txId = `0x${"22".repeat(32)}`;
+      }),
+    /txId/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitment.targetDomain = SCCP_DOMAIN_BSC;
+      }),
+    /target TAIRA|target_domain/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.payload.value.sender = `0x${"33".repeat(20)}`;
+      }),
+    /sender/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.payload.value.route_id =
+          SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1;
+      }),
+    /route/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitment.payloadHash = HEX32_A;
+      }),
+    /payload hash/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageId = HEX32_A;
+      }),
+    /messageId/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.commitmentRoot = HEX32_A;
+      }),
+    /commitmentRoot/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.sourceEventDigest = HEX32_E;
+      }),
+    /BSC burn source event digest/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.payload = { unsafe: true };
+      }),
+    /payload/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.entrypoint = "record";
+      }),
+    /finalize_inbound/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.route = SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1;
+      }),
+    /taira_bsc_xor/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.payload.kind = "Burn";
+      }),
+    /Transfer/u,
+  );
 });
 
 test("binds TAIRA XOR TRON burn-started events", () => {
@@ -14382,7 +17248,9 @@ test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
     amount,
     nonce,
   });
-  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
   const sourceEventDigest = tairaXorBurnSourceEventDigest({
     bridgeAddress,
     burnerAddress: tronSender,
@@ -14428,32 +17296,96 @@ test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
     });
   };
 
-  assert.throws(() => bind((pkg) => { pkg.txId = "22".repeat(32); }), /txId/);
   assert.throws(
-    () => bind((pkg) => { pkg.messageBundle.commitment.targetDomain = SCCP_DOMAIN_TRON; }),
+    () =>
+      bind((pkg) => {
+        pkg.txId = "22".repeat(32);
+      }),
+    /txId/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitment.targetDomain = SCCP_DOMAIN_TRON;
+      }),
     /target TAIRA|target_domain/,
   );
   assert.throws(
-    () => bind((pkg) => { pkg.messageBundle.payload.value.sender = "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW"; }),
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.payload.value.sender =
+          "TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW";
+      }),
     /sender/,
   );
   assert.throws(
-    () => bind((pkg) => { pkg.messageBundle.payload.value.route_id = "evil_route"; }),
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.payload.value.route_id = "evil_route";
+      }),
     /route/,
   );
   assert.throws(
-    () => bind((pkg) => { pkg.messageBundle.commitment.payloadHash = HEX32_A; }),
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitment.payloadHash = HEX32_A;
+      }),
     /payload hash/,
   );
-  assert.throws(() => bind((pkg) => { pkg.messageId = HEX32_A; }), /messageId/);
-  assert.throws(() => bind((pkg) => { pkg.commitmentRoot = HEX32_A; }), /commitmentRoot/);
-  assert.throws(() => bind((pkg) => { pkg.sourceEventDigest = HEX32_E; }), /burn source event digest/);
-  assert.throws(() => bind((pkg) => { pkg.settlement.payload = { unsafe: true }; }), /payload/);
-  assert.throws(() => bind((pkg) => { pkg.settlement.payload_bytes = "0x01"; }), /payload/);
-  assert.throws(() => bind((pkg) => { pkg.settlement.entrypoint = "burn_and_record"; }), /finalize_inbound/);
-  assert.throws(() => bind((pkg) => { pkg.settlement.route = "evil_route"; }), /taira_tron_xor/);
   assert.throws(
-    () => bind((pkg) => { pkg.settlement.route_id = SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1; }),
+    () =>
+      bind((pkg) => {
+        pkg.messageId = HEX32_A;
+      }),
+    /messageId/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.commitmentRoot = HEX32_A;
+      }),
+    /commitmentRoot/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.sourceEventDigest = HEX32_E;
+      }),
+    /burn source event digest/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.payload = { unsafe: true };
+      }),
+    /payload/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.payload_bytes = "0x01";
+      }),
+    /payload/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.entrypoint = "burn_and_record";
+      }),
+    /finalize_inbound/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.route = "evil_route";
+      }),
+    /taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.route_id = SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1;
+      }),
     /proofPackage\.settlement\.route must not use multiple aliases/,
   );
   assert.throws(
@@ -14553,11 +17485,24 @@ test("canonicalizes normalized SCCP message proof bundles for browser proof requ
     testVecBytes(Uint8Array.from([1, 2, 3])),
   );
 
-  assert.deepEqual(canonicalSccpPayloadEnvelopeBytes(payloadEnvelope), expectedPayloadEnvelope);
-  assert.deepEqual(canonicalSccpMerkleProofBytes(merkleProof), expectedMerkleProof);
-  assert.deepEqual(canonicalSccpMessageProofBundleBytes(bundle), expectedBundle);
+  assert.deepEqual(
+    canonicalSccpPayloadEnvelopeBytes(payloadEnvelope),
+    expectedPayloadEnvelope,
+  );
+  assert.deepEqual(
+    canonicalSccpMerkleProofBytes(merkleProof),
+    expectedMerkleProof,
+  );
+  assert.deepEqual(
+    canonicalSccpMessageProofBundleBytes(bundle),
+    expectedBundle,
+  );
   assert.throws(
-    () => canonicalSccpMessageProofBundleBytes({ ...bundle, payload: { Burn: {} } }),
+    () =>
+      canonicalSccpMessageProofBundleBytes({
+        ...bundle,
+        payload: { Burn: {} },
+      }),
     /unsupported SCCP payload variant/u,
   );
 });
@@ -14581,7 +17526,10 @@ test("builds a proof-gated TAIRA XOR SCCP record descriptor", () => {
   });
 
   assert.equal(Object.isFrozen(descriptor), true);
-  assert.equal(descriptor.execution_kind, SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1);
+  assert.equal(
+    descriptor.execution_kind,
+    SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
+  );
   assert.equal(descriptor.chain_id, SCCP_TAIRA_CHAIN_ID_V1);
   assert.equal(descriptor.network_prefix, SCCP_TAIRA_NETWORK_PREFIX_V1);
   assert.equal(descriptor.route_id, SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1);
@@ -14603,7 +17551,65 @@ test("builds a proof-gated TAIRA XOR SCCP record descriptor", () => {
     settlement_asset_selector: "nexus.fees.fee_asset_id",
     settlement_asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
     settlement_account_binding: "burn.destination.account == payload.sender",
-    settlement_amount_binding: "sum(whole-unit burns) >= sum(recorded amounts) per sender",
+    settlement_amount_binding:
+      "sum(whole-unit burns) >= sum(recorded amounts) per sender",
+    proof_gate: "sccp_recording_proof_verified",
+    normal_transaction_supported: false,
+  });
+
+  const mutableCopy = descriptor.canonicalPayloadBytes;
+  mutableCopy[0] ^= 0xff;
+  assert.deepEqual(descriptor.canonicalPayloadBytes, expectedPayloadBytes);
+});
+
+test("builds a proof-gated TAIRA XOR BSC SCCP record descriptor", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    tairaAccountId: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: 25_000_000_000_000_000n,
+    nonce: 42n,
+  };
+  const expectedPayloadBytes = tairaXorBscCanonicalTransferPayloadBytes(input);
+  const expectedPayloadHex = testBytesToHex(expectedPayloadBytes);
+  const expectedMessageId = tairaXorBscTransferMessageId(input);
+  const descriptor = buildTairaXorBscSccpRecordDescriptor({
+    ...input,
+    expectedMessageId,
+    expectedCanonicalPayloadHex: expectedPayloadHex,
+  });
+
+  assert.equal(Object.isFrozen(descriptor), true);
+  assert.equal(
+    descriptor.execution_kind,
+    SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
+  );
+  assert.equal(descriptor.chain_id, SCCP_TAIRA_CHAIN_ID_V1);
+  assert.equal(descriptor.network_prefix, SCCP_TAIRA_NETWORK_PREFIX_V1);
+  assert.equal(descriptor.route_id, SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1);
+  assert.equal(descriptor.asset_key, SCCP_TAIRA_XOR_ASSET_KEY_V1);
+  assert.equal(descriptor.message_kind, "Transfer");
+  assert.equal(descriptor.source_domain, SCCP_DOMAIN_SORA);
+  assert.equal(descriptor.dest_domain, SCCP_DOMAIN_BSC);
+  assert.equal(descriptor.message_id, expectedMessageId);
+  assert.equal(descriptor.canonical_payload_hex, expectedPayloadHex);
+  assert.equal(descriptor.payload.recipient_codec, SCCP_CODEC_EVM_HEX);
+  assert.equal(descriptor.payload.recipient, input.recipientAddress);
+  assert.deepEqual(descriptor.canonicalPayloadBytes, expectedPayloadBytes);
+  assert.deepEqual(descriptor.record_instruction, {
+    kind: "RecordSccpMessage",
+    payload_bytes_hex: expectedPayloadHex,
+  });
+  assert.deepEqual(descriptor.execution_requirements, {
+    executable: "IvmProved",
+    overlay_instruction: "RecordSccpMessage",
+    settlement_instruction: "Burn<Numeric, Asset>",
+    settlement_asset_selector: "nexus.fees.fee_asset_id",
+    settlement_asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    settlement_account_binding: "burn.destination.account == payload.sender",
+    settlement_amount_binding:
+      "sum(whole-unit burns) >= sum(recorded amounts) per sender",
     proof_gate: "sccp_recording_proof_verified",
     normal_transaction_supported: false,
   });
@@ -14672,6 +17678,65 @@ test("rejects stale TAIRA XOR SCCP record descriptor bindings", () => {
   );
 });
 
+test("rejects stale TAIRA XOR BSC SCCP record descriptor bindings", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    tairaAccountId: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: 1000n,
+    nonce: 7n,
+  };
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        expectedMessageId: HEX32_A,
+      }),
+    /expectedMessageId must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        expectedCanonicalPayloadBytes: Uint8Array.from([1, 2, 3]),
+      }),
+    /expectedCanonicalPayloadBytes must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        chainId: "00000000-0000-0000-0000-000000000000",
+      }),
+    /chainId must be TAIRA/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        networkPrefix: 753,
+      }),
+    /networkPrefix must be TAIRA/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        routeId: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+      }),
+    /routeId must be taira_bsc_xor/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpRecordDescriptor({
+        ...input,
+        assetKey: "xor#universal",
+      }),
+    /assetKey must be xor/,
+  );
+});
+
 test("encodes RecordSccpMessage instructions with the Rust canonical fixture", () => {
   const payloadBytes = Uint8Array.from([0xaa, 0xbb, 0xcc]);
   const bytes = buildRecordSccpMessageInstructionBytes(payloadBytes);
@@ -14687,7 +17752,10 @@ test("encodes RecordSccpMessage instructions with the Rust canonical fixture", (
       }),
     ),
   );
-  assert.throws(() => buildRecordSccpMessageInstructionBytes([]), /must not be empty/);
+  assert.throws(
+    () => buildRecordSccpMessageInstructionBytes([]),
+    /must not be empty/,
+  );
 });
 
 test("validates canonical SCCP codec payloads before hashing", () => {
@@ -14713,7 +17781,8 @@ test("validates canonical SCCP codec payloads before hashing", () => {
     {
       domain: SCCP_DOMAIN_TON,
       codec: SCCP_CODEC_TON_RAW,
-      recipient: "0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      recipient:
+        "0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       route: "taira_ton_xor",
     },
   ];
@@ -14752,7 +17821,10 @@ test("builds a TAIRA XOR burn-record contract payload and ZK IVM request", () =>
   const contract = buildTairaXorSccpBurnRecordContractPayload(input);
   assert.equal(contract.entrypoint, SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1);
   assert.equal(contract.payload.sender, input.sender);
-  assert.equal(contract.payload.settlement_asset, input.settlementAssetDefinitionId);
+  assert.equal(
+    contract.payload.settlement_asset,
+    input.settlementAssetDefinitionId,
+  );
   assert.equal(contract.payload.amount, input.amount);
   assert.match(contract.payload.record_instruction, /^0x[0-9a-f]+$/u);
   assert.equal(
@@ -14774,6 +17846,62 @@ test("builds a TAIRA XOR burn-record contract payload and ZK IVM request", () =>
     gasLimit: 3000000,
   });
   assert.equal(request.route_id, SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1);
+  assert.equal(request.asset_key, SCCP_TAIRA_XOR_ASSET_KEY_V1);
+  assert.deepEqual(request.request.vkRef, {
+    backend: "stark/fri",
+    name: "ivm-exec-v1",
+  });
+  assert.equal(request.request.authority, input.sender);
+  assert.equal(request.request.bytecode, "AQIDBA==");
+  assert.equal(request.request.metadata.gas_limit, 3000000);
+  assert.equal(
+    request.request.metadata.contract_entrypoint,
+    SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
+  );
+  assert.deepEqual(request.request.metadata.contract_payload, contract.payload);
+});
+
+test("builds a TAIRA XOR BSC burn-record contract payload and ZK IVM request", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    sender: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: "25000000000000000",
+    nonce: 42,
+    settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+  };
+  const contract = buildTairaXorBscSccpBurnRecordContractPayload(input);
+  assert.equal(contract.entrypoint, SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1);
+  assert.equal(contract.descriptor.route_id, SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1);
+  assert.equal(contract.descriptor.dest_domain, SCCP_DOMAIN_BSC);
+  assert.equal(contract.descriptor.payload.recipient_codec, SCCP_CODEC_EVM_HEX);
+  assert.equal(contract.payload.sender, input.sender);
+  assert.equal(
+    contract.payload.settlement_asset,
+    input.settlementAssetDefinitionId,
+  );
+  assert.equal(contract.payload.amount, input.amount);
+  assert.match(contract.payload.record_instruction, /^0x[0-9a-f]+$/u);
+  assert.equal(
+    contract.payload.record_instruction,
+    contract.record_instruction_hex,
+  );
+  const descriptorContract = buildTairaXorBscSccpBurnRecordContractPayload({
+    descriptor: contract.descriptor,
+    settlementAssetDefinitionId: input.settlementAssetDefinitionId,
+    authority: input.sender,
+  });
+  assert.deepEqual(descriptorContract.payload, contract.payload);
+
+  const request = buildTairaXorBscSccpBurnRecordZkIvmRequest({
+    ...input,
+    authority: input.sender,
+    vkRef: { backend: "stark/fri", name: "ivm-exec-v1" },
+    contractArtifact: { artifact_b64: "AQIDBA==" },
+    gasLimit: 3000000,
+  });
+  assert.equal(request.route_id, SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1);
   assert.equal(request.asset_key, SCCP_TAIRA_XOR_ASSET_KEY_V1);
   assert.deepEqual(request.request.vkRef, {
     backend: "stark/fri",
@@ -14850,13 +17978,88 @@ test("rejects unsafe TAIRA XOR burn-record ZK request bindings", () => {
   );
 });
 
+test("rejects unsafe TAIRA XOR BSC burn-record ZK request bindings", () => {
+  const input = {
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    sender: TAIRA_ACCOUNT_ID,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount: 1000,
+    nonce: 7,
+    settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    vkRef: { backend: "stark/fri", name: "ivm-exec-v1" },
+    bytecode: "AQIDBA==",
+  };
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordZkIvmRequest({
+        ...input,
+        authority: TAIRA_OTHER_ACCOUNT_ID,
+      }),
+    /authority must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordContractPayload({
+        ...input,
+        settlementAssetDefinitionId: "xor#universal",
+      }),
+    /not an alias/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordZkIvmRequest({
+        ...input,
+        amount: (1n << 63n).toString(),
+      }),
+    /amount must fit i64/,
+  );
+  const bscDescriptor = buildTairaXorBscSccpRecordDescriptor(input);
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordContractPayload({
+        descriptor: {
+          ...bscDescriptor,
+          record_instruction: {
+            kind: "RecordSccpMessage",
+            payload_bytes_hex: HEX32_A,
+          },
+        },
+        settlementAssetDefinitionId: input.settlementAssetDefinitionId,
+      }),
+    /payload_bytes_hex must match/,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordZkIvmRequest({
+        ...input,
+        gasLimit: 0,
+      }),
+    /gasLimit must be greater than zero/,
+  );
+  const tronDescriptor = buildTairaXorSccpRecordDescriptor({
+    ...input,
+    recipientAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+  });
+  assert.throws(
+    () =>
+      buildTairaXorBscSccpBurnRecordContractPayload({
+        descriptor: tronDescriptor,
+        settlementAssetDefinitionId: input.settlementAssetDefinitionId,
+      }),
+    /descriptor\.route_id must be taira_bsc_xor/u,
+  );
+});
+
 test("builds route-bound TAIRA XOR TRON payload and source-event hashes", () => {
   assert.equal(SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1, "taira_tron_xor");
   assert.equal(SCCP_TAIRA_XOR_ASSET_KEY_V1, "xor");
   const routeIdHash = testBytesToHex(
     keccak_256(testTextEncoder.encode("taira_tron_xor")),
   );
-  const assetKeyHash = testBytesToHex(keccak_256(testTextEncoder.encode("xor")));
+  const assetKeyHash = testBytesToHex(
+    keccak_256(testTextEncoder.encode("xor")),
+  );
   assert.equal(tairaXorRouteIdHash(), routeIdHash);
   assert.equal(tairaXorRouteIdHash("taira_tron_xor"), routeIdHash);
   assert.equal(tairaXorAssetKeyHash(), assetKeyHash);
@@ -14903,7 +18106,9 @@ test("builds route-bound TAIRA XOR TRON payload and source-event hashes", () => 
   const expectedBurnDigest = testBytesToHex(
     keccak_256(
       testConcatBytes(
-        keccak_256(testTextEncoder.encode("iroha:sccp:taira-xor:burn-source-event:v1")),
+        keccak_256(
+          testTextEncoder.encode("iroha:sccp:taira-xor:burn-source-event:v1"),
+        ),
         testHexToBytes(routeIdHash, 32),
         testHexToBytes(assetKeyHash, 32),
         testAbiWordAddress(bridgeAddress),
@@ -14944,12 +18149,13 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
   const proofBytes = Uint8Array.from([1, 2, 3, 4, 5]);
   const recipientAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const amount = 1000n;
-  const canonicalPayloadBytes = tairaXorCanonicalTransferPayloadBytes({
+  const canonicalPayload = buildTairaXorTransferPayload({
     sender: TAIRA_ACCOUNT_ID,
     recipientAddress,
     amount,
     nonce: 42n,
   });
+  const canonicalPayloadBytes = canonicalSccpTransferPayloadBytes(canonicalPayload);
   const publicInputs = {
     messageId: tairaXorTransferMessageId({
       sender: TAIRA_ACCOUNT_ID,
@@ -14957,7 +18163,12 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
       amount,
       nonce: 42n,
     }),
-    payloadHash: sccpPayloadHash(canonicalPayloadBytes),
+    payloadHash: sccpPayloadHash(
+      canonicalSccpPayloadEnvelopeBytes({
+        kind: "Transfer",
+        value: canonicalPayload,
+      }),
+    ),
     targetDomain: SCCP_DOMAIN_TRON,
     commitmentRoot: HEX32_C,
     finalityHeight: 9,
@@ -14972,9 +18183,12 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
     ).slice(0, 4),
   );
   assert.equal(TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1, finalizeSelector);
-  const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
+  const publicInputWords =
+    sccpMessageTransparentPublicInputAbiWords(publicInputs);
   const encodedProofBytes = testAbiDynamicBytes(proofBytes);
-  const encodedCanonicalPayloadBytes = testAbiDynamicBytes(canonicalPayloadBytes);
+  const encodedCanonicalPayloadBytes = testAbiDynamicBytes(
+    canonicalPayloadBytes,
+  );
   const expectedFinalizeCallData = testBytesToHex(
     testConcatBytes(
       testHexToBytes(finalizeSelector, 4),
@@ -15045,10 +18259,9 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
   const tairaRecipient = TAIRA_ACCOUNT_ID;
   const recipientBytes = testTextEncoder.encode(tairaRecipient);
   const burnSelector = testBytesToHex(
-    keccak_256(testTextEncoder.encode("burnToTaira(bytes32,bytes32,bytes,uint256)")).slice(
-      0,
-      4,
-    ),
+    keccak_256(
+      testTextEncoder.encode("burnToTaira(bytes32,bytes32,bytes,uint256)"),
+    ).slice(0, 4),
   );
   assert.equal(TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1, burnSelector);
   const expectedBurnCallData = testBytesToHex(
@@ -15086,7 +18299,10 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
 
 test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(() => tairaXorRouteIdHash(" taira_tron_xor"), /canonical/);
-  assert.throws(() => tairaXorRouteIdHash("other_route"), /routeId must be taira_tron_xor/);
+  assert.throws(
+    () => tairaXorRouteIdHash("other_route"),
+    /routeId must be taira_tron_xor/,
+  );
   assert.throws(() => tairaXorAssetKeyHash(""), /non-empty string/);
   assert.throws(() => tairaXorAssetKeyHash("wrong"), /assetKey must be xor/);
   assert.throws(
@@ -15225,7 +18441,8 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
         sender_codec: SCCP_CODEC_TEXT_UTF8,
         sender: TAIRA_ACCOUNT_ID,
         recipient_codec: SCCP_CODEC_TON_RAW,
-        recipient: "00:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        recipient:
+          "00:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         route_id_codec: SCCP_CODEC_TEXT_UTF8,
         route_id: "taira_ton_xor",
       }),
@@ -15316,7 +18533,8 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
     amount: 7,
     nonce: 3,
   };
-  const finalizePayload = tairaXorCanonicalTransferPayloadBytes(finalizePayloadInput);
+  const finalizePayload =
+    tairaXorCanonicalTransferPayloadBytes(finalizePayloadInput);
   const finalizePublicInputsForPayload = (payloadBytes, overrides = {}) => ({
     messageId: testSccpTransferMessageIdFromBytes(payloadBytes),
     payloadHash: sccpPayloadHash(payloadBytes),
@@ -15343,19 +18561,34 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assertFinalizePayloadRejected(wrongVersionPayload, /version must be 1/);
   const wrongSourcePayload = Uint8Array.from(finalizePayload);
   wrongSourcePayload[1] = SCCP_DOMAIN_ETH;
-  assertFinalizePayloadRejected(wrongSourcePayload, /source_domain must be SORA/);
+  assertFinalizePayloadRejected(
+    wrongSourcePayload,
+    /source_domain must be SORA/,
+  );
   const wrongDestinationPayload = Uint8Array.from(finalizePayload);
   wrongDestinationPayload[5] = SCCP_DOMAIN_ETH;
-  assertFinalizePayloadRejected(wrongDestinationPayload, /dest_domain must be TRON/);
+  assertFinalizePayloadRejected(
+    wrongDestinationPayload,
+    /dest_domain must be TRON/,
+  );
   const wrongAssetHomePayload = Uint8Array.from(finalizePayload);
   wrongAssetHomePayload[17] = SCCP_DOMAIN_TRON;
-  assertFinalizePayloadRejected(wrongAssetHomePayload, /asset_home_domain must be SORA/);
+  assertFinalizePayloadRejected(
+    wrongAssetHomePayload,
+    /asset_home_domain must be SORA/,
+  );
   const wrongAssetCodecPayload = Uint8Array.from(finalizePayload);
   wrongAssetCodecPayload[21] = SCCP_CODEC_EVM_HEX;
-  assertFinalizePayloadRejected(wrongAssetCodecPayload, /asset_id_codec must be TEXT_UTF8/);
+  assertFinalizePayloadRejected(
+    wrongAssetCodecPayload,
+    /asset_id_codec must be TEXT_UTF8/,
+  );
   const zeroAmountPayload = Uint8Array.from(finalizePayload);
   zeroAmountPayload.fill(0, 29, 45);
-  assertFinalizePayloadRejected(zeroAmountPayload, /amount must be greater than zero/);
+  assertFinalizePayloadRejected(
+    zeroAmountPayload,
+    /amount must be greater than zero/,
+  );
   assertFinalizePayloadRejected(finalizePayload.subarray(0, 20), /too short/);
   assertFinalizePayloadRejected(
     testConcatBytes(finalizePayload, Uint8Array.of(0)),
@@ -15422,7 +18655,9 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
     () =>
       tairaXorFinalizeFromTairaCallData({
         proofBytes: [1],
-        publicInputs: finalizePublicInputsForPayload(finalizePayload, { messageId: HEX32_A }),
+        publicInputs: finalizePublicInputsForPayload(finalizePayload, {
+          messageId: HEX32_A,
+        }),
         statementHash: HEX32_E,
         canonicalPayloadBytes: finalizePayload,
       }),
@@ -15432,11 +18667,13 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
     () =>
       tairaXorFinalizeFromTairaCallData({
         proofBytes: [1],
-        publicInputs: finalizePublicInputsForPayload(finalizePayload, { payloadHash: HEX32_A }),
+        publicInputs: finalizePublicInputsForPayload(finalizePayload, {
+          payloadHash: HEX32_A,
+        }),
         statementHash: HEX32_E,
         canonicalPayloadBytes: finalizePayload,
       }),
-    /payloadHash must match canonicalPayloadBytes/,
+    /payloadHash must match canonical SCCP payload envelope/,
   );
   assert.throws(
     () =>

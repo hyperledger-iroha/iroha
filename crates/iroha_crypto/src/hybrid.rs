@@ -10,7 +10,7 @@
 use core::{fmt, str::FromStr};
 
 use hkdf::Hkdf;
-use rand::{CryptoRng, RngCore};
+use rand_core::TryCryptoRng;
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{
     HedgedRngSeed, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, hedged_chacha20_rng,
@@ -81,7 +81,7 @@ impl FromStr for HybridSuite {
 }
 
 /// Errors that may occur while working with the hybrid suite helpers.
-#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub enum HybridError {
     /// Invalid X25519 public key length encountered.
     #[error("invalid x25519 public key length (expected {expected}, found {found})")]
@@ -133,6 +133,14 @@ pub enum HybridError {
     /// HKDF expand step failed due to a length mismatch.
     #[error("hkdf expand failed")]
     InvalidHkdfLength,
+    /// Random byte generation failed while constructing hybrid key material.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
 }
 
 /// Hybrid public key combining X25519 and ML-KEM material.
@@ -331,18 +339,23 @@ impl HybridKeyPair {
     /// # Errors
     ///
     /// Returns [`HybridError`] if generated component material cannot be
-    /// reconstructed through the checked hybrid secret-key parser.
+    /// reconstructed through the checked hybrid secret-key parser, or if the
+    /// RNG cannot provide X25519 or ML-KEM seed material.
     pub fn try_generate<R>(rng: &mut R) -> Result<Self, HybridError>
     where
-        R: CryptoRng + RngCore,
+        R: TryCryptoRng,
     {
         let mut x25519_bytes = Zeroizing::new([0_u8; 32]);
-        rng.fill_bytes(x25519_bytes.as_mut());
+        fill_random(
+            rng,
+            "generating hybrid x25519 secret",
+            x25519_bytes.as_mut(),
+        )?;
         let x25519_secret = StaticSecret::from(*x25519_bytes);
-        let mut kem_seed = [0_u8; 32];
-        rng.fill_bytes(&mut kem_seed);
+        let mut kem_seed = Zeroizing::new([0_u8; 32]);
+        fill_random(rng, "seeding hybrid ml-kem keypair", kem_seed.as_mut())?;
         let mut kem_rng = hedged_chacha20_rng(
-            HedgedRngSeed::from_entropy(kem_seed),
+            HedgedRngSeed::from_entropy(*kem_seed),
             b"iroha-crypto:hybrid:keypair",
         );
         let kem_pair = try_generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng)
@@ -359,10 +372,11 @@ impl HybridKeyPair {
     /// # Errors
     ///
     /// Returns [`HybridError`] if generated component material cannot be
-    /// reconstructed through the checked hybrid secret-key parser.
+    /// reconstructed through the checked hybrid secret-key parser, or if the
+    /// RNG cannot provide X25519 or ML-KEM seed material.
     pub fn generate<R>(rng: &mut R) -> Result<Self, HybridError>
     where
-        R: CryptoRng + RngCore,
+        R: TryCryptoRng,
     {
         Self::try_generate(rng)
     }
@@ -502,12 +516,16 @@ pub fn encapsulate<R>(
     rng: &mut R,
 ) -> Result<(HybridKemCiphertext, DerivedSecret), HybridError>
 where
-    R: CryptoRng + RngCore,
+    R: TryCryptoRng,
 {
     match suite {
         HybridSuite::X25519MlKem768ChaCha20Poly1305 => {
             let mut ephemeral_bytes = Zeroizing::new([0_u8; 32]);
-            rng.fill_bytes(ephemeral_bytes.as_mut());
+            fill_random(
+                rng,
+                "generating hybrid ephemeral x25519 secret",
+                ephemeral_bytes.as_mut(),
+            )?;
             let ephemeral_secret = StaticSecret::from(*ephemeral_bytes);
             let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
             let shared_ecdh = ephemeral_secret.diffie_hellman(recipient.x25519());
@@ -515,10 +533,14 @@ where
                 return Err(HybridError::InvalidX25519SharedSecret);
             }
 
-            let mut kem_seed = [0_u8; 32];
-            rng.fill_bytes(&mut kem_seed);
+            let mut kem_seed = Zeroizing::new([0_u8; 32]);
+            fill_random(
+                rng,
+                "seeding hybrid ml-kem encapsulation",
+                kem_seed.as_mut(),
+            )?;
             let mut kem_rng = hedged_chacha20_rng(
-                HedgedRngSeed::from_entropy(kem_seed),
+                HedgedRngSeed::from_entropy(*kem_seed),
                 b"iroha-crypto:hybrid:encapsulate",
             );
             let (kyber_shared, kyber_ciphertext) =
@@ -538,6 +560,18 @@ where
             Ok((ciphertext, derived))
         }
     }
+}
+
+fn fill_random<R: TryCryptoRng>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), HybridError> {
+    rng.try_fill_bytes(dest)
+        .map_err(|err| HybridError::RandomBytes {
+            operation,
+            message: err.to_string(),
+        })
 }
 
 /// Recover symmetric material from an encapsulated bundle.
@@ -628,8 +662,38 @@ fn x25519_public_key_is_low_order(public_key: &X25519PublicKey) -> bool {
 mod tests {
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
+    use rand_core::{TryCryptoRng, TryRngCore};
 
     use super::*;
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing hybrid RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
         bytes[0] = 0xFF;
@@ -663,6 +727,40 @@ mod tests {
 
         assert_eq!(sender.encryption_key(), receiver.encryption_key());
         assert_eq!(sender.rekey_secret(), receiver.rekey_secret());
+    }
+
+    #[test]
+    fn try_generate_reports_rng_failure() {
+        let mut rng = FailingTryRng;
+        let err = HybridKeyPair::try_generate(&mut rng).expect_err("RNG failure must be reported");
+        match err {
+            HybridError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating hybrid x25519 secret");
+                assert!(message.contains("failing hybrid RNG"));
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encapsulate_reports_rng_failure() {
+        let mut key_rng = ChaCha20Rng::from_seed([0x44; 32]);
+        let pair = HybridKeyPair::generate(&mut key_rng).expect("generated hybrid keypair");
+        let mut rng = FailingTryRng;
+
+        let err = encapsulate(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            pair.public(),
+            &mut rng,
+        )
+        .expect_err("RNG failure must be reported");
+        match err {
+            HybridError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "generating hybrid ephemeral x25519 secret");
+                assert!(message.contains("failing hybrid RNG"));
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ public final class JsonParserTests {
     parsesNumbers();
     rejectsLeadingZeros();
     rejectsOverflow();
+    rejectsDuplicateObjectKeys();
     System.out.println("[IrohaAndroid] JsonParserTests passed.");
   }
 
@@ -27,6 +28,18 @@ public final class JsonParserTests {
 
   private static void rejectsOverflow() {
     assertThrows(() -> JsonParser.parse("1e309"), "expected overflow rejection");
+  }
+
+  private static void rejectsDuplicateObjectKeys() {
+    assertThrows(
+        () -> JsonParser.parse("{\"bundle_id\":\"forged\",\"bundle_id\":\"trusted\"}"),
+        "expected duplicate key rejection");
+    assertThrows(
+        () -> JsonParser.parse("{\"outer\":{\"key\":1,\"key\":2}}"),
+        "expected nested duplicate key rejection");
+    assertThrows(
+        () -> JsonParser.parse("{\"bundle\\u005fid\":\"forged\",\"bundle_id\":\"trusted\"}"),
+        "expected escaped duplicate key rejection");
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {

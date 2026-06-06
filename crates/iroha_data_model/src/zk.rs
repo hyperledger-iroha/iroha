@@ -11,6 +11,25 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID: &str = "zk_ace_pq_authorization
 /// Production backend label used by ZK-ACE authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND: &str = "stark/fri/sha256-goldilocks";
 
+/// Canonical backend family identifier for native STARK/FRI verification.
+pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
+
+const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
+    "sha256-goldilocks",
+    "poseidon2-goldilocks",
+    "sha256_goldilocks.v1",
+];
+
+/// Return true when a backend label names an admitted STARK/FRI v1 verifier profile.
+#[inline]
+#[must_use]
+pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
+    backend == ZK_BACKEND_STARK_FRI_V1
+        || backend
+            .strip_prefix("stark/fri/")
+            .is_some_and(|profile| STARK_FRI_V1_PRODUCTION_PROFILES.contains(&profile))
+}
+
 /// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authorization:v0";
 
@@ -897,6 +916,38 @@ mod tests {
             vec![0x01, 0x02],
             vec![0x03, 0x04, 0x05],
         )
+    }
+
+    #[test]
+    fn stark_fri_v1_backend_label_accepts_only_admitted_profiles() {
+        for backend in [
+            "stark/fri",
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
+        ] {
+            assert!(
+                is_stark_fri_v1_backend_label(backend),
+                "{backend} must be accepted",
+            );
+        }
+
+        for backend in [
+            "stark/fri/debug-proof",
+            "stark/fri/mock",
+            "stark/fri/latest",
+            "stark/fri/sha256-goldilocks ",
+            "stark/fri/ sha256-goldilocks",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/poseidon2-goldilocks/extra",
+            "stark/fri-v2",
+            "halo2/ipa",
+        ] {
+            assert!(
+                !is_stark_fri_v1_backend_label(backend),
+                "{backend} must be rejected",
+            );
+        }
     }
 
     #[cfg(feature = "json")]

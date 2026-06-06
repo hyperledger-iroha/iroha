@@ -164,9 +164,11 @@ mod json_value_tests {
     fn sample_topology() -> SampleTopology {
         let chain = peer::chain();
         let (primary_pair, primary_pop) =
-            peer::generate_bls_key_pair(Some(b"swarm-json-primary"), b"node-0");
+            peer::generate_bls_key_pair(Some(b"swarm-json-primary"), b"node-0")
+                .expect("seeded primary BLS key generation should succeed");
         let (secondary_pair, secondary_pop) =
-            peer::generate_bls_key_pair(Some(b"swarm-json-secondary"), b"node-1");
+            peer::generate_bls_key_pair(Some(b"swarm-json-secondary"), b"node-1")
+                .expect("seeded secondary BLS key generation should succeed");
         let ports = [crate::BASE_PORT_P2P, crate::BASE_PORT_API];
         let other_ports = [crate::BASE_PORT_P2P + 1, crate::BASE_PORT_API + 1];
         let mut topology = std::collections::BTreeSet::new();
@@ -176,7 +178,8 @@ mod json_value_tests {
             other_ports[0],
             secondary_pair.0.clone(),
         ));
-        let genesis_pair = peer::generate_key_pair(Some(b"swarm-json-genesis"), b"genesis-json");
+        let genesis_pair = peer::generate_key_pair(Some(b"swarm-json-genesis"), b"genesis-json")
+            .expect("seeded genesis key generation should succeed");
         let mut trusted_pops = std::collections::BTreeMap::new();
         trusted_pops.insert(primary_pair.0.clone(), primary_pop);
         trusted_pops.insert(secondary_pair.0.clone(), secondary_pop);
@@ -1232,10 +1235,12 @@ mod tests {
 
     #[test]
     fn peer_env_produces_exhaustive_config() {
-        let (key_pair, pop) = peer::generate_bls_key_pair(None, &[]);
+        let (key_pair, pop) = peer::generate_bls_key_pair(None, &[])
+            .expect("random BLS key generation should succeed");
         let mut trusted_pops = BTreeMap::new();
         trusted_pops.insert(key_pair.0.clone(), pop);
-        let genesis_key_pair = peer::generate_key_pair(None, &[]);
+        let genesis_key_pair = peer::generate_key_pair(None, &[])
+            .expect("random genesis key generation should succeed");
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
         let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();
@@ -1257,10 +1262,12 @@ mod tests {
 
     #[test]
     fn genesis_env_produces_exhaustive_config_sans_genesis_private_key_and_topology() {
-        let (key_pair, pop) = peer::generate_bls_key_pair(None, &[]);
+        let (key_pair, pop) = peer::generate_bls_key_pair(None, &[])
+            .expect("random BLS key generation should succeed");
         let mut trusted_pops = BTreeMap::new();
         trusted_pops.insert(key_pair.0.clone(), pop);
-        let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[]);
+        let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[])
+            .expect("random genesis key generation should succeed");
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
         let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();
@@ -1292,10 +1299,12 @@ mod tests {
 
     #[test]
     fn genesis_env_with_consensus_overrides_is_exhaustive_plus_overrides() {
-        let (key_pair, pop) = peer::generate_bls_key_pair(None, &[]);
+        let (key_pair, pop) = peer::generate_bls_key_pair(None, &[])
+            .expect("random BLS key generation should succeed");
         let mut trusted_pops = BTreeMap::new();
         trusted_pops.insert(key_pair.0.clone(), pop);
-        let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[]);
+        let (genesis_public_key, genesis_private_key) = &peer::generate_key_pair(None, &[])
+            .expect("random genesis key generation should succeed");
         let ports = [BASE_PORT_P2P, BASE_PORT_API];
         let chain = peer::chain();
         let topology = [peer::peer("dummy", BASE_PORT_API, key_pair.0.clone())].into();

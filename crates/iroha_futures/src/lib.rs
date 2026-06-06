@@ -5,6 +5,7 @@ pub mod supervisor;
 use std::{
     future::Future,
     pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -28,7 +29,7 @@ pub struct TelemetryFuture<F> {
 impl<F> TelemetryFuture<F> {
     /// Constructor for future
     pub fn new(future: F, name: &'static str) -> Self {
-        let id = rand::random();
+        let id = NEXT_TELEMETRY_FUTURE_ID.fetch_add(1, Ordering::Relaxed);
         Self { future, id, name }
     }
 }
@@ -55,6 +56,7 @@ impl FuturePollTelemetry {
 const ID: &str = "id";
 const NAME: &str = "name";
 const DURATION: &str = "duration";
+static NEXT_TELEMETRY_FUTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Telemetry conversion error
 #[derive(Debug, Clone, Copy)]
@@ -175,6 +177,14 @@ mod tests {
         assert_eq!(decoded.name, sample.name);
         assert_eq!(decoded.duration, sample.duration);
         assert_eq!(decoded.duration(), Duration::from_nanos(sample.duration));
+    }
+
+    #[test]
+    fn telemetry_future_ids_are_monotonic() {
+        let first = TelemetryFuture::new(async {}, "first");
+        let second = TelemetryFuture::new(async {}, "second");
+
+        assert_eq!(second.id, first.id + 1);
     }
 
     #[test]

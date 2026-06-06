@@ -230,10 +230,11 @@ impl GenVrfArgs {
     ) -> Result<norito::json::Value> {
         let alias = format!("{}{}@{domain_literal}", self.account_prefix, index);
         let account_seed = iroha_crypto::Hash::new(alias.as_bytes());
-        let account_keypair = iroha_crypto::KeyPair::from_seed(
+        let account_keypair = iroha_crypto::KeyPair::try_from_seed(
             account_seed.as_ref().to_vec(),
             iroha_crypto::Algorithm::Ed25519,
-        );
+        )
+        .wrap_err_with(|| format!("failed to derive candidate account key for alias {alias}"))?;
         let (account_public_key, _) = account_keypair.into_parts();
         let account_id = AccountId::new(account_public_key);
         let account_id_str = account_id.to_string();
@@ -938,6 +939,42 @@ mod tests {
         assert!(
             err.contains("invalid account_id"),
             "expected account_id error, got {err}"
+        );
+    }
+
+    #[test]
+    fn generate_candidates_derives_account_from_alias_seed() {
+        let args = GenVrfArgs {
+            count: 1,
+            variant: "Normal".to_string(),
+            chain_id: "test-chain".to_string(),
+            seed_hex: None,
+            epoch: None,
+            beacon_hex: None,
+            account_prefix: "node".to_string(),
+            domain: "wonderland".to_string(),
+            out: None,
+            from_audit: false,
+        };
+        let candidates = args
+            .generate_candidates(&[7_u8; 64])
+            .expect("candidate generation should derive account key");
+        let candidate = candidates.first().expect("one candidate");
+        let expected_seed = iroha_crypto::Hash::new(b"node0@wonderland");
+        let expected_key_pair = KeyPair::try_from_seed(
+            expected_seed.as_ref().to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("expected account key pair");
+        let expected_account = AccountId::new(expected_key_pair.public_key().clone()).to_string();
+
+        assert_eq!(candidate["account_id"].as_str(), Some(expected_account.as_str()));
+        assert_eq!(candidate["variant"].as_str(), Some("Normal"));
+        assert!(candidate["pk_b64"].as_str().is_some_and(|value| !value.is_empty()));
+        assert!(
+            candidate["proof_b64"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
         );
     }
 

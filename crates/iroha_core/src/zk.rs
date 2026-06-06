@@ -157,7 +157,7 @@ const MAX_INST_ROWS: usize = 8192;
 /// Canonical backend identifier for Halo2 IPA verification.
 pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 /// Canonical backend family identifier for native STARK/FRI verification.
-pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
+pub const ZK_BACKEND_STARK_FRI_V1: &str = iroha_data_model::zk::ZK_BACKEND_STARK_FRI_V1;
 /// Canonical circuit identifier suffix for proved IVM execution commitments.
 pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
 /// Halo2 IPA parameter degree used by the canonical IVM execution binding circuit.
@@ -3378,27 +3378,7 @@ pub fn is_pending_production_backend_label(backend: &str) -> bool {
 /// STARK/FRI verifier profile.
 #[inline]
 pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    if is_pending_production_backend_label(backend)
-        || is_production_claim_backend_label(backend)
-        || is_trusted_setup_backend_label(backend)
-        || is_developer_only_backend_label(backend)
-    {
-        return false;
-    }
-    backend == ZK_BACKEND_STARK_FRI_V1
-        || backend
-            .strip_prefix("stark/fri/")
-            .is_some_and(is_stark_fri_v1_profile)
-}
-
-const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
-    "sha256-goldilocks",
-    "poseidon2-goldilocks",
-    "sha256_goldilocks.v1",
-];
-
-fn is_stark_fri_v1_profile(profile: &str) -> bool {
-    STARK_FRI_V1_PRODUCTION_PROFILES.contains(&profile)
+    iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
 
 /// Returns `true` for backend labels that require a trusted setup and are not
@@ -41791,6 +41771,7 @@ mod kagemusha_folded_real_prover_tests {
                 .expect_err("generic active verifier records must fail");
         assert!(
             err.contains("confidential-transfer-v2")
+                || err.contains("Confidential transfer v2 verifier key")
                 || err.contains("canonical semantic circuit key"),
             "unexpected error: {err}"
         );

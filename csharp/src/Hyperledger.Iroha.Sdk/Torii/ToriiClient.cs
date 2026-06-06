@@ -929,7 +929,7 @@ public sealed class ToriiClient : IDisposable
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedRequest = NormalizeSoraFsPinRegisterRequest(request);
-        var response = await PostAsync<ToriiSoraFsPinRegisterRequest, ToriiSoraFsPinRegisterResponse>(
+        var response = await PostAsync<ToriiSoraFsPinRegisterWireRequest, ToriiSoraFsPinRegisterResponse>(
             "/v1/sorafs/pin/register",
             normalizedRequest,
             cancellationToken: cancellationToken);
@@ -2422,17 +2422,22 @@ public sealed class ToriiClient : IDisposable
         }
     }
 
-    private static ToriiSoraFsPinRegisterRequest NormalizeSoraFsPinRegisterRequest(
+    private static ToriiSoraFsPinRegisterWireRequest NormalizeSoraFsPinRegisterRequest(
         ToriiSoraFsPinRegisterRequest request)
     {
         var chunker = request.Chunker ?? throw new ArgumentNullException(nameof(request.Chunker));
         var pinPolicy = request.PinPolicy ?? throw new ArgumentNullException(nameof(request.PinPolicy));
+        var normalizedChunker = NormalizeSoraFsChunker(chunker);
 
-        return new ToriiSoraFsPinRegisterRequest
+        return new ToriiSoraFsPinRegisterWireRequest
         {
             Authority = NormalizeRequiredValue(request.Authority, nameof(request.Authority)),
             PrivateKey = NormalizeRequiredValue(request.PrivateKey, nameof(request.PrivateKey)),
-            Chunker = NormalizeSoraFsChunker(chunker),
+            ChunkerProfileId = normalizedChunker.ProfileId,
+            ChunkerNamespace = normalizedChunker.Namespace,
+            ChunkerName = normalizedChunker.Name,
+            ChunkerSemver = normalizedChunker.Semver,
+            ChunkerMultihashCode = normalizedChunker.MultihashCode,
             PinPolicy = NormalizeSoraFsPinPolicy(pinPolicy),
             ManifestDigestHex = NormalizeSoraFsDigestHex(
                 request.ManifestDigestHex,

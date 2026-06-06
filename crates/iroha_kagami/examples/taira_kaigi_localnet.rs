@@ -343,16 +343,21 @@ fn append_bootstrap_authority_overlay(
     builder.build_raw()
 }
 
-fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> KeyPair {
+fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> {
     base_seed.map_or_else(
-        || KeyPair::from(REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone()),
+        || {
+            Ok(KeyPair::from(
+                REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+            ))
+        },
         |seed| {
-            KeyPair::from_seed(
+            KeyPair::try_from_seed(
                 seed.bytes()
                     .chain(LOCALNET_GENESIS_SEED_SUFFIX.iter().copied())
                     .collect::<Vec<_>>(),
                 Algorithm::default(),
             )
+            .wrap_err("failed to derive localnet genesis key pair from seed")
         },
     )
 }
@@ -365,7 +370,7 @@ fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
                 .wrap_err("failed to parse explicit genesis private key")?;
             Ok(KeyPair::from(private_key))
         }
-        (None, seed) => Ok(derive_localnet_genesis_key_pair(seed.as_deref())),
+        (None, seed) => derive_localnet_genesis_key_pair(seed.as_deref()),
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
     }
 }
@@ -825,15 +830,17 @@ mod tests {
     }
 
     #[test]
-    fn localnet_seed_derives_same_genesis_key_contract_as_kagami_localnet() {
-        let derived = derive_localnet_genesis_key_pair(Some("Iroha"));
-        let expected = KeyPair::from_seed(b"Irohagenesis".to_vec(), Algorithm::default());
+    fn localnet_seed_derives_checked_genesis_key_contract_as_kagami_localnet() {
+        let derived =
+            derive_localnet_genesis_key_pair(Some("Iroha")).expect("seeded localnet genesis key");
+        let expected = KeyPair::try_from_seed(b"Irohagenesis".to_vec(), Algorithm::default())
+            .expect("expected checked seeded key");
         assert_eq!(derived.public_key(), expected.public_key());
     }
 
     #[test]
     fn missing_seed_uses_builtin_localnet_genesis_key() {
-        let derived = derive_localnet_genesis_key_pair(None);
+        let derived = derive_localnet_genesis_key_pair(None).expect("builtin genesis key");
         assert_eq!(
             derived.public_key(),
             REAL_GENESIS_ACCOUNT_KEYPAIR.public_key()

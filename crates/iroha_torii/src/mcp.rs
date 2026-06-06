@@ -21,7 +21,10 @@ use blake3::Hasher as Blake3Hasher;
 use dashmap::DashMap;
 use http_body_util::BodyExt as _;
 use norito::json::{self, Map, Value};
-use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+use rand::{
+    rand_core::{TryCryptoRng, TryRngCore as _},
+    rngs::OsRng,
+};
 use tower::ServiceExt as _;
 
 use crate::{SharedAppState, limits, openapi};
@@ -2147,6 +2150,17 @@ async fn handle_tools_call_async(
     inbound_headers: &HeaderMap,
     params: &Map,
 ) -> Value {
+    let mut rng = OsRng;
+    handle_tools_call_async_with_rng(id, app, inbound_headers, params, &mut rng).await
+}
+
+async fn handle_tools_call_async_with_rng<R: TryCryptoRng + ?Sized>(
+    id: Option<Value>,
+    app: SharedAppState,
+    inbound_headers: &HeaderMap,
+    params: &Map,
+    rng: &mut R,
+) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return jsonrpc_error_response(
             id,
@@ -2161,7 +2175,21 @@ async fn handle_tools_call_async(
         .cloned()
         .unwrap_or_default();
 
-    let job_id = generate_mcp_job_id();
+    let job_id = match generate_mcp_job_id_with_rng(rng) {
+        Ok(job_id) => job_id,
+        Err(err) => {
+            return jsonrpc_error_response(
+                id,
+                JSONRPC_INTERNAL_ERROR,
+                "failed to generate MCP async job id",
+                Some(norito::json!({
+                    "error_code": "random_bytes",
+                    "operation": "generating MCP async job id",
+                    "source": err,
+                })),
+            );
+        }
+    };
     upsert_async_job_state(
         &app.mcp,
         job_id.clone(),
@@ -2290,12 +2318,11 @@ fn prune_async_jobs(mcp_cfg: &iroha_config::parameters::actual::ToriiMcp, now: I
     }
 }
 
-fn generate_mcp_job_id() -> String {
+fn generate_mcp_job_id_with_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<String, String> {
     let mut bytes = [0_u8; 20];
-    let mut rng = OsRng;
     rng.try_fill_bytes(&mut bytes)
-        .expect("OS RNG should be available");
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        .map_err(|err| format!("MCP async job id RNG failed: {err}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn mcp_tool_success(structured: Value) -> Value {
@@ -2810,6 +2837,14 @@ async fn dispatch_connect_session_create(
 }
 
 fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
+    let mut rng = OsRng;
+    build_connect_session_create_body_with_rng(arguments, &mut rng)
+}
+
+fn build_connect_session_create_body_with_rng<R: TryCryptoRng + ?Sized>(
+    arguments: &Map,
+    rng: &mut R,
+) -> Result<Value, String> {
     let node = arguments
         .get("node")
         .or_else(|| arguments.get("node_url"))
@@ -2827,7 +2862,8 @@ fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
                 .or_else(|| arguments.get("session_id"))
                 .and_then(Value::as_str)
                 .map(str::to_owned)
-                .unwrap_or_else(generate_connect_session_sid_b64url);
+                .map(Ok)
+                .unwrap_or_else(|| generate_connect_session_sid_b64url_with_rng(rng))?;
             payload.insert("sid".into(), Value::String(sid));
         }
         if !payload.contains_key("node") {
@@ -2840,12 +2876,13 @@ fn build_connect_session_create_body(arguments: &Map) -> Result<Value, String> {
     Ok(body)
 }
 
-fn generate_connect_session_sid_b64url() -> String {
+fn generate_connect_session_sid_b64url_with_rng<R: TryCryptoRng + ?Sized>(
+    rng: &mut R,
+) -> Result<String, String> {
     let mut sid = [0_u8; 32];
-    let mut rng = OsRng;
     rng.try_fill_bytes(&mut sid)
-        .expect("operating-system RNG should be available");
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid)
+        .map_err(|err| format!("Connect session sid RNG failed: {err}"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid))
 }
 
 async fn dispatch_connect_session_create_and_ticket(
@@ -14346,12 +14383,45 @@ mod tests {
     use super::*;
     use crate::tests_runtime_handlers::mk_app_state_for_tests;
     use iroha_config::parameters::actual::ToriiMcpProfile;
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
 
     static MCP_ASYNC_JOBS_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
         LazyLock::new(|| std::sync::Mutex::new(()));
 
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
+    #[derive(Debug)]
+    struct FailingMcpRng;
+
+    #[derive(Debug)]
+    struct FailingMcpRngError;
+
+    impl std::fmt::Display for FailingMcpRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing MCP RNG")
+        }
+    }
+
+    impl std::error::Error for FailingMcpRngError {}
+
+    impl TryRngCore for FailingMcpRng {
+        type Error = FailingMcpRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingMcpRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingMcpRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingMcpRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingMcpRng {}
 
     fn sample_tool(name: &str, method: Method, effect: ToolEffect) -> ToolSpec {
         ToolSpec {
@@ -14998,6 +15068,47 @@ mod tests {
             .and_then(Value::as_str)
             .expect("error code");
         assert_eq!(error_code, MCP_TOOL_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn tools_call_async_reports_job_id_rng_failure() {
+        let _guard = MCP_ASYNC_JOBS_TEST_LOCK.lock().expect("async job lock");
+        MCP_ASYNC_JOBS.clear();
+
+        let app = mk_app_state_for_tests();
+        let params = norito::json!({
+            "name": "torii.missing.async"
+        });
+        let response = handle_tools_call_async_with_rng(
+            Some(Value::from(7_u64)),
+            app,
+            &HeaderMap::new(),
+            params.as_object().expect("params object"),
+            &mut FailingMcpRng,
+        )
+        .await;
+
+        assert_eq!(
+            response
+                .get("error")
+                .and_then(|value| value.get("code"))
+                .and_then(Value::as_i64),
+            Some(JSONRPC_INTERNAL_ERROR)
+        );
+        let data = response
+            .get("error")
+            .and_then(|value| value.get("data"))
+            .expect("error data");
+        assert_eq!(
+            data.get("error_code").and_then(Value::as_str),
+            Some("random_bytes")
+        );
+        assert!(
+            data.get("source")
+                .and_then(Value::as_str)
+                .is_some_and(|source| source.contains("failing MCP RNG"))
+        );
+        assert!(MCP_ASYNC_JOBS.is_empty());
     }
 
     #[tokio::test]
@@ -15984,6 +16095,20 @@ mod tests {
             payload.get("node").and_then(Value::as_str),
             Some("https://node.example")
         );
+    }
+
+    #[test]
+    fn build_connect_session_create_body_reports_sid_rng_failure() {
+        let args = norito::json!({
+            "node": "https://node.example"
+        });
+        let err = build_connect_session_create_body_with_rng(
+            args.as_object().expect("object"),
+            &mut FailingMcpRng,
+        )
+        .expect_err("Connect SID RNG failure");
+        assert!(err.contains("Connect session sid RNG failed"));
+        assert!(err.contains("failing MCP RNG"));
     }
 
     #[test]

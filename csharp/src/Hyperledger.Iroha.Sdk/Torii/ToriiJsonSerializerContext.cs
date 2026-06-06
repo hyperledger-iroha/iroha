@@ -83,6 +83,7 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiSoraFsPinPolicy))]
 [JsonSerializable(typeof(ToriiSoraFsPinAlias))]
 [JsonSerializable(typeof(ToriiSoraFsPinRegisterRequest))]
+[JsonSerializable(typeof(ToriiSoraFsPinRegisterWireRequest))]
 [JsonSerializable(typeof(ToriiSoraFsPinRegisterResponse))]
 [JsonSerializable(typeof(ToriiSoraFsDenylistPackSummary))]
 [JsonSerializable(typeof(ToriiSoraFsDenylistCatalogResponse))]

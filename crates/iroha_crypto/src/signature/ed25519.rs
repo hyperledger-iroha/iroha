@@ -5,10 +5,13 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 use ed25519_dalek::Signature;
 use sha2::{Digest, Sha256};
 use signature::Signer as _;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "rand")]
-use crate::rng::os_rng;
+use rand::rngs::OsRng;
+#[cfg(feature = "rand")]
+use rand_core::TryRngCore;
+
 use crate::{Error, KeyGenOption, ParseError};
 
 pub type PublicKey = ed25519_dalek::VerifyingKey;
@@ -443,12 +446,13 @@ pub struct Ed25519Sha512;
 
 impl Ed25519Sha512 {
     pub fn keypair(option: KeyGenOption<PrivateKey>) -> (PublicKey, PrivateKey) {
+        Self::try_keypair(option).expect("Ed25519 key generation should succeed")
+    }
+
+    pub fn try_keypair(option: KeyGenOption<PrivateKey>) -> Result<(PublicKey, PrivateKey), Error> {
         let signing_key = match option {
             #[cfg(feature = "rand")]
-            KeyGenOption::Random => {
-                let mut rng = os_rng();
-                PrivateKey::generate(&mut rng)
-            }
+            KeyGenOption::Random => Self::random_private_key()?,
             KeyGenOption::UseSeed(mut seed) => {
                 let seed_bytes = ed25519_seed_from_material(&seed);
                 seed.zeroize();
@@ -456,7 +460,16 @@ impl Ed25519Sha512 {
             }
             KeyGenOption::FromPrivateKey(ref s) => PrivateKey::clone(s),
         };
-        (signing_key.verifying_key(), signing_key)
+        Ok((signing_key.verifying_key(), signing_key))
+    }
+
+    #[cfg(feature = "rand")]
+    fn random_private_key() -> Result<PrivateKey, Error> {
+        let mut seed = Zeroizing::new([0u8; 32]);
+        OsRng
+            .try_fill_bytes(seed.as_mut())
+            .map_err(|err| Error::KeyGen(format!("Ed25519 OS RNG failed: {err}")))?;
+        Ok(PrivateKey::from_bytes(&seed))
     }
 
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
@@ -780,6 +793,16 @@ mod test {
 
         println!("{s:?}");
         println!("{p:?}");
+    }
+
+    #[test]
+    fn try_keypair_random_signs_and_verifies() {
+        let (pk, sk) =
+            Ed25519Sha512::try_keypair(KeyGenOption::Random).expect("checked random keypair");
+        let message = b"ed25519 checked random keypair";
+        let signature = Ed25519Sha512::sign(message, &sk);
+
+        Ed25519Sha512::verify(message, &signature, &pk).expect("signature verifies");
     }
 
     #[test]

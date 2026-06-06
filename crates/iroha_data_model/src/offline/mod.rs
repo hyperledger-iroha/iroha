@@ -1269,7 +1269,8 @@ pub fn offline_escrow_account_id(
         chain_id.as_str()
     );
     let seed: [u8; Hash::LENGTH] = Hash::new(seed_material).into();
-    let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+    let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+        .expect("fixed Offline escrow Ed25519 account seed must derive");
     AccountId::new(keypair.public_key().clone())
 }
 
@@ -9812,6 +9813,13 @@ mod offline_note_tests {
 
         let escrow = offline_escrow_account_id(&chain_id, &definition_id);
 
+        assert_eq!(
+            escrow
+                .signatory()
+                .try_algorithm()
+                .expect("escrow account public key algorithm"),
+            Algorithm::Ed25519
+        );
         assert_eq!(escrow, offline_escrow_account_id(&chain_id, &definition_id));
         assert_ne!(
             escrow,

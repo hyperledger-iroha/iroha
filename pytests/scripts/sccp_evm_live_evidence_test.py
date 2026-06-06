@@ -89,6 +89,10 @@ def abi_word_address(address):
     return b"\x00" * 12 + address
 
 
+def abi_word_hex(value):
+    return int(value, 16).to_bytes(32, "big")
+
+
 def evm_route_canary_submit_call_data(
     module,
     *,
@@ -101,12 +105,25 @@ def evm_route_canary_submit_call_data(
     finality_height=123,
     finality_block_hash=bytes.fromhex("99" * 32),
 ):
+    g2_generator_words = tuple(
+        abi_word_hex(value)
+        for value in (
+            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed",
+            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2",
+            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa",
+            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b",
+        )
+    )
     proof_words = [
         abi_word_u32(1),
         message_id,
         abi_word_u32(source_domain),
         commitment_root,
-        *(bytes([index]) * 32 for index in range(1, 9)),
+        abi_word_u32(1),
+        abi_word_u32(2),
+        *g2_generator_words,
+        abi_word_u32(1),
+        abi_word_u32(2),
     ]
     proof_bytes = b"".join(proof_words)
     public_inputs = [
@@ -127,6 +144,40 @@ def evm_route_canary_submit_call_data(
     return bytes(call_data)
 
 
+def replace_call_word(word_index, word):
+    def mutate(_module, call_data):
+        data = bytearray(call_data)
+        offset = 4 + 32 * word_index
+        data[offset : offset + 32] = word
+        return bytes(data)
+
+    return mutate
+
+
+def zero_route_canary_proof(_module, call_data):
+    data = bytearray(call_data)
+    proof_start = 4 + 32 * 9
+    proof_end = proof_start + 384
+    data[proof_start:proof_end] = b"\x00" * 384
+    return bytes(data)
+
+
+def shorten_route_canary_proof(_module, call_data):
+    data = bytearray(call_data)
+    data[4 + 32 * 8 : 4 + 32 * 9] = abi_word_u32(352)
+    return bytes(data[: 4 + 32 * 9 + 352])
+
+
+def replace_call_word_with_bn254_base_modulus(word_index):
+    def mutate(module, call_data):
+        return replace_call_word(
+            word_index,
+            module.BN254_BASE_FIELD_MODULUS.to_bytes(32, "big"),
+        )(module, call_data)
+
+    return mutate
+
+
 def fake_opener_for(
     module,
     *,
@@ -141,6 +192,7 @@ def fake_opener_for(
     route_canary_used=True,
     route_canary_destination_binding_override=None,
     route_canary_wrong_selector=False,
+    route_canary_call_data_mutator=None,
     route_canary_receipt_block_number=None,
     route_canary_block_response_hash=None,
     route_canary_block_response_number=None,
@@ -152,6 +204,7 @@ def fake_opener_for(
     route_canary_log_block_number=None,
     route_canary_transaction_block_hash=None,
     route_canary_transaction_block_number=None,
+    route_canary_transaction_to=None,
     duplicate_route_canary_log=False,
     extra_route_canary_log_index=None,
     route_canary_removed_log=False,
@@ -242,6 +295,11 @@ def fake_opener_for(
     )
     if route_canary_wrong_selector:
         route_canary_call_data = b"\x12\x34\x56\x78" + route_canary_call_data[4:]
+    if route_canary_call_data_mutator is not None:
+        route_canary_call_data = route_canary_call_data_mutator(
+            module,
+            route_canary_call_data,
+        )
     route_canary_log_destination_binding = (
         route_canary_destination_binding_override
         if route_canary_destination_binding_override is not None
@@ -404,7 +462,7 @@ def fake_opener_for(
                         or route_canary_receipt_block_hash,
                         "blockNumber": route_canary_transaction_block_number
                         or route_canary_receipt_block_number,
-                        "to": bridge,
+                        "to": route_canary_transaction_to or bridge,
                         "input": "0x" + route_canary_call_data.hex(),
                     },
                 }
@@ -443,7 +501,13 @@ def fake_opener_for(
     )
 
 
-def route_canary_hash_for(module, fake, route_allowlist_hash):
+def route_canary_hash_for(
+    module,
+    fake,
+    route_allowlist_hash,
+    *,
+    receipt_block_finalized=True,
+):
     return module.evidence.evm_route_canary_transaction_evidence_hash(
         route_allowlist_hash=route_allowlist_hash,
         bridge_address=bytes.fromhex(fake.bridge.removeprefix("0x")),
@@ -468,6 +532,7 @@ def route_canary_hash_for(module, fake, route_allowlist_hash):
         proof_family_hash=module.evidence.evm_proof_family_hash(),
         network_id=fake.network_id,
         used_message_proof=True,
+        receipt_block_finalized=receipt_block_finalized,
     )
 
 
@@ -593,7 +658,11 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     module = load_live_module()
     fake = fake_opener_for(module)
     route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
-    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+    route_canary_hash = route_canary_hash_for(
+        module,
+        fake,
+        route_allowlist_hash,
+    )
 
     summary = module.collect_live_evidence(
         SimpleNamespace(
@@ -780,7 +849,12 @@ def test_live_evm_eth_toml_requires_finalized_block_tag():
     module = load_live_module()
     fake = fake_opener_for(module)
     route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
-    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+    route_canary_hash = route_canary_hash_for(
+        module,
+        fake,
+        route_allowlist_hash,
+        receipt_block_finalized=False,
+    )
 
     summary = module.collect_live_evidence(
         SimpleNamespace(
@@ -837,7 +911,12 @@ def test_live_evm_bsc_default_latest_route_canary_stays_diagnostic():
         ),
         destination_binding_hash=fake.destination_binding,
     )
-    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+    route_canary_hash = route_canary_hash_for(
+        module,
+        fake,
+        route_allowlist_hash,
+        receipt_block_finalized=False,
+    )
 
     summary = module.collect_live_evidence(
         SimpleNamespace(
@@ -977,7 +1056,12 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
         route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
         if evidence_hash is None:
             try:
-                evidence_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+                evidence_hash = route_canary_hash_for(
+                    module,
+                    fake,
+                    route_allowlist_hash,
+                    receipt_block_finalized=block_tag == "finalized",
+                )
             except ValueError as exc:
                 if "block_receipts_root" not in str(exc):
                     raise
@@ -1016,6 +1100,126 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
         (
             fake_opener_for(module, route_canary_wrong_selector=True),
             "submitSccpMessageProof",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(0, abi_word_u32(32 * 7)),
+            ),
+            "proofBytes offset must be 256 bytes",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(1, bytes.fromhex("ab" * 32)),
+            ),
+            "publicInputs[0] must match event messageId",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(3, abi_word_u32(56)),
+            ),
+            "targetDomain does not match expectedTargetDomain()",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(4, bytes.fromhex("ab" * 32)),
+            ),
+            "publicInputs[3] must match event commitmentRoot",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(7, bytes.fromhex("ab" * 32)),
+            ),
+            "statementHash must match accepted event",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=shorten_route_canary_proof,
+            ),
+            "proofBytes must be a 384-byte Groth16 tuple",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=zero_route_canary_proof,
+            ),
+            "proofBytes must not be all zero",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(9, abi_word_u32(2)),
+            ),
+            "proof version must be 1",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(10, bytes.fromhex("ab" * 32)),
+            ),
+            "proof messageId must match accepted event",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(11, abi_word_u32(56)),
+            ),
+            "proof sourceDomain does not match expectedSourceDomain()",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(12, bytes.fromhex("ab" * 32)),
+            ),
+            "proof commitmentRoot must match accepted event",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word_with_bn254_base_modulus(13),
+            ),
+            "proofBytes.a.x must be a BN254 base-field element",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(14, abi_word_u32(3)),
+            ),
+            "proofBytes.a must be a BN254 G1 point",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(15, abi_word_u32(0)),
+            ),
+            "proofBytes.b must be a BN254 G2 point",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(20, abi_word_u32(3)),
+            ),
+            "proofBytes.c must be a BN254 G1 point",
             None,
         ),
         (
@@ -1104,6 +1308,14 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
             None,
         ),
         (
+            fake_opener_for(
+                module,
+                route_canary_transaction_to="0x" + "33" * 20,
+            ),
+            "transaction to does not match destination bridge",
+            None,
+        ),
+        (
             fake_opener_for(module, route_canary_finalized_block_number="0x1233"),
             "receipt block is newer than the finalized execution block",
             None,
@@ -1158,7 +1370,7 @@ def test_live_evm_full_toml_revalidates_imported_summary_metadata():
             source_adapter_engine_deployment_hash=bytes.fromhex(
                 EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
             ),
-            block_tag="latest",
+            block_tag="finalized",
             timeout=1.0,
         ),
         opener=fake.opener,

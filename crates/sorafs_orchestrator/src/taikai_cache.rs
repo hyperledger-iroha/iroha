@@ -26,7 +26,7 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
     to_bytes,
 };
-use rand::RngCore;
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use thiserror::Error;
 
 /// Cache tiers tracked by the hierarchy.
@@ -1993,7 +1993,7 @@ impl CacheAdmissionGossipBody {
         issued_unix_ms: u64,
         ttl: Duration,
     ) -> Result<Self, CacheAdmissionError> {
-        let mut rng = rand::rng();
+        let mut rng = OsRng;
         Self::with_nonce(envelope, issued_unix_ms, ttl, &mut rng)
     }
 
@@ -2006,7 +2006,7 @@ impl CacheAdmissionGossipBody {
         envelope: CacheAdmissionEnvelope,
         issued_unix_ms: u64,
         ttl: Duration,
-        rng: &mut impl RngCore,
+        rng: &mut impl TryCryptoRng,
     ) -> Result<Self, CacheAdmissionError> {
         if ttl.is_zero() {
             return Err(CacheAdmissionError::InvalidTtl);
@@ -2017,7 +2017,8 @@ impl CacheAdmissionGossipBody {
             .try_into()
             .map_err(|_| CacheAdmissionError::TtlOverflow)?;
         let mut nonce = [0u8; 16];
-        rng.fill_bytes(&mut nonce);
+        rng.try_fill_bytes(&mut nonce)
+            .map_err(|error| CacheAdmissionError::RandomNonce(error.to_string()))?;
         let expires_unix_ms = issued_unix_ms
             .checked_add(ttl_ms)
             .ok_or(CacheAdmissionError::TimestampOverflow)?
@@ -2231,6 +2232,8 @@ pub enum CacheAdmissionError {
     TtlOverflow,
     #[error("cache admission timestamp overflowed")]
     TimestampOverflow,
+    #[error("cache admission gossip nonce RNG failed: {0}")]
+    RandomNonce(String),
     #[error("cache admission signature verification failed")]
     InvalidSignature,
     #[error("cache admission envelope expired at {expires_unix_ms}, now={now_unix_ms}")]
@@ -2328,7 +2331,7 @@ impl CacheAdmissionTracker {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{fmt, str::FromStr};
 
     use iroha_data_model::{
         da::types::{BlobDigest, StorageTicketId},
@@ -2338,9 +2341,42 @@ mod tests {
             TaikaiInstrumentation, TaikaiTrackMetadata,
         },
     };
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{
+        SeedableRng,
+        rand_core::{TryCryptoRng, TryRngCore},
+        rngs::StdRng,
+    };
 
     use super::*;
+
+    struct FailingCacheAdmissionNonceRng;
+
+    #[derive(Debug)]
+    struct FailingCacheAdmissionNonceRngError;
+
+    impl fmt::Display for FailingCacheAdmissionNonceRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing cache admission nonce RNG")
+        }
+    }
+
+    impl TryRngCore for FailingCacheAdmissionNonceRng {
+        type Error = FailingCacheAdmissionNonceRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingCacheAdmissionNonceRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingCacheAdmissionNonceRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingCacheAdmissionNonceRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingCacheAdmissionNonceRng {}
 
     fn digest(value: u8) -> BlobDigest {
         let mut bytes = [0u8; 32];
@@ -2410,6 +2446,35 @@ mod tests {
         let body =
             CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng).unwrap();
         CacheAdmissionGossip::sign(body, &key_pair).expect("gossip")
+    }
+
+    #[test]
+    fn cache_admission_gossip_body_reports_nonce_rng_failure() {
+        let issuer = GuardDirectoryId::new("soranet/cache");
+        let cached = dummy_segment(12, 512, QosClass::Priority);
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(15);
+        let key_pair = KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
+        let record = CacheAdmissionRecord::from_segment(
+            TaikaiShardId(5),
+            issuer,
+            &cached,
+            CacheTierKind::Hot,
+            CacheAdmissionAction::Admit,
+            issued_ms,
+            ttl,
+        )
+        .expect("record");
+        let envelope = CacheAdmissionEnvelope::sign(record, &key_pair).expect("envelope");
+        let mut rng = FailingCacheAdmissionNonceRng;
+
+        let error = CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng)
+            .expect_err("nonce RNG failure");
+
+        let CacheAdmissionError::RandomNonce(message) = error else {
+            panic!("expected random nonce failure");
+        };
+        assert!(message.contains("failing cache admission nonce RNG"));
     }
 
     #[test]

@@ -922,16 +922,17 @@ struct LocalnetTxGossipOverrides {
     resend_ticks: u32,
 }
 
-fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> AccountId {
-    let gas_key_pair = iroha_crypto::KeyPair::from_seed(
+fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Result<AccountId> {
+    let gas_key_pair = iroha_crypto::KeyPair::try_from_seed(
         genesis_public_key
             .to_string()
             .bytes()
             .chain(LOCALNET_GAS_ACCOUNT_SEED.iter().copied())
             .collect(),
         iroha_crypto::Algorithm::default(),
-    );
-    AccountId::new(gas_key_pair.public_key().clone())
+    )
+    .wrap_err("failed to derive localnet gas account key pair")?;
+    Ok(AccountId::new(gas_key_pair.public_key().clone()))
 }
 
 fn account_id_raw_string(account_id: &AccountId) -> String {
@@ -985,7 +986,8 @@ fn generate_localnet_with_line<T: Write>(
         seed_bytes,
         opts.base_api_port,
         opts.base_p2p_port,
-    );
+    )
+    .wrap_err("failed to generate localnet peer keys")?;
 
     tui::status("Generating genesis manifest");
     let da_rbc_enabled = build_line.is_iroha3();
@@ -1027,11 +1029,12 @@ fn generate_localnet_with_line<T: Write>(
     let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
     let commit_inflight_timeout_ms =
         localnet_commit_inflight_timeout_ms(block_time_ms, commit_time_ms);
-    let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+    let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
+        .wrap_err("failed to generate localnet genesis key pair")?;
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let assets = effective_localnet_assets(&opts.assets);
     let gas_account_id = if npos_bootstrap {
-        Some(localnet_gas_account_id(&genesis_public_key))
+        Some(localnet_gas_account_id(&genesis_public_key)?)
     } else {
         None
     };
@@ -1358,18 +1361,19 @@ fn resolve_localnet_redundant_send_r(
     redundant_send_r
 }
 
-fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) -> Vec<Peer> {
+fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) -> Result<Vec<Peer>> {
     (0..count)
         .map(|nth| {
-            let (bls_public, bls_secret, pop) = generate_bls_key_pair(seed, &nth.to_be_bytes());
-            Peer {
+            let (bls_public, bls_secret, pop) = generate_bls_key_pair(seed, &nth.to_be_bytes())
+                .wrap_err_with(|| format!("failed to generate BLS key pair for peer {nth}"))?;
+            Ok(Peer {
                 public_key: bls_public.clone(),
                 private_key: bls_secret,
                 bls_public_key: bls_public,
                 bls_pop: pop,
                 api_port: base_api + nth,
                 p2p_port: base_p2p + nth,
-            }
+            })
         })
         .collect()
 }
@@ -2462,7 +2466,8 @@ fn extend_genesis(
     let mut builder = genesis.into_builder().next_transaction();
 
     for idx in 0..extra_accounts {
-        let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes());
+        let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes())
+            .wrap_err_with(|| format!("failed to generate localnet extra account key {idx}"))?;
         let account_id = AccountId::new(pk.clone());
         if registrations.accounts.insert(account_id.clone()) {
             builder = builder.append_instruction(Register::account(Account::new(account_id)));
@@ -3090,15 +3095,15 @@ fn resolve_localnet_da_proof_policies(config: &actual::Root) -> DaProofPolicyBun
 fn generate_genesis_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
-) -> (iroha_crypto::PublicKey, ExposedPrivateKey) {
+) -> Result<(iroha_crypto::PublicKey, ExposedPrivateKey)> {
     if base_seed.is_none() {
-        return (
+        return Ok((
             REAL_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
             ExposedPrivateKey(REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone()),
-        );
+        ));
     }
 
-    let (public_key, private_key) = iroha_crypto::KeyPair::from_seed(
+    let (public_key, private_key) = iroha_crypto::KeyPair::try_from_seed(
         base_seed
             .expect("covered by early return for None seeds")
             .iter()
@@ -3106,45 +3111,44 @@ fn generate_genesis_key_pair(
             .copied()
             .collect::<Vec<_>>(),
         iroha_crypto::Algorithm::default(),
-    )
+    )?
     .into_parts();
-    (public_key, ExposedPrivateKey(private_key))
+    Ok((public_key, ExposedPrivateKey(private_key)))
 }
 
 fn generate_account_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
-) -> (iroha_crypto::PublicKey, ExposedPrivateKey) {
-    let (public_key, private_key) = base_seed.map_or_else(
-        || {
-            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::default())
-                .into_parts()
-        },
-        |seed| {
-            iroha_crypto::KeyPair::from_seed(
-                seed.iter().chain(extra_seed).copied().collect::<Vec<_>>(),
-                iroha_crypto::Algorithm::default(),
-            )
-            .into_parts()
-        },
-    );
-    (public_key, ExposedPrivateKey(private_key))
+) -> Result<(iroha_crypto::PublicKey, ExposedPrivateKey)> {
+    let key_pair = match base_seed {
+        Some(seed) => iroha_crypto::KeyPair::try_from_seed(
+            seed.iter().chain(extra_seed).copied().collect::<Vec<_>>(),
+            iroha_crypto::Algorithm::default(),
+        )?,
+        None => {
+            iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::default())?
+        }
+    };
+    let (public_key, private_key) = key_pair.into_parts();
+    Ok((public_key, ExposedPrivateKey(private_key)))
 }
 
 fn generate_bls_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
-) -> (iroha_crypto::PublicKey, ExposedPrivateKey, Vec<u8>) {
-    let kp = base_seed.map_or_else(
-        || iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal),
-        |seed| {
+) -> Result<(iroha_crypto::PublicKey, ExposedPrivateKey, Vec<u8>)> {
+    let kp = match base_seed {
+        Some(seed) => {
             let material = seed.iter().chain(extra_seed).copied().collect::<Vec<_>>();
-            iroha_crypto::KeyPair::from_seed(material, iroha_crypto::Algorithm::BlsNormal)
-        },
-    );
-    let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("generate BLS PoP");
+            iroha_crypto::KeyPair::try_from_seed(material, iroha_crypto::Algorithm::BlsNormal)?
+        }
+        None => {
+            iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)?
+        }
+    };
+    let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key())?;
     let (public_key, private_key) = kp.into_parts();
-    (public_key, ExposedPrivateKey(private_key), pop)
+    Ok((public_key, ExposedPrivateKey(private_key), pop))
 }
 
 fn repo_root_path() -> PathBuf {
@@ -3671,7 +3675,8 @@ mod tests {
             seed_bytes,
             opts.base_api_port,
             opts.base_p2p_port,
-        );
+        )
+        .expect("test localnet peer key generation should succeed");
         let da_rbc_enabled = opts.build_line.is_iroha3();
         let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
         let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
@@ -3694,7 +3699,8 @@ mod tests {
             spec.block_max_transactions
         });
         let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
+            .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key.clone());
         let assets = effective_localnet_assets(&opts.assets);
         let mut genesis = generate_raw_genesis(
@@ -3729,7 +3735,8 @@ mod tests {
         genesis = append_localnet_contract_permissions(genesis, &genesis_account_id);
         genesis = append_peer_pop(genesis, &peers);
         if npos_bootstrap {
-            let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+            let gas_account_id = localnet_gas_account_id(&genesis_public_key)
+                .expect("test localnet gas account derivation should succeed");
             let stake_amount =
                 localnet_npos_stake_amount(&genesis.effective_parameters(), requested_stake_amount);
             genesis = append_localnet_npos_bootstrap(
@@ -3870,7 +3877,8 @@ mod tests {
             .expect("offline note alias");
         let client_account_id = localnet_client_account_id();
         let (genesis_public_key, _) =
-            generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED);
+            generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED)
+                .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key);
         let expected_explicit_manage_offline_escrow_grants =
             usize::from(client_account_id != *ALICE_ID);
@@ -4946,7 +4954,8 @@ mod tests {
 
     #[test]
     fn genesis_key_defaults_to_real_keypair_when_unseeded() {
-        let (public_key, _) = generate_genesis_key_pair(None, GENESIS_SEED);
+        let (public_key, _) = generate_genesis_key_pair(None, GENESIS_SEED)
+            .expect("unseeded genesis key fixture should succeed");
         assert_eq!(
             public_key,
             REAL_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()
@@ -4955,8 +4964,10 @@ mod tests {
 
     #[test]
     fn extra_account_keys_are_unique_when_unseeded() {
-        let (first, _) = generate_account_key_pair(None, b"acct0");
-        let (second, _) = generate_account_key_pair(None, b"acct1");
+        let (first, _) =
+            generate_account_key_pair(None, b"acct0").expect("first random account key");
+        let (second, _) =
+            generate_account_key_pair(None, b"acct1").expect("second random account key");
         assert_ne!(first, second);
     }
 
@@ -5220,7 +5231,8 @@ mod tests {
             opts.seed.as_ref().map(String::as_bytes),
             opts.base_api_port,
             opts.base_p2p_port,
-        );
+        )
+        .expect("test localnet peer key generation should succeed");
         let expected: BTreeSet<_> = peers
             .iter()
             .map(|peer| AccountId::new(peer.public_key.clone()))
@@ -5357,7 +5369,8 @@ mod tests {
             opts.seed.as_ref().map(String::as_bytes),
             opts.base_api_port,
             opts.base_p2p_port,
-        );
+        )
+        .expect("test localnet peer key generation should succeed");
         let expected: BTreeSet<_> = peers
             .iter()
             .map(|peer| AccountId::new(peer.public_key.clone()))
@@ -7046,8 +7059,10 @@ mod tests {
             .expect("generate npos iroha3 localnet");
 
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
+            .expect("test localnet genesis key generation should succeed");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
+            .expect("test localnet gas account derivation should succeed");
 
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
@@ -7143,8 +7158,10 @@ mod tests {
     #[test]
     fn account_id_raw_string_parses_as_account_id() {
         let seed_bytes = Some(b"localnet-gas-parse".as_slice());
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
+            .expect("test localnet genesis key generation should succeed");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
+            .expect("test localnet gas account derivation should succeed");
         let encoded = account_id_raw_string(&gas_account_id);
         let parsed = AccountId::parse_encoded(&encoded)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -7155,8 +7172,10 @@ mod tests {
     #[test]
     fn account_id_runtime_literal_uses_encoded_literal() {
         let seed_bytes = Some(b"localnet-gas-runtime-literal".as_slice());
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
+            .expect("test localnet genesis key generation should succeed");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
+            .expect("test localnet gas account derivation should succeed");
         let literal = account_id_runtime_literal(&gas_account_id, None);
         assert_eq!(literal, gas_account_id.to_string());
     }
@@ -7164,8 +7183,10 @@ mod tests {
     #[test]
     fn account_id_runtime_literal_respects_requested_chain_discriminant() {
         let seed_bytes = Some(b"localnet-gas-runtime-taira".as_slice());
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
-        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
+            .expect("test localnet genesis key generation should succeed");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key)
+            .expect("test localnet gas account derivation should succeed");
         let literal = account_id_runtime_literal(&gas_account_id, Some(369));
         assert!(
             literal.starts_with("test"),
@@ -7213,7 +7234,8 @@ mod tests {
 
         let manifest = localnet_genesis_for_opts(&opts);
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
-        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
+            .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key.clone());
         let ivm_genesis_registrations = manifest
             .instructions()

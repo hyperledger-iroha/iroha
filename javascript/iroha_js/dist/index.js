@@ -4,7 +4,10 @@
  * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
  * module.
  */
-export { compileKotodamaProgram, compileKotodamaStudioProgram } from "./kotodamaCompiler/index.js";
+export {
+  compileKotodamaProgram,
+  compileKotodamaStudioProgram,
+} from "./kotodamaCompiler/index.js";
 export * from "./kotodamaCompiler/parity.js";
 export {
   AccountAddress,
@@ -37,7 +40,10 @@ export {
   openConnectWebSocket,
   verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
-export { ToriiBrowserClient, ToriiBrowserHttpError } from "./toriiBrowserClient.js";
+export {
+  ToriiBrowserClient,
+  ToriiBrowserHttpError,
+} from "./toriiBrowserClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
   CRYPTO_ALGORITHMS,
@@ -457,6 +463,8 @@ export {
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+  SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_CORE_REMOTE_DOMAINS,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
@@ -537,10 +545,16 @@ export {
   buildBscMainnetSccpDestinationProofRequest,
   wrapBscMainnetSccpDestinationProofResult,
   buildBscMainnetSccpDestinationSubmission,
+  buildBscTestnetSccpDestinationProofRequest,
+  wrapBscTestnetSccpDestinationProofResult,
+  buildBscTestnetSccpDestinationSubmission,
   buildEthereumMainnetSccpLocalAdmissionSubmission,
   buildBscMainnetSccpLocalAdmissionSubmission,
+  buildBscTestnetSccpLocalAdmissionSubmission,
   BscMainnetSccp,
   BscMainnetSccpProver,
+  BscTestnetSccp,
+  BscTestnetSccpProver,
   EvmSccpProver,
   EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
@@ -751,8 +765,15 @@ export {
   SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_TAIRA_CHAIN_ID_V1,
   SCCP_TAIRA_NETWORK_PREFIX_V1,
+  SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
   SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
   SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
   SCCP_CODEC_TEXT_UTF8,
   SCCP_CODEC_EVM_HEX,
   SCCP_CODEC_SOLANA_BASE58,
@@ -806,33 +827,59 @@ export {
   ethereumMainnetSccpDestinationBindingHash,
   bscMainnetSccpDestinationBinding,
   bscMainnetSccpDestinationBindingHash,
+  bscTestnetSccpDestinationBinding,
+  bscTestnetSccpDestinationBindingHash,
+  validateEthereumMainnetNativeEvmProverBundle,
+  parseEthereumMainnetNativeEvmProverBundleManifest,
+  validateEthereumMainnetNativeEvmProverParityFixture,
+  parseEthereumMainnetNativeEvmProverParityFixture,
+  validateEthereumMainnetNativeEvmProverSelfTestFixture,
+  parseEthereumMainnetNativeEvmProverSelfTestFixture,
+  verifyEthereumMainnetNativeEvmProverArtifacts,
+  verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
+  runEthereumMainnetNativeProverSelfTest,
   tronSccpDestinationBinding,
   tronSccpDestinationBindingHash,
   tairaXorRouteIdHash,
+  tairaXorBscRouteIdHash,
   tairaXorAssetKeyHash,
   buildTairaXorTransferPayload,
+  buildTairaXorBscTransferPayload,
   buildTairaXorSccpRecordDescriptor,
+  buildTairaXorBscSccpRecordDescriptor,
   buildRecordSccpMessageInstructionBytes,
   buildTairaXorSccpBurnRecordContractPayload,
+  buildTairaXorBscSccpBurnRecordContractPayload,
   buildTairaXorSccpBurnRecordZkIvmRequest,
+  buildTairaXorBscSccpBurnRecordZkIvmRequest,
   buildTairaXorTronToTairaTransferPayload,
+  buildTairaXorBscToTairaTransferPayload,
   canonicalSccpTransferPayloadBytes,
   canonicalSccpPayloadEnvelopeBytes,
   canonicalSccpMerkleProofBytes,
   canonicalSccpMessageProofBundleBytes,
   tairaXorCanonicalTransferPayloadBytes,
+  tairaXorBscCanonicalTransferPayloadBytes,
   tairaXorTronToTairaCanonicalTransferPayloadBytes,
+  tairaXorBscToTairaCanonicalTransferPayloadBytes,
   tairaXorTransferMessageId,
+  tairaXorBscTransferMessageId,
   tairaXorTronToTairaTransferMessageId,
+  tairaXorBscToTairaTransferMessageId,
   sccpTransferMessageId,
   tairaXorTransferPayloadHash,
+  tairaXorBscToTairaTransferPayloadHash,
   tairaXorBurnSourceEventDigest,
+  tairaXorBscBurnSourceEventDigest,
   tairaXorFinalizeFromTairaCallData,
   tairaXorBurnToTairaCallData,
   tairaXorBurnToTairaAccountCallData,
+  tairaXorBscBurnToTairaCallData,
+  tairaXorBscBurnToTairaAccountCallData,
   isTairaXorTronBurnStartedEventName,
   bindTairaXorTronBurnStartedEvent,
   bindTairaXorTronToTairaSourceProofPackage,
+  bindTairaXorBscToTairaSourceProofPackage,
   normalizeSccpSourceVerifierMaterial,
   canonicalSccpSourceVerifierMaterialBytes,
   sccpSourceVerifierMaterialHash,
@@ -852,7 +899,11 @@ export {
   validateSccpTokenMessageBundleSurface,
   validateSccpGovernanceBundleSurface,
 } from "./sccp.js";
-export { decodeReplicationOrder, SorafsGatewayFetchError, sorafsGatewayFetch } from "./sorafs.js";
+export {
+  decodeReplicationOrder,
+  SorafsGatewayFetchError,
+  sorafsGatewayFetch,
+} from "./sorafs.js";
 export {
   queryOracleFeeds,
   queryOracleFeedHistory,
@@ -875,7 +926,10 @@ export {
   connectErrorFrom,
   ConnectQueueError,
 } from "./connectError.js";
-export { generateConnectSid, createConnectSessionPreview } from "./connectSession.js";
+export {
+  generateConnectSid,
+  createConnectSessionPreview,
+} from "./connectSession.js";
 export { bootstrapConnectPreviewSession } from "./connectPreviewFlow.js";
 export {
   appendConnectQueueMetric,
@@ -892,7 +946,10 @@ export {
   ConnectJournalRecord,
   ConnectJournalError,
 } from "./connectJournalRecord.js";
-export { SoranetPuzzleClient, SoranetPuzzleError } from "./soranetPuzzleClient.js";
+export {
+  SoranetPuzzleClient,
+  SoranetPuzzleError,
+} from "./soranetPuzzleClient.js";
 export {
   deriveGatewayHosts as deriveSoradnsGatewayHosts,
   hostPatternsCoverDerivedHosts,

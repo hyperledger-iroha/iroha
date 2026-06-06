@@ -2,7 +2,7 @@
 
 use std::{env, path::PathBuf};
 
-use eyre::{Result, eyre};
+use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     isi::SetParameter,
@@ -33,7 +33,8 @@ fn main() -> Result<()> {
         print_batch("normalized", batch_idx, batch);
     }
 
-    let block = RawGenesisTransaction::from_path(&path)?.build_and_sign(&KeyPair::random())?;
+    let signer = normalization_signer()?;
+    let block = RawGenesisTransaction::from_path(&path)?.build_and_sign(&signer)?;
     println!(
         "event=manifest_normalize stage=signed_block path={} batches={}",
         path.display(),
@@ -46,6 +47,10 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn normalization_signer() -> Result<KeyPair> {
+    KeyPair::try_random().wrap_err("failed to generate manifest normalization signer")
 }
 
 fn print_batch(stage: &str, batch_idx: usize, batch: &[iroha_data_model::isi::InstructionBox]) {
@@ -79,5 +84,25 @@ fn print_batch(stage: &str, batch_idx: usize, batch: &[iroha_data_model::isi::In
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::Algorithm;
+
+    use super::*;
+
+    #[test]
+    fn normalization_signer_uses_checked_default_key_generation() {
+        let keypair = normalization_signer().expect("checked default signer generation");
+
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("generated public key algorithm"),
+            Algorithm::default()
+        );
     }
 }

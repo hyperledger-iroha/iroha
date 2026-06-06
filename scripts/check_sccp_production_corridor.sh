@@ -413,8 +413,8 @@ phase_dotnet_sdk() {
 }
 
 phase_contract_smoke() {
-  run_cmd node --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
-  run_cmd node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
 }
 

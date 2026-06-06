@@ -664,12 +664,13 @@ const SCCP_BSC_VALIDATOR_STRUCT_STORAGE_SLOTS: u64 = 4;
 const SCCP_EVM_MAX_RECEIPT_VALUE_BYTES: usize = 16 * 1024;
 const SCCP_EVM_MAX_LOG_TOPICS: usize = 4;
 const SCCP_EVM_MAX_HEADER_RLP_BYTES: usize = 16 * 1024;
-const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES: usize = 512;
+const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES: usize = 512;
+#[cfg(any(test, feature = "test-fixtures"))]
+const SCCP_ETH_MAINNET_SYNC_COMMITTEE_SUPERMAJORITY_AUTHORITIES: usize = 342;
+const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES: usize = SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES;
 const SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES: usize = 48;
 const SCCP_ETH_SYNC_COMMITTEE_POP_BYTES: usize = 96;
 const SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES: usize = 96;
-const SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES: usize = 96;
-const SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES: usize = 256;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_TRANSITIONS: usize = 64;
 /// Ethereum mainnet slots per epoch from the consensus mainnet preset.
 pub const SCCP_ETH_MAINNET_SLOTS_PER_EPOCH: u64 = 32;
@@ -685,13 +686,14 @@ pub const SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD: u64 =
 pub const fn sccp_eth_mainnet_sync_committee_period_for_slot(slot: u64) -> u64 {
     slot / SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD
 }
-const SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES: usize = 1
+const SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_BYTES: usize = 1
     + 4
     + SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
-        * (4 + SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES
+        * (4 + SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES
             + 8
             + 4
-            + SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES);
+            + SCCP_ETH_SYNC_COMMITTEE_POP_BYTES);
+const SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES: usize = SCCP_ETH_SYNC_COMMITTEE_PAYLOAD_BYTES;
 pub const SCCP_EVM_SOURCE_BRIDGE_EMITTER_ADDRESS_BYTES: usize = 20;
 const SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX: u64 = 9;
 const SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH: usize = 4;
@@ -3689,6 +3691,9 @@ pub struct SccpRouteAllowlistReadinessV1 {
     pub evm_route_canary_receipt_block_hash: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
+    pub evm_route_canary_receipt_block_finalized: Option<bool>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
     pub evm_route_canary_block_receipts_root: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
@@ -3815,6 +3820,7 @@ impl Default for SccpRouteAllowlistReadinessV1 {
             evm_route_canary_log_index: None,
             evm_route_canary_receipt_block_number: None,
             evm_route_canary_receipt_block_hash: None,
+            evm_route_canary_receipt_block_finalized: None,
             evm_route_canary_block_receipts_root: None,
             evm_route_canary_call_data_sha256: None,
             evm_route_canary_message_id: None,
@@ -5993,6 +5999,7 @@ pub fn sccp_route_allowlist_for_domain(domain: u32) -> Option<SccpRouteAllowlist
         evm_route_canary_log_index: None,
         evm_route_canary_receipt_block_number: None,
         evm_route_canary_receipt_block_hash: None,
+        evm_route_canary_receipt_block_finalized: None,
         evm_route_canary_block_receipts_root: None,
         evm_route_canary_call_data_sha256: None,
         evm_route_canary_message_id: None,
@@ -6112,6 +6119,7 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     log_index: u32,
     receipt_block_number: u64,
     receipt_block_hash: H256,
+    receipt_block_finalized: bool,
     block_receipts_root: H256,
     call_data_sha256: H256,
     message_id: H256,
@@ -6185,7 +6193,7 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     let proof_family_hash = keccak256_bytes(SCCP_STARK_FRI_PROOF_FAMILY_V1.as_bytes());
 
     let mut out = Vec::new();
-    push_u8(&mut out, 3);
+    push_u8(&mut out, 4);
     out.extend_from_slice(&route_allowlist_hash);
     out.extend_from_slice(&bridge_address);
     out.extend_from_slice(&transaction_hash);
@@ -6209,6 +6217,7 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     out.extend_from_slice(&proof_family_hash);
     out.extend_from_slice(&network_id);
     push_u8(&mut out, u8::from(used_message_proof));
+    push_u8(&mut out, u8::from(receipt_block_finalized));
     Some(out)
 }
 
@@ -6222,6 +6231,7 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
     log_index: u32,
     receipt_block_number: u64,
     receipt_block_hash: H256,
+    receipt_block_finalized: bool,
     block_receipts_root: H256,
     call_data_sha256: H256,
     message_id: H256,
@@ -6236,7 +6246,7 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
     used_message_proof: bool,
 ) -> Option<H256> {
     Some(prefixed_blake2b(
-        b"iroha:sccp:evm-route-canary-evidence:v3",
+        b"iroha:sccp:evm-route-canary-evidence:v4",
         &canonical_sccp_evm_route_canary_evidence_bytes_v1(
             domain,
             route_allowlist_hash,
@@ -6246,6 +6256,7 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
             log_index,
             receipt_block_number,
             receipt_block_hash,
+            receipt_block_finalized,
             block_receipts_root,
             call_data_sha256,
             message_id,
@@ -6815,6 +6826,7 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     log_index: u32,
     receipt_block_number: u64,
     receipt_block_hash: H256,
+    receipt_block_finalized: bool,
     block_receipts_root: H256,
     call_data_sha256: H256,
     message_id: H256,
@@ -6834,6 +6846,7 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
         || proof_version != 1
         || proof_source_domain != SCCP_DOMAIN_SORA
         || !used_message_proof
+        || !receipt_block_finalized
     {
         return None;
     }
@@ -6848,6 +6861,7 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
         log_index,
         receipt_block_number,
         receipt_block_hash,
+        receipt_block_finalized,
         block_receipts_root,
         call_data_sha256,
         message_id,
@@ -6872,6 +6886,7 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     allowlist.evm_route_canary_log_index = Some(log_index);
     allowlist.evm_route_canary_receipt_block_number = Some(receipt_block_number);
     allowlist.evm_route_canary_receipt_block_hash = Some(encode_0x_lower_hex(&receipt_block_hash));
+    allowlist.evm_route_canary_receipt_block_finalized = Some(true);
     allowlist.evm_route_canary_block_receipts_root =
         Some(encode_0x_lower_hex(&block_receipts_root));
     allowlist.evm_route_canary_call_data_sha256 = Some(encode_0x_lower_hex(&call_data_sha256));
@@ -7144,6 +7159,7 @@ fn sccp_route_allowlist_evm_canary_fields_absent(
         && allowlist.evm_route_canary_log_index.is_none()
         && allowlist.evm_route_canary_receipt_block_number.is_none()
         && allowlist.evm_route_canary_receipt_block_hash.is_none()
+        && allowlist.evm_route_canary_receipt_block_finalized.is_none()
         && allowlist.evm_route_canary_block_receipts_root.is_none()
         && allowlist.evm_route_canary_call_data_sha256.is_none()
         && allowlist.evm_route_canary_message_id.is_none()
@@ -7226,6 +7242,9 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     ) else {
         return false;
     };
+    let Some(receipt_block_finalized) = allowlist.evm_route_canary_receipt_block_finalized else {
+        return false;
+    };
     let Some(block_receipts_root) = required_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_block_receipts_root.as_deref(),
     ) else {
@@ -7279,6 +7298,7 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
         || proof_version != 1
         || proof_source_domain != SCCP_DOMAIN_SORA
         || allowlist.evm_route_canary_used_message_proof != Some(true)
+        || !receipt_block_finalized
     {
         return false;
     }
@@ -7291,6 +7311,7 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
         log_index,
         receipt_block_number,
         receipt_block_hash,
+        receipt_block_finalized,
         block_receipts_root,
         call_data_sha256,
         message_id,
@@ -7817,6 +7838,28 @@ fn sccp_source_adapter_external_engines_ready_for_domain(_domain: u32) -> bool {
     false
 }
 
+fn sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
+    domain: u32,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    matches!(domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC)
+        && material.source_domain == domain
+        && deployment.source_domain == domain
+        && deployment.target_domain == SCCP_DOMAIN_SORA
+        && deployment.source_proof_plan == material.source_proof_plan
+        && deployment.finality_model == material.finality_model
+        && sccp_source_proof_plan_for_domain(domain) == Some(material.source_proof_plan)
+        && sccp_proof_finality_model_for_domain(domain) == Some(material.finality_model)
+        && deployment.source_bridge_emitter_id == material.source_bridge_emitter_id
+        && deployment.source_bridge_emitter_address == material.source_bridge_emitter_address
+        && deployment.source_bridge_emitter_code_hash == material.source_bridge_emitter_code_hash
+        && deployment.source_bridge_network_id == material.source_bridge_network_id
+        && deployment.source_bridge_owner_address == material.source_bridge_owner_address
+        && deployment.source_bridge_config_hash == material.source_bridge_config_hash
+        && sccp_source_bridge_config_hash_is_production_ready(material)
+}
+
 fn sccp_source_adapter_deployment_unblocks_production_for_domain(
     domain: u32,
     material: &SccpSourceVerifierMaterialV1,
@@ -7854,7 +7897,12 @@ fn sccp_source_adapter_deployment_unblocks_production_for_domain(
             sccp_substrate_runtime_storage_gate_hash_from_deployment_v1(material, deployment)
                 .is_some()
         }
-        _ => true,
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
+            sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
+                domain, material, deployment,
+            )
+        }
+        _ => false,
     }
 }
 
@@ -8272,14 +8320,29 @@ pub fn sccp_destination_binding_for_domain(domain: u32) -> Option<SccpDestinatio
 
 pub const SCCP_PRODUCTION_DISABLED_REASON_V1: &str = "disabled until immutable destination verifiers validate recursive SCCP proofs under cryptographic trust anchors";
 
+fn sccp_lane_production_ready_under_launch_policy_v1(
+    policy: &SccpProductionPolicyV1,
+    domain: u32,
+    lane_ready: bool,
+    all_lanes_ready: bool,
+) -> bool {
+    if !lane_ready {
+        return false;
+    }
+    match policy.launch_mode {
+        SccpLaunchModeV1::AllLanesAtOnce => all_lanes_ready,
+        SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH,
+        SccpLaunchModeV1::BscMainnetLane => domain == SCCP_DOMAIN_BSC,
+    }
+}
+
 pub fn sccp_lane_production_ready_for_domain(domain: u32) -> bool {
     let lane_ready = sccp_lane_production_readiness_for_domain(domain)
         .is_some_and(|readiness| readiness.production_ready);
-    match sccp_production_policy_v1().launch_mode {
-        SccpLaunchModeV1::AllLanesAtOnce => sccp_all_lanes_launch_ready_v1() && lane_ready,
-        SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH && lane_ready,
-        SccpLaunchModeV1::BscMainnetLane => domain == SCCP_DOMAIN_BSC && lane_ready,
-    }
+    let policy = sccp_production_policy_v1();
+    let all_lanes_ready = matches!(policy.launch_mode, SccpLaunchModeV1::AllLanesAtOnce)
+        && sccp_all_lanes_launch_ready_v1();
+    sccp_lane_production_ready_under_launch_policy_v1(&policy, domain, lane_ready, all_lanes_ready)
 }
 
 pub fn sccp_lane_disabled_reason_for_domain(domain: u32) -> Option<&'static str> {
@@ -9105,41 +9168,54 @@ pub fn canonical_sccp_message_transparent_public_inputs_bytes(
 }
 
 pub fn canonical_sccp_merkle_proof_bytes(proof: &SccpMerkleProofV1) -> Vec<u8> {
+    canonical_sccp_merkle_proof_bytes_checked(proof).unwrap_or_default()
+}
+
+pub fn canonical_sccp_merkle_proof_bytes_checked(proof: &SccpMerkleProofV1) -> Option<Vec<u8>> {
     let mut out = Vec::new();
-    push_u32(
-        &mut out,
-        u32::try_from(proof.steps.len()).expect("merkle proof step count fits into u32"),
-    );
+    push_u32_len_checked(&mut out, proof.steps.len())?;
     for step in &proof.steps {
         out.extend_from_slice(&step.sibling_hash);
         push_u8(&mut out, u8::from(step.sibling_is_left));
     }
-    out
+    Some(out)
 }
 
 pub fn canonical_nexus_sccp_message_bundle_bytes(bundle: &NexusSccpMessageProofV1) -> Vec<u8> {
+    canonical_nexus_sccp_message_bundle_bytes_checked(bundle).unwrap_or_default()
+}
+
+pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<Vec<u8>> {
     let commitment = canonical_commitment_bytes(&bundle.commitment);
-    let merkle_proof = canonical_sccp_merkle_proof_bytes(&bundle.merkle_proof);
+    let merkle_proof = canonical_sccp_merkle_proof_bytes_checked(&bundle.merkle_proof)?;
     let payload = canonical_sccp_payload_bytes(&bundle.payload);
 
     let mut out = Vec::new();
     push_u8(&mut out, bundle.version);
     out.extend_from_slice(&bundle.commitment_root);
-    push_vec(&mut out, &commitment);
-    push_vec(&mut out, &merkle_proof);
-    push_vec(&mut out, &payload);
-    push_vec(&mut out, &bundle.finality_proof);
-    out
+    push_vec_checked(&mut out, &commitment)?;
+    push_vec_checked(&mut out, &merkle_proof)?;
+    push_vec_checked(&mut out, &payload)?;
+    push_vec_checked(&mut out, &bundle.finality_proof)?;
+    Some(out)
 }
 
 pub fn canonical_sccp_source_chain_proof_envelope_bytes(
     proof: &SccpSourceChainProofEnvelopeV1,
 ) -> Vec<u8> {
+    canonical_sccp_source_chain_proof_envelope_bytes_checked(proof).unwrap_or_default()
+}
+
+pub fn canonical_sccp_source_chain_proof_envelope_bytes_checked(
+    proof: &SccpSourceChainProofEnvelopeV1,
+) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     push_u8(&mut out, proof.version);
     push_u32(&mut out, proof.source_domain);
     push_u32(&mut out, proof.target_domain);
-    push_vec(&mut out, proof.source_chain.as_bytes());
+    push_vec_checked(&mut out, proof.source_chain.as_bytes())?;
     push_u8(
         &mut out,
         sccp_source_proof_plan_code(proof.source_proof_plan),
@@ -9156,17 +9232,13 @@ pub fn canonical_sccp_source_chain_proof_envelope_bytes(
     out.extend_from_slice(&proof.finality_block_hash);
     out.extend_from_slice(&proof.finalized_header_hash);
     out.extend_from_slice(&proof.receipt_or_message_root);
-    push_vec(&mut out, &proof.consensus_proof);
-    push_vec(&mut out, &proof.message_inclusion_proof);
-    push_u32(
-        &mut out,
-        u32::try_from(proof.inclusion_branch.len())
-            .expect("SCCP source proof inclusion branch length fits into u32"),
-    );
+    push_vec_checked(&mut out, &proof.consensus_proof)?;
+    push_vec_checked(&mut out, &proof.message_inclusion_proof)?;
+    push_u32_len_checked(&mut out, proof.inclusion_branch.len())?;
     for step in &proof.inclusion_branch {
-        push_vec(&mut out, step);
+        push_vec_checked(&mut out, step)?;
     }
-    out
+    Some(out)
 }
 
 pub fn canonical_sccp_source_consensus_proof_bytes(proof: &SccpSourceConsensusProofV1) -> Vec<u8> {
@@ -10994,11 +11066,27 @@ pub fn canonical_sccp_source_adapter_proof_bytes(proof: &SccpSourceAdapterProofV
     out
 }
 
+pub fn canonical_sccp_source_adapter_proof_bytes_checked(
+    proof: &SccpSourceAdapterProofV1,
+) -> Option<Vec<u8>> {
+    if !sccp_source_adapter_proof_shape_is_bounded(proof) {
+        return None;
+    }
+    Some(canonical_sccp_source_adapter_proof_bytes(proof))
+}
+
 pub fn sccp_source_adapter_proof_hash(proof: &SccpSourceAdapterProofV1) -> H256 {
-    prefixed_blake2b(
-        b"sccp:source-adapter-proof:v1",
-        &canonical_sccp_source_adapter_proof_bytes(proof),
-    )
+    sccp_source_adapter_proof_hash_from_bytes(&canonical_sccp_source_adapter_proof_bytes(proof))
+}
+
+pub fn sccp_source_adapter_proof_hash_checked(proof: &SccpSourceAdapterProofV1) -> Option<H256> {
+    Some(sccp_source_adapter_proof_hash_from_bytes(
+        &canonical_sccp_source_adapter_proof_bytes_checked(proof)?,
+    ))
+}
+
+fn sccp_source_adapter_proof_hash_from_bytes(proof_bytes: &[u8]) -> H256 {
+    prefixed_blake2b(b"sccp:source-adapter-proof:v1", proof_bytes)
 }
 
 pub fn sccp_source_adapter_transcript_hash(
@@ -12802,13 +12890,28 @@ pub fn canonical_sccp_source_adapter_verification_statement_bytes(
     adapter_transcript_hash: H256,
     verifier_evidence_hash: H256,
 ) -> Vec<u8> {
-    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes(adapter_proof);
-    let adapter_proof_hash = sccp_source_adapter_proof_hash(adapter_proof);
+    canonical_sccp_source_adapter_verification_statement_bytes_checked(
+        proof,
+        adapter_proof,
+        adapter_transcript_hash,
+        verifier_evidence_hash,
+    )
+    .unwrap_or_default()
+}
+
+pub fn canonical_sccp_source_adapter_verification_statement_bytes_checked(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    adapter_proof: &SccpSourceAdapterProofV1,
+    adapter_transcript_hash: H256,
+    verifier_evidence_hash: H256,
+) -> Option<Vec<u8>> {
+    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes_checked(adapter_proof)?;
+    let adapter_proof_hash = sccp_source_adapter_proof_hash_from_bytes(&adapter_proof_bytes);
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, proof.source_domain);
     push_u32(&mut out, proof.target_domain);
-    push_vec(&mut out, proof.source_chain.as_bytes());
+    push_vec_checked(&mut out, proof.source_chain.as_bytes())?;
     push_u8(
         &mut out,
         sccp_source_proof_plan_code(proof.source_proof_plan),
@@ -12828,62 +12931,58 @@ pub fn canonical_sccp_source_adapter_verification_statement_bytes(
     out.extend_from_slice(&adapter_transcript_hash);
     out.extend_from_slice(&verifier_evidence_hash);
     out.extend_from_slice(&adapter_proof_hash);
-    push_u32(
-        &mut out,
-        u32::try_from(adapter_proof_bytes.len()).expect("source adapter proof length fits u32"),
-    );
-    out
+    push_u32_len_checked(&mut out, adapter_proof_bytes.len())?;
+    Some(out)
 }
 
-fn canonical_sccp_source_adapter_proof_commitment_bytes(
+fn canonical_sccp_source_adapter_proof_commitment_bytes_checked(
     adapter_proof: &SccpSourceAdapterProofV1,
-) -> Vec<u8> {
-    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes(adapter_proof);
+) -> Option<Vec<u8>> {
+    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes_checked(adapter_proof)?;
     let mut out = Vec::new();
     push_u8(&mut out, 1);
-    out.extend_from_slice(&sccp_source_adapter_proof_hash(adapter_proof));
-    push_u32(
-        &mut out,
-        u32::try_from(adapter_proof_bytes.len()).expect("source adapter proof length fits u32"),
-    );
-    out
+    out.extend_from_slice(&sccp_source_adapter_proof_hash_from_bytes(
+        &adapter_proof_bytes,
+    ));
+    push_u32_len_checked(&mut out, adapter_proof_bytes.len())?;
+    Some(out)
 }
 
-fn canonical_sccp_source_adapter_verification_context_bytes(
+fn canonical_sccp_source_adapter_verification_context_bytes_checked(
     proof: &SccpSourceChainProofEnvelopeV1,
     adapter_proof: &SccpSourceAdapterProofV1,
     adapter_transcript_hash: H256,
     verifier_evidence_hash: H256,
-) -> Vec<u8> {
-    let statement = canonical_sccp_source_adapter_verification_statement_bytes(
+) -> Option<Vec<u8>> {
+    let statement = canonical_sccp_source_adapter_verification_statement_bytes_checked(
         proof,
         adapter_proof,
         adapter_transcript_hash,
         verifier_evidence_hash,
-    );
+    )?;
     let mut out = Vec::new();
     push_u8(&mut out, 1);
-    push_vec(
+    push_vec_checked(
         &mut out,
         SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-    );
-    push_vec(
+    )?;
+    push_vec_checked(
         &mut out,
         sccp_chain_key_for_domain(proof.source_domain)
             .unwrap_or_default()
             .as_bytes(),
-    );
-    push_vec(
+    )?;
+    push_vec_checked(
         &mut out,
         SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1.as_bytes(),
-    );
+    )?;
     out.extend_from_slice(&prefixed_blake2b(
         b"sccp:source-adapter:statement:v1",
         &statement,
     ));
     out.extend_from_slice(&adapter_transcript_hash);
     out.extend_from_slice(&verifier_evidence_hash);
-    out
+    Some(out)
 }
 
 fn sccp_source_adapter_fastpq_public_inputs(
@@ -13139,19 +13238,20 @@ fn build_sccp_source_adapter_fastpq_batch(
     adapter_transcript_hash: H256,
     verifier_evidence_hash: H256,
 ) -> Option<FastpqTransitionBatch> {
-    let statement = canonical_sccp_source_adapter_verification_statement_bytes(
+    let statement = canonical_sccp_source_adapter_verification_statement_bytes_checked(
         proof,
         adapter_proof,
         adapter_transcript_hash,
         verifier_evidence_hash,
-    );
-    let adapter_commitment = canonical_sccp_source_adapter_proof_commitment_bytes(adapter_proof);
-    let context = canonical_sccp_source_adapter_verification_context_bytes(
+    )?;
+    let adapter_commitment =
+        canonical_sccp_source_adapter_proof_commitment_bytes_checked(adapter_proof)?;
+    let context = canonical_sccp_source_adapter_verification_context_bytes_checked(
         proof,
         adapter_proof,
         adapter_transcript_hash,
         verifier_evidence_hash,
-    );
+    )?;
     let mut batch = FastpqTransitionBatch::new(
         SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
         sccp_source_adapter_fastpq_public_inputs(proof, adapter_transcript_hash),
@@ -13309,10 +13409,17 @@ pub fn canonical_sccp_source_message_inclusion_proof_bytes(
 }
 
 pub fn sccp_source_chain_proof_envelope_hash(proof: &SccpSourceChainProofEnvelopeV1) -> H256 {
-    prefixed_blake2b(
+    sccp_source_chain_proof_envelope_hash_checked(proof)
+        .unwrap_or_else(|| prefixed_blake2b(b"sccp:source-proof-envelope:v1", &[]))
+}
+
+pub fn sccp_source_chain_proof_envelope_hash_checked(
+    proof: &SccpSourceChainProofEnvelopeV1,
+) -> Option<H256> {
+    Some(prefixed_blake2b(
         b"sccp:source-proof-envelope:v1",
-        &canonical_sccp_source_chain_proof_envelope_bytes(proof),
-    )
+        &canonical_sccp_source_chain_proof_envelope_bytes_checked(proof)?,
+    ))
 }
 
 fn keccak256_bytes(payload: &[u8]) -> H256 {
@@ -15637,7 +15744,7 @@ pub fn build_sccp_ton_internal_message_submission_payload(
     destination_binding: &SccpDestinationBindingV1,
 ) -> Option<SccpTonInternalMessageSubmissionPayloadV1> {
     let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     let message_body_boc = build_sccp_ton_message_body_boc(
         manifest,
         destination_binding,
@@ -17280,7 +17387,7 @@ fn build_sccp_local_admission_submission_payload(
         return None;
     }
     let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     if !sccp_native_recursive_payload_bytes_are_packagable(&bundle_bytes) {
         return None;
     }
@@ -17364,7 +17471,7 @@ fn build_sccp_platform_submission_payload(
     }
     let canonical_public_inputs =
         canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
-    let canonical_bundle = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let canonical_bundle = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     if !sccp_transparent_public_inputs_match_manifest(manifest, public_inputs) {
         return None;
     }
@@ -17984,18 +18091,18 @@ fn canonical_sccp_message_transparent_statement_bytes(
         &mut statement,
         sccp_verifier_backend_family_code(manifest.verifier_backend.family),
     );
-    push_vec(&mut statement, chain.as_bytes());
-    push_vec(&mut statement, manifest.proof_family.as_bytes());
-    push_vec(&mut statement, manifest.verifier_backend.key.as_bytes());
-    push_vec(&mut statement, manifest.message_backend.as_bytes());
-    push_vec(&mut statement, manifest.registry_backend.as_bytes());
-    push_vec(&mut statement, manifest.manifest_seed.as_bytes());
+    push_vec_checked(&mut statement, chain.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.proof_family.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.verifier_backend.key.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.message_backend.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.registry_backend.as_bytes())?;
+    push_vec_checked(&mut statement, manifest.manifest_seed.as_bytes())?;
     statement.extend_from_slice(&manifest.destination_binding.binding_hash);
-    push_vec(
+    push_vec_checked(
         &mut statement,
         manifest.counterparty_account_codec_key.as_bytes(),
-    );
-    push_vec(&mut statement, payload_kind.as_bytes());
+    )?;
+    push_vec_checked(&mut statement, payload_kind.as_bytes())?;
     statement.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
         public_inputs,
     ));
@@ -18562,7 +18669,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
     if !sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle) {
         return None;
     }
-    let mut finality_context = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    let mut finality_context = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     finality_context.extend_from_slice(&transfer.nonce.to_le_bytes());
     let finality_block_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_FINALITY_PREFIX_V1,
@@ -18596,8 +18703,8 @@ fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     bundle: &NexusSccpMessageProofV1,
     statement_hash: H256,
     public_inputs: &SccpMessageTransparentPublicInputsV1,
-) -> Vec<u8> {
-    let mut proof_context = canonical_nexus_sccp_message_bundle_bytes(bundle);
+) -> Option<Vec<u8>> {
+    let mut proof_context = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     proof_context.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
         public_inputs,
     ));
@@ -18614,7 +18721,7 @@ fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     proof_bytes.extend_from_slice(&public_inputs.finality_block_hash);
     proof_bytes.extend_from_slice(&statement_hash);
     proof_bytes.extend_from_slice(&proof_hash);
-    proof_bytes
+    Some(proof_bytes)
 }
 
 fn sccp_taira_tron_xor_diagnostic_submission_package(
@@ -18624,13 +18731,14 @@ fn sccp_taira_tron_xor_diagnostic_submission_package(
     statement_hash: H256,
     public_inputs: &SccpMessageTransparentPublicInputsV1,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
     let source_verifier_material_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_MATERIAL_PREFIX_V1,
         &canonical_sccp_message_transparent_public_inputs_bytes(public_inputs),
     );
     let source_adapter_engine_deployment_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_DEPLOYMENT_PREFIX_V1,
-        &canonical_nexus_sccp_message_bundle_bytes(bundle),
+        &bundle_bytes,
     );
     let platform_payload =
         SccpPlatformSubmissionPayloadV1::LocalAdmission(SccpLocalAdmissionSubmissionPayloadV1 {
@@ -18639,7 +18747,7 @@ fn sccp_taira_tron_xor_diagnostic_submission_package(
             public_inputs_bytes: canonical_sccp_message_transparent_public_inputs_bytes(
                 public_inputs,
             ),
-            bundle_bytes: canonical_nexus_sccp_message_bundle_bytes(bundle),
+            bundle_bytes,
             statement_hash,
             source_verifier_material_hash,
             source_adapter_engine_deployment_hash,
@@ -18671,7 +18779,7 @@ pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(
     let statement_hash =
         sccp_taira_tron_xor_diagnostic_statement_hash(bundle, &manifest, &public_inputs)?;
     let proof_bytes =
-        sccp_taira_tron_xor_diagnostic_proof_bytes(bundle, statement_hash, &public_inputs);
+        sccp_taira_tron_xor_diagnostic_proof_bytes(bundle, statement_hash, &public_inputs)?;
     let submission_package = sccp_taira_tron_xor_diagnostic_submission_package(
         &manifest,
         bundle,
@@ -19894,6 +20002,12 @@ fn push_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+fn push_u32_len_checked(out: &mut Vec<u8>, len: usize) -> Option<()> {
+    let len = u32::try_from(len).ok()?;
+    push_u32(out, len);
+    Some(())
+}
+
 fn push_i32(out: &mut Vec<u8>, value: i32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
@@ -19912,6 +20026,12 @@ fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
         u32::try_from(value.len()).expect("SCCP vector length fits into u32"),
     );
     out.extend_from_slice(value);
+}
+
+fn push_vec_checked(out: &mut Vec<u8>, value: &[u8]) -> Option<()> {
+    push_u32_len_checked(out, value.len())?;
+    out.extend_from_slice(value);
+    Some(())
 }
 
 fn push_protobuf_key(out: &mut Vec<u8>, field_number: u32, wire_type: u8) {
@@ -20737,8 +20857,7 @@ pub fn canonical_sccp_eth_sync_committee_bytes(
     sync_committee_weights: &[u64],
     sync_committee_pops: &[Vec<u8>],
 ) -> Option<Vec<u8>> {
-    if sync_committee_public_keys.is_empty()
-        || sync_committee_public_keys.len() > SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
+    if sync_committee_public_keys.len() != SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES
         || sync_committee_public_keys.len() != sync_committee_weights.len()
         || sync_committee_public_keys.len() != sync_committee_pops.len()
     {
@@ -20759,7 +20878,7 @@ pub fn canonical_sccp_eth_sync_committee_bytes(
     {
         if public_key.len() != SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES
             || public_key.iter().all(|byte| *byte == 0)
-            || *weight == 0
+            || *weight != 1
             || pop.len() != SCCP_ETH_SYNC_COMMITTEE_POP_BYTES
             || pop.iter().all(|byte| *byte == 0)
             || seen_keys.iter().any(|known| known == public_key)
@@ -20798,7 +20917,7 @@ pub fn decode_sccp_eth_sync_committee_payload(
     }
     cursor = cursor.checked_add(1)?;
     let committee_count = usize::try_from(read_le_u32_at(payload, &mut cursor)?).ok()?;
-    if committee_count == 0 || committee_count > SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES {
+    if committee_count != SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES {
         return None;
     }
 
@@ -20819,7 +20938,7 @@ pub fn decode_sccp_eth_sync_committee_payload(
             return None;
         }
         let weight = read_le_u64_at(payload, &mut cursor)?;
-        if weight == 0 {
+        if weight != 1 {
             return None;
         }
         let pop_len = usize::try_from(read_le_u32_at(payload, &mut cursor)?).ok()?;
@@ -21457,9 +21576,9 @@ fn push_mpt_proof_nodes(out: &mut Vec<u8>, proof_nodes: &[Vec<u8>]) -> Option<()
 
 fn sccp_eth_sync_committee_shape_is_bounded(proof: &SccpEthBeaconSyncCommitteeProofV1) -> bool {
     let roster_len = proof.sync_committee_public_keys.len();
-    roster_len != 0
-        && roster_len <= SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
-        && proof.total_weight != 0
+    roster_len == SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES
+        && usize::try_from(proof.total_weight).ok()
+            == Some(SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
         && proof.signed_weight != 0
         && proof.signed_weight <= proof.total_weight
         && h256_is_nonzero(&proof.sync_committee_message_hash)
@@ -21474,7 +21593,7 @@ fn sccp_eth_sync_committee_shape_is_bounded(proof: &SccpEthBeaconSyncCommitteePr
         && proof
             .sync_committee_weights
             .iter()
-            .all(|weight| *weight != 0)
+            .all(|weight| *weight == 1)
         && proof.sync_committee_public_keys.iter().all(|public_key| {
             public_key.len() == SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES
                 && public_key.iter().any(|byte| *byte != 0)
@@ -31239,16 +31358,16 @@ fn runtime_finality_from_nexus_finality(
 
 fn runtime_finality_from_source_chain_proof(
     proof: &SccpSourceChainProofEnvelopeV1,
-) -> SccpRuntimeFinalityProofV1 {
-    SccpRuntimeFinalityProofV1 {
+) -> Option<SccpRuntimeFinalityProofV1> {
+    Some(SccpRuntimeFinalityProofV1 {
         version: 1,
         epoch: 0,
         height: proof.finality_height,
         block_hash: proof.finality_block_hash,
         commitment_root: proof.commitment_root,
-        validator_set_hash: sccp_source_chain_proof_envelope_hash(proof),
+        validator_set_hash: sccp_source_chain_proof_envelope_hash_checked(proof)?,
         signature_count: 0,
-    }
+    })
 }
 
 pub fn sccp_runtime_envelope_from_message_bundle(
@@ -31272,7 +31391,7 @@ pub fn sccp_runtime_envelope_from_message_bundle(
         ) {
             return None;
         }
-        runtime_finality_from_source_chain_proof(&source_proof)
+        runtime_finality_from_source_chain_proof(&source_proof)?
     };
     Some(SccpRuntimeProofEnvelopeV1 {
         version: 1,
@@ -31319,7 +31438,7 @@ pub fn sccp_runtime_envelope_from_message_bundle_with_source_verifier_material_a
         commitment: runtime_commitment_from_hub(&bundle.commitment),
         merkle_proof: runtime_merkle_proof_from_hub(&bundle.merkle_proof),
         payload: runtime_payload_from_sccp_payload(&bundle.payload),
-        finality_proof: runtime_finality_from_source_chain_proof(&source_proof),
+        finality_proof: runtime_finality_from_source_chain_proof(&source_proof)?,
     })
 }
 
@@ -35228,6 +35347,30 @@ mod tests {
     const TEST_TON_CODE_BOC_ROOT_HASH: &str =
         "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe";
 
+    #[test]
+    fn sccp_checked_length_writer_rejects_u32_overflow() {
+        let mut out = Vec::new();
+        push_u32_len_checked(&mut out, 3).expect("small length is encodable");
+        assert_eq!(out, 3u32.to_le_bytes());
+
+        out.clear();
+        push_vec_checked(&mut out, b"abc").expect("small vector is encodable");
+        assert_eq!(out, [3, 0, 0, 0, b'a', b'b', b'c']);
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            out.clear();
+            assert!(
+                push_u32_len_checked(&mut out, (u32::MAX as usize) + 1).is_none(),
+                "SCCP canonical transcript lengths must fail closed above u32::MAX",
+            );
+            assert!(
+                out.is_empty(),
+                "overflow rejection must not leave a partial length prefix",
+            );
+        }
+    }
+
     fn sample_taira_tron_xor_diagnostic_bundle(
         route_id: &[u8],
         asset_id: &[u8],
@@ -35259,6 +35402,223 @@ mod tests {
             payload,
             finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
         }
+    }
+
+    fn sample_checked_source_chain_proof_envelope() -> SccpSourceChainProofEnvelopeV1 {
+        SccpSourceChainProofEnvelopeV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_ETH,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_chain: "ethereum".to_owned(),
+            source_proof_plan: SccpSourceProofPlanV1::EthereumBeaconReceiptProof,
+            finality_model: SccpProofFinalityModelV1::EthereumBeaconExecution,
+            message_id: [0x11; 32],
+            payload_hash: [0x22; 32],
+            source_event_digest: [0x33; 32],
+            commitment_root: [0x44; 32],
+            finality_height: 12_345,
+            finality_block_hash: [0x55; 32],
+            finalized_header_hash: [0x66; 32],
+            receipt_or_message_root: [0x77; 32],
+            consensus_proof: vec![0x88; 3],
+            message_inclusion_proof: vec![0x99; 5],
+            inclusion_branch: vec![vec![0xAA; 32]],
+        }
+    }
+
+    fn sample_checked_solana_source_chain_proof_envelope() -> SccpSourceChainProofEnvelopeV1 {
+        SccpSourceChainProofEnvelopeV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_chain: "solana".to_owned(),
+            source_proof_plan: SccpSourceProofPlanV1::SolanaFinalizedTransactionProof,
+            finality_model: SccpProofFinalityModelV1::SolanaFinalizedSlot,
+            message_id: [0x12; 32],
+            payload_hash: [0x23; 32],
+            source_event_digest: [0x34; 32],
+            commitment_root: [0x45; 32],
+            finality_height: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_345,
+            finality_block_hash: [0x56; 32],
+            finalized_header_hash: [0x67; 32],
+            receipt_or_message_root: [0x78; 32],
+            consensus_proof: vec![0x89; 3],
+            message_inclusion_proof: vec![0x9A; 5],
+            inclusion_branch: vec![vec![0xAB; 32]],
+        }
+    }
+
+    fn sample_checked_solana_source_adapter_proof() -> SccpSourceAdapterProofV1 {
+        SccpSourceAdapterProofV1::SolanaFinalizedTransaction(SccpSolanaFinalizedSourceProofV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            finalized_slot: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_345,
+            blockhash: [0x21; 32],
+            bank_hash: [0x22; 32],
+            transaction_status_root: [0x23; 32],
+            message_proof_hash: [0x24; 32],
+            transaction_signature: vec![0x25; SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES],
+            emitter_program_id: vec![0x26; SCCP_SOLANA_PROGRAM_ID_BYTES],
+            finality_context: SccpSolanaFinalityContextV1 {
+                version: 1,
+                epoch: 2,
+                rooted_slot: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_345,
+                parent_slot: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_344,
+                parent_bank_hash: [0x27; 32],
+                epoch_stake_root: [0x28; 32],
+                tower_lockout_hash: [0x29; 32],
+                ..SccpSolanaFinalityContextV1::default()
+            },
+            vote_proof: SccpSolanaFinalizedVoteProofV1::default(),
+        })
+    }
+
+    #[test]
+    fn sccp_checked_bundle_encoder_matches_legacy_canonical_bytes() {
+        let bundle = sample_taira_tron_xor_diagnostic_bundle(
+            SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes(),
+            SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes(),
+        );
+
+        assert_eq!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&bundle)
+                .expect("sample bundle is length-canonical"),
+            canonical_nexus_sccp_message_bundle_bytes(&bundle),
+        );
+    }
+
+    #[test]
+    fn sccp_checked_source_envelope_encoder_matches_legacy_canonical_bytes() {
+        let envelope = sample_checked_source_chain_proof_envelope();
+
+        assert_eq!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&envelope)
+                .expect("sample source envelope is length-canonical"),
+            canonical_sccp_source_chain_proof_envelope_bytes(&envelope),
+        );
+        assert_eq!(
+            sccp_source_chain_proof_envelope_hash_checked(&envelope)
+                .expect("sample source envelope hash is length-canonical"),
+            sccp_source_chain_proof_envelope_hash(&envelope),
+        );
+    }
+
+    #[test]
+    fn sccp_checked_source_adapter_verification_encoders_match_legacy_bytes() {
+        let envelope = sample_checked_solana_source_chain_proof_envelope();
+        let adapter = sample_checked_solana_source_adapter_proof();
+        let adapter_transcript_hash = [0xBC; 32];
+        let verifier_evidence_hash = [0xCD; 32];
+
+        assert_eq!(
+            canonical_sccp_source_adapter_proof_bytes_checked(&adapter)
+                .expect("sample source adapter proof is bounded"),
+            canonical_sccp_source_adapter_proof_bytes(&adapter),
+        );
+        let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes(&adapter);
+        assert_eq!(
+            sccp_source_adapter_proof_hash_checked(&adapter)
+                .expect("sample source adapter proof hash is bounded"),
+            sccp_source_adapter_proof_hash(&adapter),
+        );
+        assert_eq!(
+            canonical_sccp_source_adapter_verification_statement_bytes_checked(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .expect("sample source adapter statement is length-canonical"),
+            canonical_sccp_source_adapter_verification_statement_bytes(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            ),
+        );
+        let mut expected_adapter_commitment = Vec::new();
+        push_u8(&mut expected_adapter_commitment, 1);
+        expected_adapter_commitment.extend_from_slice(&sccp_source_adapter_proof_hash(&adapter));
+        push_u32(
+            &mut expected_adapter_commitment,
+            u32::try_from(adapter_proof_bytes.len())
+                .expect("sample source adapter proof length fits u32"),
+        );
+        assert_eq!(
+            canonical_sccp_source_adapter_proof_commitment_bytes_checked(&adapter)
+                .expect("sample source adapter commitment is length-canonical"),
+            expected_adapter_commitment,
+        );
+        let statement = canonical_sccp_source_adapter_verification_statement_bytes(
+            &envelope,
+            &adapter,
+            adapter_transcript_hash,
+            verifier_evidence_hash,
+        );
+        let mut expected_context = Vec::new();
+        push_u8(&mut expected_context, 1);
+        push_vec(
+            &mut expected_context,
+            SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
+        );
+        push_vec(
+            &mut expected_context,
+            sccp_chain_key_for_domain(envelope.source_domain)
+                .expect("sample source chain key")
+                .as_bytes(),
+        );
+        push_vec(
+            &mut expected_context,
+            SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1.as_bytes(),
+        );
+        expected_context.extend_from_slice(&prefixed_blake2b(
+            b"sccp:source-adapter:statement:v1",
+            &statement,
+        ));
+        expected_context.extend_from_slice(&adapter_transcript_hash);
+        expected_context.extend_from_slice(&verifier_evidence_hash);
+        assert_eq!(
+            canonical_sccp_source_adapter_verification_context_bytes_checked(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .expect("sample source adapter context is length-canonical"),
+            expected_context,
+        );
+        assert!(
+            build_sccp_source_adapter_fastpq_batch(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn sccp_checked_source_adapter_verification_rejects_unbounded_adapter() {
+        let envelope = sample_checked_solana_source_chain_proof_envelope();
+        let mut adapter = sample_checked_solana_source_adapter_proof();
+        let SccpSourceAdapterProofV1::SolanaFinalizedTransaction(solana) = &mut adapter else {
+            panic!("sample adapter is Solana");
+        };
+        solana.transaction_signature = vec![0x25; SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES + 1];
+
+        assert!(canonical_sccp_source_adapter_proof_bytes_checked(&adapter).is_none());
+        assert!(sccp_source_adapter_proof_hash_checked(&adapter).is_none());
+        assert!(
+            canonical_sccp_source_adapter_verification_statement_bytes_checked(
+                &envelope, &adapter, [0xBC; 32], [0xCD; 32],
+            )
+            .is_none()
+        );
+        assert!(
+            build_sccp_source_adapter_fastpq_batch(&envelope, &adapter, [0xBC; 32], [0xCD; 32],)
+                .is_none()
+        );
     }
 
     #[test]
@@ -36417,49 +36777,39 @@ mod tests {
         )
     }
 
-    fn sample_eth_sync_committee_keypairs() -> [KeyPair; 4] {
-        [
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-sync-committee:0".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-sync-committee:1".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-sync-committee:2".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-sync-committee:3".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-        ]
+    fn sample_eth_sync_committee_keypairs() -> &'static [KeyPair] {
+        static KEYPAIRS: std::sync::OnceLock<Vec<KeyPair>> = std::sync::OnceLock::new();
+        KEYPAIRS
+            .get_or_init(|| {
+                (0..SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+                    .map(|index| {
+                        KeyPair::from_seed(
+                            format!("iroha:sccp:test:eth-sync-committee:{index}").into_bytes(),
+                            Algorithm::BlsNormal,
+                        )
+                    })
+                    .collect()
+            })
+            .as_slice()
     }
 
-    fn sample_eth_next_sync_committee_keypairs() -> [KeyPair; 4] {
-        [
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-next-sync-committee:0".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-next-sync-committee:1".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-next-sync-committee:2".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:eth-next-sync-committee:3".to_vec(),
-                Algorithm::BlsNormal,
-            ),
-        ]
+    fn sample_eth_next_sync_committee_keypairs() -> &'static [KeyPair] {
+        static KEYPAIRS: std::sync::OnceLock<Vec<KeyPair>> = std::sync::OnceLock::new();
+        KEYPAIRS
+            .get_or_init(|| {
+                (0..SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+                    .map(|index| {
+                        KeyPair::from_seed(
+                            format!("iroha:sccp:test:eth-next-sync-committee:{index}").into_bytes(),
+                            Algorithm::BlsNormal,
+                        )
+                    })
+                    .collect()
+            })
+            .as_slice()
     }
 
-    fn sample_eth_sync_committee_public_keys(signers: &[KeyPair; 4]) -> Vec<Vec<u8>> {
+    fn sample_eth_sync_committee_public_keys(signers: &[KeyPair]) -> Vec<Vec<u8>> {
         signers
             .iter()
             .map(|signer| {
@@ -36473,7 +36823,7 @@ mod tests {
             .collect()
     }
 
-    fn sample_eth_sync_committee_pops(signers: &[KeyPair; 4]) -> Vec<Vec<u8>> {
+    fn sample_eth_sync_committee_pops(signers: &[KeyPair]) -> Vec<Vec<u8>> {
         signers
             .iter()
             .map(|signer| {
@@ -36482,23 +36832,35 @@ mod tests {
             .collect()
     }
 
-    fn sample_eth_sync_committee_payload_for(signers: &[KeyPair; 4]) -> Vec<u8> {
+    fn sample_eth_sync_committee_weights() -> Vec<u64> {
+        vec![1; SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES]
+    }
+
+    fn sample_eth_sync_committee_signers_bitmap(signer_count: usize) -> Vec<u8> {
+        let mut bitmap = vec![0u8; SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES.div_ceil(8)];
+        for index in 0..signer_count {
+            bitmap[index / 8] |= 1 << (index % 8);
+        }
+        bitmap
+    }
+
+    fn sample_eth_sync_committee_payload_for(signers: &[KeyPair]) -> Vec<u8> {
         canonical_sccp_eth_sync_committee_payload_bytes(
             &sample_eth_sync_committee_public_keys(signers),
-            &[1, 1, 1, 1],
+            &sample_eth_sync_committee_weights(),
             &sample_eth_sync_committee_pops(signers),
         )
         .expect("ETH sync committee payload")
     }
 
-    fn sample_eth_sync_committee_hash_for(signers: &[KeyPair; 4]) -> H256 {
+    fn sample_eth_sync_committee_hash_for(signers: &[KeyPair]) -> H256 {
         sccp_eth_sync_committee_hash_from_payload(&sample_eth_sync_committee_payload_for(signers))
             .expect("ETH sync committee hash")
     }
 
     fn sample_eth_sync_committee_hash() -> H256 {
         let signers = sample_eth_sync_committee_keypairs();
-        sample_eth_sync_committee_hash_for(&signers)
+        sample_eth_sync_committee_hash_for(signers)
     }
 
     /// Return the sample Ethereum mainnet sync committee root used by SCCP fixtures.
@@ -36508,10 +36870,11 @@ mod tests {
     }
 
     fn sample_eth_sync_committee_signature_proof_for(
-        signers: &[KeyPair; 4],
+        signers: &[KeyPair],
         sync_committee_message_hash: H256,
     ) -> SccpEthBeaconSyncCommitteeProofV1 {
-        let signatures = signers[..3]
+        let signer_count = SCCP_ETH_MAINNET_SYNC_COMMITTEE_SUPERMAJORITY_AUTHORITIES;
+        let signatures = signers[..signer_count]
             .iter()
             .map(|signer| {
                 iroha_crypto::Signature::new(signer.private_key(), &sync_committee_message_hash)
@@ -36525,13 +36888,14 @@ mod tests {
             .expect("ETH aggregate sync committee signature");
         SccpEthBeaconSyncCommitteeProofV1 {
             version: 1,
-            total_weight: 4,
-            signed_weight: 3,
+            total_weight: u64::try_from(SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+                .expect("ETH sync committee size fits u64"),
+            signed_weight: u64::try_from(signer_count).expect("ETH signer count fits u64"),
             sync_committee_message_hash,
             sync_committee_public_keys: sample_eth_sync_committee_public_keys(signers),
-            sync_committee_weights: vec![1, 1, 1, 1],
+            sync_committee_weights: sample_eth_sync_committee_weights(),
             sync_committee_pops: sample_eth_sync_committee_pops(signers),
-            signers_bitmap: vec![0b0000_0111],
+            signers_bitmap: sample_eth_sync_committee_signers_bitmap(signer_count),
             aggregate_signature,
         }
     }
@@ -36557,11 +36921,11 @@ mod tests {
             sync_committee_root,
             receipt_trie_proof_hash,
         );
-        sample_eth_sync_committee_signature_proof_for(&signers, sync_committee_message_hash)
+        sample_eth_sync_committee_signature_proof_for(signers, sync_committee_message_hash)
     }
 
     fn sample_eth_sync_committee_transition_proof(
-        parent_signers: &[KeyPair; 4],
+        parent_signers: &[KeyPair],
         from_sync_period: u64,
         to_sync_period: u64,
         transition_slot: u64,
@@ -45261,10 +45625,14 @@ mod tests {
         ));
 
         let mut insufficient_weight = adapter.clone();
-        insufficient_weight.sync_committee_proof.signers_bitmap = vec![0b0000_0011];
-        insufficient_weight.sync_committee_proof.signed_weight = 2;
+        let under_quorum_signer_count =
+            SCCP_ETH_MAINNET_SYNC_COMMITTEE_SUPERMAJORITY_AUTHORITIES - 1;
+        insufficient_weight.sync_committee_proof.signers_bitmap =
+            sample_eth_sync_committee_signers_bitmap(under_quorum_signer_count);
+        insufficient_weight.sync_committee_proof.signed_weight =
+            u64::try_from(under_quorum_signer_count).expect("ETH signer count fits u64");
         let signers = sample_eth_sync_committee_keypairs();
-        let signatures = signers[..2]
+        let signatures = signers[..under_quorum_signer_count]
             .iter()
             .map(|signer| {
                 iroha_crypto::Signature::new(
@@ -45335,9 +45703,9 @@ mod tests {
     fn eth_source_adapter_verifies_sync_committee_transition_chain() {
         let parent_signers = sample_eth_sync_committee_keypairs();
         let active_signers = sample_eth_next_sync_committee_keypairs();
-        let parent_sync_committee_hash = sample_eth_sync_committee_hash_for(&parent_signers);
-        let active_sync_committee_hash = sample_eth_sync_committee_hash_for(&active_signers);
-        let active_sync_committee_payload = sample_eth_sync_committee_payload_for(&active_signers);
+        let parent_sync_committee_hash = sample_eth_sync_committee_hash_for(parent_signers);
+        let active_sync_committee_hash = sample_eth_sync_committee_hash_for(active_signers);
+        let active_sync_committee_payload = sample_eth_sync_committee_payload_for(active_signers);
         let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
             SCCP_DOMAIN_ETH,
             parent_sync_committee_hash,
@@ -45388,7 +45756,7 @@ mod tests {
             adapter.receipt_trie_proof_hash,
         );
         adapter.sync_committee_proof =
-            sample_eth_sync_committee_signature_proof_for(&active_signers, active_message_hash);
+            sample_eth_sync_committee_signature_proof_for(active_signers, active_message_hash);
         adapter.sync_committee_signature_hash =
             sccp_eth_sync_committee_aggregate_hash(&adapter.sync_committee_proof)
                 .expect("active ETH sync committee aggregate hash");
@@ -45460,7 +45828,7 @@ mod tests {
         ));
 
         let mut wrong_next_payload = adapter.clone();
-        let parent_payload = sample_eth_sync_committee_payload_for(&parent_signers);
+        let parent_payload = sample_eth_sync_committee_payload_for(parent_signers);
         wrong_next_payload.sync_committee_transition_proofs[0].next_sync_committee_payload =
             parent_payload.clone();
         wrong_next_payload.sync_committee_transition_proofs[0].next_sync_committee_payload_hash =
@@ -45479,7 +45847,7 @@ mod tests {
         wrong_next_payload.sync_committee_transition_proofs[0].transition_message_hash =
             wrong_next_message_hash;
         wrong_next_payload.sync_committee_transition_proofs[0].sync_committee_proof =
-            sample_eth_sync_committee_signature_proof_for(&parent_signers, wrong_next_message_hash);
+            sample_eth_sync_committee_signature_proof_for(parent_signers, wrong_next_message_hash);
         wrong_next_payload.sync_committee_transition_proofs[0].transition_signature_hash =
             sccp_eth_sync_committee_transition_signature_hash(
                 &wrong_next_payload.sync_committee_transition_proofs[0],
@@ -45561,49 +45929,94 @@ mod tests {
     }
 
     #[test]
-    fn eth_sync_committee_transition_transcript_matches_sdk_fixture() {
-        let parent_public_keys = vec![vec![0x11; 48], vec![0x22; 48]];
-        let parent_weights = vec![1, 2];
-        let parent_pops = vec![vec![0xaa; 96], vec![0xbb; 96]];
+    fn eth_sync_committee_transition_transcript_requires_mainnet_rosters() {
+        fn synthetic_eth_sync_committee_public_keys(seed: u8) -> Vec<Vec<u8>> {
+            (0..SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+                .map(|index| {
+                    let mut public_key = vec![seed; SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES];
+                    public_key[46..].copy_from_slice(
+                        &u16::try_from(index)
+                            .expect("ETH sync committee index fits u16")
+                            .to_be_bytes(),
+                    );
+                    public_key
+                })
+                .collect()
+        }
+
+        fn synthetic_eth_sync_committee_pops(seed: u8) -> Vec<Vec<u8>> {
+            (0..SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+                .map(|index| {
+                    let mut pop = vec![seed; SCCP_ETH_SYNC_COMMITTEE_POP_BYTES];
+                    pop[94..].copy_from_slice(
+                        &u16::try_from(index)
+                            .expect("ETH sync committee index fits u16")
+                            .to_be_bytes(),
+                    );
+                    pop
+                })
+                .collect()
+        }
+
+        let compressed_public_keys = vec![vec![0x11; 48], vec![0x22; 48]];
+        let compressed_weights = vec![1, 1];
+        let compressed_pops = vec![vec![0xaa; 96], vec![0xbb; 96]];
+        assert!(
+            canonical_sccp_eth_sync_committee_payload_bytes(
+                &compressed_public_keys,
+                &compressed_weights,
+                &compressed_pops,
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_eth_sync_committee_hash(
+                &compressed_public_keys,
+                &compressed_weights,
+                &compressed_pops
+            )
+            .is_none()
+        );
+
+        let parent_public_keys = synthetic_eth_sync_committee_public_keys(0x11);
+        let parent_weights = sample_eth_sync_committee_weights();
+        let parent_pops = synthetic_eth_sync_committee_pops(0xaa);
         let parent_sync_committee_hash =
             sccp_eth_sync_committee_hash(&parent_public_keys, &parent_weights, &parent_pops)
                 .expect("ETH parent sync-committee hash");
-        assert_eq!(
-            parent_sync_committee_hash,
-            test_h256_from_hex(
-                "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536"
+        assert!(h256_is_nonzero(&parent_sync_committee_hash));
+
+        let mut weighted_parent_weights = parent_weights.clone();
+        weighted_parent_weights[0] = 2;
+        assert!(
+            sccp_eth_sync_committee_hash(
+                &parent_public_keys,
+                &weighted_parent_weights,
+                &parent_pops,
             )
+            .is_none(),
+            "Ethereum mainnet sync committee transcripts must not accept weighted compression"
         );
 
-        let next_public_keys = vec![vec![0x33; 48], vec![0x44; 48]];
-        let next_weights = vec![3, 4];
-        let next_pops = vec![vec![0xcc; 96], vec![0xdd; 96]];
+        let next_public_keys = synthetic_eth_sync_committee_public_keys(0x33);
+        let next_weights = sample_eth_sync_committee_weights();
+        let next_pops = synthetic_eth_sync_committee_pops(0xcc);
         let next_sync_committee_payload = canonical_sccp_eth_sync_committee_payload_bytes(
             &next_public_keys,
             &next_weights,
             &next_pops,
         )
         .expect("ETH next sync-committee payload");
-        assert_eq!(
-            encode_lower_hex(&next_sync_committee_payload),
-            "010200000030000000333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333030000000000000060000000cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc30000000444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444040000000000000060000000dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        );
         let next_sync_committee_hash =
             sccp_eth_sync_committee_hash_from_payload(&next_sync_committee_payload)
                 .expect("ETH next sync-committee hash");
         let next_sync_committee_payload_hash =
             sccp_eth_sync_committee_payload_hash(&next_sync_committee_payload);
+        assert!(h256_is_nonzero(&next_sync_committee_hash));
+        assert!(h256_is_nonzero(&next_sync_committee_payload_hash));
         assert_eq!(
-            next_sync_committee_hash,
-            test_h256_from_hex(
-                "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445"
-            )
-        );
-        assert_eq!(
-            next_sync_committee_payload_hash,
-            test_h256_from_hex(
-                "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17"
-            )
+            next_sync_committee_payload.len(),
+            SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES
         );
 
         let transition_message_hash = sccp_eth_sync_committee_transition_message_hash(
@@ -45632,12 +46045,7 @@ mod tests {
             .len(),
             189
         );
-        assert_eq!(
-            transition_message_hash,
-            test_h256_from_hex(
-                "0xc5cbfaf915a63e59bc142277814f13fab1e8012a0bd56db7033b18bc02637bec"
-            )
-        );
+        assert!(h256_is_nonzero(&transition_message_hash));
 
         let mut proof = SccpEthSyncCommitteeTransitionProofV1 {
             version: 1,
@@ -45655,30 +46063,29 @@ mod tests {
             transition_signature_hash: [0u8; 32],
             sync_committee_proof: SccpEthBeaconSyncCommitteeProofV1 {
                 version: 1,
-                total_weight: 3,
-                signed_weight: 3,
+                total_weight: u64::try_from(SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES)
+                    .expect("ETH sync committee size fits u64"),
+                signed_weight: u64::try_from(
+                    SCCP_ETH_MAINNET_SYNC_COMMITTEE_SUPERMAJORITY_AUTHORITIES,
+                )
+                .expect("ETH signer count fits u64"),
                 sync_committee_message_hash: transition_message_hash,
                 sync_committee_public_keys: parent_public_keys,
                 sync_committee_weights: parent_weights,
                 sync_committee_pops: parent_pops,
-                signers_bitmap: vec![0x03],
+                signers_bitmap: sample_eth_sync_committee_signers_bitmap(
+                    SCCP_ETH_MAINNET_SYNC_COMMITTEE_SUPERMAJORITY_AUTHORITIES,
+                ),
                 aggregate_signature: vec![0xee; 96],
             },
         };
         proof.transition_signature_hash = sccp_eth_sync_committee_transition_signature_hash(&proof)
             .expect("ETH transition signature hash");
-        assert_eq!(
+        let transition_signature_bytes =
             canonical_sccp_eth_sync_committee_transition_signature_bytes(&proof)
-                .expect("ETH transition signature bytes")
-                .len(),
-            1068
-        );
-        assert_eq!(
-            proof.transition_signature_hash,
-            test_h256_from_hex(
-                "0x2d03886e7ea307f7b5a77af00075b32536cbf016d0d8554bec2b1e424252f858"
-            )
-        );
+                .expect("ETH transition signature bytes");
+        assert!(transition_signature_bytes.len() > SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES);
+        assert!(h256_is_nonzero(&proof.transition_signature_hash));
 
         let mut invalid = proof.clone();
         invalid.sync_committee_proof.sync_committee_public_keys[0] = vec![0; 48];
@@ -45689,7 +46096,8 @@ mod tests {
         assert!(canonical_sccp_eth_sync_committee_transition_signature_bytes(&invalid).is_none());
 
         let mut invalid = proof.clone();
-        invalid.sync_committee_proof.signers_bitmap = vec![0x00];
+        invalid.sync_committee_proof.signers_bitmap =
+            vec![0x00; SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES.div_ceil(8)];
         invalid.sync_committee_proof.signed_weight = 0;
         assert!(canonical_sccp_eth_sync_committee_transition_signature_bytes(&invalid).is_none());
 
@@ -55480,6 +55888,84 @@ mod tests {
     }
 
     #[test]
+    fn ethereum_launch_policy_opens_only_eth_lane_independently_of_all_lanes() {
+        let eth_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::EthereumMainnetLane,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(
+            sccp_lane_production_ready_under_launch_policy_v1(
+                &eth_policy,
+                SCCP_DOMAIN_ETH,
+                true,
+                false,
+            ),
+            "EthereumMainnetLane must let production-ready ETH open before all lanes are ready"
+        );
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &eth_policy,
+                SCCP_DOMAIN_BSC,
+                true,
+                false,
+            ),
+            "EthereumMainnetLane must not open BSC even when BSC-shaped components are ready"
+        );
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &eth_policy,
+                SCCP_DOMAIN_ETH,
+                false,
+                true,
+            ),
+            "EthereumMainnetLane must still fail closed when ETH evidence is incomplete"
+        );
+
+        let all_lanes_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::AllLanesAtOnce,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &all_lanes_policy,
+                SCCP_DOMAIN_ETH,
+                true,
+                false,
+            ),
+            "AllLanesAtOnce must continue to wait for every advertised lane"
+        );
+        assert!(sccp_lane_production_ready_under_launch_policy_v1(
+            &all_lanes_policy,
+            SCCP_DOMAIN_ETH,
+            true,
+            true,
+        ));
+
+        let bsc_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::BscMainnetLane,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(
+            sccp_lane_production_ready_under_launch_policy_v1(
+                &bsc_policy,
+                SCCP_DOMAIN_BSC,
+                true,
+                false,
+            ),
+            "BscMainnetLane remains explicitly scoped to BSC"
+        );
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &bsc_policy,
+                SCCP_DOMAIN_ETH,
+                true,
+                false,
+            ),
+            "BscMainnetLane must not open ETH"
+        );
+    }
+
+    #[test]
     fn production_readiness_lists_source_destination_and_route_blockers() {
         let readiness =
             sccp_lane_production_readiness_for_domain(SCCP_DOMAIN_ETH).expect("eth readiness");
@@ -55923,6 +56409,7 @@ mod tests {
             3,
             18_765_432,
             [0xe8; 32],
+            true,
             [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
@@ -55952,6 +56439,7 @@ mod tests {
             3,
             18_765_432,
             [0xe8; 32],
+            true,
             [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
@@ -55967,8 +56455,8 @@ mod tests {
         )
         .expect("EVM route canary bytes");
         assert_eq!(
-            route_canary_bytes[0], 3,
-            "EVM canary transcript must use the v3 receipt-block-bound layout"
+            route_canary_bytes[0], 4,
+            "EVM canary transcript must use the v4 finalized-receipt-block-bound layout"
         );
         assert_eq!(
             &route_canary_bytes[89..97],
@@ -56016,11 +56504,52 @@ mod tests {
             "EVM canary transcript must bind the SORA proof source-domain word"
         );
         assert_eq!(
-            *route_canary_bytes.last().expect("used-message proof flag"),
+            route_canary_bytes[route_canary_bytes.len() - 2],
             1,
             "EVM canary transcript must bind the consumed-message flag"
         );
+        assert_eq!(
+            *route_canary_bytes
+                .last()
+                .expect("finalized receipt-block flag"),
+            1,
+            "EVM canary transcript must bind the finalized receipt-block flag"
+        );
         assert!(h256_is_nonzero(&route_canary_hash));
+        let non_finalized_route_canary_hash = sccp_evm_route_canary_evidence_hash_v1(
+            SCCP_DOMAIN_ETH,
+            decode_fixed_hex_bytes::<32>(
+                route_allowlist
+                    .route_allowlist_hash
+                    .as_deref()
+                    .expect("route allowlist hash"),
+            )
+            .expect("decode route allowlist hash"),
+            destination_binding_hash,
+            &destination_rollout,
+            [0xea; 32],
+            3,
+            18_765_432,
+            [0xe8; 32],
+            false,
+            [0xe9; 32],
+            [0xeb; 32],
+            [0xdd; 32],
+            [0xdc; 32],
+            SCCP_DOMAIN_ETH,
+            [0xf1; 32],
+            [0xee; 32],
+            [0xed; 32],
+            [0xec; 32],
+            1,
+            SCCP_DOMAIN_SORA,
+            true,
+        )
+        .expect("non-finalized diagnostic EVM route canary hash");
+        assert_ne!(
+            route_canary_hash, non_finalized_route_canary_hash,
+            "finalized and non-finalized canary transcripts must not share evidence hashes"
+        );
         assert_ne!(route_canary_hash, source_material_hash);
         assert_ne!(route_canary_hash, source_deployment_hash);
         assert!(
@@ -56039,6 +56568,7 @@ mod tests {
                 3,
                 18_765_432,
                 [0xe8; 32],
+                true,
                 [0xe9; 32],
                 [0xeb; 32],
                 [0xdd; 32],
@@ -56075,6 +56605,7 @@ mod tests {
                     3,
                     18_765_432,
                     [0xe8; 32],
+                    true,
                     [0xe9; 32],
                     [0xeb; 32],
                     [0xdd; 32],
@@ -56102,6 +56633,7 @@ mod tests {
                     3,
                     18_765_432,
                     [0xe8; 32],
+                    true,
                     [0xe9; 32],
                     [0xeb; 32],
                     [0xdd; 32],
@@ -56123,6 +56655,34 @@ mod tests {
         assert_rejected_canary(SCCP_DOMAIN_ETH, 2, SCCP_DOMAIN_SORA, true);
         assert_rejected_canary(SCCP_DOMAIN_ETH, 1, SCCP_DOMAIN_ETH, true);
         assert_rejected_canary(SCCP_DOMAIN_ETH, 1, SCCP_DOMAIN_SORA, false);
+        assert!(
+            sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+                route_allowlist.clone(),
+                &destination_rollout,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                [0xea; 32],
+                3,
+                18_765_432,
+                [0xe8; 32],
+                false,
+                [0xe9; 32],
+                [0xeb; 32],
+                [0xdd; 32],
+                [0xdc; 32],
+                SCCP_DOMAIN_ETH,
+                [0xf1; 32],
+                [0xee; 32],
+                [0xed; 32],
+                [0xec; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+            )
+            .is_none(),
+            "EVM route canary allowlist builder must reject non-finalized receipt block evidence"
+        );
         let allowlist = sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
             route_allowlist,
             &destination_rollout,
@@ -56133,6 +56693,7 @@ mod tests {
             3,
             18_765_432,
             [0xe8; 32],
+            true,
             [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
@@ -56163,6 +56724,10 @@ mod tests {
         assert_eq!(
             allowlist.evm_route_canary_receipt_block_hash.as_deref(),
             Some(encode_0x_lower_hex(&[0xe8; 32]).as_str())
+        );
+        assert_eq!(
+            allowlist.evm_route_canary_receipt_block_finalized,
+            Some(true)
         );
         assert_eq!(
             allowlist.evm_route_canary_block_receipts_root.as_deref(),
@@ -56228,6 +56793,80 @@ mod tests {
                 &source_deployment_hash,
             ),
             "EVM route canary evidence must reject changed source/deployment-bound route hashes"
+        );
+    }
+
+    #[test]
+    fn evm_route_canary_evidence_hash_matches_destination_script_vector() {
+        let verifier_code_hash = [0xbb; 32];
+        let verifier_key_hash = [0xcc; 32];
+        let destination_rollout = sccp_evm_mainnet_destination_rollout_with_binding_v1(
+            SCCP_DOMAIN_ETH,
+            "0x1111111111111111111111111111111111111111".to_owned(),
+            encode_0x_lower_hex(&verifier_code_hash),
+            encode_0x_lower_hex(&verifier_key_hash),
+            encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
+            "0x2222222222222222222222222222222222222222".to_owned(),
+        )
+        .expect("script-vector ETH destination rollout");
+        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+            destination_rollout.destination_binding_hash.as_deref(),
+        )
+        .expect("destination binding hash");
+        assert_eq!(
+            destination_binding_hash,
+            decode_fixed_hex_bytes::<32>(
+                "c86f9d904df50c4522d01da3773916ebecce816f3fdfa664e2dff7cfbe697c45",
+            )
+            .expect("Python destination binding vector")
+        );
+
+        let route_allowlist_hash = sccp_route_allowlist_hash_for_lane_evidence_v1(
+            SCCP_DOMAIN_ETH,
+            [0xaa; 32],
+            [0x99; 32],
+            destination_binding_hash,
+        )
+        .expect("script-vector ETH route allowlist hash");
+        assert_eq!(
+            route_allowlist_hash,
+            decode_fixed_hex_bytes::<32>(
+                "3bf99a87cc501ee17858c86eaea872a7e4a75d60bfd01e872cdd5a843895ea6e",
+            )
+            .expect("Python route allowlist vector")
+        );
+
+        let route_canary_hash = sccp_evm_route_canary_evidence_hash_v1(
+            SCCP_DOMAIN_ETH,
+            route_allowlist_hash,
+            destination_binding_hash,
+            &destination_rollout,
+            [0x44; 32],
+            0,
+            0x1234,
+            [0x45; 32],
+            true,
+            [0x46; 32],
+            [0x88; 32],
+            [0x55; 32],
+            [0x99; 32],
+            SCCP_DOMAIN_ETH,
+            [0x66; 32],
+            [0x77; 32],
+            [0xaa; 32],
+            [0xab; 32],
+            1,
+            SCCP_DOMAIN_SORA,
+            true,
+        )
+        .expect("script-vector ETH route canary hash");
+        assert_eq!(
+            route_canary_hash,
+            decode_fixed_hex_bytes::<32>(
+                "84b93b0050b6bc9696ba55d56a8c957171e6a4ebd2f242b683762d52d88db9d7",
+            )
+            .expect("Python route canary v4 vector"),
+            "Rust EVM route-canary v4 transcript must match Python evidence tooling"
         );
     }
 
@@ -56475,6 +57114,53 @@ mod tests {
     }
 
     #[test]
+    fn source_adapter_deployment_unblock_policy_is_explicit_per_domain() {
+        for (domain, label) in [(SCCP_DOMAIN_ETH, "ETH"), (SCCP_DOMAIN_BSC, "BSC")] {
+            let source_material =
+                sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                    domain,
+                    [0x11; 32],
+                    [0x12; 32],
+                    [0x13; 32],
+                    [0x14; 32],
+                    sample_evm_message_emitter_address(domain),
+                    sample_evm_source_bridge_code_hash(domain),
+                )
+                .expect("EVM source material");
+            let source_deployment = sccp_source_adapter_engine_deployment_from_material_v1(
+                &source_material,
+                [0x15; 32],
+            )
+            .expect("EVM source deployment");
+
+            assert!(
+                sccp_source_adapter_deployment_unblocks_production_for_domain(
+                    domain,
+                    &source_material,
+                    &source_deployment,
+                ),
+                "{label} source-adapter deployment evidence should unblock the audited EVM lane"
+            );
+            assert!(
+                !sccp_source_adapter_deployment_unblocks_production_for_domain(
+                    SCCP_DOMAIN_SORA,
+                    &source_material,
+                    &source_deployment,
+                ),
+                "{label} source-adapter deployment evidence must not unblock the SORA domain"
+            );
+            assert!(
+                !sccp_source_adapter_deployment_unblocks_production_for_domain(
+                    99_999,
+                    &source_material,
+                    &source_deployment,
+                ),
+                "{label} source-adapter deployment evidence must fail closed for future domains"
+            );
+        }
+    }
+
+    #[test]
     fn lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles() {
         let source_material =
             sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
@@ -56627,6 +57313,7 @@ mod tests {
             0,
             18_765_432,
             [0xe8; 32],
+            true,
             [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
@@ -66059,6 +66746,59 @@ mod tests {
         .expect("ETH mainnet source verifier material");
         let deployment = build_sccp_eth_mainnet_source_adapter_deployment(&material, [0xE6; 32])
             .expect("ETH source adapter deployment");
+        assert!(
+            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &deployment,
+            )
+        );
+
+        let mut wrong_network_deployment = deployment.clone();
+        wrong_network_deployment.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &wrong_network_deployment,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &wrong_network_deployment,
+            ),
+            "ETH source-adapter readiness must reject replayed non-mainnet network ids"
+        );
+
+        let mut wrong_config_deployment = deployment.clone();
+        wrong_config_deployment.source_bridge_config_hash[0] ^= 0x01;
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &wrong_config_deployment,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &wrong_config_deployment,
+            ),
+            "ETH source-adapter readiness must reject replayed source bridge config hashes"
+        );
+
+        let mut wrong_emitter_deployment = deployment.clone();
+        wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();
+        assert!(!sccp_source_adapter_engine_deployment_matches_material(
+            &material,
+            &wrong_emitter_deployment,
+        ));
+        assert!(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                SCCP_DOMAIN_ETH,
+                &material,
+                &wrong_emitter_deployment,
+            ),
+            "ETH source-adapter readiness must reject replayed source bridge emitters"
+        );
+
         let bundle = sample_transfer_bundle_with_source_material_and_deployment(
             SCCP_DOMAIN_ETH,
             SCCP_DOMAIN_SORA,

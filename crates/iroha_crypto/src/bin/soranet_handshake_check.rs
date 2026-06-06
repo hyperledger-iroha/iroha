@@ -60,8 +60,8 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
 
     let mut rng_client = ChaCha20Rng::from_seed([0xA5; 32]);
     let mut rng_relay = ChaCha20Rng::from_seed([0x5A; 32]);
-    let client_keys = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-    let relay_keys = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
+    let client_keys = fixed_ed25519_keypair("client", 0x11)?;
+    let relay_keys = fixed_ed25519_keypair("relay", 0x22)?;
 
     let (client_hello, client_state) = build_client_hello(&params, &mut rng_client)?;
     let client_hello_len = client_hello.len();
@@ -95,6 +95,14 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
     Ok(())
 }
 
+fn fixed_ed25519_keypair(label: &str, seed_byte: u8) -> Result<KeyPair, HarnessError> {
+    KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519).map_err(|err| {
+        HarnessError::Validation(format!(
+            "failed to derive {label} handshake-check Ed25519 keypair: {err}"
+        ))
+    })
+}
+
 fn measure_suite(suite: HandshakeSuite, samples: usize) -> Result<Vec<u128>, HarnessError> {
     let mut timings = Vec::with_capacity(samples);
     for _ in 0..samples {
@@ -103,6 +111,25 @@ fn measure_suite(suite: HandshakeSuite, samples: usize) -> Result<Vec<u128>, Har
         timings.push(start.elapsed().as_nanos());
     }
     Ok(timings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_ed25519_keypair_uses_checked_seed_derivation() {
+        let keypair = fixed_ed25519_keypair("client", 0x11)
+            .expect("fixed handshake-check Ed25519 key must derive");
+
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("fixed public key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
 }
 
 fn mean_ns(samples: &[u128]) -> f64 {

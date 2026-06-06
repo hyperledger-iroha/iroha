@@ -137,19 +137,23 @@ fn log_startup_trace(stage: &'static str, started_at: Instant) {
     }
 }
 
-fn torii_receipt_signer_or_ephemeral(receipt_signer: Option<KeyPair>) -> KeyPair {
-    receipt_signer.unwrap_or_else(|| {
-        let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
-        let algorithm = key
-            .public_key()
-            .try_algorithm()
-            .map_or("malformed", |algorithm| algorithm.as_static_str());
-        iroha_logger::info!(
-            algorithm,
-            "torii receipt signer not configured; generated ephemeral secp256k1 key"
-        );
-        key
-    })
+fn torii_receipt_signer_or_ephemeral(
+    receipt_signer: Option<KeyPair>,
+) -> Result<KeyPair, iroha_crypto::Error> {
+    if let Some(receipt_signer) = receipt_signer {
+        return Ok(receipt_signer);
+    }
+
+    let key = iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)?;
+    let algorithm = key
+        .public_key()
+        .try_algorithm()
+        .map_or("malformed", |algorithm| algorithm.as_static_str());
+    iroha_logger::info!(
+        algorithm,
+        "torii receipt signer not configured; generated ephemeral secp256k1 key"
+    );
+    Ok(key)
 }
 
 #[derive(Clone, Debug, JsonDeserialize)]
@@ -5265,7 +5269,11 @@ impl Iroha {
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
-        let receipt_signer = torii_receipt_signer_or_ephemeral(config.torii.receipt_signer.clone());
+        let receipt_signer = torii_receipt_signer_or_ephemeral(config.torii.receipt_signer.clone())
+            .map_err(|err| {
+                Report::new(StartError::StartTorii)
+                    .attach(format!("failed to generate ephemeral Torii receipt signer: {err}"))
+            })?;
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
@@ -9195,14 +9203,16 @@ mod tests {
 
         #[test]
         fn defaults_to_ephemeral_secp256k1() {
-            let signer = torii_receipt_signer_or_ephemeral(None);
+            let signer = torii_receipt_signer_or_ephemeral(None)
+                .expect("checked ephemeral receipt signer generation should succeed");
             assert_eq!(signer.algorithm(), Algorithm::Secp256k1);
         }
 
         #[test]
         fn preserves_configured_receipt_signer() {
             let configured = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let signer = torii_receipt_signer_or_ephemeral(Some(configured.clone()));
+            let signer = torii_receipt_signer_or_ephemeral(Some(configured.clone()))
+                .expect("configured receipt signer should not require randomness");
             assert_eq!(signer.public_key(), configured.public_key());
             assert_eq!(signer.algorithm(), Algorithm::Ed25519);
         }

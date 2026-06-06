@@ -70,6 +70,8 @@ TEXT_REQUIREMENTS = {
     "crates/connect_norito_bridge/src/lib.rs": (
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;",
         "KagemushaRecursiveCompactUnavailable",
+        "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
+        "valid recursive compact Pallas envelope fixture must decode",
         "preverify_kagemusha_recursive_compact_payment_token",
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
         "*out_valid = 0",
@@ -77,6 +79,7 @@ TEXT_REQUIREMENTS = {
     ),
     "crates/iroha_js_host/src/lib.rs": (
         "connect_norito_bridge_abi_version() -> u32",
+        "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
         "preverify_kagemusha_recursive_compact_payment_token",
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
         "return Ok(false);",
@@ -84,6 +87,7 @@ TEXT_REQUIREMENTS = {
     ),
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py",
+        "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
         "return Ok(false);",
         "kagemusha_recursive_spend_redeem_py",

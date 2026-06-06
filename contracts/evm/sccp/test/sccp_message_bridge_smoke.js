@@ -83,6 +83,24 @@ function compileContracts() {
         "sccp",
         "TairaXorSccpBridge.sol"
       ),
+      "contracts/bsc/sccp/SccpBscSourceBridge.sol": loadRepoSource(
+        "contracts",
+        "bsc",
+        "sccp",
+        "SccpBscSourceBridge.sol"
+      ),
+      "contracts/bsc/sccp/TairaXOR.sol": loadRepoSource(
+        "contracts",
+        "bsc",
+        "sccp",
+        "TairaXOR.sol"
+      ),
+      "contracts/bsc/sccp/TairaXorBscSccpBridge.sol": loadRepoSource(
+        "contracts",
+        "bsc",
+        "sccp",
+        "TairaXorBscSccpBridge.sol"
+      ),
     },
     settings: {
       optimizer: { enabled: true, runs: 200 },
@@ -190,6 +208,27 @@ function computeTronSourceBridgeConfigHash(
   );
 }
 
+function computeBscSourceBridgeConfigHash(
+  abi,
+  { bridgeAddress, networkId, sourceDomain, targetDomain, owner }
+) {
+  return ethers.keccak256(
+    abi.encode(
+      ["bytes32", "address", "bytes32", "uint32", "uint32", "address"],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:bsc-source-bridge-config:v1")
+        ),
+        bridgeAddress,
+        networkId,
+        sourceDomain,
+        targetDomain,
+        owner,
+      ]
+    )
+  );
+}
+
 function computeTronDestinationBindingHash(
   abi,
   {
@@ -238,6 +277,38 @@ function tronAddressWord(address) {
 }
 
 function computeTairaXorBurnSourceEventDigest(
+  abi,
+  { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
+) {
+  return ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "address",
+        "address",
+        "bytes32",
+        "uint256",
+        "uint256",
+      ],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:taira-xor:burn-source-event:v1")
+        ),
+        routeIdHash,
+        assetKeyHash,
+        bridgeAddress,
+        burner,
+        tairaRecipientHash,
+        amount,
+        nonce,
+      ]
+    )
+  );
+}
+
+function computeTairaXorBscBurnSourceEventDigest(
   abi,
   { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
 ) {
@@ -439,6 +510,8 @@ function callExceptionWithReason(reason) {
 async function main() {
   const {
     sccpPayloadHash,
+    tairaXorBscCanonicalTransferPayloadBytes,
+    tairaXorBscTransferMessageId,
     tairaXorCanonicalTransferPayloadBytes,
     tairaXorTransferMessageId,
   } = await import(
@@ -496,6 +569,7 @@ async function main() {
     "SccpGroth16Bn254MessageVerifier.sol",
     "SccpGroth16Bn254MessageVerifier"
   );
+  const ownableArtifact = artifact(contracts, "Ownable.sol", "Ownable");
   const tronGroth16VerifierArtifact = artifact(
     contracts,
     "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
@@ -515,6 +589,21 @@ async function main() {
     contracts,
     "contracts/tron/sccp/TairaXorSccpBridge.sol",
     "TairaXorSccpBridge"
+  );
+  const bscSourceBridgeArtifact = artifact(
+    contracts,
+    "contracts/bsc/sccp/SccpBscSourceBridge.sol",
+    "SccpBscSourceBridge"
+  );
+  const bscTairaXorArtifact = artifact(
+    contracts,
+    "contracts/bsc/sccp/TairaXOR.sol",
+    "TairaXOR"
+  );
+  const bscTairaXorBridgeArtifact = artifact(
+    contracts,
+    "contracts/bsc/sccp/TairaXorBscSccpBridge.sol",
+    "TairaXorBscSccpBridge"
   );
   const tronAcceptedEvent = tronGroth16VerifierArtifact.abi.find(
     (entry) => entry.type === "event" && entry.name === "MessageProofAccepted"
@@ -542,6 +631,12 @@ async function main() {
   const verifierAddress = await verifier.getAddress();
   const verifierCodeHash = await contractCodeHash(provider, verifierAddress);
   const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);
+  const bscMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(56), 32);
+  const bscTestnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(97), 32);
+  const unsupportedBscNetworkId = ethers.zeroPadValue(
+    ethers.toBeHex(31337),
+    32
+  );
   const bridgeConstructorArgs = ({
     bridgeVerifierAddress = verifierAddress,
     bridgeVerifierCodeHash = verifierCodeHash,
@@ -629,6 +724,64 @@ async function main() {
       );
     },
     callException
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
+          networkId: bscMainnetNetworkId,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be ETH mainnet")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
+          networkId: bscTestnetNetworkId,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be ETH mainnet")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
+          networkId: ethMainnetNetworkId,
+          targetDomain: 2,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be BSC mainnet or testnet")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
+          networkId: unsupportedBscNetworkId,
+          targetDomain: 2,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be BSC mainnet or testnet")
   );
 
   await assert.rejects(
@@ -1077,6 +1230,16 @@ async function main() {
     groth16VerifierAddress
   );
   const groth16VerifierKeyHash = await groth16Verifier.verifyingKeyHash();
+  const nonVerifierContract = await deploy(
+    signer,
+    ownableArtifact.abi,
+    ownableArtifact.bytecode
+  );
+  const nonVerifierContractAddress = await nonVerifierContract.getAddress();
+  const nonVerifierContractCodeHash = await contractCodeHash(
+    provider,
+    nonVerifierContractAddress
+  );
 
   await assert.rejects(
     async () => {
@@ -1117,7 +1280,7 @@ async function main() {
         ]
       );
     },
-    callException
+    callExceptionWithReason("Verifier key hash is required")
   );
 
   await assert.rejects(
@@ -1138,7 +1301,28 @@ async function main() {
         ]
       );
     },
-    callException
+    callExceptionWithReason("Verifier key hash mismatch")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        [
+          nonVerifierContractAddress,
+          nonVerifierContractCodeHash,
+          groth16VerifierKeyHash,
+          "evm-groth16-bn254-v1",
+          "stark-fri-v1",
+          networkId,
+          0,
+          1,
+        ]
+      );
+    },
+    callExceptionWithReason("Verifier key hash unavailable")
   );
 
   const groth16Bridge = await deploy(
@@ -1158,6 +1342,42 @@ async function main() {
   );
   assert.equal(await groth16Bridge.verifierCodeHash(), groth16VerifierCodeHash);
   assert.equal(await groth16Bridge.verifierKeyHash(), groth16VerifierKeyHash);
+  const bscTestnetGroth16Bridge = await deploy(
+    signer,
+    bridgeArtifact.abi,
+    bridgeArtifact.bytecode,
+    [
+      groth16VerifierAddress,
+      groth16VerifierCodeHash,
+      groth16VerifierKeyHash,
+      "evm-groth16-bn254-v1",
+      "stark-fri-v1",
+      bscTestnetNetworkId,
+      0,
+      2,
+    ]
+  );
+  const bscTestnetGroth16BridgeAddress =
+    await bscTestnetGroth16Bridge.getAddress();
+  const bscTestnetDestinationBindingHash = computeDestinationBindingHash(abi, {
+    verifierBackendHash: ethers.keccak256(
+      ethers.toUtf8Bytes("evm-groth16-bn254-v1")
+    ),
+    proofFamilyHash: ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1")),
+    networkId: bscTestnetNetworkId,
+    sourceDomain: 0,
+    targetDomain: 2,
+    verifierAddress: groth16VerifierAddress,
+    wrapperAddress: bscTestnetGroth16BridgeAddress,
+    verifierCodeHash: groth16VerifierCodeHash,
+    verifierKeyHash: groth16VerifierKeyHash,
+  });
+  assert.equal(await bscTestnetGroth16Bridge.networkId(), bscTestnetNetworkId);
+  assert.equal(await bscTestnetGroth16Bridge.expectedTargetDomain(), 2n);
+  assert.equal(
+    await bscTestnetGroth16Bridge.destinationBindingHash(),
+    bscTestnetDestinationBindingHash
+  );
   const invalidGroth16ProofBytes = abi.encode(
     [
       "uint256",
@@ -1252,7 +1472,7 @@ async function main() {
         statementHash,
         ethers.ZeroHash
       ),
-    callException
+    callExceptionWithReason("Destination binding hash is required")
   );
 
   const zeroTargetGrothInputs = publicInputs.slice();
@@ -1349,7 +1569,46 @@ async function main() {
         statementHash,
         destinationBindingHash
       ),
-    callException
+    callExceptionWithReason("Source domain overflow")
+  );
+
+  const overflowTargetDomainGrothInputs = publicInputs.slice();
+  overflowTargetDomainGrothInputs[2] = ethers.zeroPadValue(
+    ethers.toBeHex(4294967296n),
+    32
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        invalidGroth16ProofBytes,
+        overflowTargetDomainGrothInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callExceptionWithReason("Target domain overflow")
+  );
+
+  const sameDomainGroth16ProofBytes = abi.encode(
+    [
+      "uint256",
+      "bytes32",
+      "uint256",
+      "bytes32",
+      "uint256[2]",
+      "uint256[4]",
+      "uint256[2]",
+    ],
+    [1, messageId, 1, publicInputs[3], g1, g2, g1]
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        sameDomainGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        destinationBindingHash
+      ),
+    callExceptionWithReason("Source and target domains must differ")
   );
 
   const zeroPointGroth16ProofBytes = abi.encode(
@@ -1549,6 +1808,19 @@ async function main() {
   assert.equal(acceptedGroth16Result[0], messageId);
   assert.equal(acceptedGroth16Result[1], 0n);
   assert.equal(acceptedGroth16Result[2], publicInputs[3]);
+  const wrongDestinationBindingHash = ethers.keccak256(
+    ethers.toUtf8Bytes("wrong-groth16-destination-binding")
+  );
+  await assert.rejects(
+    () =>
+      groth16Verifier.verifySccpMessageProof.staticCall(
+        acceptingGroth16ProofBytes,
+        publicInputs,
+        statementHash,
+        wrongDestinationBindingHash
+      ),
+    callExceptionWithReason("Groth16 proof verification failed")
+  );
   const mismatchedPayloadGroth16Inputs = publicInputs.slice();
   mismatchedPayloadGroth16Inputs[1] = ethers.keccak256(
     ethers.toUtf8Bytes("wrong-accepted-groth16-payload")
@@ -1589,6 +1861,37 @@ async function main() {
         statementHash,
         groth16DestinationBindingHash
       ),
+    callExceptionWithReason("Groth16 proof verification failed")
+  );
+  const crossDeploymentGroth16Bridge = await deploy(
+    signer,
+    bridgeArtifact.abi,
+    bridgeArtifact.bytecode,
+    [
+      groth16VerifierAddress,
+      groth16VerifierCodeHash,
+      groth16VerifierKeyHash,
+      "evm-groth16-bn254-v1",
+      "stark-fri-v1",
+      networkId,
+      0,
+      1,
+    ]
+  );
+  assert.notEqual(
+    await crossDeploymentGroth16Bridge.destinationBindingHash(),
+    groth16DestinationBindingHash
+  );
+  await assert.rejects(
+    async () => {
+      const crossDeploymentGroth16Tx =
+        await crossDeploymentGroth16Bridge.submitSccpMessageProof(
+          acceptingGroth16ProofBytes,
+          publicInputs,
+          statementHash
+        );
+      await crossDeploymentGroth16Tx.wait();
+    },
     callExceptionWithReason("Groth16 proof verification failed")
   );
   const acceptedGroth16Tx = await groth16Bridge.submitSccpMessageProof(
@@ -1642,7 +1945,20 @@ async function main() {
       );
       await replayGroth16Tx.wait();
     },
-    callException
+    callExceptionWithReason("Message proof already used")
+  );
+
+  await assert.rejects(
+    async () => {
+      const duplicateInvalidGroth16Tx =
+        await groth16Bridge.submitSccpMessageProof(
+          invalidGroth16ProofBytes,
+          publicInputs,
+          statementHash
+        );
+      await duplicateInvalidGroth16Tx.wait();
+    },
+    callExceptionWithReason("Message proof already used")
   );
 
   const tronNetworkId = ethers.encodeBytes32String("tron-mainnet");
@@ -3403,6 +3719,281 @@ async function main() {
     expectedBurnDigest,
   ]);
   assert.equal(bridgeSourceEventLogs[0].data, "0x");
+
+  const bscRouteIdHash = ethers.keccak256(ethers.toUtf8Bytes("taira_bsc_xor"));
+  await assert.rejects(
+    async () => {
+      await deploy(signer, bscSourceBridgeArtifact.abi, bscSourceBridgeArtifact.bytecode, [
+        bscTestnetNetworkId,
+        5,
+        0,
+      ]);
+    },
+    callExceptionWithReason("Source domain must be BSC")
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(signer, bscSourceBridgeArtifact.abi, bscSourceBridgeArtifact.bytecode, [
+        bscTestnetNetworkId,
+        2,
+        5,
+      ]);
+    },
+    callExceptionWithReason("Target domain must be SORA")
+  );
+  const bscSourceBridge = await deploy(
+    signer,
+    bscSourceBridgeArtifact.abi,
+    bscSourceBridgeArtifact.bytecode,
+    [bscTestnetNetworkId, 2, 0]
+  );
+  const bscSourceBridgeAddress = await bscSourceBridge.getAddress();
+  const expectedBscSourceBridgeConfigHash = computeBscSourceBridgeConfigHash(abi, {
+    bridgeAddress: bscSourceBridgeAddress,
+    networkId: bscTestnetNetworkId,
+    sourceDomain: 2,
+    targetDomain: 0,
+    owner: await signer.getAddress(),
+  });
+  assert.equal(await bscSourceBridge.sourceDomain(), 2n);
+  assert.equal(await bscSourceBridge.targetDomain(), 0n);
+  assert.equal(
+    await bscSourceBridge.sourceBridgeConfigHash(),
+    expectedBscSourceBridgeConfigHash
+  );
+
+  const bscToken = await deploy(
+    signer,
+    bscTairaXorArtifact.abi,
+    bscTairaXorArtifact.bytecode
+  );
+  const bscTokenAddress = await bscToken.getAddress();
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bscTairaXorBridgeArtifact.abi,
+        bscTairaXorBridgeArtifact.bytecode,
+        [
+          bscTokenAddress,
+          groth16VerifierAddress,
+          bscSourceBridgeAddress,
+          groth16VerifierCodeHash,
+          groth16VerifierKeyHash,
+          "evm-groth16-bn254-v1",
+          "stark-fri-v1",
+          bscTestnetNetworkId,
+          0,
+          5,
+          bscRouteIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Target domain must be BSC")
+  );
+  const bscRouteBridge = await deploy(
+    signer,
+    bscTairaXorBridgeArtifact.abi,
+    bscTairaXorBridgeArtifact.bytecode,
+    [
+      bscTokenAddress,
+      groth16VerifierAddress,
+      bscSourceBridgeAddress,
+      groth16VerifierCodeHash,
+      groth16VerifierKeyHash,
+      "evm-groth16-bn254-v1",
+      "stark-fri-v1",
+      bscTestnetNetworkId,
+      0,
+      2,
+      bscRouteIdHash,
+      assetKeyHash,
+    ]
+  );
+  const bscRouteBridgeAddress = await bscRouteBridge.getAddress();
+  const bscRouteDestinationBindingHash = computeDestinationBindingHash(abi, {
+    verifierBackendHash: ethers.keccak256(
+      ethers.toUtf8Bytes("evm-groth16-bn254-v1")
+    ),
+    proofFamilyHash: ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1")),
+    networkId: bscTestnetNetworkId,
+    sourceDomain: 0,
+    targetDomain: 2,
+    verifierAddress: groth16VerifierAddress,
+    wrapperAddress: bscRouteBridgeAddress,
+    verifierCodeHash: groth16VerifierCodeHash,
+    verifierKeyHash: groth16VerifierKeyHash,
+  });
+  assert.equal(await bscRouteBridge.networkId(), bscTestnetNetworkId);
+  assert.equal(await bscRouteBridge.expectedSourceDomain(), 0n);
+  assert.equal(await bscRouteBridge.expectedTargetDomain(), 2n);
+  assert.equal(await bscRouteBridge.verifierCodeHash(), groth16VerifierCodeHash);
+  assert.equal(await bscRouteBridge.verifierKeyHash(), groth16VerifierKeyHash);
+  assert.equal(
+    await bscRouteBridge.destinationBindingHash(),
+    bscRouteDestinationBindingHash
+  );
+  await (await bscToken.setBridge(bscRouteBridgeAddress)).wait();
+  await (await bscToken.lockBridge()).wait();
+  await (await bscSourceBridge.transferOwnership(bscRouteBridgeAddress)).wait();
+  assert.equal(await bscSourceBridge.owner(), bscRouteBridgeAddress);
+
+  const bscRecipient = ethers.getAddress(await outsider.getAddress());
+  const bscMintAmount = 45_678n;
+  const bscPayloadInput = {
+    tairaAccountId,
+    bscRecipient,
+    amount: bscMintAmount,
+    nonce: 99n,
+  };
+  const bscCanonicalPayload =
+    tairaXorBscCanonicalTransferPayloadBytes(bscPayloadInput);
+  const bscPayloadHash = sccpPayloadHash(bscCanonicalPayload);
+  const bscMessageId = tairaXorBscTransferMessageId(bscPayloadInput);
+  const bscInputs = [
+    bscMessageId,
+    bscPayloadHash,
+    ethers.zeroPadValue(ethers.toBeHex(2), 32),
+    ethers.keccak256(ethers.toUtf8Bytes("taira-bsc-xor-commitment-root")),
+    ethers.zeroPadValue(ethers.toBeHex(97), 32),
+    ethers.keccak256(ethers.toUtf8Bytes("taira-bsc-xor-finality-block")),
+  ];
+  const bscStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("taira-bsc-xor-statement")
+  );
+  const bscProofBytes = await buildAcceptingGroth16ProofBytes(provider, abi, {
+    publicInputs: bscInputs,
+    sourceDomain: 0,
+    statementHash: bscStatementHash,
+    destinationBindingHash: bscRouteDestinationBindingHash,
+    g1,
+    g2,
+  });
+  assert.equal(
+    await bscRouteBridge.tairaXorTransferMessageId.staticCall(bscCanonicalPayload),
+    bscMessageId
+  );
+  assert.equal(
+    await bscRouteBridge.finalizeFromTaira.staticCall(
+      bscProofBytes,
+      bscInputs,
+      bscStatementHash,
+      bscCanonicalPayload
+    ),
+    bscMessageId
+  );
+  const bscRecipientCodecOffset = recipientCodecOffset;
+  const wrongBscRecipientCodecPayload = Uint8Array.from(bscCanonicalPayload);
+  wrongBscRecipientCodecPayload[bscRecipientCodecOffset] = 5;
+  await assert.rejects(
+    async () => {
+      await bscRouteBridge.finalizeFromTaira.staticCall(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        wrongBscRecipientCodecPayload
+      );
+    },
+    callExceptionWithReason("Unexpected recipient codec")
+  );
+  const bscRecipientOffset = bscRecipientCodecOffset + 1 + 4;
+  const zeroBscRecipientPayload = Uint8Array.from(bscCanonicalPayload);
+  zeroBscRecipientPayload.fill(
+    "0".charCodeAt(0),
+    bscRecipientOffset + 2,
+    bscRecipientOffset + 42
+  );
+  await assert.rejects(
+    async () => {
+      await bscRouteBridge.finalizeFromTaira.staticCall(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        zeroBscRecipientPayload
+      );
+    },
+    callExceptionWithReason("Recipient address is required")
+  );
+  const wrongBscRoutePayload = Uint8Array.from(bscCanonicalPayload);
+  wrongBscRoutePayload[wrongBscRoutePayload.length - 1] ^= 1;
+  await assert.rejects(
+    async () => {
+      await bscRouteBridge.finalizeFromTaira.staticCall(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        wrongBscRoutePayload
+      );
+    },
+    callExceptionWithReason("Unexpected route")
+  );
+
+  const bscMintTx = await bscRouteBridge.finalizeFromTaira(
+    bscProofBytes,
+    bscInputs,
+    bscStatementHash,
+    bscCanonicalPayload
+  );
+  await bscMintTx.wait();
+  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintAmount);
+  assert.equal(await bscToken.totalSupply(), bscMintAmount);
+  await assert.rejects(
+    async () => {
+      const replayBscMintTx = await bscRouteBridge.finalizeFromTaira(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        bscCanonicalPayload
+      );
+      await replayBscMintTx.wait();
+    },
+    callExceptionWithReason("Message proof already used")
+  );
+
+  const bscBurnRecipient = ethers.toUtf8Bytes("testu-bsc@taira");
+  const bscBurnRecipientHash = ethers.keccak256(bscBurnRecipient);
+  const bscBurnAmount = 333n;
+  const expectedBscBurnDigest = computeTairaXorBscBurnSourceEventDigest(abi, {
+    routeIdHash: bscRouteIdHash,
+    assetKeyHash,
+    bridgeAddress: bscRouteBridgeAddress,
+    burner: bscRecipient,
+    tairaRecipientHash: bscBurnRecipientHash,
+    amount: bscBurnAmount,
+    nonce: 0n,
+  });
+  assert.equal(
+    await bscRouteBridge.tairaXorBurnSourceEventDigest.staticCall(
+      bscRouteIdHash,
+      assetKeyHash,
+      bscRecipient,
+      bscBurnRecipientHash,
+      bscBurnAmount,
+      0
+    ),
+    expectedBscBurnDigest
+  );
+  const bscBurnTx = await bscRouteBridge
+    .connect(outsider)
+    .burnToTaira(bscRouteIdHash, assetKeyHash, bscBurnRecipient, bscBurnAmount);
+  const bscBurnReceipt = await bscBurnTx.wait();
+  assert.equal(await bscRouteBridge.burnNonce(), 1n);
+  assert.equal(await bscSourceBridge.submittedSourceEvents(expectedBscBurnDigest), true);
+  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintAmount - bscBurnAmount);
+  assert.equal(await bscToken.totalSupply(), bscMintAmount - bscBurnAmount);
+  const bscSourceEventLogs = bscBurnReceipt.logs
+    .filter(
+      (log) =>
+        log.address.toLowerCase() === bscSourceBridgeAddress.toLowerCase() &&
+        log.topics[0] === sourceEventTopic
+    );
+  assert.equal(bscSourceEventLogs.length, 1);
+  assert.deepEqual(bscSourceEventLogs[0].topics, [
+    sourceEventTopic,
+    expectedBscBurnDigest,
+  ]);
+  assert.equal(bscSourceEventLogs[0].data, "0x");
 
   console.log("sccp_message_bridge_smoke: ok");
 }

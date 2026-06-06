@@ -1,5 +1,7 @@
 """Tests for the SCCP release-readiness report renderer."""
 
+from __future__ import annotations
+
 import hashlib
 import importlib
 import json
@@ -152,6 +154,17 @@ ETHEREUM_DATA_COLLECTION_REGIONS = {
             "collectFinalityEvidence",
         ),
     ),
+    "js-dist": (
+        ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js",
+        "  async validateExecutionProviderMainnet",
+        "  async submitInboundToIroha",
+        (
+            "eth_chainId",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByHash",
+            "collectFinalityEvidence",
+        ),
+    ),
     "python-sdk": (
         ROOT / "python" / "iroha_torii_client" / "sccp.py",
         "    async def validate_execution_provider_mainnet",
@@ -263,6 +276,849 @@ NATIVE_LOCAL_PROVER_SOURCE_GLOBS = {
         "csharp/src/Hyperledger.Iroha.Sdk/Sccp/*.cs",
     ),
 }
+NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS = {
+    "js-sdk": {
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
+            "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "validateEthereumMainnetNativeEvmProverParityFixture",
+            "SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
+            "rejectDuplicateJsonObjectKeys",
+            "JSON.parse(json)",
+            "validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options)",
+            "normalizeCanonicalNativeEvmProverBundleHex32",
+            "requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation",
+            "requireNativeEvmProverBundleKnownFields",
+            "contains duplicate JSON key",
+            "canonical lowercase 0x-prefixed 32-byte hex",
+            "hashes must be role-separated",
+            "contains unknown field",
+            "must not use multiple aliases",
+            "isCanonicalDecimalText",
+            "normalizeNativeEvmProverArtifactPath",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "nativeEvmProverBundleRequiredAuditHashKeys",
+            "auditHashes missing field",
+            "auditHashes.${key}",
+        ),
+        ROOT / "javascript" / "iroha_js" / "src" / "index.js": (
+            "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+        ),
+        ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js": (
+            "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "validateEthereumMainnetNativeEvmProverParityFixture",
+            "SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
+            "rejectDuplicateJsonObjectKeys",
+            "JSON.parse(json)",
+            "normalizeCanonicalNativeEvmProverBundleHex32",
+            "requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation",
+            "requireNativeEvmProverBundleKnownFields",
+            "contains duplicate JSON key",
+            "canonical lowercase 0x-prefixed 32-byte hex",
+            "hashes must be role-separated",
+            "contains unknown field",
+            "must not use multiple aliases",
+            "isCanonicalDecimalText",
+            "normalizeNativeEvmProverArtifactPath",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "nativeEvmProverBundleRequiredAuditHashKeys",
+            "auditHashes missing field",
+            "auditHashes.${key}",
+        ),
+        ROOT / "javascript" / "iroha_js" / "dist" / "index.js": (
+            "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+        ),
+        ROOT / "javascript" / "iroha_js" / "index.d.ts": (
+            "parseEthereumMainnetNativeEvmProverBundleManifest",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "EthereumMainnetNativeEvmProverParitySdkResult",
+            "json: string",
+            "proofArtifact?: string",
+            "implementationArtifact?: string",
+            "crossSdkFixtureParityArtifact?: string",
+            "readonly proofArtifact: string",
+            "readonly crossSdkFixtureParityArtifact: string",
+            "EthereumMainnetNativeEvmProverAuditHashes",
+            "no_wasm_no_remote_scan",
+        ),
+    },
+    "swift-sdk": {
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpEvmProver.swift": (
+            "public init(jsonData: Data",
+            "public init(jsonString: String",
+            "public init(jsonObject object: [String: Any]",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "sccpEthNativeEvmProverParityFixtureSchemaV1",
+            "nativeProverParityFixture",
+            "rejectDuplicateJsonObjectKeys",
+            "nativeProverBundle.duplicateJsonKey",
+            "manifestBool",
+            "CFBooleanGetTypeID",
+            "expectedDestinationBindingHash",
+            "evmNormalizeNativeEvmProverBundleHex32",
+            "evmRequireNativeEvmProverBundleHashRoleSeparation",
+            "requireManifestKeys",
+            "isCanonicalDecimalText",
+            "evmNormalizeNativeEvmProverArtifactPath",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "sccpEthNativeEvmProverRequiredAuditHashesV1",
+            "manifestStringMap",
+            "auditHashes.\\(key)",
+        ),
+    },
+    "kotlin-sdk": {
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProver.kt": (
+            "fun fromJson(",
+            "fun fromJsonBytes(",
+            "fun fromMap(",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
+            "nativeProverParityFixture",
+            "manifestBoolean",
+            "expectedDestinationBindingHash",
+            "nativeProverBundle JSON is invalid",
+            "normalizeNativeEvmProverBundleHex32",
+            "requireNativeEvmProverBundleHashRoleSeparation",
+            "requireManifestKeys",
+            "contains unknown field",
+            "must not use multiple aliases",
+            "canonical decimal integer",
+            "normalizeNativeEvmProverArtifactPath",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1",
+            "manifestStringMap",
+            "auditHashes.$key",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "client"
+        / "JsonParser.kt": (
+            "Duplicate JSON object key",
+        ),
+    },
+    "java-android": {
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProver.java": (
+            "fromJson(final String json",
+            "fromJsonBytes(final byte[] payload",
+            "public static EthereumMainnetNativeEvmProverBundle fromMap(",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1",
+            "nativeProverParityFixture",
+            "final Map<String, Object> manifest",
+            "manifestBoolean",
+            "expectedDestinationBindingHash",
+            "nativeProverBundle JSON is invalid",
+            "normalizeNativeEvmProverBundleHex32",
+            "requireNativeEvmProverBundleHashRoleSeparation",
+            "requireManifestKeys",
+            "contains unknown field",
+            "must not use multiple aliases",
+            "canonical decimal integer",
+            "normalizeNativeEvmProverArtifactPath",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "ETH_NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES_V1",
+            "manifestStringMap",
+            "auditHashes.",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "client"
+        / "JsonParser.java": (
+            "Duplicate JSON object key",
+        ),
+    },
+    "dotnet-sdk": {
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs": (
+            "FromJson(",
+            "FromJsonBytes(",
+            "FromJsonElement(",
+            "EthereumMainnetNativeEvmProverParityFixture",
+            "EthNativeEvmProverParityFixtureSchemaV1",
+            "nativeProverParityFixture",
+            "ManifestBool",
+            "expectedDestinationBindingHash",
+            "NormalizeNativeEvmProverBundleHex32",
+            "RequireNativeEvmProverBundleHashRoleSeparation",
+            "RequireManifestKeys",
+            "contains duplicate JSON key",
+            "canonical lowercase 0x-prefixed 32-byte hex",
+            "hashes must be role-separated",
+            "contains unknown field",
+            "must not use multiple aliases",
+            "canonical decimal integer",
+            "NormalizeNativeEvmProverArtifactPath",
+            "ProofArtifact",
+            "ImplementationArtifact",
+            "CrossSdkFixtureParityArtifact",
+            "EthNativeEvmProverRequiredAuditHashesV1",
+            "ManifestStringMap",
+            "auditHashes.",
+        ),
+    },
+}
+NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
+    "js-sdk": {
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
+            "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "fromNativeProverBundle",
+            "ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput",
+            "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "sha256Hex32",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "auditHashes.cross_sdk_fixture_parity",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "artifactResolver",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "nativeProverBundle verifierKeyHash must match destinationBinding",
+            "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
+            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "assertNativeEvmProverArtifactHasProductionSize",
+            "must be at least",
+            "contains forbidden prover dependency marker",
+            "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
+            "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
+            "requireEthereumMainnetNativeProverSelfTest",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTestFn",
+            "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+            "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
+            "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+            "submission requires verified native EVM prover artifacts",
+            "nativeProverArtifacts artifact hashes must match proofResult",
+            "SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16Bn254ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
+        ),
+        ROOT / "javascript" / "iroha_js" / "src" / "index.js": (
+            "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "runEthereumMainnetNativeProverSelfTest",
+            "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+        ),
+        ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js": (
+            "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "fromNativeProverBundle",
+            "ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput",
+            "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "sha256Hex32",
+            "implementationBytes are required",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "auditHashes.cross_sdk_fixture_parity",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity",
+            "parseEthereumMainnetNativeEvmProverParityFixture",
+            "artifactResolver",
+            "proofArtifact",
+            "implementationArtifact",
+            "crossSdkFixtureParityArtifact",
+            "nativeProverBundle verifierKeyHash must match destinationBinding",
+            "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
+            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "assertNativeEvmProverArtifactHasProductionSize",
+            "must be at least",
+            "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
+            "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
+            "requireEthereumMainnetNativeProverSelfTest",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTestFn",
+            "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+            "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
+            "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+            "submission requires verified native EVM prover artifacts",
+            "nativeProverArtifacts artifact hashes must match proofResult",
+            "SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16Bn254ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
+        ),
+        ROOT / "javascript" / "iroha_js" / "dist" / "index.js": (
+            "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "runEthereumMainnetNativeProverSelfTest",
+            "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+        ),
+        ROOT / "javascript" / "iroha_js" / "index.d.ts": (
+            "EthereumMainnetNativeEvmProverArtifactsInput",
+            "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "EthereumMainnetNativeEvmProverArtifactResolverMetadata",
+            "EthereumMainnetNativeEvmProverArtifactBundleInput",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "EthereumMainnetSccpNativeProverBundleOptions",
+            "static fromNativeProverBundle",
+            "artifactResolver?:",
+            "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "nativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts",
+            "verifiedNativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts",
+            "readonly implementationHash: string",
+            "implementationArtifact?: string",
+            "crossSdkFixtureParityBytes?: BinaryLike",
+            "readonly crossSdkFixtureParityHash: string",
+            "readonly crossSdkFixtureParity: Readonly<EthereumMainnetNativeEvmProverParityFixture>",
+            "readonly crossSdkFixtureParityArtifact: string",
+            "EthereumMainnetNativeProverSelfTestContext",
+            "EthereumMainnetNativeProverSelfTestFn",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn",
+        ),
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
+            "verifies native prover artifact bytes against manifest hashes",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "pass nativeProverArtifacts to the constructor directly",
+            "artifactResolver(path, metadata)",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "nativeProverArtifacts.implementationHash is required",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes is required",
+            "crossSdkFixtureParityBytes sha256",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity",
+            "nativeProverBundle verifierKeyHash must match destinationBinding",
+            "proofArtifact:",
+            "implementationArtifact:",
+            "crossSdkFixtureParityArtifact:",
+            "flaggedArtifactBytes",
+            "tinyProofArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes contains forbidden prover dependency marker",
+            "verified native EVM prover artifacts",
+            "buildEthereumCalldata({ proofResult })",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTest(context)",
+            "missingSelfTestProverCalled",
+            "tamperedSelfTestProverCalled",
+            "native prover self-test hook",
+            "sdkResults.javascript.proofHash must match proofHash",
+            "rejects malformed Ethereum Groth16 proof tuples",
+            "proofBytes\\.version",
+            "BN254 base-field",
+            "proofBytes\\.b",
+            "proofBytes\\.c",
+            "messageId must match",
+            "sourceDomain must match",
+            "commitmentRoot must match",
+            "validates native prover self-test fixtures",
+            "nativeProverParityFixture contains duplicate JSON key",
+            "nativeProverSelfTestFixture contains duplicate JSON key",
+        ),
+        ROOT / "javascript" / "iroha_js" / "test" / "package_dist.test.js": (
+            "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "fromNativeProverBundle",
+            "EthereumMainnetSccpNativeProverBundleOptions",
+            "artifactResolver(path)",
+            "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "EthereumMainnetNativeProverSelfTestFn",
+            "EthereumMainnetNativeProverSelfTestContext",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTestBytes",
+            "nativeProverSelfTestHash",
+            "nativeProverSelfTest",
+            "proofArtifactBytes must be at least 256 bytes",
+        ),
+    },
+    "swift-sdk": {
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpEvmProver.swift": (
+            "sccpNativeEvmProverArtifactHashAlgorithmV1",
+            "func verifiedArtifacts(proofArtifactBytes: Data",
+            "func verifiedArtifacts(sdk: String",
+            "artifactResolver: (String) throws -> Data",
+            "fromNativeProverBundle",
+            "nativeProverBundle.verifiedArtifacts",
+            "sccpNativeEvmProverArtifactSha256Hex",
+            "sccpNativeEvmProverMinArtifactBytesV1",
+            "sccpNativeEvmProverRequireProductionArtifactSize",
+            ".minBytes",
+            "implementationBytes",
+            "invalidPublicInputs(\"implementationBytes\")",
+            "nativeProverArtifacts.implementationHash",
+            "nativeProverArtifacts.verifierKeyHash",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "auditHashes[\"cross_sdk_fixture_parity\"]",
+            "EthereumMainnetNativeEvmProverParityFixture(",
+            "crossSdkFixtureParityArtifact",
+            "implementationArtifact",
+            "nativeProverBundle.verifierKeyHash",
+            "sccpNativeEvmProverForbiddenArtifactMarkers",
+            "sccpNativeEvmProverRejectForbiddenArtifactMarkers",
+            "requireVerifiedNativeProverArtifacts",
+            "NativeProverSelfTestFunction",
+            "requireNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTestFunction",
+            "nativeProverSelfTestResult",
+            "proofResult: EvmSccpProofResult",
+            "nativeProverArtifacts",
+            "requireEvmGroth16ProofTuple",
+            "sccpGroth16Bn254ProofTupleInvalidField",
+            "evmBn254BaseFieldModulus",
+            "proofBytes.sourceDomain",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpGroth16Bn254.swift": (
+            "func sccpGroth16Bn254ProofTupleInvalidField",
+            "proofBytes.version",
+            "proofBytes.b",
+            "proofBytes.c",
+            "proofBytes.sourceDomain",
+            "sccpGroth16Bn254BaseFieldModulus",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Tests"
+        / "IrohaSwiftTests"
+        / "SccpSolanaProverTests.swift": (
+            "verifiedBundle.verifiedArtifacts",
+            "verifiedArtifacts(sdk: \"swift\")",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "factoryBoundRequest",
+            "sccpNativeEvmProverArtifactHashAlgorithmV1",
+            "implementationBytes",
+            "nativeProverArtifacts.implementationHash",
+            "nativeProverArtifacts.verifierKeyHash",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParityArtifact",
+            "swiftImplementationArtifact",
+            "Data(\"{}\".utf8)",
+            "nativeProverBundle.verifierKeyHash",
+            "nativeEvmProverArtifactBytes",
+            "proofArtifactBytes.minBytes",
+            "proof.wasm",
+            "flaggedArtifactBytes",
+            "proofArtifactBytes.forbiddenMarker",
+            "Ethereum outbound prover must require verified native artifacts",
+            ".invalidPublicInputs(\"nativeProverArtifacts\")",
+            "runNativeProverSelfTest",
+            "artifactBoundSelfTestCalled",
+            "missingSelfTestHookProverCalled",
+            "driftingSelfTestHookProverCalled",
+            ".invalidPublicInputs(\"nativeProverSelfTestFunction\")",
+            ".invalidPublicInputs(\"nativeProverSelfTestResult\")",
+            "testRejectsMalformedEvmGroth16ProofTuple",
+            "proofBytes.version",
+            "proofBytes.a.x",
+            "proofBytes.b",
+            "proofBytes.c",
+            "proofBytes.sourceDomain",
+            "proofBytes.commitmentRoot",
+            "nativeProverParityFixture.duplicateJsonKey",
+            "nativeProverSelfTestFixture.duplicateJsonKey",
+        ),
+    },
+    "kotlin-sdk": {
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProver.kt": (
+            "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "fun verifiedArtifacts(",
+            "NativeEvmProverArtifactResolver",
+            "artifactResolver: NativeEvmProverArtifactResolver",
+            "fun fromNativeProverBundle(",
+            "nativeProverBundle.verifiedArtifacts",
+            'MessageDigest.getInstance("SHA-256")',
+            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "requireNativeEvmProverProductionArtifactSize",
+            "must be at least",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "auditHashes[\"cross_sdk_fixture_parity\"]",
+            "EthereumMainnetNativeEvmProverParityFixture.fromJsonBytes",
+            "crossSdkFixtureParityArtifact",
+            "implementationArtifact",
+            "nativeProverBundle.verifierKeyHash must match destinationBinding",
+            "nativeEvmProverForbiddenArtifactMarkers",
+            "contains forbidden prover dependency marker",
+            "requireVerifiedNativeProverArtifacts",
+            "EthereumMainnetNativeProverSelfTest",
+            "requireNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
+            "verified native EVM prover artifacts",
+            "submission requires verified native EVM prover artifacts",
+            "nativeProverArtifacts artifact hashes must match proofResult",
+            "GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProverTest.kt": (
+            "verifiedBundle.verifiedArtifacts",
+            "verifiedBundle.verifiedArtifacts(\"kotlin\")",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "factoryBoundRequest",
+            "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParityArtifact",
+            "kotlinImplementationPath",
+            "\"{}\".toByteArray()",
+            "nativeProverBundle.verifierKeyHash",
+            "nativeEvmProverArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
+            "proof.wasm",
+            "flaggedArtifactBytes",
+            "proofArtifactBytes contains forbidden",
+            "verified native EVM prover artifacts",
+            "buildEthereumCalldata(EvmSccpSubmissionInput(result))",
+            "runNativeProverSelfTest",
+            "artifactBoundSelfTestCalled",
+            "missingSelfTestHookProverCalled",
+            "driftingSelfTestHookProverCalled",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
+            "rejectsMalformedGroth16ProofTuple",
+            "proofBytes.version",
+            "BN254 base-field",
+            "proofBytes.b",
+            "proofBytes.c",
+            "messageId must match",
+            "sourceDomain must match",
+            "commitmentRoot must match",
+            "EthereumMainnetNativeEvmProverSelfTestFixture.fromJson",
+            "Duplicate JSON object key: schema",
+        ),
+    },
+    "java-android": {
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProver.java": (
+            "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "EthereumMainnetNativeEvmProverArtifacts verifiedArtifacts",
+            "NativeEvmProverArtifactResolver",
+            "artifactResolver.resolveArtifact",
+            'MessageDigest.getInstance("SHA-256")',
+            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "requireNativeEvmProverProductionArtifactSize",
+            "must be at least",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "auditHashes.get(\"cross_sdk_fixture_parity\")",
+            "EthereumMainnetNativeEvmProverParityFixture.fromJsonBytes",
+            "crossSdkFixtureParityArtifact",
+            "implementationArtifact",
+            "nativeProverBundle.verifierKeyHash must match destinationBinding",
+            "NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
+            "contains forbidden prover dependency marker",
+            "GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EthereumMainnetSccp.java": (
+            "fromNativeProverBundle",
+            "nativeProverBundle.verifiedArtifacts",
+            "requireVerifiedNativeProverArtifacts",
+            "NativeProverSelfTest",
+            "requireNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
+            "verified native EVM prover artifacts",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParity()",
+            "auditHashes().get(\"cross_sdk_fixture_parity\")",
+            "submission requires verified native EVM prover artifacts",
+            "nativeProverArtifacts artifact hashes must match proofResult",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProverTests.java": (
+            "verifiedBundle.verifiedArtifacts",
+            "javaImplementationArtifact",
+            "EthereumMainnetSccp.fromNativeProverBundle",
+            "factoryBoundRequest",
+            "NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "crossSdkFixtureParityHash",
+            "crossSdkFixtureParityArtifact",
+            "artifactBytesByPath",
+            "\"{}\".getBytes(StandardCharsets.UTF_8)",
+            "nativeProverBundle.verifierKeyHash",
+            "nativeEvmProverArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
+            "proof.wasm",
+            "flaggedArtifactBytes",
+            "proofArtifactBytes contains forbidden",
+            "verified native EVM prover artifacts",
+            "buildEthereumCalldata(new EvmSccpProver.SubmissionInput(result))",
+            "runNativeProverSelfTest",
+            "artifactBoundSelfTestCalled",
+            "missingSelfTestHookProverCalled",
+            "driftingSelfTestHookProverCalled",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
+            "rejectsMalformedGroth16ProofTuple",
+            "proofBytes.version",
+            "BN254 base-field",
+            "proofBytes.b",
+            "proofBytes.c",
+            "messageId must match",
+            "sourceDomain must match",
+            "commitmentRoot must match",
+            "EthereumMainnetNativeEvmProverSelfTestFixture.fromJson",
+            "Duplicate JSON object key: schema",
+        ),
+    },
+    "dotnet-sdk": {
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs": (
+            "NativeEvmProverArtifactHashAlgorithmV1",
+            "VerifiedArtifacts(",
+            "ProveOutboundToEthereumFromNativeProverBundleAsync",
+            "BuildEthereumCalldataFromNativeProverBundle",
+            "SubmitOutboundToEthereumFromNativeProverBundleAsync",
+            "nativeProverBundle.VerifiedArtifacts",
+            "Func<string, byte[]> artifactResolver",
+            "artifactResolver(ProofArtifact)",
+            "SHA256.HashData",
+            "NativeEvmProverMinArtifactBytesV1",
+            "RequireNativeEvmProverProductionArtifactSize",
+            "must be at least",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "CrossSdkFixtureParityHash",
+            "AuditHashes[\"cross_sdk_fixture_parity\"]",
+            "EthereumMainnetNativeEvmProverParityFixture.FromJsonBytes",
+            "CrossSdkFixtureParityArtifact",
+            "ImplementationArtifact",
+            "nativeProverBundle.verifierKeyHash must match destinationBinding",
+            "NativeEvmProverForbiddenArtifactMarkers",
+            "contains forbidden prover dependency marker",
+            "RequireVerifiedNativeProverArtifacts",
+            "IEthereumMainnetNativeProverSelfTest",
+            "RequireNativeProverSelfTestAsync",
+            "RunNativeProverSelfTestAsync",
+            "NativeProverSelfTestResultEquals",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
+            "EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts",
+            "BuildEthereumCalldataUnchecked",
+            "Ethereum mainnet calldata requires verified native EVM prover artifacts",
+            "nativeProverArtifacts artifact hashes must match proofResult",
+            "RequireGroth16Bn254ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            ".sourceDomain must match",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpEthereumMainnetTests.cs": (
+            "verifiedBundle.VerifiedArtifacts",
+            "verifiedBundle.VerifiedArtifacts(",
+            "ProveOutboundToEthereumFromNativeProverBundleAsync",
+            "BuildEthereumCalldataFromNativeProverBundle",
+            "SubmitOutboundToEthereumFromNativeProverBundleAsync",
+            "factoryBoundProver",
+            "resolverSubmitter",
+            "CrossSdkFixtureParityArtifact",
+            "dotnetImplementationArtifact",
+            "NativeEvmProverArtifactHashAlgorithmV1",
+            "implementationBytes sha256",
+            "implementationBytes are required",
+            "nativeProverArtifacts must bind sdk implementation and implementationHash",
+            "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
+            "crossSdkFixtureParityBytes",
+            "CrossSdkFixtureParityHash",
+            "Encoding.UTF8.GetBytes(\"{}\")",
+            "nativeProverBundle.verifierKeyHash",
+            "NativeEvmProverArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
+            "proof.wasm",
+            "flaggedArtifactBytes",
+            "proofArtifactBytes contains forbidden",
+            "artifactBoundProver",
+            "verified native EVM prover artifacts",
+            "NativeProverSelfTestStub",
+            "RunNativeProverSelfTestAsync",
+            "artifactBoundSelfTest",
+            "missingSelfTestHookProver",
+            "driftingSelfTestHookProver",
+            "nativeProverSelfTest runner",
+            "nativeProverSelfTest result",
+            "OutboundProofPathRejectsCrossLaneAndMalformedProofs",
+            "wrongMessageId",
+            "wrongSourceDomain",
+            "badG1Point",
+            "EthereumMainnetNativeEvmProverSelfTestFixture.FromJson",
+            "duplicate JSON key: schema",
+        ),
+    },
+}
 FORBIDDEN_PROVER_DEPENDENCY_SAMPLES = {
     "WebAssembly": "const runtime = WebAssembly;",
     "wasm": "const backend = 'wasm';",
@@ -289,7 +1145,7 @@ def corridor_evidence_script_tests() -> tuple[str, ...]:
         r"\s+local tests=\(\n"
         r"(?P<body>.*?)"
         r"\n\s+\)\n"
-        r"\s+run_cmd python3 -m pytest -q \"\$\{tests\[@\]\}\"",
+        r"(?P<runner>\s+run_cmd .*\bpytest -q \"\$\{tests\[@\]\}\")",
         script,
         re.DOTALL,
     )
@@ -301,6 +1157,15 @@ def corridor_evidence_script_tests() -> tuple[str, ...]:
             continue
         tests.append(line)
     return tuple(tests)
+
+
+def corridor_android_harness_mains() -> tuple[str, ...]:
+    """Return Java/Android harness mains listed by the production corridor."""
+
+    script = CORRIDOR_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(r'android_harness_mains="(?P<body>[^"]+)"', script)
+    assert match is not None, "java-android harness inventory not found"
+    return tuple(match.group("body").split(","))
 
 
 def complete_corridor_log(phases: tuple[str, ...] = PHASES) -> str:
@@ -399,6 +1264,177 @@ def active_evm_live_chain_id(report):
     }.get(report.ACTIVE_LAUNCH_CHAIN)
 
 
+def fixed_hex32(seed: int) -> str:
+    """Return a non-zero 32-byte hex fixture."""
+
+    return "0x" + f"{seed % 256:02x}" * 32
+
+
+def write_native_evm_prover_bundle(
+    tmp_path: Path,
+    evidence_path: Path,
+    *,
+    overrides: dict[str, object] | None = None,
+) -> Path:
+    """Write a synthetic audited native EVM prover bundle manifest."""
+
+    report = load_report_module()
+    evidence = report._load_evidence_summary([evidence_path])
+    active_lane = report._active_launch_lane(evidence)
+    assert active_lane is not None
+    destination_binding = active_lane["destination_binding"][
+        "destination_binding_hash"
+    ]
+    artifact_dir = tmp_path / "native-prover-artifacts"
+    artifact_dir.mkdir(exist_ok=True)
+
+    def write_artifact(name: str, content: bytes) -> tuple[str, str]:
+        path = artifact_dir / name
+        path.write_bytes(content)
+        return (
+            path.relative_to(tmp_path).as_posix(),
+            "0x" + hashlib.sha256(content).hexdigest(),
+        )
+
+    def native_payload(label: str) -> bytes:
+        content = (f"{label}\n").encode("utf-8")
+        repeats = report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES // len(content) + 1
+        return (content * repeats)[: report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES]
+
+    proof_artifact, proof_artifact_hash = write_artifact(
+        "proof-artifact.bin",
+        native_payload("ethereum mainnet sccp proof artifact v1"),
+    )
+    proving_key, proving_key_hash = write_artifact(
+        "proving-key.bin",
+        native_payload("ethereum mainnet sccp proving key v1"),
+    )
+    verifier_key, verifier_key_hash = write_artifact(
+        "verifier-key.bin",
+        native_payload("ethereum mainnet sccp verifier key v1"),
+    )
+    sdk_artifacts = []
+    for sdk, implementation in sorted(
+        report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.items()
+    ):
+        implementation_artifact, implementation_hash = write_artifact(
+            f"{sdk}-implementation.bin",
+            native_payload(
+                "ethereum mainnet sccp "
+                f"{sdk} {implementation} implementation v1"
+            ),
+        )
+        sdk_artifacts.append(
+            {
+                "sdk": sdk,
+                "implementation": implementation,
+                "prover_artifact_hash": proof_artifact_hash,
+                "proving_key_hash": proving_key_hash,
+                "implementation_artifact": implementation_artifact,
+                "implementation_hash": implementation_hash,
+            }
+        )
+    parity_vector = {
+        "schema": report.NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "receipt_proof_hash": fixed_hex32(0xB1),
+        "source_proof_hash": fixed_hex32(0xB2),
+        "public_signal_words": [fixed_hex32(0xC0 + index) for index in range(9)],
+        "calldata_hash": fixed_hex32(0xB3),
+        "torii_submit_payload_hash": fixed_hex32(0xB4),
+    }
+    parity_vector["sdk_results"] = {
+        sdk: {
+            "receipt_proof_hash": parity_vector["receipt_proof_hash"],
+            "source_proof_hash": parity_vector["source_proof_hash"],
+            "destination_binding_hash": parity_vector["destination_binding_hash"],
+            "public_signal_words": parity_vector["public_signal_words"],
+            "calldata_hash": parity_vector["calldata_hash"],
+            "torii_submit_payload_hash": parity_vector["torii_submit_payload_hash"],
+        }
+        for sdk in sorted(report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    }
+    parity_artifact, parity_hash = write_artifact(
+        "cross-sdk-fixture-parity.json",
+        (json.dumps(parity_vector, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    self_test_vector = {
+        "schema": report.NATIVE_EVM_PROVER_SELF_TEST_SCHEMA,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "request_hash": fixed_hex32(0xD1),
+        "witness_hash": fixed_hex32(0xD2),
+        "source_proof_hash": fixed_hex32(0xD3),
+        "proof_hash": fixed_hex32(0xD4),
+        "public_signal_words": [fixed_hex32(0xE0 + index) for index in range(9)],
+        "calldata_hash": fixed_hex32(0xD5),
+        "torii_submit_payload_hash": fixed_hex32(0xD6),
+    }
+    self_test_vector["sdk_results"] = {
+        sdk: {
+            "request_hash": self_test_vector["request_hash"],
+            "witness_hash": self_test_vector["witness_hash"],
+            "source_proof_hash": self_test_vector["source_proof_hash"],
+            "proof_hash": self_test_vector["proof_hash"],
+            "public_signal_words": self_test_vector["public_signal_words"],
+            "calldata_hash": self_test_vector["calldata_hash"],
+            "torii_submit_payload_hash": self_test_vector["torii_submit_payload_hash"],
+        }
+        for sdk in sorted(report.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS)
+    }
+    self_test_artifact, self_test_hash = write_artifact(
+        "native-prover-self-test.json",
+        (json.dumps(self_test_vector, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        ),
+    )
+    audit_hashes = {
+        key: fixed_hex32(0xA1 + index)
+        for index, key in enumerate(report.NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES)
+    }
+    audit_hashes["cross_sdk_fixture_parity"] = parity_hash
+    audit_hashes["native_prover_self_test"] = self_test_hash
+    payload: dict[str, object] = {
+        "schema": report.NATIVE_EVM_PROVER_BUNDLE_SCHEMA,
+        "bundle_id": report.NATIVE_EVM_PROVER_BUNDLE_ID,
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+        "proof_backend": "evm-groth16-bn254-v1",
+        "proof_artifact": proof_artifact,
+        "proof_artifact_hash": proof_artifact_hash,
+        "proving_key": proving_key,
+        "proving_key_hash": proving_key_hash,
+        "verifier_key": verifier_key,
+        "verifier_key_hash": verifier_key_hash,
+        "destination_binding_hash": destination_binding,
+        "no_wasm": True,
+        "remote_prover_required": False,
+        "browser_implementation": "pure-typescript",
+        "native_sdk_artifacts": sdk_artifacts,
+        "cross_sdk_fixture_parity_artifact": parity_artifact,
+        "native_prover_self_test_artifact": self_test_artifact,
+        "audit_hashes": audit_hashes,
+    }
+    if overrides:
+        payload.update(overrides)
+    path = tmp_path / "native-evm-prover-bundle.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     """Write a complete synthetic all-lanes evidence bundle for report tests."""
 
@@ -455,6 +1491,18 @@ def test_release_readiness_evidence_phase_inventory_matches_corridor_runner() ->
 
     for test_path in corridor_evidence_script_tests():
         assert any(test_path in fragment for fragment in required_fragments)
+
+
+def test_release_readiness_java_android_phase_requires_source_proof_harness() -> None:
+    """Android readiness evidence must prove source-proof hardening ran."""
+
+    report = load_report_module()
+    source_harness = "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"
+
+    assert source_harness in corridor_android_harness_mains()
+    assert source_harness in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "java-android"
+    ]
 
 
 def test_release_readiness_report_requires_evm_evidence_script_transcript(
@@ -810,6 +1858,7 @@ def test_release_readiness_ethereum_js_dist_keeps_receipt_admission_guards() -> 
         "const executionReceiptsRoot = nonZeroHex32Bytes(",
         "const beaconFinalizedRoot = nonZeroHex32Bytes(",
         "const syncCommitteeRoot = nonZeroHex32Bytes(",
+        "await prove(immutableProverCallbackValue(evidence), options)",
     )
     checked_paths = (
         ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
@@ -985,6 +2034,160 @@ def test_release_readiness_ethereum_sdks_keep_receipt_metadata_guards() -> None:
     assert violations == []
 
 
+def test_release_readiness_ethereum_native_sdks_keep_receipt_finality_guards() -> None:
+    """Native SDK receipt-proof builders must require Beacon finality roots."""
+
+    native_markers = {
+        "swift-sdk": (
+            (
+                ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "SccpEvmProver.swift",
+                (
+                    "guard let beaconSlotInput = try Self.strictFirstPresent(",
+                    "guard let finalizedRootInput = try Self.strictFirstPresent(",
+                    "guard let syncCommitteeRootInput = try Self.strictFirstPresent(",
+                ),
+            ),
+            (
+                ROOT
+                / "IrohaSwift"
+                / "Tests"
+                / "IrohaSwiftTests"
+                / "SccpSolanaProverTests.swift",
+                (
+                    "for (missingField, label) in [",
+                    ".invalidPublicInputs(label)",
+                    '("finalizedHeaderRoot", "beaconFinality.finalizedHeaderRoot")',
+                    '("syncCommitteeRoot", "beaconFinality.syncCommitteeRoot")',
+                    '("beaconSlot", "beaconFinality.beaconSlot")',
+                ),
+            ),
+        ),
+        "kotlin-sdk": (
+            (
+                ROOT
+                / "kotlin"
+                / "core-jvm"
+                / "src"
+                / "main"
+                / "java"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "sdk"
+                / "sccp"
+                / "EvmSccpProver.kt",
+                (
+                    "beaconFinality.beaconSlot is required for receiptProof",
+                    "beaconFinality.finalizedHeaderRoot is required for receiptProof",
+                    "beaconFinality.syncCommitteeRoot is required for receiptProof",
+                ),
+            ),
+            (
+                ROOT
+                / "kotlin"
+                / "core-jvm"
+                / "src"
+                / "test"
+                / "kotlin"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "sdk"
+                / "sccp"
+                / "EvmSccpProverTest.kt",
+                (
+                    "for ((field, label) in listOf(",
+                    "beaconFinality = beaconFinality - field",
+                    '"finalizedHeaderRoot" to "beaconFinality.finalizedHeaderRoot"',
+                    '"syncCommitteeRoot" to "beaconFinality.syncCommitteeRoot"',
+                    '"beaconSlot" to "beaconFinality.beaconSlot"',
+                ),
+            ),
+        ),
+        "java-android": (
+            (
+                ROOT
+                / "java"
+                / "iroha_android"
+                / "src"
+                / "main"
+                / "java"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "android"
+                / "sccp"
+                / "EthereumMainnetSccp.java",
+                (
+                    "beaconFinality.beaconSlot is required for receiptProof",
+                    "beaconFinality.finalizedHeaderRoot is required for receiptProof",
+                    "beaconFinality.syncCommitteeRoot is required for receiptProof",
+                ),
+            ),
+            (
+                ROOT
+                / "java"
+                / "iroha_android"
+                / "src"
+                / "test"
+                / "java"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "android"
+                / "sccp"
+                / "EvmSccpProverTests.java",
+                (
+                    "for (final String[] missingFinalityCase :",
+                    "collection must reject missing",
+                    '{"finalizedHeaderRoot", "beaconFinality.finalizedHeaderRoot"}',
+                    '{"syncCommitteeRoot", "beaconFinality.syncCommitteeRoot"}',
+                    '{"beaconSlot", "beaconFinality.beaconSlot"}',
+                ),
+            ),
+        ),
+        "dotnet-sdk": (
+            (
+                ROOT
+                / "csharp"
+                / "src"
+                / "Hyperledger.Iroha.Sdk"
+                / "Sccp"
+                / "EthereumMainnetSccp.cs",
+                (
+                    "BeaconSlot = NormalizeUnsignedInteger(",
+                    "BeaconFinalizedRoot = NormalizeRpcHex(",
+                    "SyncCommitteeRoot = NormalizeRpcHex(",
+                ),
+            ),
+            (
+                ROOT
+                / "csharp"
+                / "tests"
+                / "Hyperledger.Iroha.Sdk.Tests"
+                / "SccpEthereumMainnetTests.cs",
+                (
+                    "foreach (var (missingField, label) in new[]",
+                    "incompleteFinality.Remove(missingField);",
+                    '("finalizedHeaderRoot", "beaconFinality.finalizedHeaderRoot")',
+                    '("syncCommitteeRoot", "beaconFinality.syncCommitteeRoot")',
+                    '("beaconSlot", "beaconFinality.beaconSlot")',
+                ),
+            ),
+        ),
+    }
+
+    violations: list[str] = []
+    for sdk, guarded_files in native_markers.items():
+        for path, markers in guarded_files:
+            source = path.read_text(encoding="utf-8")
+            for marker in markers:
+                if marker not in source:
+                    violations.append(f"{sdk} {path.relative_to(ROOT)} missing `{marker}`")
+
+    assert violations == []
+
+
 def test_release_readiness_ethereum_sdks_validate_provider_before_outbound_submitter() -> None:
     """Ethereum outbound submitter paths must honor configured mainnet providers."""
 
@@ -1003,6 +2206,14 @@ def test_release_readiness_ethereum_sdks_validate_provider_before_outbound_submi
                 "let providerValidated = false;",
                 "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
                 "if (typeof submit === \"function\")",
+            ),
+        ),
+        "python-sdk": (
+            ROOT / "python" / "iroha_torii_client" / "sccp.py",
+            (
+                'provider = options.get("execution_provider", self.execution_provider)',
+                "await self.validate_execution_provider_mainnet(provider)",
+                "return await _maybe_await(submitter(dict(submission), options))",
             ),
         ),
         "swift-sdk": (
@@ -1142,6 +2353,147 @@ def test_release_readiness_evm_evidence_keeps_block_tag_metadata_guards() -> Non
     assert violations == []
 
 
+def test_release_readiness_guards_evm_source_live_production_surface() -> None:
+    """Ethereum source evidence must keep live production deployment guards."""
+
+    guarded_sources = {
+        ROOT / "scripts" / "sccp_evm_source_live_evidence.py": (
+            'return "finalized" if domain == SCCP_DOMAIN_ETH else "latest"',
+            "eth_chainId for {chain} lane must be canonical mainnet chain id",
+            "deployment transaction receipt status must be 0x1",
+            "deployment receipt contractAddress does not match source bridge",
+            "deployment transaction hash does not match requested deployment transaction",
+            "deployment transaction to must be null for contract creation",
+            "deployment transaction input must not be empty or zero",
+            "deployment receipt blockHash does not match eth_getBlockByNumber",
+            "eth_getBlockByNumber receiptsRoot",
+            "source bridge code hash at deployment receipt block does not",
+            "source bridge runtime bytecode at deployment receipt block does",
+            "deployment receipt block is newer than the finalized execution block",
+            "deployment receipt block hash does not match the finalized execution block",
+            "source bridge runtime bytecode hash must match bridge_code_hash",
+            "deployment receipt block receiptsRoot metadata must be verified",
+            "Ethereum source deployment receipt block finality metadata must be verified",
+            "source verifier material hash metadata must match canonical inputs",
+            "source adapter engine deployment hash metadata must match canonical inputs",
+            "expected source verifier material hash argument must match ",
+            "expected source adapter engine deployment hash argument must match ",
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_source_live_evidence_test.py": (
+            "test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift",
+            "test_evm_source_live_rejects_deployment_transaction_readback_drift",
+            "test_evm_source_live_rejects_missing_or_drifted_receipt_contract_address",
+            "test_evm_source_live_rejects_receipt_block_hash_drift",
+            "test_evm_source_live_rejects_receipt_block_number_drift",
+            "test_evm_source_live_rejects_unfinalized_deployment_receipt_block",
+            "test_evm_source_live_rejects_finalized_deployment_receipt_hash_drift",
+            "test_evm_source_live_rejects_zero_receipt_block_receipts_root",
+            "test_evm_source_live_rejects_receipt_block_code_hash_drift",
+            "test_evm_source_live_toml_revalidates_imported_summary_metadata",
+            "test_evm_source_live_toml_requires_independent_pins",
+        ),
+    }
+
+    missing = []
+    for path, markers in guarded_sources.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
+def test_release_readiness_guards_ethereum_launch_policy_selector() -> None:
+    """Ethereum launch readiness must keep the ETH-only selector regression."""
+
+    lib_rs = ROOT / "crates" / "iroha_sccp" / "src" / "lib.rs"
+    markers = (
+        "fn sccp_lane_production_ready_under_launch_policy_v1(",
+        "SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH",
+        "fn ethereum_launch_policy_opens_only_eth_lane_independently_of_all_lanes()",
+        "EthereumMainnetLane must let production-ready ETH open before all lanes are ready",
+        "EthereumMainnetLane must not open BSC even when BSC-shaped components are ready",
+        "EthereumMainnetLane must still fail closed when ETH evidence is incomplete",
+        "AllLanesAtOnce must continue to wait for every advertised lane",
+        "BscMainnetLane must not open ETH",
+    )
+
+    source = lib_rs.read_text(encoding="utf-8")
+    missing = [
+        f"{lib_rs.relative_to(ROOT)} missing `{marker}`"
+        for marker in markers
+        if marker not in source
+    ]
+
+    assert missing == []
+
+
+def test_release_readiness_guards_evm_live_destination_production_surface() -> None:
+    """Ethereum destination evidence must keep live production binding guards."""
+
+    guarded_sources = {
+        ROOT / "scripts" / "sccp_evm_live_evidence.py": (
+            "eth_chainId for {chain} lane must be canonical mainnet chain id",
+            "verifierCodeHash() does not match eth_getCode runtime bytecode",
+            "verifierKeyHash() does not match verifier verifyingKeyHash()",
+            "destinationBindingHash() does not match canonical live deployment inputs",
+            "bridge runtime bytecode hash must match bridge_code_hash",
+            "verifier runtime bytecode hash must match verifier_code_hash",
+            "verifier key hash metadata must match verifyingKeyHash",
+            "destination binding hash metadata must match canonical live inputs",
+            "destination binding key metadata must match canonical inputs",
+            "route-canary MessageProofAccepted destinationBindingHash does not",
+            "route-canary MessageProofAccepted verifierBackendHash does not",
+            "route-canary MessageProofAccepted proofFamilyHash does not match",
+            "route-canary MessageProofAccepted networkId does not match networkId()",
+            "route-canary transaction calldata must call",
+            "submitSccpMessageProof(bytes,bytes32[6],bytes32)",
+            "route-canary proofBytes must be a 384-byte Groth16 tuple",
+            "route-canary proofBytes must not be all zero",
+            "route-canary proof version must be 1",
+            "route-canary proof sourceDomain does not match expectedSourceDomain()",
+            "def _require_route_canary_groth16_bn254_proof_tuple(",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "usedMessageProofs(bytes32) is false",
+            'and transaction.get("message_proof_used") is True',
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_live_evidence_test.py": (
+            "test_live_evm_evidence_rejects_verifier_code_hash_drift",
+            "test_live_evm_evidence_rejects_bridge_code_hash_drift",
+            "test_live_evm_evidence_rejects_bridge_destination_binding_drift",
+            "test_live_evm_full_toml_revalidates_imported_summary_metadata",
+            "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
+            "route_canary_call_data_mutator",
+            "proofBytes offset must be 256 bytes",
+            "publicInputs[0] must match event messageId",
+            "targetDomain does not match expectedTargetDomain()",
+            "publicInputs[3] must match event commitmentRoot",
+            "statementHash must match accepted event",
+            "proofBytes must be a 384-byte Groth16 tuple",
+            "proofBytes must not be all zero",
+            "proof version must be 1",
+            "proof sourceDomain does not match expectedSourceDomain()",
+            "proofBytes.a.x must be a BN254 base-field element",
+            "proofBytes.a must be a BN254 G1 point",
+            "proofBytes.b must be a BN254 G2 point",
+            "proofBytes.c must be a BN254 G1 point",
+            "usedMessageProofs(bytes32) is false",
+        ),
+    }
+
+    missing = []
+    for path, markers in guarded_sources.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
 def test_release_readiness_guards_evm_route_canary_finalized_receipt_block() -> None:
     """Ethereum route canaries must bind receipt blocks to finalized execution heads."""
 
@@ -1155,8 +2507,13 @@ def test_release_readiness_guards_evm_route_canary_finalized_receipt_block() -> 
             '"receipt_block_finalized": True',
             'and transaction.get("receipt_block_finalized") is True',
             'route_canary_transaction.get("receipt_block_finalized") is True',
+            'receipt_block_finalized=finalized_block["receipt_block_finalized"]',
         ),
         ROOT / "scripts" / "sccp_evm_destination_evidence.py": (
+            'EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v4"',
+            "receipt_block_finalized: bool",
+            "receipt_block_finalized must be a boolean for EVM route canaries",
+            'receipt_block_finalized=values["receipt_block_finalized"]',
             "route_canary_receipt_block_finalized",
             "--route-canary-receipt-block-finalized",
             "from finalized live reads",
@@ -1166,6 +2523,7 @@ def test_release_readiness_guards_evm_route_canary_finalized_receipt_block() -> 
             "evm_route_canary_receipt_block_finalized",
             "_comment_evm_route_canary_receipt_block_finalized",
             "EVM route canary receipt block finalized metadata must be true",
+            "receipt_block_finalized=receipt_block_finalized",
             'canary["receipt_block_finalized"] = True',
         ),
         ROOT / "pytests" / "scripts" / "sccp_evm_live_evidence_test.py": (
@@ -1174,6 +2532,9 @@ def test_release_readiness_guards_evm_route_canary_finalized_receipt_block() -> 
             '"receipt_block_finalized"] is True',
             '"receipt_block_finalized"] is False',
             "evm_route_canary_receipt_block_finalized = true",
+            "receipt_block_finalized=True",
+            "receipt_block_finalized=False",
+            "transaction to does not match destination bridge",
             'block_tag="finalized" if finality_expected else "latest"',
             "test_live_evm_bsc_default_latest_route_canary_stays_diagnostic",
             "receipt block is newer than the finalized execution block",
@@ -1182,7 +2543,26 @@ def test_release_readiness_guards_evm_route_canary_finalized_receipt_block() -> 
         ROOT / "pytests" / "scripts" / "sccp_all_lanes_evidence_test.py": (
             "test_all_lanes_rejects_evm_route_canary_missing_finalized_receipt_state",
             "_comment_evm_route_canary_receipt_block_finalized",
+            "receipt_block_finalized=True",
             "receipt block finalized metadata must be true",
+        ),
+        ROOT / "crates" / "iroha_sccp" / "src" / "lib.rs": (
+            "pub evm_route_canary_receipt_block_finalized: Option<bool>",
+            'b"iroha:sccp:evm-route-canary-evidence:v4"',
+            "push_u8(&mut out, u8::from(receipt_block_finalized));",
+            "|| !receipt_block_finalized",
+            "allowlist.evm_route_canary_receipt_block_finalized = Some(true);",
+            "non-finalized diagnostic EVM route canary hash",
+            "evm_route_canary_evidence_hash_matches_destination_script_vector",
+            "84b93b0050b6bc9696ba55d56a8c957171e6a4ebd2f242b683762d52d88db9d7",
+        ),
+        ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs": (
+            "pub evm_route_canary_receipt_block_finalized: Option<bool>",
+            "evm_route_canary_receipt_block_finalized: self.evm_route_canary_receipt_block_finalized",
+        ),
+        ROOT / "crates" / "iroha_core" / "src" / "smartcontracts" / "isi" / "world.rs": (
+            "evm_route_canary_receipt_block_finalized: configured",
+            "configured_sccp_all_lanes_launch_rejects_evm_non_finalized_route_canary",
         ),
     }
     missing = []
@@ -1210,6 +2590,46 @@ def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_o
                     )
 
     assert violations == []
+
+
+def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned(
+) -> None:
+    """Primary SDKs must parse signed native prover bundle manifests locally."""
+
+    missing: list[str] = []
+    for sdk, paths in NATIVE_EVM_PROVER_BUNDLE_PARSER_MARKERS.items():
+        for path, markers in paths.items():
+            if not path.is_file():
+                missing.append(f"{sdk} missing parser source file: {path.relative_to(ROOT)}")
+                continue
+            source = path.read_text(encoding="utf-8")
+            for marker in markers:
+                if marker not in source:
+                    missing.append(
+                        f"{sdk} {path.relative_to(ROOT)} missing native bundle parser marker `{marker}`"
+                    )
+
+    assert missing == []
+
+
+def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned(
+) -> None:
+    """Primary SDKs must verify native prover artifact bytes against bundle hashes locally."""
+
+    missing: list[str] = []
+    for sdk, paths in NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS.items():
+        for path, markers in paths.items():
+            if not path.is_file():
+                missing.append(f"{sdk} missing artifact verifier source file: {path.relative_to(ROOT)}")
+                continue
+            source = path.read_text(encoding="utf-8")
+            for marker in markers:
+                if marker not in source:
+                    missing.append(
+                        f"{sdk} {path.relative_to(ROOT)} missing native artifact verifier marker `{marker}`"
+                    )
+
+    assert missing == []
 
 
 def test_release_readiness_native_local_prover_guard_covers_identifier_variants() -> None:
@@ -1502,6 +2922,14 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         == surfaces["eth,bsc"]["sdk_helper_symbols"]
     )
     assert (
+        "EthereumMainnetSccp.runNativeProverSelfTest"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["js-sdk"]
+    )
+    assert (
+        "runEthereumMainnetNativeProverSelfTest"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["js-sdk"]
+    )
+    assert (
         "build_evm_sccp_proof_request"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
     )
@@ -1563,6 +2991,7 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     for symbol in (
         "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.runNativeProverSelfTest",
         "EthereumMainnetSccp.proveOutboundToEthereum",
         "EthereumMainnetSccp.buildEthereumCalldata",
     ):
@@ -1625,6 +3054,7 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     for symbol in (
         "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.runNativeProverSelfTest",
         "EthereumMainnetSccp.proveOutboundToEthereum",
         "EthereumMainnetSccp.buildEthereumCalldata",
     ):
@@ -1687,6 +3117,7 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     for symbol in (
         "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.runNativeProverSelfTest",
         "EthereumMainnetSccp.proveOutboundToEthereum",
         "EthereumMainnetSccp.buildEthereumCalldata",
     ):
@@ -1737,6 +3168,10 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     assert (
         "EthereumMainnetSccp.SubmitOutboundToEthereumAsync"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.RunNativeProverSelfTestAsync"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
     )
     assert (
@@ -2041,6 +3476,7 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     corridor_payload = complete_corridor_log()
     corridor_log.write_text(corridor_payload, encoding="utf-8")
 
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     completed = subprocess.run(
         [
             "python3",
@@ -2050,6 +3486,8 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
             "all=passed",
             "--phase-evidence",
             f"all={corridor_log}",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -2071,6 +3509,8 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert f"| `rust-sccp` | passed | `{corridor_log}` |" in completed.stdout
     assert "## Release Checklist" in completed.stdout
     assert "## Cryptographic Evidence" in completed.stdout
+    assert "## Native Prover Bundle" in completed.stdout
+    assert "native-evm-prover-bundle.json" in completed.stdout
     assert "EVM Source Chain ID | EVM Source Tag | EVM Destination Chain ID" in (
         completed.stdout
     )
@@ -2111,6 +3551,7 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
     report = load_report_module()
     active_domain = report.ACTIVE_LAUNCH_DOMAIN
     evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
 
     completed = subprocess.run(
         [
@@ -2120,6 +3561,8 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
             "json",
             "--phase-result",
             "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -2132,6 +3575,7 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
     payload = json.loads(completed.stdout)
     assert payload["production_ready"] is True
     assert payload["release_checklist"]["ready"] is True
+    assert payload["native_evm_prover_bundle"]["validation_status"] == "passed"
     assert payload["evidence"]["production_ready"] is False
     assert all(
         f"domain {active_domain}" not in blocker for blocker in payload["blockers"]
@@ -2164,6 +3608,799 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
         if lane["domain"] != active_domain and not lane["production_ready"]
     ]
     assert blocked_future_lanes
+
+
+def test_release_readiness_report_blocks_without_native_evm_prover_bundle(
+    tmp_path: Path,
+) -> None:
+    """Ethereum launch readiness must require native no-WASM prover artifacts."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    assert payload["production_ready"] is False
+    assert payload["native_evm_prover_bundle"]["validation_status"] == "blocked"
+    assert (
+        "native EVM Groth16 prover bundle manifest is required"
+        in payload["native_evm_prover_bundle"]["validation_blockers"]
+    )
+    checklist = {
+        item["id"]: item for item in payload["release_checklist"]["items"]
+    }
+    assert checklist["native_evm_groth16_prover_bundle"]["ready"] is False
+    assert all(
+        f"domain {report.ACTIVE_LAUNCH_DOMAIN}" not in blocker
+        for blocker in payload["blockers"]
+    )
+
+
+def test_release_readiness_report_blocks_wasm_or_remote_native_evm_prover_bundle(
+    tmp_path: Path,
+) -> None:
+    """Metadata-only callbacks must not satisfy the native no-WASM prover gate."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(
+        tmp_path,
+        evidence,
+        overrides={
+            "no_wasm": False,
+            "remote_prover_required": True,
+        },
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert "native EVM Groth16 prover bundle no_wasm must be true" in blockers
+    assert (
+        "native EVM Groth16 prover bundle remote_prover_required must be false"
+        in blockers
+    )
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_duplicate_native_evm_prover_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Signed native prover manifests must not rely on JSON last-key-wins parsing."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    manifest = native_bundle.read_text(encoding="utf-8")
+    native_bundle.write_text(
+        manifest.replace(
+            '  "bundle_id": "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1",',
+            '  "bundle_id": "sccp:eth:native-evm-groth16-prover:forged",\n'
+            '  "bundle_id": "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1",',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle JSON contains duplicate key: bundle_id"
+        in blockers
+    )
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_native_evm_prover_payload_hash_mismatch(
+    tmp_path: Path,
+) -> None:
+    """Native prover readiness must verify the artifact bytes, not only metadata."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    (tmp_path / "native-prover-artifacts" / "proof-artifact.bin").write_bytes(
+        b"tampered native proof artifact\n"
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact sha256 must match "
+        "proof_artifact_hash"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_empty_native_evm_prover_payload(
+    tmp_path: Path,
+) -> None:
+    """Native prover payload files must carry real bytes, not empty hashes."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_path.write_bytes(b"")
+    proof_hash = "0x" + hashlib.sha256(b"").hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact must not be empty"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_tiny_native_evm_prover_payload(
+    tmp_path: Path,
+) -> None:
+    """Native prover payload files must not be hash-consistent tiny placeholders."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    tiny_payload = b"tiny native proof artifact\n"
+    proof_path.write_bytes(tiny_payload)
+    proof_hash = "0x" + hashlib.sha256(tiny_payload).hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact must be at least "
+        "256 bytes"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash(
+    tmp_path: Path,
+) -> None:
+    """Native prover artifact, key, and implementation hashes are separate roles."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proving_key"] = payload["proof_artifact"]
+    payload["proving_key_hash"] = payload["proof_artifact_hash"]
+    payload["native_sdk_artifacts"][0]["proving_key_hash"] = (
+        payload["proving_key_hash"]
+    )
+    payload["native_sdk_artifacts"][0]["implementation_artifact"] = (
+        payload["proof_artifact"]
+    )
+    payload["native_sdk_artifacts"][0]["implementation_hash"] = (
+        payload["proof_artifact_hash"]
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proving_key_hash must not reuse "
+        "proof_artifact_hash"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle "
+        "native_sdk_artifacts[0].implementation_hash must not reuse "
+        "proof_artifact_hash"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash(
+    tmp_path: Path,
+) -> None:
+    """Native prover hashes must be canonical lowercase 0x-prefixed hex."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["circuit_security_audit"] = "0x" + "A1" * 32
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes.circuit_security_audit "
+        "must be a "
+        "canonical non-zero 32-byte hex value"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash(
+    tmp_path: Path,
+) -> None:
+    """Native prover audit hashes must be unique and role-separated."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["circuit_security_audit"] = payload[
+        "proof_artifact_hash"
+    ]
+    payload["audit_hashes"]["native_implementation_audit"] = payload[
+        "native_sdk_artifacts"
+    ][0]["implementation_hash"]
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = fixed_hex32(0xA1)
+    payload["audit_hashes"]["no_wasm_no_remote_scan"] = fixed_hex32(0xA1)
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes.circuit_security_audit "
+        "must not reuse "
+        "proof_artifact_hash"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes.native_implementation_audit "
+        "must not reuse "
+        "native_sdk_artifacts[0].implementation_hash"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes.no_wasm_no_remote_scan "
+        "must not duplicate audit_hashes.cross_sdk_fixture_parity"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_unlabeled_native_evm_prover_audits(
+    tmp_path: Path,
+) -> None:
+    """Native prover audits must be named evidence fields, not filler hashes."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["audit_hashes"] = [fixed_hex32(0xA1)]
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes must be a non-empty object"
+        in blockers
+    )
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_missing_native_evm_parity_fixture(
+    tmp_path: Path,
+) -> None:
+    """Native prover readiness must require concrete cross-SDK parity vectors."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload.pop("cross_sdk_fixture_parity_artifact")
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle missing field: "
+        "cross_sdk_fixture_parity_artifact"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash(
+    tmp_path: Path,
+) -> None:
+    """The cross-SDK parity vector file must match its named audit hash."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    parity_path.write_text("{}\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "sha256 must match audit_hashes.cross_sdk_fixture_parity"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_keys(
+    tmp_path: Path,
+) -> None:
+    """The cross-SDK parity fixture must reject duplicate JSON fields."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    parity_bytes = (
+        b'{"schema":"forged","schema":"'
+        + payload["schema"].encode("utf-8")
+        + b'"}\n'
+    )
+    parity_path.write_bytes(parity_bytes)
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    duplicate_marker = "cross_sdk_fixture_parity_artifact JSON contains duplicate key"
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "JSON contains duplicate key: schema"
+    ) in blockers
+    assert any(duplicate_marker in blocker for blocker in blockers)
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_duplicate_native_evm_self_test_keys(
+    tmp_path: Path,
+) -> None:
+    """The native prover self-test fixture must reject duplicate JSON fields."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    self_test_path = tmp_path / payload["native_prover_self_test_artifact"]
+    self_test_bytes = (
+        b'{"schema":"forged","schema":"'
+        + payload["schema"].encode("utf-8")
+        + b'"}\n'
+    )
+    self_test_path.write_bytes(self_test_bytes)
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    duplicate_marker = "native_prover_self_test_artifact JSON contains duplicate key"
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "JSON contains duplicate key: schema"
+    ) in blockers
+    assert any(duplicate_marker in blocker for blocker in blockers)
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift(
+    tmp_path: Path,
+) -> None:
+    """Every required SDK row in the parity vector must match the shared hashes."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_payload["sdk_results"]["javascript"]["calldata_hash"] = fixed_hex32(0xD1)
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle "
+        "cross_sdk_fixture_parity_artifact sdk_results.javascript.calldata_hash "
+        "must match calldata_hash"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker(
+    tmp_path: Path,
+) -> None:
+    """Native prover readiness must reject WASM/remote-prover markers in payloads."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    marker_payload = b"native proof artifact imports proof.wasm\n"
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_path.write_bytes(marker_payload)
+    proof_hash = "0x" + hashlib.sha256(marker_payload).hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact contains forbidden "
+        "prover dependency marker: wasm"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_native_evm_prover_path_escape(
+    tmp_path: Path,
+) -> None:
+    """Native prover artifact paths must stay under the manifest directory."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(
+        tmp_path,
+        evidence,
+        overrides={"proof_artifact": "../proof-artifact.bin"},
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact path must be relative "
+        "and stay under the manifest directory"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
 
 
 def test_release_readiness_report_blocks_active_launch_evm_live_metadata_drift(
@@ -2236,6 +4473,7 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
     """Strict reports can bind downloaded per-phase corridor log artifacts."""
 
     evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     phase_artifacts = write_downloaded_phase_artifacts(tmp_path)
     js_log = (
         phase_artifacts
@@ -2252,6 +4490,8 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
             "all=passed",
             "--phase-evidence-dir",
             str(phase_artifacts),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
             str(evidence),
         ],
         check=False,
@@ -2336,6 +4576,48 @@ def test_release_readiness_report_rejects_phase_log_without_expected_command(
     assert (
         "production corridor phase rust-sccp evidence artifact is missing "
         "expected phase-block command: cargo test -p iroha_sccp -- --nocapture"
+    ) in completed.stdout
+
+def test_release_readiness_rejects_java_android_log_without_source_harness(
+    tmp_path: Path,
+) -> None:
+    """The Android phase log must include source-proof harness selection."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "java-android-without-source-harness.log"
+    source_harness = "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"
+    corridor_log.write_text(
+        "==> SCCP production corridor: java-android\n"
+        "+ ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests\n"
+        "+ ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests\n"
+        "+ ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests\n"
+        "BUILD SUCCESSFUL\n"
+        "SCCP production corridor completed.\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"java-android={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase java-android evidence artifact is missing "
+        f"expected phase-block command: {source_harness}"
     ) in completed.stdout
 
 
@@ -2726,6 +5008,34 @@ def test_release_readiness_report_requires_ethereum_browser_no_wasm_marker(
     ) in completed.stdout
 
 
+def test_release_readiness_sccp_allow_unready_transparent_proofs_is_config_only() -> None:
+    """SCCP unready transparent-proof bypasses must be sourced from TOML config."""
+
+    user_config = ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
+    service = ROOT / "configs" / "soranexus" / "taira" / "taira-irohad.service"
+    bootstrap = (
+        ROOT / "configs" / "soranexus" / "taira" / "bootstrap_kaigi_localnet.sh"
+    )
+    taira_config = ROOT / "configs" / "soranexus" / "taira" / "config.toml"
+
+    for path in (user_config, service, bootstrap):
+        assert "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" not in path.read_text(
+            encoding="utf-8"
+        )
+    assert (
+        "pub sccp_allow_unready_transparent_proofs: bool"
+        in user_config.read_text(encoding="utf-8")
+    )
+    assert (
+        "sccp_allow_unready_transparent_proofs = true"
+        in bootstrap.read_text(encoding="utf-8")
+    )
+    assert (
+        "sccp_allow_unready_transparent_proofs = false"
+        in taira_config.read_text(encoding="utf-8")
+    )
+
+
 def test_release_readiness_report_requires_bsc_parlia_declaration_marker(
     tmp_path: Path,
 ) -> None:
@@ -2969,7 +5279,15 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "beaconFinality.executionReceiptsRoot",
             "EthereumMainnetSccp validates source bridge logs in receipt evidence",
             "sourceEventLog(), sourceEventLog()",
+            "/exactly 2 topics/u",
+            "/source event log data must be 0x/u",
+            "/source event digest must not be zero/u",
+            "/removed logs/u",
             'for (const missingField of ["transactionHash", "blockHash", "blockNumber"])',
+            '["transaction_hash", hex32("ab"), "receipt.logs[0].transactionHash"]',
+            '["block_hash", hex32("ac"), "receipt.logs[0].blockHash"]',
+            '["block_number", "0x1235", "receipt.logs[0].blockNumber"]',
+            "must not use multiple aliases",
             "receipt_proof_hash: receiptProofHash",
             'receiptProofHash: hex32("00")',
             "receiptProofHash: evmSccpReceiptProofHash(sampleReceiptProof)",
@@ -2980,21 +5298,89 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "/receipt\\.blockHash must not be zero/u",
             "/block\\.hash must not be zero/u",
             "/block\\.receiptsRoot must not be zero/u",
+            "EthereumMainnetSccp inbound prover receives immutable evidence snapshots",
+            "Object.isFrozen(evidence.receiptProof.receiptTrieProofNodes[0])",
+            'evidence.beaconFinality.finalityBranch.push(hex32("99"))',
+            "EthereumMainnetSccp collectInboundEvidenceFromReceipt snapshots consensus evidence",
+            "Object.isFrozen(evidence.block.mutableWitness.branch)",
+            "mutablePayload[0] = 0x7e",
+            "evidence.beaconFinality.mutableWitness.branch",
             "EthereumMainnetSccp requires linked local prover functions",
             "ERR_SCCP_ETH_INBOUND_PROVER_UNAVAILABLE",
             "assert.equal(executionRequests, 0)",
+            "SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES",
+            "/proofBytes must be at most/u",
+            "assert.equal(submitterCalled, false)",
             "/requires receipt source event validation/u",
             '["executionBlockHash", /executionBlockHash must not be zero/u]',
             '["executionReceiptsRoot", /executionReceiptsRoot must not be zero/u]',
             '["beaconFinalizedRoot", /beaconFinalizedRoot must not be zero/u]',
             '["syncCommitteeRoot", /syncCommitteeRoot must not be zero/u]',
+            "/receiptProof\\.executionBlockNumber must match beaconFinality\\.executionBlockNumber/u",
+            "/receiptProof\\.executionBlockHash must match beaconFinality\\.executionBlockHash/u",
+            "/receiptProof\\.executionReceiptsRoot must match beaconFinality\\.executionReceiptsRoot/u",
+            "/receiptProof\\.beaconFinalizedRoot must match beaconFinality\\.finalizedHeaderRoot/u",
+            "/receiptProof\\.syncCommitteeRoot must match beaconFinality\\.syncCommitteeRoot/u",
+            "/receiptProof\\.beaconSlot must match beaconFinality\\.beaconSlot/u",
+            "/receiptProof\\.sourceEventDigest must match receipt source event/u",
             "SAMPLE_SYNC_COMMITTEE_BITS",
+            "LOW_SYNC_COMMITTEE_BITS",
+            "/beaconFinality\\.finalityBranch/u",
             "/beaconFinality\\.syncCommitteeBits/u",
+            "/beaconFinality\\.syncCommitteeBits must contain Ethereum sync committee supermajority/u",
+            "/beaconFinality\\.syncCommitteeParticipation must match syncCommitteeBits/u",
+            "/beaconFinality\\.syncSignatureSlot must cover beaconFinality\\.beaconSlot/u",
+            "/beaconFinality\\.syncCommitteeSignature must not be zero/u",
+            "/sync_committee_bits must contain Ethereum sync committee supermajority/u",
+            "/sync_committee_signature must not be zero/u",
+            "aliasOnlyProverCalls",
+            "assert.equal(alias in evidence.beaconFinality, false)",
             "Ethereum receipt-proof transcript rejects empty trie and finality branches",
+            'fullReceipt(0, { transaction_index: "0x0" })',
+            '["transaction_hash", hex32("ab"), "receipt.transactionHash"]',
+            '["receipts_root", hex32("ab"), "block.receiptsRoot"]',
+            '["block_hash", hex32("ab"), "blockReceipts.blockHash"]',
+            '["cumulative_gas_used", "0x5208", "receipt.cumulativeGasUsed"]',
+            '["logs_bloom", `0x${"11".repeat(256)}`, "receipt.logsBloom"]',
             "receiptTrieProofNodes: []",
             "inclusionBranch: []",
             "sourceDomain: SCCP_DOMAIN_BSC",
             "/sourceDomain must be ETH/u",
+        ),
+        ROOT / "python" / "iroha_torii_client" / "sccp.py": (
+            "_normalize_ethereum_mainnet_finality_branch",
+            "beaconFinality.finalityBranch",
+            "must contain 6 siblings",
+            "_normalize_ethereum_mainnet_finality_sync_committee_bits",
+            "must contain Ethereum sync committee supermajority",
+            "receiptProof.beaconFinalizedRoot must match beaconFinality.finalizedHeaderRoot",
+            "receiptProof.syncCommitteeRoot must match beaconFinality.syncCommitteeRoot",
+            "receiptProof.beaconSlot must match beaconFinality.beaconSlot",
+            "_clone_prover_callback_request(evidence), options",
+            "return _clone_prover_callback_request(evidence)",
+            '_require_native_recursive_proof_bytes(proof_copy, "proofBytes")',
+        ),
+        ROOT / "python" / "iroha_torii_client" / "tests" / "sccp_test.py": (
+            "ETHEREUM_FINALITY_BRANCH",
+            "LOW_ETHEREUM_SYNC_COMMITTEE_BITS",
+            'evidence["beacon_finality"]["finality_branch"]',
+            "finalityBranch must contain 6 siblings",
+            "beaconFinality.syncCommitteeParticipation",
+            "receiptProof.beaconFinalizedRoot",
+            "receiptProof.syncCommitteeRoot",
+            "receiptProof.beaconSlot",
+            "test_ethereum_mainnet_sccp_collects_immutable_evidence_snapshot_from_mutable_inputs",
+            "ConsensusProvider",
+            'evidence["block"]["mutableWitness"]["branch"].append(HEX32_A)',
+            'finality_witness["bytes"][0] = 0x7E',
+            "test_ethereum_mainnet_sccp_inbound_prover_receives_immutable_evidence_snapshot",
+            'evidence["beacon_finality"]["finality_branch"].append(HEX32_A)',
+            "mutable_payload[0] = 0x7E",
+            'mutable_receipt_proof_nodes[0] = "0x" + "99" * 32',
+            'callback_evidence["block"]["mutableWitness"]["bytes"] == b"\\xbb"',
+            "SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1",
+            "proofBytes must be at most",
+            'assert submitted == [b"\\x0a\\x0b\\x0c"]',
         ),
         ROOT
         / "IrohaSwift"
@@ -3004,7 +5390,14 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'invalidPublicInputs("receipt.status")',
             'invalidPublicInputs("beaconFinality.executionReceiptsRoot")',
             "wrongTopicReceipt",
+            "extraTopicReceipt",
+            'invalidPublicInputs("receipt.logs[0].topics")',
+            "nonEmptyDataReceipt",
+            'invalidPublicInputs("receipt.logs[0].data")',
+            "zeroDigestReceipt",
+            'invalidPublicInputs("receipt.logs[0].topics[1]")',
             "duplicateLogReceipt",
+            "removedLogReceipt",
             'invalidPublicInputs("receipt.logs")',
             'for missingField in ["transactionHash", "blockHash", "blockNumber"]',
             "EthereumMainnetInboundEvidence(receiptProofHash: receiptProofHash)",
@@ -3013,17 +5406,40 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'XCTFail("prover callback must not run without receiptProof")',
             'XCTFail("prover callback must not run without source event validation")',
             'invalidPublicInputs("receiptProof")',
+            'missingFinalityBranchFinality.removeValue(forKey: "finalityBranch")',
+            'invalidPublicInputs("beaconFinality.finalityBranch")',
             'invalidPublicInputs("beaconFinality.syncCommitteeBits")',
+            'mismatchedSyncParticipationFinality["syncCommitteeParticipation"] = "341"',
+            'underQuorumSyncBitsFinality["syncCommitteeBits"] = "0x01" + String(repeating: "00", count: 63)',
+            '.invalidPublicInputs("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits")',
+            'staleSyncSignatureSlotFinality["syncSignatureSlot"] = "31"',
+            'zeroSyncCommitteeSignatureFinality["syncCommitteeSignature"] = "0x" + String(repeating: "00", count: 96)',
+            '.zeroField("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature")',
+            "let aliasOnlyFinality: [String: Any]",
+            "XCTAssertFalse(finality.keys.contains(alias))",
             '"finalized_header_root", "0x" + String(repeating: "13", count: 32)',
             '"sync_committee_root", "0x" + String(repeating: "14", count: 32)',
             '"beacon_slot", "33", "beaconFinality.beaconSlot"',
             '"transaction_hash", "0x" + String(repeating: "ab", count: 32)',
             '"block_hash", "0x" + String(repeating: "ac", count: 32)',
             '"block_number", "0x1235", "receipt.logs[0].blockNumber"',
+            '.invalidRlp("blockReceipts[0].transactionHash")',
+            '.invalidRlp("receipt.cumulativeGasUsed")',
+            '.invalidRlp("receipt.logsBloom")',
             'receiptTrieProofNodes: []',
             '.invalidValidatorSet("receiptTrieProofNodes")',
             'inclusionBranch: []',
             '.invalidBranch("inclusionBranch")',
+            "testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot",
+            "testEthereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+            "testBscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+            "XCTAssertEqual(consensusProvider.calls, 1)",
+            "sccpNativeRecursiveMaxProofBytes + 1",
+            '.invalidPublicInputs("proofBytes")',
+            "finalityWitness.setObject(\"changed\", forKey: \"new\" as NSString)",
+            "XCTAssertNil(evidence.beaconFinality?[\"mutableWitness\"] as? NSMutableDictionary)",
+            "mutableReceiptProofNode[0] = 0xff",
+            "blockReceiptsWitness.add(\"changed\")",
             "sourceDomain: sccpDomainBsc",
             "sourceDomain: sccpDomainEthereum",
         ),
@@ -3065,6 +5481,10 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'receipt + ("status" to "0x0")',
             'beaconFinality + ("executionReceiptsRoot"',
             '"logs" to listOf(sourceEventLog, sourceEventLog)',
+            '"0x" + "66".repeat(32)',
+            '"data" to "0x01"',
+            '"0x" + "00".repeat(32)',
+            'sourceEventLog + ("removed" to true)',
             "SccpEthereumMainnet.sourceEventTopic()",
             "receiptProof.executionReceiptsRoot",
             'for (missingField in listOf("transactionHash", "blockHash", "blockNumber"))',
@@ -3073,13 +5493,38 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'receiptProofHash + " "',
             "val missingReceiptProof = assertFailsWith<IllegalArgumentException>",
             'missingReceiptProof.message?.contains("receiptProof")',
+            "prebuiltProofOnlyProverCalls",
+            'prebuiltProofWithoutSourceEvent.message?.contains("receipt source event validation")',
+            'missingFinalityBranch.message?.contains("beaconFinality.finalityBranch")',
             'missingSyncBits.message?.contains("beaconFinality.syncCommitteeBits")',
+            'mismatchedSyncParticipation.message?.contains("beaconFinality.syncCommitteeParticipation")',
+            'underQuorumSyncBits.message?.contains("beaconFinality.syncCommitteeBits")',
+            'sync_committee_bits must contain Ethereum sync committee supermajority',
+            'staleSyncSignatureSlot.message?.contains("beaconFinality.syncSignatureSlot")',
+            'zeroSyncCommitteeSignature.message?.contains("beaconFinality.syncCommitteeSignature")',
+            'beaconFinalityUpdateJson(syncCommitteeSignature = "0x" + "00".repeat(96))',
+            "val aliasOnlyFinality = mapOf<String, Any?>",
+            "assertTrue(alias !in finality)",
             'Triple("finalized_header_root", "0x" + "13".repeat(32), "beaconFinality.finalizedHeaderRoot")',
             'Triple("sync_committee_root", "0x" + "14".repeat(32), "beaconFinality.syncCommitteeRoot")',
             'Triple("beacon_slot", "33", "beaconFinality.beaconSlot")',
             'Triple("transaction_hash", "0x" + "ab".repeat(32), "receipt.logs[0].transactionHash")',
             'Triple("block_hash", "0x" + "ac".repeat(32), "receipt.logs[0].blockHash")',
             'Triple("block_number", "0x1235", "receipt.logs[0].blockNumber")',
+            'Triple("transaction_hash", "0x" + "ac".repeat(32), "receipt.transactionHash")',
+            'blockReceipts[0].transactionHash',
+            'receipt + ("cumulative_gas_used" to "0x5208")',
+            'receipt + ("logs_bloom" to ("0x" + "00".repeat(256)))',
+            "ethereumMainnetInboundProverReceivesCallbackEvidenceSnapshot",
+            "ethereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+            "bscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+            'assertFalse(collectedReceipt?.get("mutableWitness") === receiptWitness)',
+            "SccpEvm.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1",
+            'oversizedSubmit.message?.contains("proofBytes must be at most")',
+            'finalityWitness["new"] = "changed"',
+            "finalityBranchWitness.add(\"0x\" + \"99\".repeat(32))",
+            "mutableReceiptProofNode[0] = 0x7c",
+            'assertContentEquals(byteArrayOf(0xbb.toByte()), receiptNestedSnapshot["bytes"] as ByteArray)',
         ),
         ROOT
         / "java"
@@ -3097,6 +5542,10 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "beaconFinality.executionReceiptsRoot",
             'duplicateReceipt.put("logs"',
             "source-event validation must reject duplicate matching events",
+            "Ethereum source-event validation must reject extra source-event topics",
+            "Ethereum source-event validation must reject non-empty source-event data",
+            "Ethereum source-event validation must reject zero source-event digest",
+            "Ethereum source-event validation must reject removed logs",
             "EthereumMainnetSccp.sourceEventTopic()",
             'Arrays.asList("transactionHash", "blockHash", "blockNumber")',
             "hash-only receiptProofHash evidence",
@@ -3104,13 +5553,40 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'receiptProofHash + " "',
             "Ethereum inbound proving must reject hash-only receipt proof evidence",
             "Ethereum inbound prover must not run without receipt proof material",
+            "prebuiltProofOnlyProverCalls",
+            "Ethereum inbound proving must reject proof-only evidence without source event validation",
+            "Ethereum inbound proving must reject missing finality branch",
             "Ethereum inbound proving must reject missing sync-committee bits",
+            'mismatchedSyncParticipationFinality.put("syncCommitteeParticipation", "341")',
+            "Ethereum inbound proving must reject under-quorum sync-committee bits",
+            "Beacon REST provider must reject under-quorum sync committee aggregate bits",
+            'staleSyncSignatureSlotFinality.put("syncSignatureSlot", "31")',
+            "Ethereum inbound proving must reject zero sync-committee signatures",
+            "Beacon REST provider must reject zero sync committee aggregate signatures",
+            'aliasOnlyFinality.put("execution_block_number", "0x1234")',
+            "callback finality must not retain alias",
             "final Object[][] conflictingFinalityAliases",
             '"finalized_header_root", "0x" + repeat("13", 32), "beaconFinality.finalizedHeaderRoot"',
             '"sync_committee_root", "0x" + repeat("14", 32), "beaconFinality.syncCommitteeRoot"',
             "final Object[][] conflictingLogAliases",
             '"transaction_hash", "0x" + repeat("ab", 32), "receipt.logs[0].transactionHash"',
             '"block_hash", "0x" + repeat("ac", 32), "receipt.logs[0].blockHash"',
+            "final String[][] receiptAliasConflicts",
+            "blockReceipts[0].transactionHash",
+            'conflictingGas.put("cumulative_gas_used", "0x5208")',
+            'conflictingBloom.put("logs_bloom", "0x" + repeat("00", 256))',
+            "ethereumMainnetInboundProverReceivesCallbackEvidenceSnapshot",
+            "ethereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+            "bscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+            'collectedReceipt.get("mutableWitness") != receiptWitness',
+            "Ethereum inbound prover output must reject oversized proof bytes",
+            "Ethereum inbound submitter must reject oversized proof bytes",
+            "BSC collection consensus callback must receive a receipt witness snapshot",
+            'finalityWitness.put("new", "changed");',
+            'finalityBranchWitness.add("0x" + repeat("99", 32));',
+            "mutableReceiptProofNode[0] = 0x7c;",
+            "Ethereum inbound callback receipt bytes must be detached",
+            "Ethereum proof engine must receive a callback request snapshot",
             "Ethereum receipt-proof transcript must reject empty receiptTrieProofNodes",
             "Ethereum receipt-proof transcript must reject empty inclusionBranch",
             "Ethereum receipt-proof transcript must reject BSC sourceDomain",
@@ -3125,7 +5601,14 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "receiptProof.executionReceiptsRoot",
             "driftedFinalityReceiptsRoot",
             "wrongTopicLog",
+            "extraTopicReceipt",
+            'Assert.Contains("exactly 2 topics", extraTopic.Message)',
+            "nonEmptyDataReceipt",
+            'Assert.Contains("data must be 0x", nonEmptyData.Message)',
+            "zeroDigestReceipt",
+            'Assert.Contains("digest must not be zero", zeroDigest.Message)',
             "duplicateReceipt",
+            'Assert.Contains("removed logs", removedSourceEventLog.Message)',
             'foreach (var missingField in new[] { "transactionHash", "blockHash", "blockNumber" })',
             "Assert.Null(receiptProofHashOnlyEvidence.ReceiptProof)",
             "ReceiptProofHash must not be zero",
@@ -3134,13 +5617,42 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'Assert.Contains("receiptProof", missingReceiptProof.Message)',
             "unanchoredReceiptProofProver",
             'Assert.Contains("receipt source event validation", unanchoredReceiptProof.Message)',
+            'missingFinalityBranchFinality.Remove("finalityBranch")',
+            'Assert.Contains("beaconFinality.finalityBranch", missingFinalityBranch.Message)',
             'Assert.Contains("beaconFinality.syncCommitteeBits", missingSyncBits.Message)',
+            "mismatchedSyncParticipationFinality",
+            'Assert.Contains("beaconFinality.syncCommitteeParticipation", mismatchedSyncParticipation.Message)',
+            "underQuorumSyncBitsFinality",
+            'Assert.Contains("beaconFinality.syncCommitteeBits", underQuorumSyncBits.Message)',
+            'Assert.Contains("sync_committee_bits must contain Ethereum sync committee supermajority", underQuorumSyncAggregate.Message)',
+            '["syncSignatureSlot"] = "31"',
+            'Assert.Contains("beaconFinality.syncSignatureSlot", staleSyncSignatureSlot.Message)',
+            'Assert.Contains("beaconFinality.syncCommitteeSignature", zeroSyncCommitteeSignature.Message)',
+            'Assert.Contains("sync_committee_signature must not be zero", zeroSyncAggregateSignature.Message)',
+            "var aliasOnlyFinality = new Dictionary<string, object?>",
+            "Assert.False(finality.ContainsKey(alias))",
             '("finalized_header_root", "0x" + string.Concat(Enumerable.Repeat("13", 32)), "beaconFinality.finalizedHeaderRoot")',
             '("sync_committee_root", "0x" + string.Concat(Enumerable.Repeat("14", 32)), "beaconFinality.syncCommitteeRoot")',
             '("beacon_slot", "33", "beaconFinality.beaconSlot")',
             '("transaction_hash", "0x" + new string(\'d\', 64), "receipt.logs[0].transactionHash")',
             '("block_hash", "0x" + new string(\'a\', 64), "receipt.logs[0].blockHash")',
             '("block_number", "0x1235", "receipt.logs[0].blockNumber")',
+            '("transaction_hash", "0x" + new string(\'a\', 64), "receipt.transactionHash")',
+            'Assert.Contains("blockReceipts[0].transactionHash", indexedHashAliasConflict.Message);',
+            '["cumulative_gas_used"] = "0x5208"',
+            '["logs_bloom"] = logsBloom',
+            "InboundProverReceivesCallbackEvidenceSnapshot",
+            "CollectInboundEvidenceSnapshotsConsensusBoundary",
+            "BscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary",
+            'Assert.NotSame(receiptWitness, collectedReceipt?["mutableWitness"])',
+            "EthereumMainnetSccp.NativeRecursiveMaxProofBytes + 1",
+            'Assert.Contains("proofBytes must be at most", oversizedSubmit.Message)',
+            'Assert.False(returnedFinalitySnapshot.ContainsKey("new"))',
+            'finalityBranchWitness.Add("0x" + new string(\'9\', 64));',
+            "mutableReceiptProofNode[0] = 0x7c;",
+            'Assert.Equal(new byte[] { 0xbb }, Assert.IsType<byte[]>(receiptNestedSnapshot["bytes"]))',
+            "callbackRequest.PublicSignalWords[0] = \"0x\" + new string('f', 64);",
+            "Assert.NotEqual(ExpectedPublicSignalWords[0], prover.Request.PublicSignalWords[0]);",
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",
@@ -3163,10 +5675,21 @@ def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> N
         ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
             "Ethereum outbound prover callback must not see BSC requests",
             "assert.equal(outboundProverCalled, false)",
-            "ERR_SCCP_ETH_OUTBOUND_PROVER_UNAVAILABLE",
-            "local JS\\/native EVM prover",
+            "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+            "verified native EVM prover artifacts",
             "Ethereum mainnet SCCP outbound from",
             "submittedTxs[3].from",
+            "assert.notDeepStrictEqual(",
+            "Array.from(callbackPublicInputsBytes),",
+            "assert.deepEqual(Array.from(proofResult.bundleBytes), [1, 2, 3]);",
+            'proofArtifactHash: hex32("91")',
+            "proofArtifactHash and provingKeyHash must be supplied together",
+            "proofArtifactHash and provingKeyHash must match request",
+        ),
+        ROOT / "python" / "iroha_torii_client" / "tests" / "sccp_test.py": (
+            "destinationBindingHash must match destinationBinding",
+            "outbound_prover_called = False",
+            "assert not outbound_prover_called",
         ),
         ROOT
         / "IrohaSwift"
@@ -3175,8 +5698,13 @@ def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> N
         / "SccpSolanaProverTests.swift": (
             "Ethereum outbound prover callback must not see BSC requests",
             "XCTAssertFalse(outboundProverCalled)",
+            "Ethereum outbound facade must reject forged destinationBindingHash before returning request",
             "forgedBindingHashRequest",
             "String(repeating: \"99\", count: 32)",
+            "proofArtifactHash: String(repeating: \"91\", count: 32)",
+            ".invalidPublicInputs(\"proofArtifactHash/provingKeyHash\")",
+            ".zeroField(\"proofArtifactHash\")",
+            "artifactResult.proofArtifactHash",
         ),
         ROOT
         / "kotlin"
@@ -3193,6 +5721,9 @@ def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> N
             "Ethereum outbound prover callback must not see BSC requests",
             "outboundProverCalled",
             'request.copy(destinationBindingHash = "0x" + "99".repeat(32))',
+            'proofArtifactHash = "91".repeat(32)',
+            "proofArtifactHash and provingKeyHash",
+            "artifactResult.proofArtifactHash",
         ),
         ROOT
         / "java"
@@ -3210,6 +5741,9 @@ def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> N
             "assert !outboundProverCalled[0]",
             "Ethereum wrapProofResult must reject forged destinationBindingHash",
             "evmRequestWithDestinationBindingHash",
+            "partial proof artifact metadata must be rejected",
+            "zero proof artifact hash must be rejected",
+            "proof result must carry proof artifact hash",
         ),
         ROOT
         / "csharp"
@@ -3219,6 +5753,9 @@ def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> N
             "Ethereum outbound prover callback must not see BSC requests",
             "Assert.Null(guardedProver.Request)",
             "request with { DestinationBindingHash = \"0x\" + new string('9', 64) }",
+            "ProofArtifactHash = \"0x\" + new string('9', 64)",
+            "artifactResult.ProofArtifactHash",
+            "proofResult with",
         ),
     }
     missing = []
@@ -4061,11 +6598,15 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "const syncCommitteeRoot = requireEthereumRpcHexData(",
             "/eth/v1/beacon/light_client/finality_update",
             "ethereumMainnetBeaconRestFinalityUpdateSummary",
+            "normalizeEthereumMainnetFinalityBranch",
+            "Ethereum mainnet Beacon REST light-client finality update.data.finality_branch",
             "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits",
             "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature",
+            "must contain 6 siblings",
             "must contain at least one participant",
             "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
             "Ethereum mainnet Beacon REST target block is newer than the finalized header",
+            "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -4083,11 +6624,15 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "const syncCommitteeRoot = requireEthereumRpcHexData(",
             "/eth/v1/beacon/light_client/finality_update",
             "ethereumMainnetBeaconRestFinalityUpdateSummary",
+            "normalizeEthereumMainnetFinalityBranch",
+            "Ethereum mainnet Beacon REST light-client finality update.data.finality_branch",
             "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits",
             "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature",
+            "must contain 6 siblings",
             "must contain at least one participant",
             "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
             "Ethereum mainnet Beacon REST target block is newer than the finalized header",
+            "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -4099,14 +6644,19 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "/eth/v2/beacon/blocks/64",
             "/eth/v1/beacon/light_client/finality_update",
             "validFinalityUpdate",
+            "SAMPLE_FINALITY_BRANCH",
+            "assert.deepEqual(evidence.beaconFinality.finalityBranch, SAMPLE_FINALITY_BRANCH)",
             "syncCommitteeParticipation",
             "/sync_committee_bits must contain at least one participant/u",
+            "/finality_branch is required/u",
+            "/finality_branch must contain 6 siblings/u",
             "/finalizedHeaderRoot must not be zero/u",
             "/finalizedBlockRoot must not be zero/u",
             "/finalizedCheckpointRoot must not be zero/u",
             "/syncCommitteeRoot must not be zero/u",
             "/requires beaconSlot, beaconBlockRoot, or block\\.timestamp/u",
             "/finalized target header must be finalized/u",
+            "/historical target blocks require an ancestry proof/u",
             "/beaconFinality\\.executionBlockHash must not be zero/u",
             "/beaconFinality\\.executionReceiptsRoot must not be zero/u",
             "/beaconFinality\\.finalizedHeaderRoot must not be zero/u",
@@ -4121,7 +6671,10 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "syncCommitteeSignature?: string;",
             "syncSignatureSlot?: string | number | bigint;",
             "signatureSlot?: string | number | bigint;",
+            "finalityBranch?: readonly string[];",
+            "finality_branch?: readonly string[];",
             "syncCommitteeParticipation?: string | number | bigint;",
+            "readonly finalityBranch?: readonly string[];",
             "readonly syncCommitteeBits?: string;",
             "readonly syncCommitteeSignature?: string;",
         ),
@@ -4129,7 +6682,9 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "syncCommitteeBits\\?: string;",
             "syncCommitteeSignature\\?: string;",
             "syncSignatureSlot\\?: string \\| number \\| bigint;",
+            "finalityBranch\\?: readonly string\\[\\];",
             "syncCommitteeParticipation\\?: string \\| number \\| bigint;",
+            "readonly finalityBranch\\?: readonly string\\[\\];",
             "readonly syncCommitteeBits\\?: string;",
         ),
         ROOT
@@ -4143,8 +6698,11 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             'path: "/eth/v2/beacon/blocks/\\(targetBlockId.id)"',
             'path: "/eth/v1/beacon/light_client/finality_update"',
             "BeaconRestFinalityUpdateSummary",
+            "Ethereum mainnet Beacon REST light-client finality update.data.finality_branch",
             "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits",
             "Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_signature",
+            "normalizeFinalityBranch(",
+            '"finalityBranch": finalityUpdate.finalityBranch',
             "syncCommitteeParticipation",
             "public let syncCommitteeBits: String?",
             'value["syncCommitteeBits"] = syncCommitteeBits',
@@ -4153,6 +6711,7 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "execution_payload",
             'invalidPublicInputs("beaconRest.targetHeader.slot")',
             'invalidPublicInputs("beaconRest.targetHeader.finalizedSlot")',
+            'invalidPublicInputs("beaconRest.targetHeader.ancestryProof")',
             'invalidPublicInputs("beaconRest.finalizedBlockRoot")',
             'invalidPublicInputs("beaconRest.executionPayload.blockHash")',
             'invalidPublicInputs("beaconRest.executionPayload.receiptsRoot")',
@@ -4166,18 +6725,23 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "testEthereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
             "/eth/v1/beacon/genesis",
             "/eth/v1/beacon/headers/32",
-            "/eth/v1/beacon/blocks/32/root",
-            "/eth/v2/beacon/blocks/32",
+            "/eth/v1/beacon/blocks/64/root",
+            "/eth/v2/beacon/blocks/64",
             "/eth/v1/beacon/light_client/finality_update",
             "ethereumBeaconFinalityUpdateJson(",
+            "ethereumFinalityBranch",
+            'XCTAssertEqual(finality["finalityBranch"] as? [String], Self.ethereumFinalityBranch)',
+            "includeFinalityBranch: false",
+            "finalityBranch: Array(Self.ethereumFinalityBranch.prefix(5))",
             "syncCommitteeParticipation",
             'syncCommitteeBits: "0x01" + String(repeating: "00", count: 63)',
             'conflictingSyncBitsFinality["sync_committee_bits"]',
             '"finalized_header_root", "0x" + String(repeating: "13", count: 32)',
             '.zeroField("Ethereum mainnet Beacon REST light-client finality update.data.sync_aggregate.sync_committee_bits")',
-            '"timestamp": "0x1e4"',
+            '"timestamp": "0x364"',
             "ethereumBeaconBlockRootJson(",
             "ethereumBeaconBlockJson(",
+            'invalidPublicInputs("beaconRest.targetHeader.ancestryProof")',
             'invalidPublicInputs("beaconRest.finalizedBlockRoot")',
             'invalidPublicInputs("beaconRest.executionPayload.blockHash")',
             'invalidPublicInputs("beaconRest.executionPayload.receiptsRoot")',
@@ -4200,7 +6764,10 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             '"/eth/v2/beacon/blocks/${targetBlockId.id}"',
             '"/eth/v1/beacon/light_client/finality_update"',
             "ethereumBeaconRestFinalityUpdateSummary",
+            "normalizeEthereumBeaconRestFinalityBranch",
+            '"finalityBranch" to finalityUpdate.finalityBranch',
             "sync_aggregate",
+            "finality_branch",
             "sync_committee_bits",
             "sync_committee_signature",
             "ethereumBeaconRestSyncCommitteeParticipation",
@@ -4210,6 +6777,7 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "execution_payload",
             "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
             "Ethereum mainnet Beacon REST target block is newer than the finalized header",
+            "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -4230,18 +6798,23 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "ethereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
             "https://beacon.example/eth/v1/beacon/genesis",
             "https://beacon.example/eth/v1/beacon/headers/32",
-            "https://beacon.example/eth/v1/beacon/blocks/32/root",
-            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/blocks/64/root",
+            "https://beacon.example/eth/v2/beacon/blocks/64",
             "https://beacon.example/eth/v1/beacon/light_client/finality_update",
             "beaconFinalityUpdateJson(",
+            "ethereumFinalityBranch",
+            'assertEquals(ethereumFinalityBranch, evidence.beaconFinality?.get("finalityBranch"))',
+            "includeFinalityBranch = false",
+            "finalityBranch = ethereumFinalityBranch.take(5)",
             "syncCommitteeParticipation",
-            'syncCommitteeBits = "0x01" + "00".repeat(63)',
+            "ethereumSyncCommitteeSupermajorityBits",
             '"sync_committee_bits" to ("0x02" + "00".repeat(63))',
             'Triple("finalized_header_root", "0x" + "13".repeat(32), "beaconFinality.finalizedHeaderRoot")',
             "sync_committee_bits must contain at least one participant",
-            '"timestamp" to "0x1e4"',
+            '"timestamp" to "0x364"',
             "beaconBlockRootJson(",
             "beaconBlockJson(",
+            "historical target blocks require an ancestry proof",
             "finalized block root must match finalized header root",
             "execution payload block_hash must match block.hash",
             "execution payload receipts_root must match block.receiptsRoot",
@@ -4264,7 +6837,10 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             '"/eth/v2/beacon/blocks/" + targetBlockId.id',
             '"/eth/v1/beacon/light_client/finality_update"',
             "beaconRestFinalityUpdateSummary",
+            "normalizeBeaconRestFinalityBranch",
+            'evidence.put("finalityBranch", finalityUpdate.finalityBranch)',
             "sync_aggregate",
+            "finality_branch",
             "sync_committee_bits",
             "sync_committee_signature",
             "beaconRestSyncCommitteeParticipation",
@@ -4275,6 +6851,7 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "execution_payload",
             "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
             "Ethereum mainnet Beacon REST target block is newer than the finalized header",
+            "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -4295,18 +6872,22 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "ethereumMainnetBeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
             "https://beacon.example/eth/v1/beacon/genesis",
             "https://beacon.example/eth/v1/beacon/headers/32",
-            "https://beacon.example/eth/v1/beacon/blocks/32/root",
-            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/blocks/64/root",
+            "https://beacon.example/eth/v2/beacon/blocks/64",
             "https://beacon.example/eth/v1/beacon/light_client/finality_update",
             "beaconFinalityUpdateJson(",
+            "ETHEREUM_FINALITY_BRANCH",
+            "Beacon REST provider must reject missing finality branch",
+            "Beacon REST provider must reject malformed finality branch",
             "syncCommitteeParticipation",
-            '"0x01" + repeat("00", 63),',
+            "ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS",
             'conflictingSyncBitsFinality.put("sync_committee_bits"',
             "final Object[][] conflictingFinalityAliases",
             "sync_committee_bits must contain at least one participant",
-            '"timestamp", "0x1e4"',
+            '"timestamp", "0x364"',
             "beaconBlockRootJson(",
             "beaconBlockJson(",
+            "historical target blocks require an ancestry proof",
             "finalized block root must match finalized header root",
             "execution payload block_hash must match block.hash",
             "execution payload receipts_root must match block.receiptsRoot",
@@ -4323,7 +6904,10 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             '$"/eth/v2/beacon/blocks/{targetBlockId.Id}"',
             '"/eth/v1/beacon/light_client/finality_update"',
             "BeaconRestFinalityUpdateSummary",
+            "NormalizeFinalityBranch(",
+            '["finalityBranch"] = finalityUpdate.FinalityBranch',
             "sync_aggregate",
+            "finality_branch",
             "sync_committee_bits",
             "sync_committee_signature",
             "SyncCommitteeParticipation",
@@ -4332,8 +6916,13 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "StrictFirstPresent(",
             "NormalizeFinalitySyncCommitteeBits(",
             "execution_payload",
+            "EthExecutionPayloadHeaderRootFromRlp",
+            "EthBeaconBodyRootFromExecutionPayloadBranch",
+            "EthBeaconBlockHeaderRoot",
+            "SszMerkleRootFromBranch(",
             "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot",
             "Ethereum mainnet Beacon REST target block is newer than the finalized header",
+            "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof",
             "Ethereum mainnet Beacon REST finalized block root must match finalized header root",
             "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash",
             "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot",
@@ -4347,20 +6936,207 @@ def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests()
             "BeaconRestConsensusProviderDerivesTargetSlotFromTimestamp",
             "https://beacon.example/eth/v1/beacon/genesis",
             "https://beacon.example/eth/v1/beacon/headers/32",
-            "https://beacon.example/eth/v1/beacon/blocks/32/root",
-            "https://beacon.example/eth/v2/beacon/blocks/32",
+            "https://beacon.example/eth/v1/beacon/blocks/64/root",
+            "https://beacon.example/eth/v2/beacon/blocks/64",
             "https://beacon.example/eth/v1/beacon/light_client/finality_update",
             "BeaconFinalityUpdateJson(",
+            "EthereumFinalityBranch",
+            'Assert.Equal(EthereumFinalityBranch, Assert.IsAssignableFrom<IReadOnlyList<string>>(evidence.BeaconFinality?["finalityBranch"]))',
+            "includeFinalityBranch: false",
+            "finalityBranch: EthereumFinalityBranch.Take(5).ToArray()",
             "syncCommitteeParticipation",
-            'SyncCommitteeBits: "0x01" + new string(\'0\', 126)',
+            "EthereumSyncCommitteeSupermajorityBits",
             '["sync_committee_bits"] = "0x02" + string.Concat(Enumerable.Repeat("00", 63))',
             "sync_committee_bits must contain at least one participant",
-            '["timestamp"] = "0x1e4"',
+            '["timestamp"] = "0x364"',
             "BeaconBlockRootJson(",
             "BeaconBlockJson(",
+            "BeaconExecutionPayloadSszRootsMatchSharedVector",
+            "0xc029dda492d2e41ad72bd83f1727a67e5331f413ec29d5c31de955d0bea24624",
+            "0x431e6bef5e759e8fdf32d8e8ed1ff761933ddb4de24ec9ae8e2aa0d25fe861ba",
+            "0xd54b406debae26e6ebaef512cc4f9e6bc12cf02af0d4476895383b37f682a179",
+            "historical target blocks require an ancestry proof",
             "finalized block root must match finalized header root",
             "execution payload block_hash must match block.hash",
             "execution payload receipts_root must match block.receiptsRoot",
+        ),
+    }
+    missing = []
+    for path, markers in guarded_sources.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
+def test_release_readiness_guards_ethereum_sync_committee_roster_tests() -> None:
+    """Ethereum mainnet sync-committee helpers must reject compressed rosters."""
+
+    guarded_sources = {
+        ROOT / "crates" / "iroha_sccp" / "src" / "lib.rs": (
+            "const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES: usize = 512;",
+            ".all(|weight| *weight == 1)",
+            "eth_sync_committee_transition_transcript_requires_mainnet_rosters",
+        ),
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
+            "const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512;",
+            "ETH sync committee must contain exactly",
+            "syncCommitteeWeights[${index}] must be 1 for Ethereum mainnet",
+        ),
+        ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js": (
+            "const SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512;",
+            "ETH sync committee must contain exactly",
+            "syncCommitteeWeights[${index}] must be 1 for Ethereum mainnet",
+        ),
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpSolanaProver.test.js": (
+            "syncCommitteeFixture(0x11, 0xaa)",
+            "assert.equal(nextSyncCommitteePayload.length, 81925)",
+            "signersBitmap(342)",
+        ),
+        ROOT / "python" / "iroha_torii_client" / "sccp.py": (
+            "_SCCP_ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512",
+            "ETH sync committee must contain exactly",
+            "syncCommitteeWeights[{index}] must be 1 for Ethereum mainnet",
+        ),
+        ROOT / "python" / "iroha_torii_client" / "tests" / "sccp_test.py": (
+            "sync_committee_fixture(0x11, 0xAA)",
+            "assert len(next_payload) == 81925",
+            "signers_bitmap(342)",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpSourceProofHashes.swift": (
+            "sccpEthMainnetSyncCommitteeAuthorities = 512",
+            "syncCommitteeWeights[index] == 1",
+            "signersBitmap.count == (syncCommitteePublicKeys.count + 7) / 8",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Tests"
+        / "IrohaSwiftTests"
+        / "SccpSolanaProverTests.swift": (
+            "ethereumSyncCommitteeBytes(_ byte: UInt8, count: Int)",
+            "XCTAssertEqual(nextSyncPayload.count, 81_925)",
+            "Self.ethereumSyncCommitteeSignersBitmap(342)",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "SourceSccpProofHashes.kt": (
+            "ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES: Int = 512",
+            "syncCommitteeWeights[$index] must be 1 for Ethereum mainnet",
+            "signersBitmap.size == (syncCommitteePublicKeys.size + 7) / 8",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "SourceSccpProofHashesTest.kt": (
+            "List(512) { index ->",
+            "assertEquals(81925, nextSyncPayload.size)",
+            "syncCommitteeSignersBitmap(342)",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProverTest.kt": (
+            "indexedSyncCommitteeBytes(0x11, 48, index)",
+            'syncCommitteeWeights = List(512) { "1" }',
+            "syncCommitteeRoot must match syncCommitteePayload",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "SourceSccpProofs.java": (
+            "ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512",
+            "must be 1 for Ethereum mainnet",
+            "(syncCommitteePublicKeys.size() + 7) / 8",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "SourceSccpProofsTests.java": (
+            "syncCommitteeBytes(0x11, 48)",
+            "nextSyncPayload.length == 81925",
+            "syncCommitteeSignersBitmap(342)",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProverTests.java": (
+            "for (int index = 0; index < 512; index++)",
+            "indexedSyncCommitteeBytes(0x11, 48, index)",
+            "syncCommitteeRoot must match syncCommitteePayload",
+        ),
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs": (
+            "EthMainnetSyncCommitteeAuthorities = 512",
+            "syncCommitteePayload must contain exactly",
+            "must be 1 for Ethereum mainnet",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpEthereumMainnetTests.cs": (
+            "Assert.Equal(81925, syncCommitteePayload.Length)",
+            "CompressedSyncCommitteePayload()",
+            "WeightedSyncCommitteePayload()",
         ),
     }
     missing = []

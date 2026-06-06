@@ -10,8 +10,12 @@ ETH_DESTINATION_BINDING_VECTOR = (
 BSC_DESTINATION_BINDING_VECTOR = (
     "5e97d6da2b4ca7d64171ae717cfa31340a736c125485812a7cb9641570bc27d6"
 )
+BSC_TESTNET_DESTINATION_BINDING_VECTOR = (
+    "16eb6817844e492f8fea4fc4742b9e464a80ae392f25d5e6fad9960d49414dcc"
+)
 ETH_MAINNET_NETWORK_ID = "00" * 31 + "01"
 BSC_MAINNET_NETWORK_ID = "00" * 31 + "38"
+BSC_TESTNET_NETWORK_ID = "00" * 31 + "61"
 EVM_SOURCE_VERIFIER_MATERIAL_HASH = "aa" * 32
 EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH = "99" * 32
 ETH_ROUTE_ALLOWLIST_HASH_VECTOR = (
@@ -20,12 +24,18 @@ ETH_ROUTE_ALLOWLIST_HASH_VECTOR = (
 BSC_ROUTE_ALLOWLIST_HASH_VECTOR = (
     "03492e28a9c71c56c7702eb438b5aff0df0f5e263a6173f3b950a7b45cc1bda6"
 )
+BSC_TESTNET_ROUTE_ALLOWLIST_HASH_VECTOR = (
+    "27573a75bd6d18056533bcf09049f155f2966553124219d0a464d1c9953cc4a7"
+)
 EVM_ROUTE_CANARY_EVIDENCE_HASH = "e1" * 32
 ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "c08cea56ca5233fad7af7e4a2a849eb1c245f1f093015858b11049a0b63992d9"
+    "84b93b0050b6bc9696ba55d56a8c957171e6a4ebd2f242b683762d52d88db9d7"
 )
 BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "fbe2366715a171e9e1d8afdc48b811316c3c32cd393e83c65e5e27134e0d1def"
+    "66a7bdfe287e79a350688ca84699cde4df4c6cbf38926f0ac4f027c7a2c43744"
+)
+BSC_TESTNET_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
+    "903b4afe339398216c02663eea270634494a1f12b166dc322d9d4d9c1c3e544b"
 )
 
 
@@ -42,10 +52,10 @@ def load_evidence_module():
     return module
 
 
-def evm_runtime_material(module, *, domain=1):
+def evm_runtime_material(module, *, domain=1, bsc_network="mainnet"):
     bridge_runtime = bytes.fromhex("6001600255")
     verifier_runtime = bytes.fromhex("6080604052")
-    network_id = module.evm_mainnet_network_id_for_domain(domain)
+    network_id = module.evm_network_id_for_domain(domain, bsc_network=bsc_network)
     verifier_address = bytes.fromhex("11" * 20)
     bridge_address = bytes.fromhex("22" * 20)
     verifier_key_hash = bytes.fromhex("cc" * 32)
@@ -59,6 +69,7 @@ def evm_runtime_material(module, *, domain=1):
         bridge_address=bridge_address,
         verifier_code_hash=verifier_code_hash,
         verifier_key_hash=verifier_key_hash,
+        bsc_network=bsc_network,
     )
     route_allowlist_hash = module.evm_route_allowlist_hash(
         domain=domain,
@@ -67,6 +78,7 @@ def evm_runtime_material(module, *, domain=1):
             EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
         ),
         destination_binding_hash=destination_binding_hash,
+        bsc_network=bsc_network,
     )
     route_canary_transaction_hash = bytes.fromhex("44" * 32)
     route_canary_receipt_block_number = 0x1234
@@ -103,9 +115,12 @@ def evm_runtime_material(module, *, domain=1):
         proof_family_hash=module.evm_proof_family_hash(),
         network_id=network_id,
         used_message_proof=True,
+        receipt_block_finalized=True,
+        bsc_network=bsc_network,
     )
     return SimpleNamespace(
         domain=domain,
+        bsc_network=bsc_network,
         network_id=network_id,
         verifier_address=verifier_address,
         bridge_address=bridge_address,
@@ -170,6 +185,7 @@ def full_toml_args(material):
     return add_route_canary_args(
         SimpleNamespace(
             domain=material.domain,
+            bsc_network=material.bsc_network,
             network_id=material.network_id,
             verifier_address=material.verifier_address,
             bridge_address=material.bridge_address,
@@ -214,6 +230,22 @@ def test_evm_destination_domain_parser_accepts_eth_and_bsc_only():
         assert "domain must be eth or bsc" in str(exc)
     else:
         raise AssertionError("padded EVM destination domain was accepted")
+
+    assert module.parse_bsc_network("mainnet") == "mainnet"
+    assert module.parse_bsc_network("bsc-mainnet") == "mainnet"
+    assert module.parse_bsc_network("56") == "mainnet"
+    assert module.parse_bsc_network("testnet") == "testnet"
+    assert module.parse_bsc_network("bsc-testnet") == "testnet"
+    assert module.parse_bsc_network("chapel") == "testnet"
+    assert module.parse_bsc_network("97") == "testnet"
+
+    for value in (" testnet ", "nile", "bnb-testnet"):
+        try:
+            module.parse_bsc_network(value)
+        except module.argparse.ArgumentTypeError as exc:
+            assert "BSC network must be mainnet or testnet" in str(exc)
+        else:
+            raise AssertionError(f"non-canonical BSC network {value!r} was accepted")
 
 
 def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
@@ -323,14 +355,35 @@ def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
         "verifier_key_hash": bytes.fromhex("cc" * 32),
     }
     common_bsc = {**common_eth, "network_id": bytes.fromhex(BSC_MAINNET_NETWORK_ID)}
+    common_bsc_testnet = {
+        **common_eth,
+        "network_id": bytes.fromhex(BSC_TESTNET_NETWORK_ID),
+    }
 
     eth_hash = module.evm_destination_binding_hash(target_domain=1, **common_eth)
     bsc_hash = module.evm_destination_binding_hash(target_domain=2, **common_bsc)
+    bsc_testnet_hash = module.evm_destination_binding_hash(
+        target_domain=2,
+        bsc_network="testnet",
+        **common_bsc_testnet,
+    )
     eth_key = module.evm_destination_binding_key(target_domain=1, **common_eth)
+    bsc_testnet_key = module.evm_destination_binding_key(
+        target_domain=2,
+        bsc_network="testnet",
+        **common_bsc_testnet,
+    )
 
     assert eth_hash.hex() == ETH_DESTINATION_BINDING_VECTOR
     assert bsc_hash.hex() == BSC_DESTINATION_BINDING_VECTOR
+    assert bsc_testnet_hash.hex() == BSC_TESTNET_DESTINATION_BINDING_VECTOR
+    assert module.evm_network_id_for_domain(2).hex() == BSC_MAINNET_NETWORK_ID
+    assert (
+        module.evm_network_id_for_domain(2, bsc_network="testnet").hex()
+        == BSC_TESTNET_NETWORK_ID
+    )
     assert eth_hash != bsc_hash
+    assert bsc_hash != bsc_testnet_hash
     assert eth_key == (
         "evm:0:1:"
         + ETH_MAINNET_NETWORK_ID
@@ -343,6 +396,39 @@ def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
         + ":0x"
         + "cc" * 32
     )
+    assert bsc_testnet_key == (
+        "evm:0:2:"
+        + BSC_TESTNET_NETWORK_ID
+        + ":0x"
+        + "11" * 20
+        + ":0x"
+        + "22" * 20
+        + ":0x"
+        + "bb" * 32
+        + ":0x"
+        + "cc" * 32
+    )
+
+    try:
+        module.evm_destination_binding_hash(
+            target_domain=2,
+            bsc_network="testnet",
+            **common_bsc,
+        )
+    except ValueError as exc:
+        assert "chain id 97" in str(exc)
+    else:
+        raise AssertionError("BSC testnet binding accepted mainnet network id")
+
+    try:
+        module.evm_destination_binding_hash(
+            target_domain=2,
+            **common_bsc_testnet,
+        )
+    except ValueError as exc:
+        assert "chain id 56" in str(exc)
+    else:
+        raise AssertionError("BSC mainnet binding accepted testnet network id")
 
 
 def test_evm_route_allowlist_hash_matches_lane_evidence_vectors():
@@ -364,10 +450,21 @@ def test_evm_route_allowlist_hash_matches_lane_evidence_vectors():
         ),
         destination_binding_hash=bytes.fromhex(BSC_DESTINATION_BINDING_VECTOR),
     )
+    bsc_testnet_hash = module.evm_route_allowlist_hash(
+        domain=2,
+        bsc_network="testnet",
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        destination_binding_hash=bytes.fromhex(BSC_TESTNET_DESTINATION_BINDING_VECTOR),
+    )
 
     assert eth_hash.hex() == ETH_ROUTE_ALLOWLIST_HASH_VECTOR
     assert bsc_hash.hex() == BSC_ROUTE_ALLOWLIST_HASH_VECTOR
+    assert bsc_testnet_hash.hex() == BSC_TESTNET_ROUTE_ALLOWLIST_HASH_VECTOR
     assert eth_hash != bsc_hash
+    assert bsc_hash != bsc_testnet_hash
 
 
 def test_evm_route_canary_transaction_hash_binds_target_domain():
@@ -392,6 +489,7 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         "verifier_backend_hash": module.evm_verifier_backend_hash(),
         "proof_family_hash": module.evm_proof_family_hash(),
         "used_message_proof": True,
+        "receipt_block_finalized": True,
     }
     eth_common = {
         **common,
@@ -405,6 +503,14 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         "destination_binding_hash": bytes.fromhex(BSC_DESTINATION_BINDING_VECTOR),
         "network_id": bytes.fromhex(BSC_MAINNET_NETWORK_ID),
     }
+    bsc_testnet_common = {
+        **common,
+        "route_allowlist_hash": bytes.fromhex(BSC_TESTNET_ROUTE_ALLOWLIST_HASH_VECTOR),
+        "destination_binding_hash": bytes.fromhex(
+            BSC_TESTNET_DESTINATION_BINDING_VECTOR
+        ),
+        "network_id": bytes.fromhex(BSC_TESTNET_NETWORK_ID),
+    }
 
     eth_hash = module.evm_route_canary_transaction_evidence_hash(
         target_domain=module.SCCP_DOMAIN_ETH,
@@ -414,10 +520,20 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         target_domain=module.SCCP_DOMAIN_BSC,
         **bsc_common,
     )
+    bsc_testnet_hash = module.evm_route_canary_transaction_evidence_hash(
+        target_domain=module.SCCP_DOMAIN_BSC,
+        bsc_network="testnet",
+        **bsc_testnet_common,
+    )
 
     assert eth_hash != bsc_hash
+    assert bsc_hash != bsc_testnet_hash
     assert eth_hash.hex() == ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR
     assert bsc_hash.hex() == BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR
+    assert (
+        bsc_testnet_hash.hex()
+        == BSC_TESTNET_ROUTE_CANARY_TRANSACTION_HASH_VECTOR
+    )
     try:
         module.evm_route_canary_transaction_evidence_hash(
             target_domain=module.SCCP_DOMAIN_SORA,
@@ -446,6 +562,12 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
             assert "EVM route canary transcript hashes must be distinct" in str(exc)
         else:
             raise AssertionError(f"reused EVM route canary hash role {field} accepted")
+
+    non_finalized_hash = module.evm_route_canary_transaction_evidence_hash(
+        target_domain=module.SCCP_DOMAIN_ETH,
+        **{**eth_common, "receipt_block_finalized": False},
+    )
+    assert non_finalized_hash != eth_hash
 
 
 def test_evm_destination_binding_hash_rejects_malformed_direct_material():
@@ -479,6 +601,16 @@ def test_evm_destination_binding_hash_rejects_malformed_direct_material():
         assert "network_id must match ETH mainnet EIP-155 chain id 1" in str(exc)
     else:
         raise AssertionError("non-mainnet ETH network id was accepted")
+
+    try:
+        module.evm_destination_binding_key(
+            network_id=bytes.fromhex("33" * 32),
+            **{key: value for key, value in common.items() if key != "network_id"},
+        )
+    except ValueError as exc:
+        assert "network_id must match ETH mainnet EIP-155 chain id 1" in str(exc)
+    else:
+        raise AssertionError("non-mainnet ETH network id binding key was accepted")
 
     try:
         module.evm_destination_binding_hash(
@@ -649,6 +781,7 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
         proof_family_hash=module.evm_proof_family_hash(),
         network_id=network_id,
         used_message_proof=True,
+        receipt_block_finalized=True,
     )
     common = dict(
         domain=1,
@@ -728,6 +861,7 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
     def toml_args(material):
         return SimpleNamespace(
             domain=material.domain,
+            bsc_network=material.bsc_network,
             network_id=material.network_id,
             verifier_address=material.verifier_address,
             bridge_address=material.bridge_address,
@@ -903,6 +1037,68 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
         'route_allowlist_id = "sccp:bsc:route-allowlist:bsc-mainnet:v1"'
         in bsc_rendered
     )
+
+    bsc_testnet = evm_runtime_material(module, domain=2, bsc_network="testnet")
+    bsc_testnet_args = toml_args(bsc_testnet)
+    bsc_testnet_rendered = module.render_toml(
+        bsc_testnet_args,
+        bsc_testnet.destination_binding_hash,
+    )
+    assert 'domain = 2' in bsc_testnet_rendered
+    assert 'chain = "bsc-testnet"' in bsc_testnet_rendered
+    assert '# sccp_evm_rpc_chain_id = "97"' in bsc_testnet_rendered
+    assert '# sccp_evm_block_tag = "latest"' in bsc_testnet_rendered
+    assert (
+        '# sccp_evm_destination_network_id = "0x'
+        + BSC_TESTNET_NETWORK_ID
+        + '"'
+        in bsc_testnet_rendered
+    )
+    assert (
+        'destination_network_id = "0x' + BSC_TESTNET_NETWORK_ID + '"'
+        in bsc_testnet_rendered
+    )
+    assert (
+        'destination_binding_key = "evm:0:2:' + BSC_TESTNET_NETWORK_ID
+        in bsc_testnet_rendered
+    )
+    assert (
+        'destination_binding_hash = "0x'
+        + bsc_testnet.destination_binding_hash.hex()
+        + '"'
+        in bsc_testnet_rendered
+    )
+    assert (
+        'route_allowlist_hash = "0x'
+        + bsc_testnet.route_allowlist_hash.hex()
+        + '"'
+        in bsc_testnet_rendered
+    )
+    assert (
+        'anchor_id = "sccp:bsc:destination-anchor:bsc-testnet:v1"'
+        in bsc_testnet_rendered
+    )
+    assert (
+        'route_allowlist_id = "sccp:bsc:route-allowlist:bsc-testnet:v1"'
+        in bsc_testnet_rendered
+    )
+    assert '# sccp_route_canary_status = "passed"' in bsc_testnet_rendered
+    assert 'route_canary_status = "passed"' in bsc_testnet_rendered
+
+    bsc_testnet_summary = module._json_summary(
+        bsc_testnet_args,
+        bsc_testnet.destination_binding_hash,
+        True,
+    )
+    assert bsc_testnet_summary["chain"] == "bsc-testnet"
+    assert bsc_testnet_summary["network_id"] == "0x" + BSC_TESTNET_NETWORK_ID
+    assert bsc_testnet_summary["destination_binding_hash"] == (
+        "0x" + bsc_testnet.destination_binding_hash.hex()
+    )
+    assert bsc_testnet_summary["route_allowlist_hash"] == (
+        "0x" + bsc_testnet.route_allowlist_hash.hex()
+    )
+    assert bsc_testnet_summary["toml_ready"] is True
 
     try:
         module.render_toml(eth_args, bytes.fromhex("ee" * 32))
@@ -1291,6 +1487,78 @@ def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
         assert exc.code == 2
     else:
         raise AssertionError("mismatched EVM destination binding hash was accepted")
+
+
+def test_evm_cli_bsc_testnet_profile_defaults_and_scope(capsys):
+    module = load_evidence_module()
+    bsc_testnet = evm_runtime_material(module, domain=2, bsc_network="testnet")
+    args = [
+        "--domain",
+        "bsc",
+        "--bsc-network",
+        "testnet",
+        "--verifier-address",
+        "0x" + bsc_testnet.verifier_address.hex(),
+        "--bridge-address",
+        "0x" + bsc_testnet.bridge_address.hex(),
+        "--bridge-code-hash",
+        "0x" + bsc_testnet.bridge_code_hash.hex(),
+        "--verifier-code-hash",
+        "0x" + bsc_testnet.verifier_code_hash.hex(),
+        "--verifier-key-hash",
+        "0x" + bsc_testnet.verifier_key_hash.hex(),
+        "--expected-destination-binding-hash",
+        "0x" + bsc_testnet.destination_binding_hash.hex(),
+    ]
+
+    assert module.main(args) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["chain"] == "bsc-testnet"
+    assert output["target_domain"] == 2
+    assert output["network_id"] == "0x" + BSC_TESTNET_NETWORK_ID
+    assert output["destination_binding_key"].startswith(
+        "evm:0:2:" + BSC_TESTNET_NETWORK_ID
+    )
+    assert output["destination_binding_hash"] == (
+        "0x" + bsc_testnet.destination_binding_hash.hex()
+    )
+
+    wrong_network_args = [
+        *args[:4],
+        "--network-id",
+        "0x" + BSC_MAINNET_NETWORK_ID,
+        *args[4:],
+    ]
+    try:
+        module.main(wrong_network_args)
+    except SystemExit as exc:
+        assert exc.code == 2
+        assert "chain id 97" in capsys.readouterr().err
+    else:
+        raise AssertionError("BSC testnet CLI accepted the BSC mainnet network id")
+
+    try:
+        module.main(
+            [
+                "--domain",
+                "eth",
+                "--bsc-network",
+                "testnet",
+                "--verifier-address",
+                "0x" + "11" * 20,
+                "--bridge-address",
+                "0x" + "22" * 20,
+                "--verifier-code-hash",
+                "0x" + "bb" * 32,
+                "--verifier-key-hash",
+                "0x" + "cc" * 32,
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+        assert "--bsc-network only applies when --domain bsc" in capsys.readouterr().err
+    else:
+        raise AssertionError("ETH destination CLI accepted a BSC testnet selector")
 
 
 def test_evm_cli_requires_code_hash_or_runtime_bytecode():

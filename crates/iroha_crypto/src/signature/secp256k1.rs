@@ -18,6 +18,16 @@ impl EcdsaSecp256k1Sha256 {
         EcdsaSecp256k1Impl::keypair(option)
     }
 
+    /// Fallibly generate a secp256k1 keypair using the provided RNG option.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyGen`] if OS-backed random generation fails or cannot
+    /// produce a valid scalar within the bounded retry window.
+    pub fn try_keypair(option: KeyGenOption<PrivateKey>) -> Result<(PublicKey, PrivateKey), Error> {
+        EcdsaSecp256k1Impl::try_keypair(option)
+    }
+
     /// Sign a message using the provided secp256k1 private key.
     pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
         EcdsaSecp256k1Impl::sign(message, sk)
@@ -172,6 +182,17 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn try_keypair_random_signs_and_verifies() {
+        let (pk, sk) =
+            EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::Random).expect("checked keypair");
+        let message = b"secp256k1 checked random keypair";
+        let signature = EcdsaSecp256k1Sha256::sign(message, &sk);
+
+        EcdsaSecp256k1Sha256::verify(message, &signature, &pk).expect("signature verifies");
+    }
 }
 
 mod ecdsa_secp256k1 {
@@ -184,24 +205,31 @@ mod ecdsa_secp256k1 {
         },
         elliptic_curve::sec1::ToEncodedPoint as _,
     };
+    #[cfg(feature = "rand")]
+    use rand::rngs::OsRng;
+    #[cfg(feature = "rand")]
+    use rand_core::TryRngCore;
     use sha2::Digest as _;
     use sha3::Keccak256;
+    #[cfg(feature = "rand")]
+    use zeroize::Zeroizing;
 
     use super::{PrivateKey, PublicKey};
-    #[cfg(feature = "rand")]
-    use crate::rng::os_rng;
     use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
 
     pub struct EcdsaSecp256k1Impl;
 
     impl EcdsaSecp256k1Impl {
         pub fn keypair(option: KeyGenOption<PrivateKey>) -> (PublicKey, PrivateKey) {
+            Self::try_keypair(option).expect("secp256k1 key generation should succeed")
+        }
+
+        pub fn try_keypair(
+            option: KeyGenOption<PrivateKey>,
+        ) -> Result<(PublicKey, PrivateKey), Error> {
             let signing_key = match option {
                 #[cfg(feature = "rand")]
-                KeyGenOption::Random => {
-                    let mut rng = os_rng();
-                    PrivateKey::random(&mut rng)
-                }
+                KeyGenOption::Random => Self::random_private_key()?,
                 KeyGenOption::UseSeed(seed) => {
                     let mut rng = rng_from_seed(seed);
                     PrivateKey::random(&mut rng)
@@ -210,7 +238,24 @@ mod ecdsa_secp256k1 {
             };
 
             let public_key = signing_key.public_key();
-            (public_key, signing_key)
+            Ok((public_key, signing_key))
+        }
+
+        #[cfg(feature = "rand")]
+        fn random_private_key() -> Result<PrivateKey, Error> {
+            const RANDOM_KEYGEN_ATTEMPTS: usize = 16;
+            for _ in 0..RANDOM_KEYGEN_ATTEMPTS {
+                let mut bytes = Zeroizing::new([0u8; 32]);
+                OsRng
+                    .try_fill_bytes(bytes.as_mut())
+                    .map_err(|err| Error::KeyGen(format!("secp256k1 OS RNG failed: {err}")))?;
+                if let Ok(secret) = PrivateKey::from_slice(bytes.as_ref()) {
+                    return Ok(secret);
+                }
+            }
+            Err(Error::KeyGen(
+                "secp256k1 OS RNG did not produce a valid scalar".to_owned(),
+            ))
         }
 
         pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {

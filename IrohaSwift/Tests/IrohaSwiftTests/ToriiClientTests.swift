@@ -2657,7 +2657,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
         let expected =
-            "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000004887a2a6d485fb5100a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002cab6c00000000000800000000000000440e92000000000008000000000000005a25000000000000080000000000000049671100000000000800000000000000bd3e2300000000000800000000000000403d85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ed884300000000000800000000000000dc21b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006b979b00000000000800000000000000ddd4410000000000080000000000000052086600000000000800000000000000ee13ae00000000002001000000000000880000000000000008000000000000000800000000000000d96d690000000000080000000000000092060e0000000000080000000000000034077500000000000800000000000000dcc4190000000000080000000000000062ea230000000000080000000000000055ef0a00000000000800000000000000ac52d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f3214400000000000800000000000000caedd2000000000008000000000000001cfb5b00000000000800000000000000d26e660000000000080000000000000016ec0e000000000008000000000000003cee83000000000008000000000000006d7ef900000000000800000000000000c2fbbb00000000002001000000000000880000000000000008000000000000000800000000000000c9c7eb00000000000800000000000000c8c04800000000000800000000000000ef1e8700000000000800000000000000aed22c000000000008000000000000006021990000000000080000000000000035ac8c00000000000800000000000000d24393000000000008000000000000008a206d0000000000880000000000000008000000000000000800000000000000407ded00000000000800000000000000d79c3400000000000800000000000000a0332c0000000000080000000000000091fe5700000000000800000000000000543de8000000000008000000000000005eb9df00000000000800000000000000a7c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005c874400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006c1c1a000000000008000000000000006f4fc200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000caf929000000000008000000000000005848730000000000080000000000000061909200000000000800000000000000f5f5dd00000000000800000000000000435a3b000000000008000000000000009a9f690000000000"
+            "4e52543000001042e5b988077612440e4cd45673596b00b004000000000000dd479e32bf99dbd000a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002dac6c00000000000800000000000000440e92000000000008000000000000005b2600000000000008000000000000004a681100000000000800000000000000bc3d2300000000000800000000000000413e85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ee894300000000000800000000000000dd22b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006a969b00000000000800000000000000ddd4410000000000080000000000000051076600000000000800000000000000ef14ae00000000002001000000000000880000000000000008000000000000000800000000000000d86c690000000000080000000000000093070e0000000000080000000000000033067500000000000800000000000000ddc5190000000000080000000000000062ea230000000000080000000000000056f00a00000000000800000000000000ab51d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f2204400000000000800000000000000c9ecd2000000000008000000000000001dfc5b00000000000800000000000000d16d660000000000080000000000000016ec0e000000000008000000000000003def83000000000008000000000000006e7ff900000000000800000000000000c1fabb00000000002001000000000000880000000000000008000000000000000800000000000000c8c6eb00000000000800000000000000c9c14800000000000800000000000000f01f8700000000000800000000000000aed22c000000000008000000000000006122990000000000080000000000000036ad8c00000000000800000000000000d1429300000000000800000000000000891f6d0000000000880000000000000008000000000000000800000000000000417eed00000000000800000000000000d79c34000000000008000000000000009f322c0000000000080000000000000091fe5700000000000800000000000000533ce8000000000008000000000000005db8df00000000000800000000000000a8c313000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005d884400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006d1d1a000000000008000000000000007050c200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000cbfa290000000000080000000000000057477300000000000800000000000000608f9200000000000800000000000000f5f5dd00000000000800000000000000445b3b00000000000800000000000000999e690000000000"
 
         XCTAssertEqual(try policy.encryptInput("ab", seedHex: seedHex), expected)
         let request = try policy.encryptedRequest(
@@ -2667,6 +2667,47 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(request.policyId, "string#retail")
         XCTAssertEqual(request.encryptedInputHex, expected)
+    }
+
+    func testIdentifierBfvEnvelopeBuilderRejectsOverwideInputProfile() throws {
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "string#retail",
+            owner: try canonicalOwnerLiteral(),
+            active: true,
+            normalization: .exact,
+            resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
+                parameters: ToriiIdentifierBfvParameters(
+                    polynomialDegree: 8,
+                    plaintextModulus: 257,
+                    ciphertextModulus: 16_842_752,
+                    decompositionBaseLog: 12
+                ),
+                publicKey: ToriiIdentifierBfvPublicKey(
+                    b: [11_472_226, 15_791_131, 10_301_391, 6_321_610, 502_045, 1_948_157, 5_332_249, 12_641_494],
+                    a: [3_503_246, 2_379_264, 12_091_019, 30_169, 15_804_162, 8_155_629, 2_418_997, 3_003_107]
+                ),
+                maxInputBytes: 64
+            ),
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+
+        XCTAssertThrowsError(
+            try policy.encryptInput(
+                "ab",
+                seedHex: "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+            )
+        ) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("registered RAM-LFE"))
+        }
     }
 
     func testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors() throws {
@@ -2705,6 +2746,66 @@ final class ToriiClientTests: XCTestCase {
                 "fixture ciphertext digest must be unique: \(digest)"
             )
         }
+    }
+
+    func testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudOperationInputVectors() throws {
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent("fixtures/soracloud/bfv_identifier_vectors_v1.json")
+        let fixtureData = try Data(contentsOf: fixtureURL)
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
+        )
+        let operationVectors = try object(fixture, "operation_vectors")
+        XCTAssertEqual(try string(operationVectors, "vector_set"), "soracloud-bfv-operation-v1")
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "soracloud-operation#fixture",
+            owner: try canonicalOwnerLiteral(),
+            active: true,
+            normalization: .exact,
+            resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
+            backend: "bfv-programmed-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: try bfvParameters(
+                fromFixture: object(operationVectors, "public_parameters_decoded")
+            ),
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+        var checkedInputs = 0
+        var observedDigests = Set<String>()
+        for vector in try objectArray(operationVectors, "vectors") {
+            let vectorName = try string(vector, "name")
+            for input in try objectArray(vector, "inputs") {
+                if input["packed_slots"] != nil {
+                    continue
+                }
+                let seedUtf8 = try string(input, "seed_utf8")
+                let inputBytes = try XCTUnwrap(Data(hexString: try string(input, "input_hex")))
+                let inputString = String(decoding: inputBytes, as: UTF8.self)
+                let seed = Data(seedUtf8.utf8).hexEncodedString()
+                let ciphertextHex = try policy.encryptInput(inputString, seedHex: seed)
+                XCTAssertEqual(
+                    ciphertextHex.count / 2,
+                    try int(input, "expected_ciphertext_bytes"),
+                    "\(vectorName)/\(seedUtf8) ciphertext byte length"
+                )
+                let ciphertext = try XCTUnwrap(Data(hexString: ciphertextHex))
+                let digest = sha256Hex(ciphertext)
+                XCTAssertEqual(
+                    digest,
+                    try string(input, "expected_ciphertext_sha256"),
+                    "\(vectorName)/\(seedUtf8) ciphertext digest"
+                )
+                XCTAssertTrue(
+                    observedDigests.insert(digest).inserted,
+                    "operation input digest must be unique: \(digest)"
+                )
+                checkedInputs += 1
+            }
+        }
+        XCTAssertEqual(checkedInputs, 8)
     }
 
     func testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete() throws {
@@ -3059,15 +3160,16 @@ final class ToriiClientTests: XCTestCase {
         return ToriiIdentifierBfvPublicParameters(
             parameters: ToriiIdentifierBfvParameters(
                 polynomialDegree: UInt32(try int(rawParameters, "polynomial_degree")),
-                plaintextModulus: UInt64(try int(rawParameters, "plaintext_modulus")),
-                ciphertextModulus: UInt64(try int(rawParameters, "ciphertext_modulus")),
+                plaintextModulus: try uint64(rawParameters, "plaintext_modulus"),
+                ciphertextModulus: try uint64(rawParameters, "ciphertext_modulus"),
                 decompositionBaseLog: UInt8(try int(rawParameters, "decomposition_base_log"))
             ),
             publicKey: ToriiIdentifierBfvPublicKey(
                 b: try uint64Array(rawPublicKey, "b"),
                 a: try uint64Array(rawPublicKey, "a")
             ),
-            maxInputBytes: UInt16(try int(params, "max_input_bytes"))
+            maxInputBytes: UInt16(try int(params, "max_input_bytes")),
+            noritoLengthEncoding: params["norito_length_encoding"] as? String
         )
     }
 
@@ -3192,10 +3294,138 @@ final class ToriiClientTests: XCTestCase {
         }
         let bootstrap = try object(operationVectors, "bootstrap_key")
         try assertBfvEqual(try string(bootstrap, "key_id"), try string(evaluationKey, "bootstrap_key_id"), "bootstrap key id")
+        try assertBfvEqual(try int(bootstrap, "max_refresh_rounds"), try int(evaluationKey, "bootstrap_max_refresh_rounds"), "bootstrap max refresh rounds")
+        XCTAssertGreaterThan(try int(bootstrap, "max_refresh_rounds"), 0)
         let bootstrapComponents = try object(bootstrap, "zero_refresh_components")
         try assertBfvEqual(try int(bootstrapComponents, "coefficient_count"), publicDegree, "bootstrap coefficient count")
         try assertBfvComponentDigest("bootstrap c0", try string(bootstrapComponents, "c0_sha256"), seen: &componentDigests)
         try assertBfvComponentDigest("bootstrap c1", try string(bootstrapComponents, "c1_sha256"), seen: &componentDigests)
+        let roundRefreshes = try objectArray(bootstrap, "round_refreshes")
+        XCTAssertEqual(roundRefreshes.count, try int(bootstrap, "max_refresh_rounds"))
+        for (index, refresh) in roundRefreshes.enumerated() {
+            XCTAssertEqual(try int(refresh, "round_index"), index)
+            XCTAssertGreaterThan(try int(refresh, "expected_refresh_bytes"), 0)
+            assertBfvUpperSha256("bootstrap round \(index) refresh", try string(refresh, "expected_refresh_sha256"))
+            let components = try object(refresh, "components")
+            XCTAssertEqual(try int(components, "coefficient_count"), publicDegree)
+            if index == 0 {
+                XCTAssertEqual(try string(components, "c0_sha256"), try string(bootstrapComponents, "c0_sha256"))
+                XCTAssertEqual(try string(components, "c1_sha256"), try string(bootstrapComponents, "c1_sha256"))
+                assertBfvUpperSha256("bootstrap round 0 c0", try string(components, "c0_sha256"))
+                assertBfvUpperSha256("bootstrap round 0 c1", try string(components, "c1_sha256"))
+            } else {
+                try assertBfvComponentDigest("bootstrap round \(index) c0", try string(components, "c0_sha256"), seen: &componentDigests)
+                try assertBfvComponentDigest("bootstrap round \(index) c1", try string(components, "c1_sha256"), seen: &componentDigests)
+            }
+        }
+        XCTAssertEqual(try string(roundRefreshes[0], "expected_refresh_sha256"), try string(bootstrap, "expected_zero_refresh_sha256"))
+        if roundRefreshes.count > 1 {
+            XCTAssertNotEqual(try string(roundRefreshes[0], "expected_refresh_sha256"), try string(roundRefreshes[1], "expected_refresh_sha256"))
+        }
+        let bootstrapRefreshVectors = try objectArray(operationVectors, "bootstrap_refresh_vectors")
+        XCTAssertFalse(bootstrapRefreshVectors.isEmpty)
+        for vector in bootstrapRefreshVectors {
+            let name = try string(vector, "name")
+            XCTAssertEqual(try string(vector, "key_id"), try string(bootstrap, "key_id"))
+            let refreshRounds = try int(vector, "refresh_rounds")
+            XCTAssertGreaterThan(refreshRounds, 0)
+            XCTAssertLessThanOrEqual(refreshRounds, try int(bootstrap, "max_refresh_rounds"))
+            guard let plaintextSlots = vector["input_plaintext_slots"] as? [Int] else {
+                throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "input_plaintext_slots must be an integer array"])
+            }
+            XCTAssertFalse(plaintextSlots.isEmpty)
+            XCTAssertTrue(plaintextSlots.allSatisfy { $0 >= 0 })
+            XCTAssertGreaterThan(try int(vector, "expected_input_ciphertext_bytes"), 0)
+            XCTAssertGreaterThan(try int(vector, "expected_output_ciphertext_bytes"), 0)
+            assertBfvUpperSha256("bootstrap refresh vector \(name) input", try string(vector, "expected_input_ciphertext_sha256"))
+            assertBfvUpperSha256("bootstrap refresh vector \(name) output", try string(vector, "expected_output_ciphertext_sha256"))
+            assertBfvUpperSha256("bootstrap refresh vector \(name) plaintext", try string(vector, "expected_plaintext_sha256"))
+            let components = try object(vector, "output_components")
+            XCTAssertEqual(try int(components, "coefficient_count"), publicDegree)
+            try assertBfvComponentDigest("bootstrap refresh vector \(name) c0", try string(components, "c0_sha256"), seen: &componentDigests)
+            try assertBfvComponentDigest("bootstrap refresh vector \(name) c1", try string(components, "c1_sha256"), seen: &componentDigests)
+        }
+        let runtimeVectors = try objectArray(operationVectors, "vectors")
+        for vector in runtimeVectors {
+            let vectorName = try string(vector, "name")
+            let expectedDepth = try string(vector, "operation") == "Multiply"
+                ? balancedBfvMultiplicationDepth(try objectArray(vector, "inputs").count)
+                : 0
+            XCTAssertEqual(
+                try int(vector, "requested_multiplication_depth"),
+                expectedDepth,
+                "\(vectorName) requested multiplication depth"
+            )
+        }
+        guard let packedRotate = runtimeVectors.first(where: { ($0["name"] as? String) == "soracloud-packed-rotate-left-output" }) else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "packed RotateLeft operation vector must be present"])
+        }
+        XCTAssertEqual(try string(packedRotate, "operation"), "RotateLeft")
+        XCTAssertEqual(try int(packedRotate, "rotation_steps"), publicDegree / 2)
+        let packedRotatePower = try int(packedRotate, "automorphism_power")
+        XCTAssertEqual(packedRotatePower, publicDegree + 1)
+        XCTAssertTrue(try galoisKeys.contains { try int($0, "automorphism_power") == packedRotatePower })
+        let packedRotateInputs = try objectArray(packedRotate, "inputs")
+        XCTAssertEqual(packedRotateInputs.count, 1)
+        let packedRotateInput = packedRotateInputs[0]
+        guard let inputSlots = packedRotateInput["packed_slots"] as? [Int] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "packed RotateLeft packed_slots must be an integer array"])
+        }
+        guard let outputSlots = packedRotate["expected_packed_slots"] as? [Int] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "packed RotateLeft expected_packed_slots must be an integer array"])
+        }
+        XCTAssertEqual(inputSlots.count, publicDegree)
+        XCTAssertEqual(outputSlots.count, publicDegree)
+        XCTAssertTrue(inputSlots.allSatisfy { $0 >= 0 })
+        XCTAssertTrue(outputSlots.allSatisfy { $0 >= 0 })
+        XCTAssertGreaterThan(try int(packedRotateInput, "expected_ciphertext_bytes"), 0)
+        XCTAssertGreaterThan(try int(packedRotate, "expected_output_ciphertext_bytes"), 0)
+        assertBfvUpperSha256("packed RotateLeft input plaintext", try string(packedRotateInput, "expected_packed_plaintext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft input", try string(packedRotateInput, "expected_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft output", try string(packedRotate, "expected_output_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft plaintext", try string(packedRotate, "expected_plaintext_coefficients_sha256"))
+        let packedRotateComponents = try object(packedRotate, "output_components")
+        XCTAssertEqual(try int(packedRotateComponents, "coefficient_count"), publicDegree)
+        try assertBfvComponentDigest("packed RotateLeft c0", try string(packedRotateComponents, "c0_sha256"), seen: &componentDigests)
+        try assertBfvComponentDigest("packed RotateLeft c1", try string(packedRotateComponents, "c1_sha256"), seen: &componentDigests)
+
+        guard let packedRotateSchedule = runtimeVectors.first(where: { ($0["name"] as? String) == "soracloud-packed-rotate-left-schedule-output" }) else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "packed RotateLeft schedule vector must be present"])
+        }
+        XCTAssertEqual(try string(packedRotateSchedule, "operation"), "RotateLeft")
+        XCTAssertEqual(try int(packedRotateSchedule, "rotation_steps"), 1)
+        guard let schedulePowers = packedRotateSchedule["automorphism_powers"] as? [Int] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "packed RotateLeft automorphism_powers must be an integer array"])
+        }
+        XCTAssertGreaterThan(schedulePowers.count, 1)
+        for power in schedulePowers {
+            XCTAssertGreaterThan(power, 0)
+            XCTAssertTrue(try galoisKeys.contains { try int($0, "automorphism_power") == power })
+        }
+        let packedRotateScheduleInputs = try objectArray(packedRotateSchedule, "inputs")
+        XCTAssertEqual(packedRotateScheduleInputs.count, 1)
+        let packedRotateScheduleInput = packedRotateScheduleInputs[0]
+        guard let scheduleInputSlots = packedRotateScheduleInput["packed_slots"] as? [Int] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "packed RotateLeft schedule packed_slots must be an integer array"])
+        }
+        guard let scheduleOutputSlots = packedRotateSchedule["expected_packed_slots"] as? [Int] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "packed RotateLeft schedule expected_packed_slots must be an integer array"])
+        }
+        XCTAssertEqual(scheduleInputSlots.count, publicDegree)
+        XCTAssertEqual(scheduleOutputSlots.count, publicDegree)
+        XCTAssertEqual(Array(scheduleInputSlots.dropFirst()) + [scheduleInputSlots[0]], scheduleOutputSlots)
+        XCTAssertTrue(scheduleInputSlots.allSatisfy { $0 >= 0 })
+        XCTAssertTrue(scheduleOutputSlots.allSatisfy { $0 >= 0 })
+        XCTAssertGreaterThan(try int(packedRotateScheduleInput, "expected_ciphertext_bytes"), 0)
+        XCTAssertGreaterThan(try int(packedRotateSchedule, "expected_output_ciphertext_bytes"), 0)
+        assertBfvUpperSha256("packed RotateLeft schedule input plaintext", try string(packedRotateScheduleInput, "expected_packed_plaintext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft schedule input", try string(packedRotateScheduleInput, "expected_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft schedule output", try string(packedRotateSchedule, "expected_output_ciphertext_sha256"))
+        assertBfvUpperSha256("packed RotateLeft schedule plaintext", try string(packedRotateSchedule, "expected_plaintext_coefficients_sha256"))
+        let packedRotateScheduleComponents = try object(packedRotateSchedule, "output_components")
+        XCTAssertEqual(try int(packedRotateScheduleComponents, "coefficient_count"), publicDegree)
+        try assertBfvComponentDigest("packed RotateLeft schedule c0", try string(packedRotateScheduleComponents, "c0_sha256"), seen: &componentDigests)
+        try assertBfvComponentDigest("packed RotateLeft schedule c1", try string(packedRotateScheduleComponents, "c1_sha256"), seen: &componentDigests)
     }
 
     private func assertBfvEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) throws {
@@ -3207,8 +3437,10 @@ final class ToriiClientTests: XCTestCase {
     private func assertBfvRnsModulusChainFixture(_ operationVectors: [String: Any], publicDegree: Int) throws {
         let rns = try object(operationVectors, "rns_modulus_chain")
         let moduli = try uint64Array(rns, "moduli")
-        XCTAssertEqual(moduli, [358273, 448769, 449921])
-        XCTAssertEqual(try string(rns, "product"), "72339115408190977")
+        XCTAssertFalse(moduli.isEmpty)
+        XCTAssertEqual(moduli, moduli.sorted())
+        XCTAssertTrue(moduli.allSatisfy { $0 > 2 && $0 % 2 == 1 })
+        XCTAssertTrue(try string(rns, "product").allSatisfy(\.isNumber))
         assertBfvLowerDigest("RNS modulus-chain digest", try string(rns, "expected_digest_hex"))
 
         let samples = try object(rns, "sample_polynomials")
@@ -3262,6 +3494,17 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNotEqual(value, String(repeating: "0", count: 64), "\(label) must not be zero")
     }
 
+    private func balancedBfvMultiplicationDepth(_ inputCount: Int) -> Int {
+        XCTAssertGreaterThan(inputCount, 0, "BFV multiplication depth requires at least one input")
+        var covered = 1
+        var depth = 0
+        while covered < inputCount {
+            covered *= 2
+            depth += 1
+        }
+        return depth
+    }
+
     private func assertBfvLowerDigest(_ label: String, _ value: String) {
         XCTAssertEqual(value.count, 64, "\(label) must be 32-byte hex")
         XCTAssertNil(value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789abcdef").inverted), "\(label) must be lowercase hex")
@@ -3282,11 +3525,29 @@ final class ToriiClientTests: XCTestCase {
         return value.intValue
     }
 
+    private func uint64(_ root: [String: Any], _ key: String) throws -> UInt64 {
+        if let value = root[key] as? NSNumber {
+            return UInt64(truncating: value)
+        }
+        if let value = root[key] as? String, let parsed = UInt64(value) {
+            return parsed
+        }
+        throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be an unsigned integer"])
+    }
+
     private func uint64Array(_ root: [String: Any], _ key: String) throws -> [UInt64] {
-        guard let values = root[key] as? [NSNumber] else {
+        guard let values = root[key] as? [Any] else {
             throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be a number array"])
         }
-        return values.map { UInt64(truncating: $0) }
+        return try values.map { value in
+            if let number = value as? NSNumber {
+                return UInt64(truncating: number)
+            }
+            if let string = value as? String, let parsed = UInt64(string) {
+                return parsed
+            }
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must contain unsigned integers"])
+        }
     }
 
     private func stringArray(_ root: [String: Any], _ key: String) throws -> [String] {
@@ -13442,12 +13703,12 @@ id: 88
             let root = self.bodyJSON(from: request)
             XCTAssertEqual(root["authority"] as? String, "alice@boi")
             XCTAssertEqual(root["private_key"] as? String, "ed25519:deadbeef")
-            let chunker = root["chunker"] as? [String: Any]
-            XCTAssertEqual(chunker?["profile_id"] as? Int, 1)
-            XCTAssertEqual(chunker?["namespace"] as? String, "sorafs")
-            XCTAssertEqual(chunker?["name"] as? String, "sf1")
-            XCTAssertEqual(chunker?["semver"] as? String, "1.0.0")
-            XCTAssertEqual(chunker?["multihash_code"] as? Int, 0)
+            XCTAssertNil(root["chunker"])
+            XCTAssertEqual(root["chunker_profile_id"] as? Int, 1)
+            XCTAssertEqual(root["chunker_namespace"] as? String, "sorafs")
+            XCTAssertEqual(root["chunker_name"] as? String, "sf1")
+            XCTAssertEqual(root["chunker_semver"] as? String, "1.0.0")
+            XCTAssertEqual(root["chunker_multihash_code"] as? Int, 0)
             let pinPolicy = root["pin_policy"] as? [String: Any]
             XCTAssertEqual(pinPolicy?["min_replicas"] as? Int, 3)
             let storageClass = pinPolicy?["storage_class"] as? [String: Any]

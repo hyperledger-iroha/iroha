@@ -4,7 +4,10 @@
 //! Some helpers are gated by telemetry and may be unused when those tests are
 //! disabled; allow the definitions to stay available across feature sets.
 
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{
+    Arc, LazyLock, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use axum::{body::Body, http::Request};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -13,10 +16,10 @@ use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{account::AccountId, peer::PeerId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
-use rand::RngCore as _;
 
 static SHARED_METRICS: LazyLock<Mutex<Arc<Metrics>>> =
     LazyLock::new(|| Mutex::new(Arc::new(Metrics::default())));
+static OPERATOR_NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical literals for a single well-known account used in tx query tests.
 #[allow(dead_code)]
@@ -111,8 +114,9 @@ pub fn operator_signed_request(
         .try_into()
         .unwrap_or(u64::MAX);
 
-    let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill_bytes(&mut nonce_bytes);
+    let nonce_counter = OPERATOR_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut nonce_bytes = [0_u8; 12];
+    nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
 
     let mut msg =

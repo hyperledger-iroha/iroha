@@ -19,7 +19,8 @@ pub trait KeyExchangeScheme {
     /// Generate a new instance of the scheme.
     fn new() -> Self;
 
-    /// Create new keypairs. If
+    /// Create new keypairs. Prefer [`Self::try_keypair`] when the caller can
+    /// propagate key generation failures. If
     /// - `options` is [`Random`](KeyGenOption::Random), the keys are generated ephemerally from the [`OsRng`](rand::rngs::OsRng)
     /// - `options` is [`UseSeed`](KeyGenOption::UseSeed), the keys are generated ephemerally from the sha256 hash of the seed which is
     ///   then used to seed the [`ChaChaRng`](rand_chacha::ChaChaRng)
@@ -29,6 +30,19 @@ pub trait KeyExchangeScheme {
         &self,
         options: KeyGenOption<Self::PrivateKey>,
     ) -> (Self::PublicKey, Self::PrivateKey);
+
+    /// Create new keypairs while reporting key generation failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyGen`] when random key material cannot be generated
+    /// or the selected scheme rejects the generated material.
+    fn try_keypair(
+        &self,
+        options: KeyGenOption<Self::PrivateKey>,
+    ) -> Result<(Self::PublicKey, Self::PrivateKey), Error> {
+        Ok(self.keypair(options))
+    }
 
     /// Compute the diffie-hellman shared secret.
     /// `local_private_key` is the key generated from calling `keypair` while

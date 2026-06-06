@@ -26,7 +26,8 @@
     "deprecation_height": null,
     "withdraw_height": null,
     "parameter_digest": "hash:ECA18E4232F9BE0B5020B1B4E647826425EC6666F81F24C784CA5A380BAEF789#FB6E",
-    "rns_modulus_chain_digest": "hash:C192E8C50E2A42FFDAEE9F3A279A0FB40B73AA7988AE9F8496FD01D261442BEB#51A6"
+    "rns_modulus_chain_digest": "hash:EEA5EF5503B1C9FEDB3CE920BE2D2E004CA07AD4139EF930ED7749666503A5A5#94FB",
+    "key_switch_decomposition_chain_digest": "hash:31DB6356925DA9D3513D2355A57D91DB5109549FCC605AFBD55E1F7218EA0997#5361"
   },
   "execution_policy": {
     "schema_version": 1,
@@ -34,6 +35,11 @@
     "param_set": "bfv-default",
     "param_set_version": 1,
     "evaluation_key_digest": "hash:6018ED3CB8315DF01D8E1F7910AFAB8BD02C978CBF96570FF9561F5812A8874B#00FA",
+    "evaluation_key_refresh_transcript_digest": "hash:5C5D5E5F606162636465666768696A6B6C6D6E6F707172737475767778797A7B#543B",
+    "refresh_transcript_mode": {
+      "refresh_transcript_mode": "ExactLift",
+      "value": null
+    },
     "max_ciphertext_bytes": 131072,
     "max_plaintext_bytes": 512,
     "max_input_ciphertexts": 4,

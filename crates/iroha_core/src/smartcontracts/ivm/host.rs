@@ -19667,7 +19667,8 @@ seiyaku Vault {
         host.set_current_manifest_id(Some("core".to_string()));
         enable_halo2_batch_verifier(&mut host, 8, 18);
 
-        let env_ok = registered_halo2_batch_fixture(&mut host, "halo2/ipa:tiny-add", "transfer");
+        let env_ok =
+            registered_halo2_batch_fixture(&mut host, "halo2/ipa:tiny-add-public", "transfer");
         let mut env_bad = env_ok.clone();
         let last = env_bad
             .proof_bytes

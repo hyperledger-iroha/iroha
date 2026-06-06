@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Numerics;
@@ -18,6 +19,16 @@ public static class EthereumMainnetSccp
     public const int DomainEthereum = 1;
     public const ulong MainnetChainId = 1;
     public const string EvmGroth16Bn254ProofBackend = "evm-groth16-bn254-v1";
+    public const string NativeEvmProverBundleSchemaV1 =
+        "sccp-native-evm-groth16-prover-bundle-v1";
+    public const string EthNativeEvmProverParityFixtureSchemaV1 =
+        "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+    public const string EthNativeEvmProverSelfTestSchemaV1 =
+        "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
+    public const string EthNativeEvmProverBundleIdV1 =
+        "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
+    public const string NativeEvmProverArtifactHashAlgorithmV1 = "sha256";
+    internal const int NativeEvmProverMinArtifactBytesV1 = 256;
     public const string StarkFriProofFamily = "stark-fri-v1";
     public const string ContractCallAbiTuple = "abi_tuple_v1";
     public const string LocalAdmissionEnvelopeEncoding = "norito:sccp-local-admission:v1";
@@ -34,6 +45,80 @@ public static class EthereumMainnetSccp
     public const string SourceAdapterOpenVerifyCircuitId = "sccp-source-adapter-v1";
     public const string SourceAdapterFastPqParameterSet = "fastpq-lane-balanced";
 
+    public static readonly IReadOnlyDictionary<string, string>
+        EthNativeEvmProverRequiredImplementationsV1 =
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["javascript"] = "pure-typescript",
+                ["swift"] = "native-swift",
+                ["kotlin"] = "native-kotlin",
+                ["java-android"] = "native-java",
+                ["dotnet"] = "native-csharp",
+            };
+
+    public static readonly IReadOnlyList<string> EthNativeEvmProverRequiredAuditHashesV1 =
+        new[]
+        {
+            "circuit_security_audit",
+            "native_implementation_audit",
+            "reproducible_build_attestation",
+            "cross_sdk_fixture_parity",
+            "native_prover_self_test",
+            "no_wasm_no_remote_scan",
+        };
+
+    internal static string NormalizeNativeEvmProverBundleHex32(string value, string name)
+    {
+        var normalized = NormalizeNonZeroHex(value, name, 32);
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"{name} must be canonical lowercase 0x-prefixed 32-byte hex.",
+                name);
+        }
+
+        return normalized;
+    }
+
+    internal static string NormalizeNativeEvmProverArtifactPath(string value, string name)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            throw new ArgumentException($"{name} must be a non-empty relative POSIX path.", name);
+        }
+
+        if (value.Any(character => character < 0x20 || character == 0x7f))
+        {
+            throw new ArgumentException($"{name} must not contain control characters.", name);
+        }
+
+        if (value.StartsWith("/", StringComparison.Ordinal) || value.Contains('\\'))
+        {
+            throw new ArgumentException($"{name} must be a relative POSIX path.", name);
+        }
+
+        var segments = value.Split('/');
+        if (segments.Length == 0 || segments.Any(segment => segment.Length == 0 || segment == "." || segment == ".."))
+        {
+            throw new ArgumentException($"{name} must stay under the manifest directory.", name);
+        }
+
+        return value;
+    }
+
+    internal static string NormalizeNativeEvmProverParityHex32(string value, string name)
+    {
+        var normalized = ToHex(FixedHexToBytes(value, name, 32));
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"{name} must be canonical lowercase 0x-prefixed 32-byte hex.",
+                name);
+        }
+
+        return normalized;
+    }
+
     private const string EvmDestinationBindingLabel = "iroha:sccp:evm-destination-binding:v1";
     private const string EthSourceBridgeConfigLabel = "iroha:sccp:eth-source-bridge-config:v1";
     private const string SourceVerifierMaterialRecordPrefix =
@@ -45,25 +130,27 @@ public static class EthereumMainnetSccp
     private const string ProofRequestPrefix = "sccp:evm:groth16-proof-request:v1";
     private const string ProofEnvelopePrefix = "sccp:evm:groth16-proof-envelope:v1";
     private const int Groth16Bn254ProofAbiByteLength = 384;
-    private const int EthMaxSyncCommitteeAuthorities = 512;
+    private const int EthMainnetSyncCommitteeAuthorities = 512;
+    private const int EthMaxSyncCommitteeAuthorities = EthMainnetSyncCommitteeAuthorities;
     private const int EthSyncCommitteePublicKeyBytes = 48;
-    private const int EthMaxSyncCommitteePublicKeyBytes = 96;
     private const int EthSyncCommitteePopBytes = 96;
-    private const int EthMaxSyncCommitteePopBytes = 256;
     private const int EthMaxSyncCommitteePayloadBytes = 1 + 4
         + EthMaxSyncCommitteeAuthorities
-        * (4 + EthMaxSyncCommitteePublicKeyBytes + 8 + 4 + EthMaxSyncCommitteePopBytes);
+        * (4 + EthSyncCommitteePublicKeyBytes + 8 + 4 + EthSyncCommitteePopBytes);
     private const int Keccak256Rate = 136;
     private const int MaxSourceMerkleBranchNodes = 64;
     private const int MaxMptProofNodes = 64;
     private const int MaxMptNodeBytes = 16 * 1024;
     private const int EvmMaxBlockReceipts = 4096;
+    private const int EthExecutionPayloadBodyFieldIndex = 9;
+    private const int EthExecutionPayloadBodyBranchDepth = 4;
     private const ulong SourceAdapterFastPqTraceRoot = 0x002A_247F_81C6_F850UL;
     private const ulong SourceAdapterFastPqLdeRoot = 0x6026_3388_DBBF_9B2AUL;
     private const ulong SourceAdapterFastPqOmegaCoset = 0x6AF3_25E8_25AD_5C18UL;
     private const string SourceChain = "eth";
     private const byte SourceProofPlan = 1;
     private const byte SourceFinalityModel = 1;
+    private sealed record Groth16ProverArtifacts(string ProofArtifactHash, string ProvingKeyHash);
     private const string SourceTrustAnchorId =
         "sccp:eth:source-trust-anchor:ethereum-mainnet-beacon-finalized-checkpoint:v1";
     private const string ConsensusVerifierId =
@@ -74,6 +161,44 @@ public static class EthereumMainnetSccp
         "sccp:eth:finality-policy:beacon-finalized-checkpoint-mainnet:v1";
     private const string SourceBridgeEmitterId =
         "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1";
+    private static readonly string[] BeaconFinalityAliasKeys =
+    [
+        "executionBlockNumber",
+        "execution_block_number",
+        "finalityHeight",
+        "finality_height",
+        "executionBlockHash",
+        "execution_block_hash",
+        "finalityBlockHash",
+        "finality_block_hash",
+        "executionReceiptsRoot",
+        "execution_receipts_root",
+        "receiptsRoot",
+        "receipts_root",
+        "finalizedHeaderRoot",
+        "finalized_header_root",
+        "beaconFinalizedRoot",
+        "beacon_finalized_root",
+        "syncCommitteeRoot",
+        "sync_committee_root",
+        "beaconSlot",
+        "beacon_slot",
+        "finalizedSlot",
+        "finalized_slot",
+        "slot",
+        "finalityBranch",
+        "finality_branch",
+        "syncCommitteeBits",
+        "sync_committee_bits",
+        "syncCommitteeSignature",
+        "sync_committee_signature",
+        "syncSignatureSlot",
+        "sync_signature_slot",
+        "signatureSlot",
+        "signature_slot",
+        "syncCommitteeParticipation",
+        "sync_committee_participation",
+    ];
     private static readonly byte[] SubmitMessageProofSelectorBytes = [0xbd, 0x57, 0x82, 0x6c];
     private static readonly BigInteger Bn254ScalarFieldModulus =
         new(
@@ -184,6 +309,12 @@ public static class EthereumMainnetSccp
 
     private sealed record EvmTrieItem(IReadOnlyList<int> Path, byte[] Value);
 
+    private readonly record struct RlpDecodedItem(
+        int PayloadOffset,
+        int PayloadLength,
+        int NextOffset,
+        bool IsList);
+
     private abstract class EvmTrieNode
     {
         public byte[]? Rlp { get; set; }
@@ -249,10 +380,14 @@ public static class EthereumMainnetSccp
         {
             RlpBytes(MinimalBigEndianBytes(status)),
             RlpBytes(MinimalBigEndianBytes(RequireEthereumRpcQuantity(
-                FirstPresent(receipt, "cumulativeGasUsed", "cumulative_gas_used"),
+                StrictFirstPresent(
+                    receipt,
+                    "receipt.cumulativeGasUsed",
+                    "cumulativeGasUsed",
+                    "cumulative_gas_used"),
                 "receipt.cumulativeGasUsed"))),
             RlpBytes(EthereumRpcHexBytes(
-                FirstPresent(receipt, "logsBloom", "logs_bloom"),
+                StrictFirstPresent(receipt, "receipt.logsBloom", "logsBloom", "logs_bloom"),
                 "receipt.logsBloom",
                 byteLength: 256,
                 nonZero: false,
@@ -304,7 +439,11 @@ public static class EthereumMainnetSccp
             var receipt = receipts[index]
                 ?? throw new ArgumentException($"blockReceipts[{index}] is required.", nameof(receipts));
             var receiptIndex = RequireEthereumRpcQuantity(
-                FirstPresent(receipt, "transactionIndex", "transaction_index"),
+                StrictFirstPresent(
+                    receipt,
+                    $"blockReceipts[{index}].transactionIndex",
+                    "transactionIndex",
+                    "transaction_index"),
                 $"blockReceipts[{index}].transactionIndex");
             if (receiptIndex != (ulong)index)
             {
@@ -314,7 +453,11 @@ public static class EthereumMainnetSccp
             }
 
             var transactionHash = NormalizeRpcHex(
-                FirstPresent(receipt, "transactionHash", "transaction_hash"),
+                StrictFirstPresent(
+                    receipt,
+                    $"blockReceipts[{index}].transactionHash",
+                    "transactionHash",
+                    "transaction_hash"),
                 $"blockReceipts[{index}].transactionHash",
                 32);
             if (!seenTransactionHashes.Add(transactionHash))
@@ -352,6 +495,83 @@ public static class EthereumMainnetSccp
             ToHex(receiptTrieKey),
             CopyByteArrays(proofNodes));
     }
+
+    /// <summary>
+    /// Derives the SSZ ExecutionPayloadHeader root from a Deneb/Fulu Ethereum execution header RLP.
+    /// </summary>
+    public static string EthExecutionPayloadHeaderRootFromRlp(byte[] headerRlp)
+    {
+        ArgumentNullException.ThrowIfNull(headerRlp);
+
+        var fields = RlpListByteFields(headerRlp);
+        if (fields.Count < 19)
+        {
+            throw new ArgumentException(
+                "headerRlp must include Deneb/Fulu execution payload fields.",
+                nameof(headerRlp));
+        }
+
+        return ToHex(SszMerkleizeChunks(
+        [
+            SszByteVectorRoot(fields[0], 32, "parentHash"),
+            SszByteVectorRoot(fields[2], 20, "feeRecipient"),
+            SszByteVectorRoot(fields[3], 32, "stateRoot"),
+            SszByteVectorRoot(fields[5], 32, "receiptsRoot"),
+            SszByteVectorRoot(fields[6], 256, "logsBloom"),
+            SszByteVectorRoot(fields[13], 32, "prevRandao"),
+            SszU64ChunkFromRlp(fields[8], "blockNumber"),
+            SszU64ChunkFromRlp(fields[9], "gasLimit"),
+            SszU64ChunkFromRlp(fields[10], "gasUsed"),
+            SszU64ChunkFromRlp(fields[11], "timestamp"),
+            SszByteListRoot(fields[12], 32, "extraData"),
+            SszU256ChunkFromRlp(fields[15], "baseFeePerGas"),
+            Keccak256(headerRlp),
+            SszByteVectorRoot(fields[4], 32, "transactionsRoot"),
+            SszByteVectorRoot(fields[16], 32, "withdrawalsRoot"),
+            SszU64ChunkFromRlp(fields[17], "blobGasUsed"),
+            SszU64ChunkFromRlp(fields[18], "excessBlobGas"),
+        ]));
+    }
+
+    /// <summary>
+    /// Derives the BeaconBlockBody root from an execution-payload header root and body branch.
+    /// </summary>
+    public static string EthBeaconBodyRootFromExecutionPayloadBranch(
+        string executionPayloadHeaderRoot,
+        IReadOnlyList<byte[]> executionPayloadBranch)
+    {
+        ArgumentNullException.ThrowIfNull(executionPayloadBranch);
+        if (executionPayloadBranch.Count != EthExecutionPayloadBodyBranchDepth)
+        {
+            throw new ArgumentException(
+                $"executionPayloadBranch must contain {EthExecutionPayloadBodyBranchDepth} siblings.",
+                nameof(executionPayloadBranch));
+        }
+
+        return ToHex(SszMerkleRootFromBranch(
+            FixedHexToBytes(executionPayloadHeaderRoot, nameof(executionPayloadHeaderRoot), 32),
+            EthExecutionPayloadBodyFieldIndex,
+            executionPayloadBranch,
+            "executionPayloadBranch"));
+    }
+
+    /// <summary>
+    /// Derives the SSZ BeaconBlockHeader root from local Ethereum mainnet witness material.
+    /// </summary>
+    public static string EthBeaconBlockHeaderRoot(
+        ulong beaconSlot,
+        ulong beaconProposerIndex,
+        string beaconParentRoot,
+        string beaconStateRoot,
+        string beaconBodyRoot)
+        => ToHex(SszMerkleizeChunks(
+        [
+            SszU64Chunk(beaconSlot),
+            SszU64Chunk(beaconProposerIndex),
+            FixedHexToBytes(beaconParentRoot, nameof(beaconParentRoot), 32),
+            FixedHexToBytes(beaconStateRoot, nameof(beaconStateRoot), 32),
+            FixedHexToBytes(beaconBodyRoot, nameof(beaconBodyRoot), 32),
+        ]));
 
     public static async ValueTask<EthereumMainnetInboundEvidence> CollectInboundEvidenceFromReceiptAsync(
         EthereumMainnetInboundEvidence input,
@@ -410,7 +630,11 @@ public static class EthereumMainnetSccp
             }
 
             var receiptTransactionHash = NormalizeRpcHex(
-                FirstPresent(receipt, "transactionHash", "transaction_hash"),
+                StrictFirstPresent(
+                    receipt,
+                    "receipt.transactionHash",
+                    "transactionHash",
+                    "transaction_hash"),
                 "receipt.transactionHash",
                 32);
             if (transactionHash is not null
@@ -423,10 +647,11 @@ public static class EthereumMainnetSccp
 
             transactionHash = receiptTransactionHash;
             blockHash = NormalizeRpcHex(
-                FirstPresent(receipt, "blockHash", "block_hash"),
+                StrictFirstPresent(receipt, "receipt.blockHash", "blockHash", "block_hash"),
                 "receipt.blockHash",
                 32);
-            var receiptBlockNumberValue = FirstPresent(receipt, "blockNumber", "block_number");
+            var receiptBlockNumberValue =
+                StrictFirstPresent(receipt, "receipt.blockNumber", "blockNumber", "block_number");
             receiptBlockNumber = NormalizePositiveRpcQuantity(receiptBlockNumberValue, "receipt.blockNumber");
         }
 
@@ -455,7 +680,12 @@ public static class EthereumMainnetSccp
                     nameof(input));
             }
 
-            var blockNumberValue = FirstPresent(block, "number", "blockNumber", "block_number");
+            var blockNumberValue = StrictFirstPresent(
+                block,
+                "block.number",
+                "number",
+                "blockNumber",
+                "block_number");
             var blockNumber = NormalizePositiveRpcQuantity(blockNumberValue, "block.number");
             if (receiptBlockNumber is not null
                 && !string.Equals(receiptBlockNumber, blockNumber, StringComparison.Ordinal))
@@ -467,10 +697,13 @@ public static class EthereumMainnetSccp
 
             receiptBlockNumber = blockNumber;
             blockReceiptsRoot = NormalizeRpcHex(
-                FirstPresent(block, "receiptsRoot", "receipts_root"),
+                StrictFirstPresent(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
                 "block.receiptsRoot",
                 32);
         }
+
+        receipt = SnapshotDictionaryOrNull(receipt);
+        block = SnapshotDictionaryOrNull(block);
 
         var beaconFinality = input.BeaconFinality;
         if (beaconFinality is null && consensusProvider is not null)
@@ -532,7 +765,11 @@ public static class EthereumMainnetSccp
                     "eth_getBlockReceipts");
             }
 
-            var receiptTransactionIndex = FirstPresent(receipt, "transactionIndex", "transaction_index");
+            var receiptTransactionIndex = StrictFirstPresent(
+                receipt,
+                "receipt.transactionIndex",
+                "transactionIndex",
+                "transaction_index");
             var receiptTrieProof = BuildEvmReceiptTrieProofFromReceipts(
                 blockReceipts,
                 receiptTransactionIndex);
@@ -562,7 +799,11 @@ public static class EthereumMainnetSccp
 
             var indexedReceipt = blockReceipts[(int)targetIndex];
             var indexedTransactionHash = NormalizeRpcHex(
-                FirstPresent(indexedReceipt, "transactionHash", "transaction_hash"),
+                StrictFirstPresent(
+                    indexedReceipt,
+                    "blockReceipts.transactionHash",
+                    "transactionHash",
+                    "transaction_hash"),
                 "blockReceipts.transactionHash",
                 32);
             if (transactionHash is null
@@ -574,7 +815,7 @@ public static class EthereumMainnetSccp
             }
 
             var indexedBlockHash = NormalizeRpcHex(
-                FirstPresent(indexedReceipt, "blockHash", "block_hash"),
+                StrictFirstPresent(indexedReceipt, "blockReceipts.blockHash", "blockHash", "block_hash"),
                 "blockReceipts.blockHash",
                 32);
             if (!string.Equals(indexedBlockHash, blockHash, StringComparison.Ordinal))
@@ -585,7 +826,11 @@ public static class EthereumMainnetSccp
             }
 
             var indexedBlockNumber = NormalizePositiveRpcQuantity(
-                FirstPresent(indexedReceipt, "blockNumber", "block_number"),
+                StrictFirstPresent(
+                    indexedReceipt,
+                    "blockReceipts.blockNumber",
+                    "blockNumber",
+                    "block_number"),
                 "blockReceipts.blockNumber");
             if (!string.Equals(indexedBlockNumber, receiptBlockNumber, StringComparison.Ordinal))
             {
@@ -670,7 +915,7 @@ public static class EthereumMainnetSccp
             beaconFinality,
             sourceEvent.SourceEventDigest);
 
-        return input with
+        return SnapshotInboundEvidence(input with
         {
             SourceDomain = DomainEthereum,
             TargetDomain = DomainSora,
@@ -686,7 +931,7 @@ public static class EthereumMainnetSccp
             ReceiptProofHash = NormalizeReceiptProofHash(receiptProof, input.ReceiptProofHash),
             SourceEventDigest = sourceEvent.SourceEventDigest,
             SourceBridgeEmitterAddress = sourceEvent.SourceBridgeEmitterAddress,
-        };
+        });
     }
 
     public static async ValueTask<byte[]> ProveInboundToSoraAsync(
@@ -746,6 +991,7 @@ public static class EthereumMainnetSccp
 
         foreach (var field in new[]
                  {
+                     "finalityBranch",
                      "syncCommitteeBits",
                      "syncCommitteeSignature",
                      "syncCommitteeParticipation",
@@ -763,7 +1009,7 @@ public static class EthereumMainnetSccp
         var proofBytes = await inboundProver.ProveAsync(
             SnapshotInboundEvidence(evidence),
             cancellationToken).ConfigureAwait(false);
-        return RequireNonZeroProofBytes(proofBytes, nameof(proofBytes));
+        return RequireNativeRecursiveBytes(proofBytes, nameof(proofBytes));
     }
 
     public static async ValueTask<object?> SubmitInboundToIrohaAsync(
@@ -773,7 +1019,7 @@ public static class EthereumMainnetSccp
     {
         ArgumentNullException.ThrowIfNull(inboundSubmitter);
 
-        var proofCopy = RequireNonZeroProofBytes(proofBytes, nameof(proofBytes));
+        var proofCopy = RequireNativeRecursiveBytes(proofBytes, nameof(proofBytes));
         return await inboundSubmitter.SubmitAsync(proofCopy, cancellationToken).ConfigureAwait(false);
     }
 
@@ -936,6 +1182,9 @@ public static class EthereumMainnetSccp
         var statementHash = NormalizeNonZeroHex(input.StatementHash, nameof(input.StatementHash), 32);
         var bundleBytes = RequireNonEmptyBytes(input.BundleBytes, nameof(input.BundleBytes));
         var sourceProofBytes = NormalizeOptionalNonZeroBytes(input.SourceProofBytes, nameof(input.SourceProofBytes));
+        var proverArtifacts = NormalizeOptionalGroth16ProverArtifacts(
+            input.ProofArtifactHash,
+            input.ProvingKeyHash);
         var publicInputsBytes = CanonicalPublicInputsBytes(publicInputs);
         var publicSignalWords = PublicSignalWords(
             publicInputs,
@@ -948,7 +1197,9 @@ public static class EthereumMainnetSccp
             sourceProofBytes,
             statementHash,
             destinationBindingHash,
-            publicSignalWords);
+            publicSignalWords,
+            proverArtifacts?.ProofArtifactHash,
+            proverArtifacts?.ProvingKeyHash);
 
         return new EthereumMainnetOutboundProofRequest(
             Version: 1,
@@ -963,8 +1214,18 @@ public static class EthereumMainnetSccp
             ProofContext: new EthereumMainnetSccpProofContext(statementHash, destinationBindingHash),
             StatementHash: statementHash,
             DestinationBindingHash: destinationBindingHash,
+            ProofArtifactHash: proverArtifacts?.ProofArtifactHash,
+            ProvingKeyHash: proverArtifacts?.ProvingKeyHash,
             RequestHash: requestHash,
             DestinationBinding: destinationBinding);
+    }
+
+    public static EthereumMainnetOutboundProofRequest BuildOutboundProofRequest(
+        EthereumMainnetOutboundProofRequestInput input,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle)
+    {
+        ArgumentNullException.ThrowIfNull(nativeProverBundle);
+        return BuildOutboundProofRequest(nativeProverBundle.ApplyTo(input));
     }
 
     public static async ValueTask<EthereumMainnetOutboundProofResult> ProveOutboundToEthereumAsync(
@@ -979,6 +1240,89 @@ public static class EthereumMainnetSccp
             Snapshot(request),
             cancellationToken).ConfigureAwait(false);
         return WrapOutboundProofResult(proofBytes, request);
+    }
+
+    public static async ValueTask<EthereumMainnetOutboundProofResult> ProveOutboundToEthereumAsync(
+        EthereumMainnetOutboundProofRequestInput input,
+        IEthereumMainnetOutboundProver outboundProver,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+        CancellationToken cancellationToken = default)
+        => await ProveOutboundToEthereumAsync(
+            input,
+            outboundProver,
+            nativeProverArtifacts,
+            nativeProverSelfTest: null,
+            cancellationToken).ConfigureAwait(false);
+
+    public static async ValueTask<EthereumMainnetOutboundProofResult> ProveOutboundToEthereumAsync(
+        EthereumMainnetOutboundProofRequestInput input,
+        IEthereumMainnetOutboundProver outboundProver,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+        IEthereumMainnetNativeProverSelfTest? nativeProverSelfTest,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(outboundProver);
+        ArgumentNullException.ThrowIfNull(nativeProverArtifacts);
+
+        var request = BuildOutboundProofRequest(input, nativeProverArtifacts.NativeProverBundle);
+        RequireVerifiedNativeProverArtifacts(nativeProverArtifacts, request);
+        _ = await RequireNativeProverSelfTestAsync(
+            nativeProverArtifacts,
+            nativeProverSelfTest,
+            cancellationToken).ConfigureAwait(false);
+        var proofBytes = await outboundProver.ProveAsync(
+            Snapshot(request),
+            cancellationToken).ConfigureAwait(false);
+        return WrapOutboundProofResult(proofBytes, request);
+    }
+
+    public static async ValueTask<EthereumMainnetNativeEvmProverSelfTestSdkResult>
+        RunNativeProverSelfTestAsync(
+            EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+            IEthereumMainnetNativeProverSelfTest nativeProverSelfTest,
+            CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(nativeProverArtifacts);
+        ArgumentNullException.ThrowIfNull(nativeProverSelfTest);
+        return await RequireNativeProverSelfTestAsync(
+            nativeProverArtifacts,
+            nativeProverSelfTest,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public static ValueTask<EthereumMainnetOutboundProofResult> ProveOutboundToEthereumFromNativeProverBundleAsync(
+        EthereumMainnetOutboundProofRequestInput input,
+        IEthereumMainnetOutboundProver outboundProver,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string sdk,
+        Func<string, byte[]> artifactResolver,
+        CancellationToken cancellationToken = default)
+        => ProveOutboundToEthereumFromNativeProverBundleAsync(
+            input,
+            outboundProver,
+            nativeProverBundle,
+            sdk,
+            artifactResolver,
+            nativeProverSelfTest: null,
+            cancellationToken);
+
+    public static ValueTask<EthereumMainnetOutboundProofResult> ProveOutboundToEthereumFromNativeProverBundleAsync(
+        EthereumMainnetOutboundProofRequestInput input,
+        IEthereumMainnetOutboundProver outboundProver,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string sdk,
+        Func<string, byte[]> artifactResolver,
+        IEthereumMainnetNativeProverSelfTest? nativeProverSelfTest,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(nativeProverBundle);
+        var verifiedArtifacts = nativeProverBundle.VerifiedArtifacts(sdk, artifactResolver);
+        return ProveOutboundToEthereumAsync(
+            input,
+            outboundProver,
+            verifiedArtifacts,
+            nativeProverSelfTest,
+            cancellationToken);
     }
 
     public static EthereumMainnetOutboundProofResult WrapOutboundProofResult(
@@ -1015,12 +1359,43 @@ public static class EthereumMainnetSccp
             StatementHash: request.StatementHash,
             DestinationBindingHash: request.DestinationBindingHash,
             ProofContext: request.ProofContext,
+            ProofArtifactHash: request.ProofArtifactHash,
+            ProvingKeyHash: request.ProvingKeyHash,
             RequestHash: request.RequestHash,
             EnvelopeHash: envelopeHash,
             DestinationBinding: request.DestinationBinding);
     }
 
     public static EthereumMainnetSccpSubmission BuildEthereumCalldata(
+        EthereumMainnetSccpSubmissionInput input)
+    {
+        _ = BuildEthereumCalldataUnchecked(input);
+        throw new ArgumentException(
+            "Ethereum mainnet calldata requires verified native EVM prover artifacts.",
+            nameof(input));
+    }
+
+    public static EthereumMainnetSccpSubmission BuildEthereumCalldata(
+        EthereumMainnetSccpSubmissionInput input,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts)
+    {
+        var submission = BuildEthereumCalldataUnchecked(input);
+        RequireVerifiedNativeProverArtifacts(nativeProverArtifacts, input.ProofResult!);
+        return submission;
+    }
+
+    public static EthereumMainnetSccpSubmission BuildEthereumCalldataFromNativeProverBundle(
+        EthereumMainnetSccpSubmissionInput input,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string sdk,
+        Func<string, byte[]> artifactResolver)
+    {
+        ArgumentNullException.ThrowIfNull(nativeProverBundle);
+        var verifiedArtifacts = nativeProverBundle.VerifiedArtifacts(sdk, artifactResolver);
+        return BuildEthereumCalldata(input, verifiedArtifacts);
+    }
+
+    private static EthereumMainnetSccpSubmission BuildEthereumCalldataUnchecked(
         EthereumMainnetSccpSubmissionInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -1089,12 +1464,82 @@ public static class EthereumMainnetSccp
     public static async ValueTask<object?> SubmitOutboundToEthereumAsync(
         EthereumMainnetSccpSubmissionInput input,
         IEthereumMainnetOutboundSubmitter outboundSubmitter,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+        CancellationToken cancellationToken = default)
+        => await SubmitOutboundToEthereumAsync(
+            input,
+            outboundSubmitter,
+            nativeProverArtifacts,
+            executionProvider: null,
+            cancellationToken).ConfigureAwait(false);
+
+    public static async ValueTask<object?> SubmitOutboundToEthereumAsync(
+        EthereumMainnetSccpSubmissionInput input,
+        IEthereumMainnetOutboundSubmitter outboundSubmitter,
         IEthereumMainnetExecutionProvider? executionProvider,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(outboundSubmitter);
 
         var submission = BuildEthereumCalldata(input);
+        if (executionProvider is not null)
+        {
+            _ = await ValidateExecutionProviderMainnetAsync(
+                executionProvider,
+                cancellationToken).ConfigureAwait(false);
+        }
+        return await outboundSubmitter.SubmitAsync(submission, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async ValueTask<object?> SubmitOutboundToEthereumAsync(
+        EthereumMainnetSccpSubmissionInput input,
+        IEthereumMainnetOutboundSubmitter outboundSubmitter,
+        EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+        IEthereumMainnetExecutionProvider? executionProvider,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(outboundSubmitter);
+
+        var submission = BuildEthereumCalldata(input, nativeProverArtifacts);
+        if (executionProvider is not null)
+        {
+            _ = await ValidateExecutionProviderMainnetAsync(
+                executionProvider,
+                cancellationToken).ConfigureAwait(false);
+        }
+        return await outboundSubmitter.SubmitAsync(submission, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async ValueTask<object?> SubmitOutboundToEthereumFromNativeProverBundleAsync(
+        EthereumMainnetSccpSubmissionInput input,
+        IEthereumMainnetOutboundSubmitter outboundSubmitter,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string sdk,
+        Func<string, byte[]> artifactResolver,
+        CancellationToken cancellationToken = default)
+        => await SubmitOutboundToEthereumFromNativeProverBundleAsync(
+            input,
+            outboundSubmitter,
+            nativeProverBundle,
+            sdk,
+            artifactResolver,
+            executionProvider: null,
+            cancellationToken).ConfigureAwait(false);
+
+    public static async ValueTask<object?> SubmitOutboundToEthereumFromNativeProverBundleAsync(
+        EthereumMainnetSccpSubmissionInput input,
+        IEthereumMainnetOutboundSubmitter outboundSubmitter,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string sdk,
+        Func<string, byte[]> artifactResolver,
+        IEthereumMainnetExecutionProvider? executionProvider,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(outboundSubmitter);
+        ArgumentNullException.ThrowIfNull(nativeProverBundle);
+
+        var verifiedArtifacts = nativeProverBundle.VerifiedArtifacts(sdk, artifactResolver);
+        var submission = BuildEthereumCalldata(input, verifiedArtifacts);
         if (executionProvider is not null)
         {
             _ = await ValidateExecutionProviderMainnetAsync(
@@ -1501,7 +1946,9 @@ public static class EthereumMainnetSccp
             request.SourceProofBytes,
             request.StatementHash,
             request.DestinationBindingHash,
-            request.PublicSignalWords);
+            request.PublicSignalWords,
+            request.ProofArtifactHash,
+            request.ProvingKeyHash);
     }
 
     private static string ComputeProofRequestHash(
@@ -1510,7 +1957,9 @@ public static class EthereumMainnetSccp
         byte[] sourceProofBytes,
         string statementHash,
         string destinationBindingHash,
-        IReadOnlyList<string> publicSignalWords)
+        IReadOnlyList<string> publicSignalWords,
+        string? proofArtifactHash = null,
+        string? provingKeyHash = null)
     {
         if (publicSignalWords.Count != 9)
         {
@@ -1519,12 +1968,19 @@ public static class EthereumMainnetSccp
                 nameof(publicSignalWords));
         }
 
+        var proverArtifacts = NormalizeOptionalGroth16ProverArtifacts(proofArtifactHash, provingKeyHash);
         using var payload = new MemoryStream();
         payload.Write(publicInputsBytes);
         payload.Write(WriteBytes(bundleBytes));
         payload.Write(WriteBytes(sourceProofBytes));
         payload.Write(HexToBytes(statementHash, 32));
         payload.Write(HexToBytes(destinationBindingHash, 32));
+        if (proverArtifacts is not null)
+        {
+            payload.Write(HexToBytes(proverArtifacts.ProofArtifactHash, 32));
+            payload.Write(HexToBytes(proverArtifacts.ProvingKeyHash, 32));
+        }
+
         foreach (var word in publicSignalWords)
         {
             payload.Write(FixedHexToBytes(word, "publicSignalWords", 32));
@@ -1550,14 +2006,10 @@ public static class EthereumMainnetSccp
 
         cursor++;
         var count = ReadU32Le(payload, ref cursor, "syncCommitteePayload");
-        if (count == 0)
-        {
-            throw new ArgumentException("syncCommitteePayload must not be empty.", nameof(payload));
-        }
-        if (count > EthMaxSyncCommitteeAuthorities)
+        if (count != EthMainnetSyncCommitteeAuthorities)
         {
             throw new ArgumentException(
-                $"syncCommitteePayload must contain at most {EthMaxSyncCommitteeAuthorities} entries.",
+                $"syncCommitteePayload must contain exactly {EthMainnetSyncCommitteeAuthorities} entries.",
                 nameof(payload));
         }
 
@@ -1588,10 +2040,10 @@ public static class EthereumMainnetSccp
             }
 
             var weight = ReadU64Le(payload, ref cursor, $"syncCommitteeWeights[{index}]");
-            if (weight == 0)
+            if (weight != 1)
             {
                 throw new ArgumentException(
-                    $"syncCommitteeWeights[{index}] must not be zero.",
+                    $"syncCommitteeWeights[{index}] must be 1 for Ethereum mainnet.",
                     nameof(payload));
             }
 
@@ -1755,6 +2207,19 @@ public static class EthereumMainnetSccp
             throw new ArgumentException("proofResult destination binding hash must match request.");
         }
 
+        if (!string.Equals(
+                proofResult.ProofArtifactHash,
+                proofResult.Request.ProofArtifactHash,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                proofResult.ProvingKeyHash,
+                proofResult.Request.ProvingKeyHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "proofResult proofArtifactHash and provingKeyHash must match request.");
+        }
+
         if (!proofResult.PublicSignalWords.SequenceEqual(proofResult.Request.PublicSignalWords))
         {
             throw new ArgumentException("proofResult publicSignalWords must match request.");
@@ -1775,6 +2240,244 @@ public static class EthereumMainnetSccp
         }
     }
 
+    private static async ValueTask<EthereumMainnetNativeEvmProverSelfTestSdkResult>
+        RequireNativeProverSelfTestAsync(
+        EthereumMainnetNativeEvmProverArtifacts artifacts,
+        IEthereumMainnetNativeProverSelfTest? nativeProverSelfTest,
+        CancellationToken cancellationToken)
+    {
+        if (artifacts.NativeProverSelfTest is null)
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts nativeProverSelfTest is required.",
+                nameof(artifacts));
+        }
+
+        if (artifacts.Sdk is null)
+        {
+            throw new ArgumentException("nativeProverArtifacts sdk is required.", nameof(artifacts));
+        }
+
+        if (!artifacts.NativeProverSelfTest.SdkResults.TryGetValue(artifacts.Sdk, out var expectedResult))
+        {
+            throw new ArgumentException(
+                $"nativeProverSelfTest sdkResults must include {artifacts.Sdk}.",
+                nameof(artifacts));
+        }
+
+        if (nativeProverSelfTest is null)
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTest runner is required.",
+                nameof(nativeProverSelfTest));
+        }
+
+        var result = await nativeProverSelfTest.RunAsync(
+            artifacts.NativeProverSelfTest,
+            expectedResult,
+            artifacts,
+            cancellationToken).ConfigureAwait(false);
+        if (!NativeProverSelfTestResultEquals(result, expectedResult))
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTest result must match nativeProverBundle fixture.",
+                nameof(nativeProverSelfTest));
+        }
+
+        return result;
+    }
+
+    private static bool NativeProverSelfTestResultEquals(
+        EthereumMainnetNativeEvmProverSelfTestSdkResult left,
+        EthereumMainnetNativeEvmProverSelfTestSdkResult right)
+        => string.Equals(left.RequestHash, right.RequestHash, StringComparison.Ordinal)
+            && string.Equals(left.WitnessHash, right.WitnessHash, StringComparison.Ordinal)
+            && string.Equals(left.SourceProofHash, right.SourceProofHash, StringComparison.Ordinal)
+            && string.Equals(left.ProofHash, right.ProofHash, StringComparison.Ordinal)
+            && left.PublicSignalWords.SequenceEqual(right.PublicSignalWords)
+            && string.Equals(left.CalldataHash, right.CalldataHash, StringComparison.Ordinal)
+            && string.Equals(left.ToriiSubmitPayloadHash, right.ToriiSubmitPayloadHash, StringComparison.Ordinal);
+
+    private static void RequireVerifiedNativeProverArtifacts(
+        EthereumMainnetNativeEvmProverArtifacts artifacts,
+        EthereumMainnetOutboundProofRequest request)
+    {
+        if (!string.Equals(
+                artifacts.NativeProverBundle.DestinationBindingHash,
+                request.DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts destinationBindingHash must match proof request.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.ProofArtifactHash, request.ProofArtifactHash, StringComparison.Ordinal)
+            || !string.Equals(artifacts.ProvingKeyHash, request.ProvingKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts artifact hashes must match proof request.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.VerifierKeyHash, artifacts.NativeProverBundle.VerifierKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts verifierKeyHash must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(
+                artifacts.CrossSdkFixtureParityHash,
+                artifacts.NativeProverBundle.AuditHashes["cross_sdk_fixture_parity"],
+                StringComparison.Ordinal)
+            || artifacts.CrossSdkFixtureParity is null
+            || !string.Equals(
+                artifacts.CrossSdkFixtureParity.DestinationBindingHash,
+                artifacts.NativeProverBundle.DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(
+                artifacts.NativeProverSelfTestHash,
+                artifacts.NativeProverBundle.AuditHashes["native_prover_self_test"],
+                StringComparison.Ordinal)
+            || artifacts.NativeProverSelfTest is null
+            || !string.Equals(
+                artifacts.NativeProverSelfTest.DestinationBindingHash,
+                artifacts.NativeProverBundle.DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+
+        if (string.IsNullOrEmpty(artifacts.Sdk)
+            || string.IsNullOrEmpty(artifacts.Implementation)
+            || string.IsNullOrEmpty(artifacts.ImplementationHash))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts must bind sdk implementation and implementationHash.",
+                nameof(artifacts));
+        }
+
+        var artifact = artifacts.NativeProverBundle.NativeSdkArtifacts
+            .FirstOrDefault(row => string.Equals(row.Sdk, artifacts.Sdk, StringComparison.Ordinal));
+        if (artifact is null)
+        {
+            throw new ArgumentException(
+                $"nativeProverBundle has no artifact row for sdk: {artifacts.Sdk}.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.Implementation, artifact.Implementation, StringComparison.Ordinal)
+            || !string.Equals(artifacts.ImplementationHash, artifact.ImplementationHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts implementation binding must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+    }
+
+    private static void RequireVerifiedNativeProverArtifacts(
+        EthereumMainnetNativeEvmProverArtifacts? artifacts,
+        EthereumMainnetOutboundProofResult proofResult)
+    {
+        ArgumentNullException.ThrowIfNull(proofResult);
+        if (artifacts is null)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet SCCP submission requires verified native EVM prover artifacts.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(
+                artifacts.NativeProverBundle.DestinationBindingHash,
+                proofResult.DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts destinationBindingHash must match proofResult.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.ProofArtifactHash, proofResult.ProofArtifactHash, StringComparison.Ordinal)
+            || !string.Equals(artifacts.ProvingKeyHash, proofResult.ProvingKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts artifact hashes must match proofResult.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.VerifierKeyHash, artifacts.NativeProverBundle.VerifierKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts verifierKeyHash must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(
+                artifacts.CrossSdkFixtureParityHash,
+                artifacts.NativeProverBundle.AuditHashes["cross_sdk_fixture_parity"],
+                StringComparison.Ordinal)
+            || artifacts.CrossSdkFixtureParity is null
+            || !string.Equals(
+                artifacts.CrossSdkFixtureParity.DestinationBindingHash,
+                artifacts.NativeProverBundle.DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts crossSdkFixtureParityHash must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(
+                artifacts.NativeProverSelfTestHash,
+                artifacts.NativeProverBundle.AuditHashes["native_prover_self_test"],
+                StringComparison.Ordinal)
+            || artifacts.NativeProverSelfTest is null
+            || !string.Equals(
+                artifacts.NativeProverSelfTest.DestinationBindingHash,
+                artifacts.NativeProverBundle.DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+
+        if (string.IsNullOrEmpty(artifacts.Sdk)
+            || string.IsNullOrEmpty(artifacts.Implementation)
+            || string.IsNullOrEmpty(artifacts.ImplementationHash))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts must bind sdk implementation and implementationHash.",
+                nameof(artifacts));
+        }
+
+        var artifact = artifacts.NativeProverBundle.NativeSdkArtifacts
+            .FirstOrDefault(row => string.Equals(row.Sdk, artifacts.Sdk, StringComparison.Ordinal));
+        if (artifact is null)
+        {
+            throw new ArgumentException(
+                $"nativeProverBundle has no artifact row for sdk: {artifacts.Sdk}.",
+                nameof(artifacts));
+        }
+
+        if (!string.Equals(artifacts.Implementation, artifact.Implementation, StringComparison.Ordinal)
+            || !string.Equals(artifacts.ImplementationHash, artifact.ImplementationHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverArtifacts implementation binding must match nativeProverBundle.",
+                nameof(artifacts));
+        }
+    }
+
     private static void RequireEthereumProofRequest(EthereumMainnetOutboundProofRequest request)
     {
         RequireEthereumProofRequestShape(request);
@@ -1784,7 +2487,9 @@ public static class EthereumMainnetSccp
             request.SourceProofBytes,
             request.StatementHash,
             request.DestinationBindingHash,
-            request.PublicSignalWords);
+            request.PublicSignalWords,
+            request.ProofArtifactHash,
+            request.ProvingKeyHash);
         if (!string.Equals(expectedRequestHash, request.RequestHash, StringComparison.Ordinal))
         {
             throw new ArgumentException("requestHash must match Ethereum mainnet proof request fields.");
@@ -1819,6 +2524,7 @@ public static class EthereumMainnetSccp
 
         RequireNonEmptyBytes(request.BundleBytes, nameof(request.BundleBytes));
         NormalizeOptionalNonZeroBytes(request.SourceProofBytes, nameof(request.SourceProofBytes));
+        NormalizeOptionalGroth16ProverArtifacts(request.ProofArtifactHash, request.ProvingKeyHash);
         var statementHash = NormalizeNonZeroHex(request.StatementHash, nameof(request.StatementHash), 32);
         var destinationBinding = RequireEthereumDestinationBinding(request.DestinationBinding);
         if (!string.Equals(destinationBinding.BindingHash, request.DestinationBindingHash, StringComparison.Ordinal))
@@ -2591,6 +3297,128 @@ public static class EthereumMainnetSccp
         return Concat(new[] { (byte)(longOffset + lengthBytes.Count) }, lengthBytes.ToArray());
     }
 
+    private static IReadOnlyList<byte[]> RlpListByteFields(byte[] bytes)
+    {
+        var outer = ReadRlpItem(bytes, 0);
+        if (!outer.IsList || outer.NextOffset != bytes.Length)
+        {
+            throw new ArgumentException("headerRlp must be an RLP list.", nameof(bytes));
+        }
+
+        var fields = new List<byte[]>();
+        var cursor = outer.PayloadOffset;
+        var end = outer.PayloadOffset + outer.PayloadLength;
+        while (cursor < end)
+        {
+            var item = ReadRlpItem(bytes, cursor);
+            if (item.IsList)
+            {
+                throw new ArgumentException(
+                    "headerRlp must contain only RLP byte fields.",
+                    nameof(bytes));
+            }
+
+            fields.Add(bytes.AsSpan(item.PayloadOffset, item.PayloadLength).ToArray());
+            cursor = item.NextOffset;
+        }
+
+        return fields;
+    }
+
+    private static RlpDecodedItem ReadRlpItem(byte[] bytes, int offset)
+    {
+        if (offset < 0 || offset >= bytes.Length)
+        {
+            throw new ArgumentException("RLP item offset is out of bounds.", nameof(offset));
+        }
+
+        var prefix = bytes[offset];
+        if (prefix <= 0x7f)
+        {
+            return new RlpDecodedItem(offset, 1, offset + 1, false);
+        }
+
+        if (prefix <= 0xb7)
+        {
+            var length = prefix - 0x80;
+            var payloadOffset = offset + 1;
+            RequireRlpBounds(bytes, payloadOffset, length);
+            if (length == 1 && bytes[payloadOffset] < 0x80)
+            {
+                throw new ArgumentException("RLP byte field is not canonical.", nameof(bytes));
+            }
+
+            return new RlpDecodedItem(payloadOffset, length, payloadOffset + length, false);
+        }
+
+        if (prefix <= 0xbf)
+        {
+            var lengthOfLength = prefix - 0xb7;
+            var payloadLength = ReadRlpLength(bytes, offset + 1, lengthOfLength);
+            if (payloadLength < 56)
+            {
+                throw new ArgumentException("RLP long byte field is not canonical.", nameof(bytes));
+            }
+
+            var payloadOffset = offset + 1 + lengthOfLength;
+            RequireRlpBounds(bytes, payloadOffset, payloadLength);
+            return new RlpDecodedItem(payloadOffset, payloadLength, payloadOffset + payloadLength, false);
+        }
+
+        if (prefix <= 0xf7)
+        {
+            var length = prefix - 0xc0;
+            var payloadOffset = offset + 1;
+            RequireRlpBounds(bytes, payloadOffset, length);
+            return new RlpDecodedItem(payloadOffset, length, payloadOffset + length, true);
+        }
+
+        var listLengthOfLength = prefix - 0xf7;
+        var listPayloadLength = ReadRlpLength(bytes, offset + 1, listLengthOfLength);
+        if (listPayloadLength < 56)
+        {
+            throw new ArgumentException("RLP long list is not canonical.", nameof(bytes));
+        }
+
+        var listPayloadOffset = offset + 1 + listLengthOfLength;
+        RequireRlpBounds(bytes, listPayloadOffset, listPayloadLength);
+        return new RlpDecodedItem(
+            listPayloadOffset,
+            listPayloadLength,
+            listPayloadOffset + listPayloadLength,
+            true);
+    }
+
+    private static int ReadRlpLength(byte[] bytes, int offset, int lengthOfLength)
+    {
+        if (lengthOfLength <= 0 || lengthOfLength > 4)
+        {
+            throw new ArgumentException("RLP length-of-length is out of range.", nameof(bytes));
+        }
+
+        RequireRlpBounds(bytes, offset, lengthOfLength);
+        if (bytes[offset] == 0)
+        {
+            throw new ArgumentException("RLP length must be minimally encoded.", nameof(bytes));
+        }
+
+        var length = 0;
+        for (var index = 0; index < lengthOfLength; index++)
+        {
+            length = checked((length << 8) | bytes[offset + index]);
+        }
+
+        return length;
+    }
+
+    private static void RequireRlpBounds(byte[] bytes, int offset, int length)
+    {
+        if (offset < 0 || length < 0 || offset > bytes.Length - length)
+        {
+            throw new ArgumentException("RLP item length exceeds input.", nameof(bytes));
+        }
+    }
+
     private static string NormalizeRpcHex(
         object? value,
         string parameterName,
@@ -3188,12 +4016,14 @@ public static class EthereumMainnetSccp
                 nameof(finality));
         }
 
-        var normalized = new Dictionary<string, object?>(finality, StringComparer.Ordinal)
+        var normalized = new Dictionary<string, object?>(finality, StringComparer.Ordinal);
+        foreach (var key in BeaconFinalityAliasKeys)
         {
-            ["executionBlockNumber"] = executionBlockNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["executionBlockHash"] = executionBlockHash,
-            ["executionReceiptsRoot"] = executionReceiptsRoot,
-        };
+            normalized.Remove(key);
+        }
+        normalized["executionBlockNumber"] = executionBlockNumber.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        normalized["executionBlockHash"] = executionBlockHash;
+        normalized["executionReceiptsRoot"] = executionReceiptsRoot;
         var finalizedHeaderRootInput = StrictFirstPresent(
             finality,
             "beaconFinality.finalizedHeaderRoot",
@@ -3229,30 +4059,44 @@ public static class EthereumMainnetSccp
             "finalizedSlot",
             "finalized_slot",
             "slot");
+        ulong? normalizedBeaconSlot = null;
         if (beaconSlotInput is not null)
         {
-            var beaconSlot = NormalizeUnsignedInteger(
+            normalizedBeaconSlot = NormalizeUnsignedInteger(
                 beaconSlotInput,
                 "beaconFinality.beaconSlot");
-            if (beaconSlot == 0)
+            if (normalizedBeaconSlot.Value == 0)
             {
                 throw new ArgumentException(
                     "beaconFinality.beaconSlot must be positive.",
                     nameof(finality));
             }
 
-            normalized["beaconSlot"] = beaconSlot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            normalized["beaconSlot"] = normalizedBeaconSlot.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        var finalityBranchInput = StrictFirstPresent(
+            finality,
+            "beaconFinality.finalityBranch",
+            "finalityBranch",
+            "finality_branch");
+        if (finalityBranchInput is not null)
+        {
+            normalized["finalityBranch"] = NormalizeFinalityBranch(
+                finalityBranchInput,
+                "beaconFinality.finalityBranch");
         }
         var syncCommitteeBitsInput = StrictFirstPresent(
             finality,
             "beaconFinality.syncCommitteeBits",
             "syncCommitteeBits",
             "sync_committee_bits");
+        string? normalizedSyncCommitteeBits = null;
         if (syncCommitteeBitsInput is not null)
         {
-            normalized["syncCommitteeBits"] = NormalizeFinalitySyncCommitteeBits(
+            normalizedSyncCommitteeBits = NormalizeFinalitySyncCommitteeBits(
                 syncCommitteeBitsInput,
                 "beaconFinality.syncCommitteeBits");
+            normalized["syncCommitteeBits"] = normalizedSyncCommitteeBits;
         }
 
         var syncCommitteeSignatureInput = StrictFirstPresent(
@@ -3275,19 +4119,28 @@ public static class EthereumMainnetSccp
             "sync_signature_slot",
             "signatureSlot",
             "signature_slot");
+        ulong? normalizedSyncSignatureSlot = null;
         if (syncSignatureSlotInput is not null)
         {
-            var syncSignatureSlot = NormalizeUnsignedInteger(
+            normalizedSyncSignatureSlot = NormalizeUnsignedInteger(
                 syncSignatureSlotInput,
                 "beaconFinality.syncSignatureSlot");
-            if (syncSignatureSlot == 0)
+            if (normalizedSyncSignatureSlot.Value == 0)
             {
                 throw new ArgumentException(
                     "beaconFinality.syncSignatureSlot must be positive.",
                     nameof(finality));
             }
 
-            normalized["syncSignatureSlot"] = syncSignatureSlot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            normalized["syncSignatureSlot"] = normalizedSyncSignatureSlot.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (normalizedBeaconSlot is not null
+            && normalizedSyncSignatureSlot is not null
+            && normalizedSyncSignatureSlot.Value < normalizedBeaconSlot.Value)
+        {
+            throw new ArgumentException(
+                "beaconFinality.syncSignatureSlot must cover beaconFinality.beaconSlot.",
+                nameof(finality));
         }
 
         var syncCommitteeParticipationInput = StrictFirstPresent(
@@ -3295,19 +4148,29 @@ public static class EthereumMainnetSccp
             "beaconFinality.syncCommitteeParticipation",
             "syncCommitteeParticipation",
             "sync_committee_participation");
+        ulong? normalizedSyncCommitteeParticipation = null;
         if (syncCommitteeParticipationInput is not null)
         {
-            var syncCommitteeParticipation = NormalizeUnsignedInteger(
+            normalizedSyncCommitteeParticipation = NormalizeUnsignedInteger(
                 syncCommitteeParticipationInput,
                 "beaconFinality.syncCommitteeParticipation");
-            if (syncCommitteeParticipation == 0)
+            if (normalizedSyncCommitteeParticipation.Value == 0)
             {
                 throw new ArgumentException(
                     "beaconFinality.syncCommitteeParticipation must be positive.",
                     nameof(finality));
             }
 
-            normalized["syncCommitteeParticipation"] = syncCommitteeParticipation.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            normalized["syncCommitteeParticipation"] =
+                normalizedSyncCommitteeParticipation.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (normalizedSyncCommitteeBits is not null
+            && normalizedSyncCommitteeParticipation is not null
+            && FinalitySyncCommitteeParticipation(normalizedSyncCommitteeBits) != normalizedSyncCommitteeParticipation.Value)
+        {
+            throw new ArgumentException(
+                "beaconFinality.syncCommitteeParticipation must match syncCommitteeBits.",
+                nameof(finality));
         }
         return normalized;
     }
@@ -3315,14 +4178,41 @@ public static class EthereumMainnetSccp
     private static string NormalizeFinalitySyncCommitteeBits(object? value, string parameterName)
     {
         var bits = NormalizeRpcHex(value, parameterName, 64, allowZero: true);
-        if (FinalitySyncCommitteeParticipation(bits) == 0)
+        var participation = FinalitySyncCommitteeParticipation(bits);
+        if (participation == 0)
         {
             throw new ArgumentException(
                 $"{parameterName} must contain at least one participant.",
                 parameterName);
         }
 
+        if (participation * 3 < 512 * 2)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must contain Ethereum sync committee supermajority.",
+                parameterName);
+        }
+
         return bits;
+    }
+
+    private static IReadOnlyList<string> NormalizeFinalityBranch(object? value, string parameterName)
+    {
+        if (value is string || value is not System.Collections.IEnumerable values)
+        {
+            throw new ArgumentException($"{parameterName} must be an array.", parameterName);
+        }
+        var branch = values.Cast<object?>().Select((sibling, index) => NormalizeRpcHex(
+                sibling,
+                $"{parameterName}[{index}]",
+                32,
+                allowZero: true))
+            .ToArray();
+        if (branch.Length != 6)
+        {
+            throw new ArgumentException($"{parameterName} must contain 6 siblings.", parameterName);
+        }
+        return Array.AsReadOnly(branch);
     }
 
     private static ulong FinalitySyncCommitteeParticipation(string bits)
@@ -3920,6 +4810,173 @@ public static class EthereumMainnetSccp
         return outBytes;
     }
 
+    private static byte[] SszHashNode(byte[] left, byte[] right)
+    {
+        if (left.Length != 32 || right.Length != 32)
+        {
+            throw new ArgumentException("SSZ node inputs must be 32 bytes.");
+        }
+
+        return SHA256.HashData(Concat(left, right));
+    }
+
+    private static byte[] SszMerkleizeChunks(IReadOnlyList<byte[]> inputChunks)
+    {
+        if (inputChunks.Count == 0)
+        {
+            return new byte[32];
+        }
+
+        var chunks = new List<byte[]>(inputChunks.Count);
+        foreach (var chunk in inputChunks)
+        {
+            if (chunk.Length != 32)
+            {
+                throw new ArgumentException("SSZ chunk must be 32 bytes.", nameof(inputChunks));
+            }
+
+            chunks.Add(chunk.ToArray());
+        }
+
+        var paddedLength = 1;
+        while (paddedLength < chunks.Count)
+        {
+            paddedLength <<= 1;
+        }
+
+        while (chunks.Count < paddedLength)
+        {
+            chunks.Add(new byte[32]);
+        }
+
+        while (chunks.Count > 1)
+        {
+            var next = new List<byte[]>(chunks.Count / 2);
+            for (var index = 0; index < chunks.Count; index += 2)
+            {
+                next.Add(SszHashNode(chunks[index], chunks[index + 1]));
+            }
+
+            chunks = next;
+        }
+
+        return chunks[0];
+    }
+
+    private static byte[] SszU64Chunk(ulong value)
+    {
+        var outBytes = new byte[32];
+        BinaryPrimitives.WriteUInt64LittleEndian(outBytes, value);
+        return outBytes;
+    }
+
+    private static byte[] SszU64ChunkFromRlp(byte[] bytes, string field)
+    {
+        if (bytes.Length > 8 || (bytes.Length > 1 && bytes[0] == 0))
+        {
+            throw new ArgumentException($"{field} must be a canonical RLP u64.", field);
+        }
+
+        ulong value = 0;
+        foreach (var item in bytes)
+        {
+            value = (value << 8) | item;
+        }
+
+        return SszU64Chunk(value);
+    }
+
+    private static byte[] SszU256ChunkFromRlp(byte[] bytes, string field)
+    {
+        if (bytes.Length > 32 || (bytes.Length > 1 && bytes[0] == 0))
+        {
+            throw new ArgumentException($"{field} must be a canonical RLP uint256.", field);
+        }
+
+        var outBytes = new byte[32];
+        for (var index = 0; index < bytes.Length; index++)
+        {
+            outBytes[index] = bytes[bytes.Length - 1 - index];
+        }
+
+        return outBytes;
+    }
+
+    private static byte[] SszByteVectorRoot(byte[] bytes, int expectedLength, string field)
+    {
+        if (bytes.Length != expectedLength)
+        {
+            throw new ArgumentException($"{field} must be {expectedLength} bytes.", field);
+        }
+
+        var chunks = new List<byte[]>();
+        for (var offset = 0; offset < bytes.Length; offset += 32)
+        {
+            var chunk = new byte[32];
+            var length = Math.Min(32, bytes.Length - offset);
+            bytes.AsSpan(offset, length).CopyTo(chunk);
+            chunks.Add(chunk);
+        }
+
+        return SszMerkleizeChunks(chunks);
+    }
+
+    private static byte[] SszByteListRoot(byte[] bytes, int maxLength, string field)
+    {
+        if (bytes.Length > maxLength)
+        {
+            throw new ArgumentException($"{field} must be at most {maxLength} bytes.", field);
+        }
+
+        var limitChunks = Math.Max(1, (maxLength + 31) / 32);
+        var chunks = new List<byte[]>();
+        for (var offset = 0; offset < bytes.Length; offset += 32)
+        {
+            var chunk = new byte[32];
+            var length = Math.Min(32, bytes.Length - offset);
+            bytes.AsSpan(offset, length).CopyTo(chunk);
+            chunks.Add(chunk);
+        }
+
+        while (chunks.Count < limitChunks)
+        {
+            chunks.Add(new byte[32]);
+        }
+
+        return SszHashNode(SszMerkleizeChunks(chunks), SszU64Chunk((ulong)bytes.Length));
+    }
+
+    private static byte[] SszMerkleRootFromBranch(
+        byte[] leaf,
+        int leafIndex,
+        IReadOnlyList<byte[]> branch,
+        string field)
+    {
+        if (leaf.Length != 32)
+        {
+            throw new ArgumentException($"{field} leaf must be 32 bytes.", field);
+        }
+
+        var current = leaf.ToArray();
+        var index = leafIndex;
+        for (var branchIndex = 0; branchIndex < branch.Count; branchIndex++)
+        {
+            var sibling = branch[branchIndex]
+                ?? throw new ArgumentException($"{field}[{branchIndex}] is required.", field);
+            if (sibling.Length != 32)
+            {
+                throw new ArgumentException($"{field}[{branchIndex}] must be 32 bytes.", field);
+            }
+
+            current = (index & 1) == 1
+                ? SszHashNode(sibling, current)
+                : SszHashNode(current, sibling);
+            index >>= 1;
+        }
+
+        return current;
+    }
+
     private static byte[] WriteBytes(byte[] value)
     {
         var length = new byte[4];
@@ -3971,6 +5028,26 @@ public static class EthereumMainnetSccp
         }
 
         return ToHex(bytes);
+    }
+
+    private static Groth16ProverArtifacts? NormalizeOptionalGroth16ProverArtifacts(
+        string? proofArtifactHash,
+        string? provingKeyHash)
+    {
+        if ((proofArtifactHash is null) != (provingKeyHash is null))
+        {
+            throw new ArgumentException(
+                "proofArtifactHash and provingKeyHash must be supplied together.");
+        }
+
+        if (proofArtifactHash is null || provingKeyHash is null)
+        {
+            return null;
+        }
+
+        return new Groth16ProverArtifacts(
+            NormalizeNonZeroHex(proofArtifactHash, nameof(proofArtifactHash), 32),
+            NormalizeNonZeroHex(provingKeyHash, nameof(provingKeyHash), 32));
     }
 
     private static byte[] HexToBytes(string value, int byteLength)
@@ -4236,6 +5313,1995 @@ public sealed record EthereumMainnetSccpProofContext(
     string StatementHash,
     string DestinationBindingHash);
 
+public sealed record EthereumMainnetNativeEvmProverBundleSdkArtifact
+{
+    public EthereumMainnetNativeEvmProverBundleSdkArtifact(
+        string sdk,
+        string implementation,
+        string proofArtifactHash,
+        string provingKeyHash,
+        string implementationHash,
+        string? implementationArtifact = null)
+    {
+        if (string.IsNullOrEmpty(sdk))
+        {
+            throw new ArgumentException("nativeSdkArtifacts.sdk must be non-empty.", nameof(sdk));
+        }
+
+        if (!EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1.TryGetValue(
+                sdk,
+                out var expectedImplementation)
+            || !string.Equals(expectedImplementation, implementation, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"{sdk} implementation must match Ethereum native EVM prover bundle profile.",
+                nameof(implementation));
+        }
+
+        Sdk = sdk;
+        Implementation = implementation;
+        ProofArtifactHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            proofArtifactHash,
+            nameof(proofArtifactHash));
+        ProvingKeyHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            provingKeyHash,
+            nameof(provingKeyHash));
+        ImplementationArtifact = implementationArtifact is null
+            ? null
+            : EthereumMainnetSccp.NormalizeNativeEvmProverArtifactPath(
+                implementationArtifact,
+                nameof(implementationArtifact));
+        ImplementationHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            implementationHash,
+            nameof(implementationHash));
+    }
+
+    public string Sdk { get; }
+
+    public string Implementation { get; }
+
+    public string ProofArtifactHash { get; }
+
+    public string ProvingKeyHash { get; }
+
+    public string? ImplementationArtifact { get; }
+
+    public string ImplementationHash { get; }
+}
+
+public sealed record EthereumMainnetNativeEvmProverBundle
+{
+    public EthereumMainnetNativeEvmProverBundle(
+        string proofArtifactHash,
+        string provingKeyHash,
+        string verifierKeyHash,
+        string destinationBindingHash,
+        IReadOnlyList<EthereumMainnetNativeEvmProverBundleSdkArtifact> nativeSdkArtifacts,
+        IReadOnlyDictionary<string, string> auditHashes,
+        string schema = EthereumMainnetSccp.NativeEvmProverBundleSchemaV1,
+        string bundleId = EthereumMainnetSccp.EthNativeEvmProverBundleIdV1,
+        int domain = EthereumMainnetSccp.DomainEthereum,
+        string chain = "eth",
+        string proofBackend = EthereumMainnetSccp.EvmGroth16Bn254ProofBackend,
+        bool noWasm = true,
+        bool remoteProverRequired = false,
+        string browserImplementation = "pure-typescript",
+        string? expectedDestinationBindingHash = null,
+        string? proofArtifact = null,
+        string? provingKey = null,
+        string? verifierKey = null,
+        string? crossSdkFixtureParityArtifact = null,
+        string? nativeProverSelfTestArtifact = null)
+    {
+        ArgumentNullException.ThrowIfNull(nativeSdkArtifacts);
+        ArgumentNullException.ThrowIfNull(auditHashes);
+
+        if (!string.Equals(schema, EthereumMainnetSccp.NativeEvmProverBundleSchemaV1, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("nativeProverBundle.schema is not supported.", nameof(schema));
+        }
+
+        if (!string.Equals(bundleId, EthereumMainnetSccp.EthNativeEvmProverBundleIdV1, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("nativeProverBundle.bundleId is not supported.", nameof(bundleId));
+        }
+
+        if (domain != EthereumMainnetSccp.DomainEthereum)
+        {
+            throw new ArgumentException("nativeProverBundle.domain must be ETH.", nameof(domain));
+        }
+
+        if (!string.Equals(chain, "eth", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("nativeProverBundle.chain must be eth.", nameof(chain));
+        }
+
+        if (!string.Equals(proofBackend, EthereumMainnetSccp.EvmGroth16Bn254ProofBackend, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.proofBackend must be evm-groth16-bn254-v1.",
+                nameof(proofBackend));
+        }
+
+        if (!noWasm)
+        {
+            throw new ArgumentException("nativeProverBundle.noWasm must be true.", nameof(noWasm));
+        }
+
+        if (remoteProverRequired)
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.remoteProverRequired must be false.",
+                nameof(remoteProverRequired));
+        }
+
+        if (!string.Equals(browserImplementation, "pure-typescript", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.browserImplementation must be pure-typescript.",
+                nameof(browserImplementation));
+        }
+
+        ProofArtifactHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            proofArtifactHash,
+            nameof(proofArtifactHash));
+        ProvingKeyHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            provingKeyHash,
+            nameof(provingKeyHash));
+        VerifierKeyHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            verifierKeyHash,
+            nameof(verifierKeyHash));
+        DestinationBindingHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            destinationBindingHash,
+            nameof(destinationBindingHash));
+        if (expectedDestinationBindingHash is not null
+            && !string.Equals(
+                EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+                    expectedDestinationBindingHash,
+                    nameof(expectedDestinationBindingHash)),
+                DestinationBindingHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.destinationBindingHash must match destinationBinding.",
+                nameof(expectedDestinationBindingHash));
+        }
+
+        if (auditHashes.Count == 0)
+        {
+            throw new ArgumentException("nativeProverBundle.auditHashes must be non-empty.", nameof(auditHashes));
+        }
+
+        foreach (var key in auditHashes.Keys)
+        {
+            if (!EthereumMainnetSccp.EthNativeEvmProverRequiredAuditHashesV1.Contains(key, StringComparer.Ordinal))
+            {
+                throw new ArgumentException($"auditHashes.{key} is not expected.", nameof(auditHashes));
+            }
+        }
+
+        var normalizedAuditHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var key in EthereumMainnetSccp.EthNativeEvmProverRequiredAuditHashesV1)
+        {
+            if (!auditHashes.TryGetValue(key, out var value))
+            {
+                throw new ArgumentException($"auditHashes.{key} is required.", nameof(auditHashes));
+            }
+
+            normalizedAuditHashes[key] = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+                value,
+                $"auditHashes.{key}");
+        }
+
+        AuditHashes = normalizedAuditHashes;
+        var artifactsBySdk = new Dictionary<string, EthereumMainnetNativeEvmProverBundleSdkArtifact>(
+            StringComparer.Ordinal);
+        foreach (var artifact in nativeSdkArtifacts)
+        {
+            if (!artifactsBySdk.TryAdd(artifact.Sdk, artifact))
+            {
+                throw new ArgumentException(
+                    $"nativeSdkArtifacts contains duplicate sdk: {artifact.Sdk}.",
+                    nameof(nativeSdkArtifacts));
+            }
+
+            if (!string.Equals(artifact.ProofArtifactHash, ProofArtifactHash, StringComparison.Ordinal)
+                || !string.Equals(artifact.ProvingKeyHash, ProvingKeyHash, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"{artifact.Sdk} artifact hashes must match bundle.",
+                    nameof(nativeSdkArtifacts));
+            }
+        }
+
+        foreach (var sdk in EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1.Keys)
+        {
+            if (!artifactsBySdk.ContainsKey(sdk))
+            {
+                throw new ArgumentException(
+                    $"nativeSdkArtifacts missing sdk: {sdk}.",
+                    nameof(nativeSdkArtifacts));
+            }
+        }
+
+        var sortedArtifacts = artifactsBySdk.Values
+            .OrderBy(artifact => artifact.Sdk, StringComparer.Ordinal)
+            .ToArray();
+        var hashRoles = new List<KeyValuePair<string, string>>
+        {
+            new("proofArtifactHash", ProofArtifactHash),
+            new("provingKeyHash", ProvingKeyHash),
+            new("verifierKeyHash", VerifierKeyHash),
+            new("destinationBindingHash", DestinationBindingHash),
+        };
+        hashRoles.AddRange(sortedArtifacts.Select(artifact =>
+            new KeyValuePair<string, string>(
+                $"nativeSdkArtifacts[{artifact.Sdk}].implementationHash",
+                artifact.ImplementationHash)));
+        hashRoles.AddRange(AuditHashes
+            .OrderBy(row => row.Key, StringComparer.Ordinal)
+            .Select(row => new KeyValuePair<string, string>($"auditHashes.{row.Key}", row.Value)));
+        RequireNativeEvmProverBundleHashRoleSeparation(hashRoles);
+
+        NativeSdkArtifacts = sortedArtifacts;
+        Schema = schema;
+        BundleId = bundleId;
+        Domain = domain;
+        Chain = chain;
+        ProofBackend = proofBackend;
+        ProofArtifact = proofArtifact is null
+            ? null
+            : EthereumMainnetSccp.NormalizeNativeEvmProverArtifactPath(
+                proofArtifact,
+                nameof(proofArtifact));
+        ProvingKey = provingKey is null
+            ? null
+            : EthereumMainnetSccp.NormalizeNativeEvmProverArtifactPath(
+                provingKey,
+                nameof(provingKey));
+        VerifierKey = verifierKey is null
+            ? null
+            : EthereumMainnetSccp.NormalizeNativeEvmProverArtifactPath(
+                verifierKey,
+                nameof(verifierKey));
+        NoWasm = noWasm;
+        RemoteProverRequired = remoteProverRequired;
+        BrowserImplementation = browserImplementation;
+        CrossSdkFixtureParityArtifact = crossSdkFixtureParityArtifact is null
+            ? null
+            : EthereumMainnetSccp.NormalizeNativeEvmProverArtifactPath(
+                crossSdkFixtureParityArtifact,
+                nameof(crossSdkFixtureParityArtifact));
+        NativeProverSelfTestArtifact = nativeProverSelfTestArtifact is null
+            ? null
+            : EthereumMainnetSccp.NormalizeNativeEvmProverArtifactPath(
+                nativeProverSelfTestArtifact,
+                nameof(nativeProverSelfTestArtifact));
+    }
+
+    private static void RequireNativeEvmProverBundleHashRoleSeparation(
+        IEnumerable<KeyValuePair<string, string>> roles)
+    {
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var role in roles)
+        {
+            if (seen.TryGetValue(role.Value, out var previous))
+            {
+                throw new ArgumentException(
+                    $"nativeProverBundle hashes must be role-separated: {role.Key} matches {previous}.");
+            }
+
+            seen.Add(role.Value, role.Key);
+        }
+    }
+
+    public EthereumMainnetNativeEvmProverArtifacts VerifiedArtifacts(
+        byte[] proofArtifactBytes,
+        byte[] provingKeyBytes,
+        byte[] verifierKeyBytes,
+        string? sdk = null,
+        byte[]? implementationBytes = null,
+        byte[]? crossSdkFixtureParityBytes = null,
+        byte[]? nativeProverSelfTestBytes = null)
+    {
+        ArgumentNullException.ThrowIfNull(proofArtifactBytes);
+        ArgumentNullException.ThrowIfNull(provingKeyBytes);
+        ArgumentNullException.ThrowIfNull(verifierKeyBytes);
+
+        var proofArtifactHash = Sha256Hex(proofArtifactBytes);
+        if (!string.Equals(proofArtifactHash, ProofArtifactHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "proofArtifactBytes sha256 must match nativeProverBundle.proofArtifactHash.",
+                nameof(proofArtifactBytes));
+        }
+
+        var provingKeyHash = Sha256Hex(provingKeyBytes);
+        if (!string.Equals(provingKeyHash, ProvingKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "provingKeyBytes sha256 must match nativeProverBundle.provingKeyHash.",
+                nameof(provingKeyBytes));
+        }
+
+        var verifierKeyHash = Sha256Hex(verifierKeyBytes);
+        if (!string.Equals(verifierKeyHash, VerifierKeyHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "verifierKeyBytes sha256 must match nativeProverBundle.verifierKeyHash.",
+                nameof(verifierKeyBytes));
+        }
+
+        if (crossSdkFixtureParityBytes is null)
+        {
+            throw new ArgumentException(
+                "crossSdkFixtureParityBytes are required for nativeProverBundle parity binding.",
+                nameof(crossSdkFixtureParityBytes));
+        }
+
+        var crossSdkFixtureParityHash = Sha256Hex(crossSdkFixtureParityBytes);
+        if (!string.Equals(
+                crossSdkFixtureParityHash,
+                AuditHashes["cross_sdk_fixture_parity"],
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "crossSdkFixtureParityBytes sha256 must match nativeProverBundle.auditHashes.cross_sdk_fixture_parity.",
+                nameof(crossSdkFixtureParityBytes));
+        }
+
+        if (nativeProverSelfTestBytes is null)
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTestBytes are required for nativeProverBundle self-test binding.",
+                nameof(nativeProverSelfTestBytes));
+        }
+
+        var nativeProverSelfTestHash = Sha256Hex(nativeProverSelfTestBytes);
+        if (!string.Equals(
+                nativeProverSelfTestHash,
+                AuditHashes["native_prover_self_test"],
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test.",
+                nameof(nativeProverSelfTestBytes));
+        }
+
+        RequireNativeEvmProverProductionArtifactSize(proofArtifactBytes, nameof(proofArtifactBytes));
+        RequireNativeEvmProverProductionArtifactSize(provingKeyBytes, nameof(provingKeyBytes));
+        RequireNativeEvmProverProductionArtifactSize(verifierKeyBytes, nameof(verifierKeyBytes));
+        RejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, nameof(proofArtifactBytes));
+        RejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, nameof(provingKeyBytes));
+        RejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, nameof(verifierKeyBytes));
+        RejectNativeEvmProverForbiddenArtifactMarkers(
+            crossSdkFixtureParityBytes,
+            nameof(crossSdkFixtureParityBytes));
+        RejectNativeEvmProverForbiddenArtifactMarkers(
+            nativeProverSelfTestBytes,
+            nameof(nativeProverSelfTestBytes));
+        var crossSdkFixtureParity = EthereumMainnetNativeEvmProverParityFixture.FromJsonBytes(
+            crossSdkFixtureParityBytes,
+            this);
+        var nativeProverSelfTest = EthereumMainnetNativeEvmProverSelfTestFixture.FromJsonBytes(
+            nativeProverSelfTestBytes,
+            this);
+
+        if (string.IsNullOrEmpty(sdk))
+        {
+            throw new ArgumentException(
+                "sdk must be a non-empty string for nativeProverBundle implementation binding.",
+                nameof(sdk));
+        }
+
+        if (implementationBytes is null)
+        {
+            throw new ArgumentException(
+                "implementationBytes are required for nativeProverBundle implementation binding.",
+                nameof(implementationBytes));
+        }
+
+        var artifact = NativeSdkArtifacts.FirstOrDefault(row => string.Equals(row.Sdk, sdk, StringComparison.Ordinal));
+        if (artifact is null)
+        {
+            throw new ArgumentException($"nativeProverBundle has no artifact row for sdk: {sdk}.", nameof(sdk));
+        }
+
+        var implementationHash = Sha256Hex(implementationBytes);
+        if (!string.Equals(implementationHash, artifact.ImplementationHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "implementationBytes sha256 must match nativeProverBundle implementationHash.",
+                nameof(implementationBytes));
+        }
+
+        RequireNativeEvmProverProductionArtifactSize(
+            implementationBytes,
+            nameof(implementationBytes));
+        RejectNativeEvmProverForbiddenArtifactMarkers(
+            implementationBytes,
+            nameof(implementationBytes));
+
+        var implementation = artifact.Implementation;
+
+        return new EthereumMainnetNativeEvmProverArtifacts(
+            EthereumMainnetSccp.NativeEvmProverArtifactHashAlgorithmV1,
+            this,
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            crossSdkFixtureParityHash,
+            crossSdkFixtureParity,
+            nativeProverSelfTestHash,
+            nativeProverSelfTest,
+            sdk,
+            implementation,
+            implementationHash);
+    }
+
+    public EthereumMainnetNativeEvmProverArtifacts VerifiedArtifacts(
+        string sdk,
+        Func<string, byte[]> artifactResolver)
+    {
+        ArgumentNullException.ThrowIfNull(artifactResolver);
+        if (ProofArtifact is null)
+        {
+            throw new ArgumentException("proofArtifact is required.", nameof(ProofArtifact));
+        }
+
+        if (ProvingKey is null)
+        {
+            throw new ArgumentException("provingKey is required.", nameof(ProvingKey));
+        }
+
+        if (VerifierKey is null)
+        {
+            throw new ArgumentException("verifierKey is required.", nameof(VerifierKey));
+        }
+
+        if (CrossSdkFixtureParityArtifact is null)
+        {
+            throw new ArgumentException(
+                "crossSdkFixtureParityArtifact is required.",
+                nameof(CrossSdkFixtureParityArtifact));
+        }
+
+        if (NativeProverSelfTestArtifact is null)
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTestArtifact is required.",
+                nameof(NativeProverSelfTestArtifact));
+        }
+
+        var artifact = NativeSdkArtifacts.FirstOrDefault(row => string.Equals(row.Sdk, sdk, StringComparison.Ordinal));
+        if (artifact is null)
+        {
+            throw new ArgumentException($"nativeProverBundle has no artifact row for sdk: {sdk}.", nameof(sdk));
+        }
+
+        if (artifact.ImplementationArtifact is null)
+        {
+            throw new ArgumentException(
+                "implementationArtifact is required.",
+                nameof(artifact.ImplementationArtifact));
+        }
+
+        return VerifiedArtifacts(
+            artifactResolver(ProofArtifact),
+            artifactResolver(ProvingKey),
+            artifactResolver(VerifierKey),
+            sdk,
+            artifactResolver(artifact.ImplementationArtifact),
+            artifactResolver(CrossSdkFixtureParityArtifact),
+            artifactResolver(NativeProverSelfTestArtifact));
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle FromJson(
+        string json,
+        string? expectedDestinationBindingHash = null)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        using var document = JsonDocument.Parse(json);
+        return FromJsonElement(document.RootElement, expectedDestinationBindingHash);
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle FromJsonBytes(
+        byte[] payload,
+        string? expectedDestinationBindingHash = null)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        return FromJson(Encoding.UTF8.GetString(payload), expectedDestinationBindingHash);
+    }
+
+    public static EthereumMainnetNativeEvmProverBundle FromJsonElement(
+        JsonElement manifest,
+        string? expectedDestinationBindingHash = null)
+    {
+        RequireManifestObject(manifest, "nativeProverBundle");
+        RequireManifestKeys(
+            manifest,
+            "nativeProverBundle",
+            NativeEvmProverBundleManifestKeys);
+        var proofArtifactHash = ManifestString(
+            ManifestProperty(
+                manifest,
+                "proofArtifactHash",
+                "proofArtifactHash",
+                "proof_artifact_hash",
+                "proverArtifactHash",
+                "prover_artifact_hash",
+                "circuitArtifactHash",
+                "circuit_artifact_hash"),
+            "proofArtifactHash");
+        var provingKeyHash = ManifestString(
+            ManifestProperty(manifest, "provingKeyHash", "provingKeyHash", "proving_key_hash"),
+            "provingKeyHash");
+        return new EthereumMainnetNativeEvmProverBundle(
+            proofArtifactHash,
+            provingKeyHash,
+            ManifestString(
+                ManifestProperty(manifest, "verifierKeyHash", "verifierKeyHash", "verifier_key_hash"),
+                "verifierKeyHash"),
+            ManifestString(
+                ManifestProperty(
+                    manifest,
+                    "destinationBindingHash",
+                    "destinationBindingHash",
+                    "destination_binding_hash"),
+                "destinationBindingHash"),
+            ManifestSdkArtifacts(
+                ManifestProperty(
+                    manifest,
+                    "nativeSdkArtifacts",
+                    "nativeSdkArtifacts",
+                    "native_sdk_artifacts",
+                    "sdkArtifacts",
+                    "sdk_artifacts")),
+            ManifestStringMap(
+                ManifestProperty(manifest, "auditHashes", "auditHashes", "audit_hashes"),
+                "auditHashes"),
+            ManifestString(ManifestProperty(manifest, "schema", "schema"), "schema"),
+            ManifestString(ManifestProperty(manifest, "bundleId", "bundleId", "bundle_id"), "bundleId"),
+            ManifestDomain(ManifestProperty(manifest, "domain", "domain"), "domain"),
+            ManifestString(ManifestProperty(manifest, "chain", "chain"), "chain"),
+            ManifestString(
+                ManifestProperty(manifest, "proofBackend", "proofBackend", "proof_backend", "backend"),
+                "proofBackend"),
+            ManifestBool(ManifestProperty(manifest, "noWasm", "noWasm", "no_wasm"), "noWasm"),
+            ManifestBool(
+                ManifestProperty(
+                    manifest,
+                    "remoteProverRequired",
+                    "remoteProverRequired",
+                    "remote_prover_required"),
+                "remoteProverRequired"),
+            ManifestString(
+                ManifestProperty(
+                    manifest,
+                    "browserImplementation",
+                    "browserImplementation",
+                    "browser_implementation"),
+                "browserImplementation"),
+            expectedDestinationBindingHash,
+            proofArtifact: ManifestString(
+                ManifestProperty(
+                    manifest,
+                    "proofArtifact",
+                    "proofArtifact",
+                    "proof_artifact",
+                    "proverArtifact",
+                    "prover_artifact",
+                    "circuitArtifact",
+                    "circuit_artifact"),
+                "proofArtifact"),
+            provingKey: ManifestString(
+                ManifestProperty(manifest, "provingKey", "provingKey", "proving_key"),
+                "provingKey"),
+            verifierKey: ManifestString(
+                ManifestProperty(manifest, "verifierKey", "verifierKey", "verifier_key"),
+                "verifierKey"),
+            crossSdkFixtureParityArtifact: ManifestString(
+                ManifestProperty(
+                    manifest,
+                    "crossSdkFixtureParityArtifact",
+                    "crossSdkFixtureParityArtifact",
+                    "cross_sdk_fixture_parity_artifact"),
+                "crossSdkFixtureParityArtifact"),
+            nativeProverSelfTestArtifact: ManifestString(
+                ManifestProperty(
+                    manifest,
+                    "nativeProverSelfTestArtifact",
+                    "nativeProverSelfTestArtifact",
+                    "native_prover_self_test_artifact",
+                    "selfTestArtifact",
+                    "self_test_artifact"),
+                "nativeProverSelfTestArtifact"));
+    }
+
+    public string Schema { get; }
+
+    public string BundleId { get; }
+
+    public int Domain { get; }
+
+    public string Chain { get; }
+
+    public string ProofBackend { get; }
+
+    public string ProofArtifactHash { get; }
+
+    public string? ProofArtifact { get; }
+
+    public string ProvingKeyHash { get; }
+
+    public string? ProvingKey { get; }
+
+    public string VerifierKeyHash { get; }
+
+    public string? VerifierKey { get; }
+
+    public string DestinationBindingHash { get; }
+
+    public bool NoWasm { get; }
+
+    public bool RemoteProverRequired { get; }
+
+    public string BrowserImplementation { get; }
+
+    public IReadOnlyList<EthereumMainnetNativeEvmProverBundleSdkArtifact> NativeSdkArtifacts { get; }
+
+    public string? CrossSdkFixtureParityArtifact { get; }
+
+    public string? NativeProverSelfTestArtifact { get; }
+
+    public IReadOnlyDictionary<string, string> AuditHashes { get; }
+
+    private static string Sha256Hex(byte[] value) => "0x" + Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
+
+    private static readonly byte[][] NativeEvmProverForbiddenArtifactMarkers =
+    {
+        new byte[] { 0x77, 0x65, 0x62, 0x61, 0x73, 0x73, 0x65, 0x6D, 0x62, 0x6C, 0x79 },
+        new byte[] { 0x77, 0x61, 0x73, 0x6D },
+        new byte[] { 0x73, 0x6E, 0x61, 0x72, 0x6B, 0x6A, 0x73 },
+        new byte[] { 0x72, 0x65, 0x6D, 0x6F, 0x74, 0x65, 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72 },
+        new byte[] { 0x72, 0x65, 0x6D, 0x6F, 0x74, 0x65, 0x20, 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72 },
+        new byte[] { 0x72, 0x65, 0x6D, 0x6F, 0x74, 0x65, 0x5F, 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72 },
+        new byte[] { 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x5F, 0x75, 0x72, 0x6C },
+        new byte[] { 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x2D, 0x75, 0x72, 0x6C },
+        new byte[] { 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x65, 0x6E, 0x64, 0x70, 0x6F, 0x69, 0x6E, 0x74 },
+        new byte[] { 0x70, 0x72, 0x6F, 0x76, 0x65, 0x72, 0x20, 0x65, 0x6E, 0x64, 0x70, 0x6F, 0x69, 0x6E, 0x74 },
+    };
+
+    private static int LowerAsciiByte(byte value) =>
+        value >= 0x41 && value <= 0x5A ? value + 0x20 : value;
+
+    private static bool ContainsNativeEvmProverMarker(
+        ReadOnlySpan<byte> bytes,
+        ReadOnlySpan<byte> marker)
+    {
+        if (marker.Length > bytes.Length)
+        {
+            return false;
+        }
+
+        for (var offset = 0; offset <= bytes.Length - marker.Length; offset++)
+        {
+            var matched = true;
+            for (var index = 0; index < marker.Length; index++)
+            {
+                if (LowerAsciiByte(bytes[offset + index]) != marker[index])
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (matched)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void RejectNativeEvmProverForbiddenArtifactMarkers(
+        byte[] bytes,
+        string parameterName)
+    {
+        foreach (var marker in NativeEvmProverForbiddenArtifactMarkers)
+        {
+            if (ContainsNativeEvmProverMarker(bytes, marker))
+            {
+                throw new ArgumentException(
+                    $"{parameterName} contains forbidden prover dependency marker.",
+                    parameterName);
+            }
+        }
+    }
+
+    private static void RequireNativeEvmProverProductionArtifactSize(
+        byte[] bytes,
+        string parameterName)
+    {
+        if (bytes.Length < EthereumMainnetSccp.NativeEvmProverMinArtifactBytesV1)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must be at least {EthereumMainnetSccp.NativeEvmProverMinArtifactBytesV1} bytes.",
+                parameterName);
+        }
+    }
+
+    public EthereumMainnetOutboundProofRequestInput ApplyTo(EthereumMainnetOutboundProofRequestInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var destinationBindingHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            input.DestinationBindingHash ?? input.DestinationBinding?.BindingHash
+                ?? throw new ArgumentException("destinationBindingHash is required.", nameof(input)),
+            nameof(input.DestinationBindingHash));
+        if (!string.Equals(destinationBindingHash, DestinationBindingHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.destinationBindingHash must match destinationBinding.",
+                nameof(input));
+        }
+
+        if (input.DestinationBinding is not null
+            && !string.Equals(
+                EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+                    input.DestinationBinding.VerifierKeyHash,
+                    nameof(input.DestinationBinding.VerifierKeyHash)),
+                VerifierKeyHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.verifierKeyHash must match destinationBinding.",
+                nameof(input));
+        }
+
+        if (input.ProofArtifactHash is not null
+            && !string.Equals(
+                EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+                    input.ProofArtifactHash,
+                    nameof(input.ProofArtifactHash)),
+                ProofArtifactHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.proofArtifactHash must match proof request.",
+                nameof(input));
+        }
+
+        if (input.ProvingKeyHash is not null
+            && !string.Equals(
+                EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+                    input.ProvingKeyHash,
+                    nameof(input.ProvingKeyHash)),
+                ProvingKeyHash,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverBundle.provingKeyHash must match proof request.",
+                nameof(input));
+        }
+
+        if ((input.ProofArtifactHash is null) != (input.ProvingKeyHash is null))
+        {
+            throw new ArgumentException(
+                "proofArtifactHash and provingKeyHash must be supplied together.",
+                nameof(input));
+        }
+
+        return input with
+        {
+            DestinationBindingHash = DestinationBindingHash,
+            ProofArtifactHash = ProofArtifactHash,
+            ProvingKeyHash = ProvingKeyHash,
+        };
+    }
+
+    internal static void RequireManifestObject(JsonElement value, string label)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException($"{label} must be an object.");
+        }
+    }
+
+    private static readonly HashSet<string> NativeEvmProverBundleManifestKeys =
+        new(StringComparer.Ordinal)
+        {
+            "schema",
+            "bundleId",
+            "bundle_id",
+            "domain",
+            "chain",
+            "proofBackend",
+            "proof_backend",
+            "backend",
+            "proofArtifact",
+            "proof_artifact",
+            "proverArtifact",
+            "prover_artifact",
+            "circuitArtifact",
+            "circuit_artifact",
+            "proofArtifactHash",
+            "proof_artifact_hash",
+            "proverArtifactHash",
+            "prover_artifact_hash",
+            "circuitArtifactHash",
+            "circuit_artifact_hash",
+            "provingKey",
+            "proving_key",
+            "provingKeyHash",
+            "proving_key_hash",
+            "verifierKey",
+            "verifier_key",
+            "verifierKeyHash",
+            "verifier_key_hash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+            "noWasm",
+            "no_wasm",
+            "remoteProverRequired",
+            "remote_prover_required",
+            "browserImplementation",
+            "browser_implementation",
+            "nativeSdkArtifacts",
+            "native_sdk_artifacts",
+            "sdkArtifacts",
+            "sdk_artifacts",
+            "crossSdkFixtureParityArtifact",
+            "cross_sdk_fixture_parity_artifact",
+            "nativeProverSelfTestArtifact",
+            "native_prover_self_test_artifact",
+            "selfTestArtifact",
+            "self_test_artifact",
+            "auditHashes",
+            "audit_hashes",
+        };
+
+    internal static readonly HashSet<string> NativeEvmProverParityFixtureKeys =
+        new(StringComparer.Ordinal)
+        {
+            "schema",
+            "domain",
+            "chain",
+            "proofBackend",
+            "proof_backend",
+            "backend",
+            "proofArtifactHash",
+            "proof_artifact_hash",
+            "proverArtifactHash",
+            "prover_artifact_hash",
+            "circuitArtifactHash",
+            "circuit_artifact_hash",
+            "provingKeyHash",
+            "proving_key_hash",
+            "verifierKeyHash",
+            "verifier_key_hash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+            "receiptProofHash",
+            "receipt_proof_hash",
+            "sourceProofHash",
+            "source_proof_hash",
+            "publicSignalWords",
+            "public_signal_words",
+            "calldataHash",
+            "calldata_hash",
+            "toriiSubmitPayloadHash",
+            "torii_submit_payload_hash",
+            "sdkResults",
+            "sdk_results",
+        };
+
+    internal static readonly HashSet<string> NativeEvmProverParitySdkResultKeys =
+        new(StringComparer.Ordinal)
+        {
+            "receiptProofHash",
+            "receipt_proof_hash",
+            "sourceProofHash",
+            "source_proof_hash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+            "publicSignalWords",
+            "public_signal_words",
+            "calldataHash",
+            "calldata_hash",
+            "toriiSubmitPayloadHash",
+            "torii_submit_payload_hash",
+        };
+
+    internal static readonly HashSet<string> NativeEvmProverSelfTestFixtureKeys =
+        new(StringComparer.Ordinal)
+        {
+            "schema",
+            "domain",
+            "chain",
+            "proofBackend",
+            "proof_backend",
+            "backend",
+            "proofArtifactHash",
+            "proof_artifact_hash",
+            "proverArtifactHash",
+            "prover_artifact_hash",
+            "circuitArtifactHash",
+            "circuit_artifact_hash",
+            "provingKeyHash",
+            "proving_key_hash",
+            "verifierKeyHash",
+            "verifier_key_hash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+            "requestHash",
+            "request_hash",
+            "witnessHash",
+            "witness_hash",
+            "sourceProofHash",
+            "source_proof_hash",
+            "proofHash",
+            "proof_hash",
+            "publicSignalWords",
+            "public_signal_words",
+            "calldataHash",
+            "calldata_hash",
+            "toriiSubmitPayloadHash",
+            "torii_submit_payload_hash",
+            "sdkResults",
+            "sdk_results",
+        };
+
+    internal static readonly HashSet<string> NativeEvmProverSelfTestSdkResultKeys =
+        new(StringComparer.Ordinal)
+        {
+            "requestHash",
+            "request_hash",
+            "witnessHash",
+            "witness_hash",
+            "sourceProofHash",
+            "source_proof_hash",
+            "proofHash",
+            "proof_hash",
+            "publicSignalWords",
+            "public_signal_words",
+            "calldataHash",
+            "calldata_hash",
+            "toriiSubmitPayloadHash",
+            "torii_submit_payload_hash",
+        };
+
+    private static readonly HashSet<string> NativeEvmProverBundleSdkArtifactKeys =
+        new(StringComparer.Ordinal)
+        {
+            "sdk",
+            "implementation",
+            "proofArtifactHash",
+            "proof_artifact_hash",
+            "proverArtifactHash",
+            "prover_artifact_hash",
+            "provingKeyHash",
+            "proving_key_hash",
+            "implementationArtifact",
+            "implementation_artifact",
+            "implementationPath",
+            "implementation_path",
+            "implementationHash",
+            "implementation_hash",
+        };
+
+    internal static void RequireManifestKeys(
+        JsonElement value,
+        string label,
+        IReadOnlySet<string> allowedKeys)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!seen.Add(property.Name))
+            {
+                throw new ArgumentException($"{label} contains duplicate JSON key: {property.Name}.");
+            }
+
+            if (!allowedKeys.Contains(property.Name))
+            {
+                throw new ArgumentException($"{label} contains unknown field: {property.Name}.");
+            }
+        }
+    }
+
+    internal static JsonElement ManifestProperty(JsonElement value, string label, params string[] aliases)
+    {
+        RequireManifestObject(value, label);
+        string? present = null;
+        JsonElement selected = default;
+        foreach (var alias in aliases)
+        {
+            if (value.TryGetProperty(alias, out var property))
+            {
+                if (present is not null)
+                {
+                    throw new ArgumentException($"{label} must not use multiple aliases.");
+                }
+
+                present = alias;
+                selected = property;
+            }
+        }
+
+        if (present is not null)
+        {
+            return selected;
+        }
+
+        throw new ArgumentException($"{label} is required.");
+    }
+
+    internal static string ManifestString(JsonElement value, string label)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new ArgumentException($"{label} must be a string.");
+        }
+
+        return value.GetString()!;
+    }
+
+    internal static IReadOnlyList<string> ManifestStringList(JsonElement value, string label)
+    {
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException($"{label} must be an array.");
+        }
+
+        return value.EnumerateArray()
+            .Select((item, index) => ManifestString(item, $"{label}[{index}]"))
+            .ToArray();
+    }
+
+    private static bool ManifestBool(JsonElement value, string label)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new ArgumentException($"{label} must be a boolean."),
+        };
+    }
+
+    internal static int ManifestDomain(JsonElement value, string label)
+    {
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var numeric))
+        {
+            return numeric;
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            var text = value.GetString()!;
+            if (text.Length == 0
+                || (text != "0" && (text[0] == '0' || !text.All(static character => character is >= '0' and <= '9')))
+                || !int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
+            {
+                throw new ArgumentException($"{label} must be a canonical decimal integer.");
+            }
+
+            return parsed;
+        }
+
+        throw new ArgumentException($"{label} must be an integer.");
+    }
+
+    private static IReadOnlyDictionary<string, string> ManifestStringMap(JsonElement value, string label)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException($"{label} must be an object.");
+        }
+
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var item in value.EnumerateObject().OrderBy(item => item.Name, StringComparer.Ordinal))
+        {
+            values[item.Name] = ManifestString(item.Value, $"{label}.{item.Name}");
+        }
+
+        if (values.Count == 0)
+        {
+            throw new ArgumentException($"{label} must be non-empty.");
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyList<EthereumMainnetNativeEvmProverBundleSdkArtifact> ManifestSdkArtifacts(
+        JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException("nativeSdkArtifacts must be an array.");
+        }
+
+        var artifacts = value.EnumerateArray()
+            .Select((item, index) =>
+            {
+                RequireManifestObject(item, $"nativeSdkArtifacts[{index}]");
+                RequireManifestKeys(
+                    item,
+                    $"nativeSdkArtifacts[{index}]",
+                    NativeEvmProverBundleSdkArtifactKeys);
+                return new EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                    ManifestString(
+                        ManifestProperty(item, $"nativeSdkArtifacts[{index}].sdk", "sdk"),
+                        $"nativeSdkArtifacts[{index}].sdk"),
+                    ManifestString(
+                        ManifestProperty(
+                            item,
+                            $"nativeSdkArtifacts[{index}].implementation",
+                            "implementation"),
+                        $"nativeSdkArtifacts[{index}].implementation"),
+                    ManifestString(
+                        ManifestProperty(
+                            item,
+                            $"nativeSdkArtifacts[{index}].proofArtifactHash",
+                            "proofArtifactHash",
+                            "proof_artifact_hash",
+                            "proverArtifactHash",
+                            "prover_artifact_hash"),
+                        $"nativeSdkArtifacts[{index}].proofArtifactHash"),
+                    ManifestString(
+                        ManifestProperty(
+                            item,
+                            $"nativeSdkArtifacts[{index}].provingKeyHash",
+                            "provingKeyHash",
+                            "proving_key_hash"),
+                        $"nativeSdkArtifacts[{index}].provingKeyHash"),
+                    ManifestString(
+                        ManifestProperty(
+                            item,
+                            $"nativeSdkArtifacts[{index}].implementationHash",
+                            "implementationHash",
+                            "implementation_hash"),
+                        $"nativeSdkArtifacts[{index}].implementationHash"),
+                    implementationArtifact: ManifestString(
+                        ManifestProperty(
+                            item,
+                            $"nativeSdkArtifacts[{index}].implementationArtifact",
+                            "implementationArtifact",
+                            "implementation_artifact",
+                            "implementationPath",
+                            "implementation_path"),
+                        $"nativeSdkArtifacts[{index}].implementationArtifact"));
+            })
+            .ToArray();
+        if (artifacts.Length == 0)
+        {
+            throw new ArgumentException("nativeSdkArtifacts must be non-empty.");
+        }
+
+        return artifacts;
+    }
+}
+
+public sealed record EthereumMainnetNativeEvmProverParitySdkResult
+{
+    public EthereumMainnetNativeEvmProverParitySdkResult(
+        string receiptProofHash,
+        string sourceProofHash,
+        string destinationBindingHash,
+        IReadOnlyList<string> publicSignalWords,
+        string calldataHash,
+        string toriiSubmitPayloadHash)
+    {
+        ReceiptProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            receiptProofHash,
+            nameof(receiptProofHash));
+        SourceProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            sourceProofHash,
+            nameof(sourceProofHash));
+        DestinationBindingHash = EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
+            destinationBindingHash,
+            nameof(destinationBindingHash));
+        ArgumentNullException.ThrowIfNull(publicSignalWords);
+        if (publicSignalWords.Count != 9)
+        {
+            throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
+        }
+
+        PublicSignalWords = publicSignalWords
+            .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
+                word,
+                $"publicSignalWords[{index}]"))
+            .ToArray();
+        CalldataHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            calldataHash,
+            nameof(calldataHash));
+        ToriiSubmitPayloadHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            toriiSubmitPayloadHash,
+            nameof(toriiSubmitPayloadHash));
+    }
+
+    public string ReceiptProofHash { get; }
+
+    public string SourceProofHash { get; }
+
+    public string DestinationBindingHash { get; }
+
+    public IReadOnlyList<string> PublicSignalWords { get; }
+
+    public string CalldataHash { get; }
+
+    public string ToriiSubmitPayloadHash { get; }
+}
+
+public sealed record EthereumMainnetNativeEvmProverParityFixture
+{
+    public EthereumMainnetNativeEvmProverParityFixture(
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string proofArtifactHash,
+        string provingKeyHash,
+        string verifierKeyHash,
+        string destinationBindingHash,
+        string receiptProofHash,
+        string sourceProofHash,
+        IReadOnlyList<string> publicSignalWords,
+        string calldataHash,
+        string toriiSubmitPayloadHash,
+        IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverParitySdkResult> sdkResults,
+        string schema = EthereumMainnetSccp.EthNativeEvmProverParityFixtureSchemaV1,
+        int domain = EthereumMainnetSccp.DomainEthereum,
+        string chain = "eth",
+        string proofBackend = EthereumMainnetSccp.EvmGroth16Bn254ProofBackend)
+    {
+        ArgumentNullException.ThrowIfNull(nativeProverBundle);
+        ArgumentNullException.ThrowIfNull(sdkResults);
+        if (!string.Equals(schema, EthereumMainnetSccp.EthNativeEvmProverParityFixtureSchemaV1, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("nativeProverParityFixture.schema is not supported.", nameof(schema));
+        }
+
+        if (domain != EthereumMainnetSccp.DomainEthereum || domain != nativeProverBundle.Domain)
+        {
+            throw new ArgumentException(
+                "nativeProverParityFixture.domain must match nativeProverBundle.",
+                nameof(domain));
+        }
+
+        if (!string.Equals(chain, nativeProverBundle.Chain, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverParityFixture.chain must match nativeProverBundle.",
+                nameof(chain));
+        }
+
+        if (!string.Equals(proofBackend, nativeProverBundle.ProofBackend, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverParityFixture.proofBackend must match nativeProverBundle.",
+                nameof(proofBackend));
+        }
+
+        ProofArtifactHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            proofArtifactHash,
+            nameof(proofArtifactHash));
+        ProvingKeyHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            provingKeyHash,
+            nameof(provingKeyHash));
+        VerifierKeyHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            verifierKeyHash,
+            nameof(verifierKeyHash));
+        DestinationBindingHash = EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
+            destinationBindingHash,
+            nameof(destinationBindingHash));
+        if (!string.Equals(ProofArtifactHash, nativeProverBundle.ProofArtifactHash, StringComparison.Ordinal)
+            || !string.Equals(ProvingKeyHash, nativeProverBundle.ProvingKeyHash, StringComparison.Ordinal)
+            || !string.Equals(VerifierKeyHash, nativeProverBundle.VerifierKeyHash, StringComparison.Ordinal)
+            || !string.Equals(DestinationBindingHash, nativeProverBundle.DestinationBindingHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("nativeProverParityFixture hashes must match nativeProverBundle.");
+        }
+
+        ReceiptProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            receiptProofHash,
+            nameof(receiptProofHash));
+        SourceProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            sourceProofHash,
+            nameof(sourceProofHash));
+        ArgumentNullException.ThrowIfNull(publicSignalWords);
+        if (publicSignalWords.Count != 9)
+        {
+            throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
+        }
+
+        PublicSignalWords = publicSignalWords
+            .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
+                word,
+                $"publicSignalWords[{index}]"))
+            .ToArray();
+        CalldataHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            calldataHash,
+            nameof(calldataHash));
+        ToriiSubmitPayloadHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            toriiSubmitPayloadHash,
+            nameof(toriiSubmitPayloadHash));
+
+        var requiredSdks = EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1.Keys
+            .ToHashSet(StringComparer.Ordinal);
+        if (!sdkResults.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(requiredSdks))
+        {
+            throw new ArgumentException("sdkResults must contain exactly the required SDKs.", nameof(sdkResults));
+        }
+
+        var normalizedResults = new Dictionary<string, EthereumMainnetNativeEvmProverParitySdkResult>(
+            StringComparer.Ordinal);
+        foreach (var sdk in requiredSdks.OrderBy(static sdk => sdk, StringComparer.Ordinal))
+        {
+            var result = sdkResults[sdk];
+            if (!string.Equals(result.ReceiptProofHash, ReceiptProofHash, StringComparison.Ordinal)
+                || !string.Equals(result.SourceProofHash, SourceProofHash, StringComparison.Ordinal)
+                || !string.Equals(result.DestinationBindingHash, DestinationBindingHash, StringComparison.Ordinal)
+                || !result.PublicSignalWords.SequenceEqual(PublicSignalWords)
+                || !string.Equals(result.CalldataHash, CalldataHash, StringComparison.Ordinal)
+                || !string.Equals(result.ToriiSubmitPayloadHash, ToriiSubmitPayloadHash, StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"sdkResults.{sdk} must match top-level parity fixture hashes.", nameof(sdkResults));
+            }
+
+            normalizedResults[sdk] = result;
+        }
+
+        Schema = schema;
+        Domain = domain;
+        Chain = chain;
+        ProofBackend = proofBackend;
+        SdkResults = normalizedResults;
+    }
+
+    public string Schema { get; }
+
+    public int Domain { get; }
+
+    public string Chain { get; }
+
+    public string ProofBackend { get; }
+
+    public string ProofArtifactHash { get; }
+
+    public string ProvingKeyHash { get; }
+
+    public string VerifierKeyHash { get; }
+
+    public string DestinationBindingHash { get; }
+
+    public string ReceiptProofHash { get; }
+
+    public string SourceProofHash { get; }
+
+    public IReadOnlyList<string> PublicSignalWords { get; }
+
+    public string CalldataHash { get; }
+
+    public string ToriiSubmitPayloadHash { get; }
+
+    public IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverParitySdkResult> SdkResults { get; }
+
+    public static EthereumMainnetNativeEvmProverParityFixture FromJson(
+        string json,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        using var document = JsonDocument.Parse(json);
+        return FromJsonElement(document.RootElement, nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverParityFixture FromJsonBytes(
+        byte[] payload,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        return FromJson(Encoding.UTF8.GetString(payload), nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverParityFixture FromJsonElement(
+        JsonElement fixture,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle)
+    {
+        EthereumMainnetNativeEvmProverBundle.RequireManifestObject(
+            fixture,
+            "nativeProverParityFixture");
+        EthereumMainnetNativeEvmProverBundle.RequireManifestKeys(
+            fixture,
+            "nativeProverParityFixture",
+            EthereumMainnetNativeEvmProverBundle.NativeEvmProverParityFixtureKeys);
+        var publicSignalWords = EthereumMainnetNativeEvmProverBundle.ManifestStringList(
+            EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                fixture,
+                "publicSignalWords",
+                "publicSignalWords",
+                "public_signal_words"),
+            "publicSignalWords");
+        var sdkResultsElement = EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+            fixture,
+            "sdkResults",
+            "sdkResults",
+            "sdk_results");
+        EthereumMainnetNativeEvmProverBundle.RequireManifestObject(sdkResultsElement, "sdkResults");
+        var sdkResults = new Dictionary<string, EthereumMainnetNativeEvmProverParitySdkResult>(
+            StringComparer.Ordinal);
+        foreach (var sdkResult in sdkResultsElement.EnumerateObject())
+        {
+            EthereumMainnetNativeEvmProverBundle.RequireManifestObject(
+                sdkResult.Value,
+                $"sdkResults.{sdkResult.Name}");
+            EthereumMainnetNativeEvmProverBundle.RequireManifestKeys(
+                sdkResult.Value,
+                $"sdkResults.{sdkResult.Name}",
+                EthereumMainnetNativeEvmProverBundle.NativeEvmProverParitySdkResultKeys);
+            sdkResults[sdkResult.Name] = new EthereumMainnetNativeEvmProverParitySdkResult(
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.receiptProofHash",
+                        "receiptProofHash",
+                        "receipt_proof_hash"),
+                    $"sdkResults.{sdkResult.Name}.receiptProofHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.sourceProofHash",
+                        "sourceProofHash",
+                        "source_proof_hash"),
+                    $"sdkResults.{sdkResult.Name}.sourceProofHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.destinationBindingHash",
+                        "destinationBindingHash",
+                        "destination_binding_hash"),
+                    $"sdkResults.{sdkResult.Name}.destinationBindingHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestStringList(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.publicSignalWords",
+                        "publicSignalWords",
+                        "public_signal_words"),
+                    $"sdkResults.{sdkResult.Name}.publicSignalWords"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.calldataHash",
+                        "calldataHash",
+                        "calldata_hash"),
+                    $"sdkResults.{sdkResult.Name}.calldataHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.toriiSubmitPayloadHash",
+                        "toriiSubmitPayloadHash",
+                        "torii_submit_payload_hash"),
+                    $"sdkResults.{sdkResult.Name}.toriiSubmitPayloadHash"));
+        }
+
+        return new EthereumMainnetNativeEvmProverParityFixture(
+            nativeProverBundle,
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "proofArtifactHash",
+                    "proofArtifactHash",
+                    "proof_artifact_hash",
+                    "proverArtifactHash",
+                    "prover_artifact_hash",
+                    "circuitArtifactHash",
+                    "circuit_artifact_hash"),
+                "proofArtifactHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "provingKeyHash",
+                    "provingKeyHash",
+                    "proving_key_hash"),
+                "provingKeyHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "verifierKeyHash",
+                    "verifierKeyHash",
+                    "verifier_key_hash"),
+                "verifierKeyHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "destinationBindingHash",
+                    "destinationBindingHash",
+                    "destination_binding_hash"),
+                "destinationBindingHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "receiptProofHash",
+                    "receiptProofHash",
+                    "receipt_proof_hash"),
+                "receiptProofHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "sourceProofHash",
+                    "sourceProofHash",
+                    "source_proof_hash"),
+                "sourceProofHash"),
+            publicSignalWords,
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "calldataHash",
+                    "calldataHash",
+                    "calldata_hash"),
+                "calldataHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "toriiSubmitPayloadHash",
+                    "toriiSubmitPayloadHash",
+                    "torii_submit_payload_hash"),
+                "toriiSubmitPayloadHash"),
+            sdkResults,
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(fixture, "schema", "schema"),
+                "schema"),
+            EthereumMainnetNativeEvmProverBundle.ManifestDomain(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(fixture, "domain", "domain"),
+                "domain"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(fixture, "chain", "chain"),
+                "chain"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "proofBackend",
+                    "proofBackend",
+                    "proof_backend",
+                    "backend"),
+                "proofBackend"));
+    }
+}
+
+public sealed record EthereumMainnetNativeEvmProverSelfTestSdkResult
+{
+    public EthereumMainnetNativeEvmProverSelfTestSdkResult(
+        string requestHash,
+        string witnessHash,
+        string sourceProofHash,
+        string proofHash,
+        IReadOnlyList<string> publicSignalWords,
+        string calldataHash,
+        string toriiSubmitPayloadHash)
+    {
+        RequestHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            requestHash,
+            nameof(requestHash));
+        WitnessHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            witnessHash,
+            nameof(witnessHash));
+        SourceProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            sourceProofHash,
+            nameof(sourceProofHash));
+        ProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            proofHash,
+            nameof(proofHash));
+        ArgumentNullException.ThrowIfNull(publicSignalWords);
+        if (publicSignalWords.Count != 9)
+        {
+            throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
+        }
+
+        PublicSignalWords = publicSignalWords
+            .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
+                word,
+                $"publicSignalWords[{index}]"))
+            .ToArray();
+        CalldataHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            calldataHash,
+            nameof(calldataHash));
+        ToriiSubmitPayloadHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            toriiSubmitPayloadHash,
+            nameof(toriiSubmitPayloadHash));
+    }
+
+    public string RequestHash { get; }
+
+    public string WitnessHash { get; }
+
+    public string SourceProofHash { get; }
+
+    public string ProofHash { get; }
+
+    public IReadOnlyList<string> PublicSignalWords { get; }
+
+    public string CalldataHash { get; }
+
+    public string ToriiSubmitPayloadHash { get; }
+}
+
+public sealed record EthereumMainnetNativeEvmProverSelfTestFixture
+{
+    public EthereumMainnetNativeEvmProverSelfTestFixture(
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle,
+        string proofArtifactHash,
+        string provingKeyHash,
+        string verifierKeyHash,
+        string destinationBindingHash,
+        string requestHash,
+        string witnessHash,
+        string sourceProofHash,
+        string proofHash,
+        IReadOnlyList<string> publicSignalWords,
+        string calldataHash,
+        string toriiSubmitPayloadHash,
+        IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult> sdkResults,
+        string schema = EthereumMainnetSccp.EthNativeEvmProverSelfTestSchemaV1,
+        int domain = EthereumMainnetSccp.DomainEthereum,
+        string chain = "eth",
+        string proofBackend = EthereumMainnetSccp.EvmGroth16Bn254ProofBackend)
+    {
+        ArgumentNullException.ThrowIfNull(nativeProverBundle);
+        ArgumentNullException.ThrowIfNull(sdkResults);
+        if (!string.Equals(schema, EthereumMainnetSccp.EthNativeEvmProverSelfTestSchemaV1, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("nativeProverSelfTestFixture.schema is not supported.", nameof(schema));
+        }
+
+        if (domain != EthereumMainnetSccp.DomainEthereum || domain != nativeProverBundle.Domain)
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTestFixture.domain must match nativeProverBundle.",
+                nameof(domain));
+        }
+
+        if (!string.Equals(chain, nativeProverBundle.Chain, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTestFixture.chain must match nativeProverBundle.",
+                nameof(chain));
+        }
+
+        if (!string.Equals(proofBackend, nativeProverBundle.ProofBackend, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "nativeProverSelfTestFixture.proofBackend must match nativeProverBundle.",
+                nameof(proofBackend));
+        }
+
+        ProofArtifactHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            proofArtifactHash,
+            nameof(proofArtifactHash));
+        ProvingKeyHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            provingKeyHash,
+            nameof(provingKeyHash));
+        VerifierKeyHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            verifierKeyHash,
+            nameof(verifierKeyHash));
+        DestinationBindingHash = EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
+            destinationBindingHash,
+            nameof(destinationBindingHash));
+        if (!string.Equals(ProofArtifactHash, nativeProverBundle.ProofArtifactHash, StringComparison.Ordinal)
+            || !string.Equals(ProvingKeyHash, nativeProverBundle.ProvingKeyHash, StringComparison.Ordinal)
+            || !string.Equals(VerifierKeyHash, nativeProverBundle.VerifierKeyHash, StringComparison.Ordinal)
+            || !string.Equals(DestinationBindingHash, nativeProverBundle.DestinationBindingHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("nativeProverSelfTestFixture hashes must match nativeProverBundle.");
+        }
+
+        RequestHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            requestHash,
+            nameof(requestHash));
+        WitnessHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            witnessHash,
+            nameof(witnessHash));
+        SourceProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            sourceProofHash,
+            nameof(sourceProofHash));
+        ProofHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            proofHash,
+            nameof(proofHash));
+        ArgumentNullException.ThrowIfNull(publicSignalWords);
+        if (publicSignalWords.Count != 9)
+        {
+            throw new ArgumentException("publicSignalWords must contain 9 words.", nameof(publicSignalWords));
+        }
+
+        PublicSignalWords = publicSignalWords
+            .Select((word, index) => EthereumMainnetSccp.NormalizeNativeEvmProverParityHex32(
+                word,
+                $"publicSignalWords[{index}]"))
+            .ToArray();
+        CalldataHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            calldataHash,
+            nameof(calldataHash));
+        ToriiSubmitPayloadHash = EthereumMainnetSccp.NormalizeNativeEvmProverBundleHex32(
+            toriiSubmitPayloadHash,
+            nameof(toriiSubmitPayloadHash));
+
+        var requiredSdks = EthereumMainnetSccp.EthNativeEvmProverRequiredImplementationsV1.Keys
+            .ToHashSet(StringComparer.Ordinal);
+        if (!sdkResults.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(requiredSdks))
+        {
+            throw new ArgumentException("sdkResults must contain exactly the required SDKs.", nameof(sdkResults));
+        }
+
+        var normalizedResults = new Dictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult>(
+            StringComparer.Ordinal);
+        foreach (var sdk in requiredSdks.OrderBy(static sdk => sdk, StringComparer.Ordinal))
+        {
+            var result = sdkResults[sdk];
+            if (!string.Equals(result.RequestHash, RequestHash, StringComparison.Ordinal)
+                || !string.Equals(result.WitnessHash, WitnessHash, StringComparison.Ordinal)
+                || !string.Equals(result.SourceProofHash, SourceProofHash, StringComparison.Ordinal)
+                || !string.Equals(result.ProofHash, ProofHash, StringComparison.Ordinal)
+                || !result.PublicSignalWords.SequenceEqual(PublicSignalWords)
+                || !string.Equals(result.CalldataHash, CalldataHash, StringComparison.Ordinal)
+                || !string.Equals(result.ToriiSubmitPayloadHash, ToriiSubmitPayloadHash, StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"sdkResults.{sdk} must match top-level self-test fixture hashes.", nameof(sdkResults));
+            }
+
+            normalizedResults[sdk] = result;
+        }
+
+        Schema = schema;
+        Domain = domain;
+        Chain = chain;
+        ProofBackend = proofBackend;
+        SdkResults = normalizedResults;
+    }
+
+    public string Schema { get; }
+
+    public int Domain { get; }
+
+    public string Chain { get; }
+
+    public string ProofBackend { get; }
+
+    public string ProofArtifactHash { get; }
+
+    public string ProvingKeyHash { get; }
+
+    public string VerifierKeyHash { get; }
+
+    public string DestinationBindingHash { get; }
+
+    public string RequestHash { get; }
+
+    public string WitnessHash { get; }
+
+    public string SourceProofHash { get; }
+
+    public string ProofHash { get; }
+
+    public IReadOnlyList<string> PublicSignalWords { get; }
+
+    public string CalldataHash { get; }
+
+    public string ToriiSubmitPayloadHash { get; }
+
+    public IReadOnlyDictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult> SdkResults { get; }
+
+    public static EthereumMainnetNativeEvmProverSelfTestFixture FromJson(
+        string json,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        using var document = JsonDocument.Parse(json);
+        return FromJsonElement(document.RootElement, nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverSelfTestFixture FromJsonBytes(
+        byte[] payload,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        return FromJson(Encoding.UTF8.GetString(payload), nativeProverBundle);
+    }
+
+    public static EthereumMainnetNativeEvmProverSelfTestFixture FromJsonElement(
+        JsonElement fixture,
+        EthereumMainnetNativeEvmProverBundle nativeProverBundle)
+    {
+        EthereumMainnetNativeEvmProverBundle.RequireManifestObject(
+            fixture,
+            "nativeProverSelfTestFixture");
+        EthereumMainnetNativeEvmProverBundle.RequireManifestKeys(
+            fixture,
+            "nativeProverSelfTestFixture",
+            EthereumMainnetNativeEvmProverBundle.NativeEvmProverSelfTestFixtureKeys);
+        var publicSignalWords = EthereumMainnetNativeEvmProverBundle.ManifestStringList(
+            EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                fixture,
+                "publicSignalWords",
+                "publicSignalWords",
+                "public_signal_words"),
+            "publicSignalWords");
+        var sdkResultsElement = EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+            fixture,
+            "sdkResults",
+            "sdkResults",
+            "sdk_results");
+        EthereumMainnetNativeEvmProverBundle.RequireManifestObject(sdkResultsElement, "sdkResults");
+        var sdkResults = new Dictionary<string, EthereumMainnetNativeEvmProverSelfTestSdkResult>(
+            StringComparer.Ordinal);
+        foreach (var sdkResult in sdkResultsElement.EnumerateObject())
+        {
+            EthereumMainnetNativeEvmProverBundle.RequireManifestObject(
+                sdkResult.Value,
+                $"sdkResults.{sdkResult.Name}");
+            EthereumMainnetNativeEvmProverBundle.RequireManifestKeys(
+                sdkResult.Value,
+                $"sdkResults.{sdkResult.Name}",
+                EthereumMainnetNativeEvmProverBundle.NativeEvmProverSelfTestSdkResultKeys);
+            sdkResults[sdkResult.Name] = new EthereumMainnetNativeEvmProverSelfTestSdkResult(
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.requestHash",
+                        "requestHash",
+                        "request_hash"),
+                    $"sdkResults.{sdkResult.Name}.requestHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.witnessHash",
+                        "witnessHash",
+                        "witness_hash"),
+                    $"sdkResults.{sdkResult.Name}.witnessHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.sourceProofHash",
+                        "sourceProofHash",
+                        "source_proof_hash"),
+                    $"sdkResults.{sdkResult.Name}.sourceProofHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.proofHash",
+                        "proofHash",
+                        "proof_hash"),
+                    $"sdkResults.{sdkResult.Name}.proofHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestStringList(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.publicSignalWords",
+                        "publicSignalWords",
+                        "public_signal_words"),
+                    $"sdkResults.{sdkResult.Name}.publicSignalWords"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.calldataHash",
+                        "calldataHash",
+                        "calldata_hash"),
+                    $"sdkResults.{sdkResult.Name}.calldataHash"),
+                EthereumMainnetNativeEvmProverBundle.ManifestString(
+                    EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                        sdkResult.Value,
+                        $"sdkResults.{sdkResult.Name}.toriiSubmitPayloadHash",
+                        "toriiSubmitPayloadHash",
+                        "torii_submit_payload_hash"),
+                    $"sdkResults.{sdkResult.Name}.toriiSubmitPayloadHash"));
+        }
+
+        return new EthereumMainnetNativeEvmProverSelfTestFixture(
+            nativeProverBundle,
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "proofArtifactHash",
+                    "proofArtifactHash",
+                    "proof_artifact_hash",
+                    "proverArtifactHash",
+                    "prover_artifact_hash",
+                    "circuitArtifactHash",
+                    "circuit_artifact_hash"),
+                "proofArtifactHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "provingKeyHash",
+                    "provingKeyHash",
+                    "proving_key_hash"),
+                "provingKeyHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "verifierKeyHash",
+                    "verifierKeyHash",
+                    "verifier_key_hash"),
+                "verifierKeyHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "destinationBindingHash",
+                    "destinationBindingHash",
+                    "destination_binding_hash"),
+                "destinationBindingHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "requestHash",
+                    "requestHash",
+                    "request_hash"),
+                "requestHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "witnessHash",
+                    "witnessHash",
+                    "witness_hash"),
+                "witnessHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "sourceProofHash",
+                    "sourceProofHash",
+                    "source_proof_hash"),
+                "sourceProofHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "proofHash",
+                    "proofHash",
+                    "proof_hash"),
+                "proofHash"),
+            publicSignalWords,
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "calldataHash",
+                    "calldataHash",
+                    "calldata_hash"),
+                "calldataHash"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "toriiSubmitPayloadHash",
+                    "toriiSubmitPayloadHash",
+                    "torii_submit_payload_hash"),
+                "toriiSubmitPayloadHash"),
+            sdkResults,
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(fixture, "schema", "schema"),
+                "schema"),
+            EthereumMainnetNativeEvmProverBundle.ManifestDomain(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(fixture, "domain", "domain"),
+                "domain"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(fixture, "chain", "chain"),
+                "chain"),
+            EthereumMainnetNativeEvmProverBundle.ManifestString(
+                EthereumMainnetNativeEvmProverBundle.ManifestProperty(
+                    fixture,
+                    "proofBackend",
+                    "proofBackend",
+                    "proof_backend",
+                    "backend"),
+                "proofBackend"));
+    }
+}
+
+public sealed record EthereumMainnetNativeEvmProverArtifacts(
+    string HashAlgorithm,
+    EthereumMainnetNativeEvmProverBundle NativeProverBundle,
+    string ProofArtifactHash,
+    string ProvingKeyHash,
+    string VerifierKeyHash,
+    string? CrossSdkFixtureParityHash,
+    EthereumMainnetNativeEvmProverParityFixture? CrossSdkFixtureParity,
+    string? NativeProverSelfTestHash,
+    EthereumMainnetNativeEvmProverSelfTestFixture? NativeProverSelfTest,
+    string? Sdk,
+    string? Implementation,
+    string? ImplementationHash);
+
 public sealed record EthereumMainnetOutboundProofRequestInput
 {
     public EthereumMainnetTransparentPublicInputs? PublicInputs { get; init; }
@@ -4247,6 +7313,10 @@ public sealed record EthereumMainnetOutboundProofRequestInput
     public string StatementHash { get; init; } = string.Empty;
 
     public string? DestinationBindingHash { get; init; }
+
+    public string? ProofArtifactHash { get; init; }
+
+    public string? ProvingKeyHash { get; init; }
 
     public int SourceDomain { get; init; } = EthereumMainnetSccp.DomainSora;
 
@@ -4266,6 +7336,8 @@ public sealed record EthereumMainnetOutboundProofRequest(
     EthereumMainnetSccpProofContext ProofContext,
     string StatementHash,
     string DestinationBindingHash,
+    string? ProofArtifactHash,
+    string? ProvingKeyHash,
     string RequestHash,
     EthereumMainnetSccpDestinationBinding DestinationBinding);
 
@@ -4280,6 +7352,8 @@ public sealed record EthereumMainnetOutboundProofResult(
     string StatementHash,
     string DestinationBindingHash,
     EthereumMainnetSccpProofContext ProofContext,
+    string? ProofArtifactHash,
+    string? ProvingKeyHash,
     string RequestHash,
     string EnvelopeHash,
     EthereumMainnetSccpDestinationBinding DestinationBinding);
@@ -4418,6 +7492,7 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
     private readonly record struct BeaconRestFinalityUpdateSummary(
         string FinalizedHeaderRoot,
         ulong BeaconSlot,
+        IReadOnlyList<string> FinalityBranch,
         string SyncCommitteeBits,
         string SyncCommitteeSignature,
         ulong SyncCommitteeParticipation,
@@ -4468,14 +7543,14 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         }
         var blockHash = NormalizeRpcHex(RequiredBlockValue(block, "hash"), "block.hash", 32);
         var blockNumber = NormalizeRpcQuantity(
-            FirstPresent(block, "number", "blockNumber", "block_number"),
+            StrictFirstPresent(block, "block.number", "number", "blockNumber", "block_number"),
             "block.number");
         if (blockNumber == "0x0")
         {
             throw new ArgumentException("block.number must be positive", nameof(block));
         }
         var receiptsRoot = NormalizeRpcHex(
-            FirstPresent(block, "receiptsRoot", "receipts_root"),
+            StrictFirstPresent(block, "block.receiptsRoot", "receiptsRoot", "receipts_root"),
             "block.receiptsRoot",
             32);
         var targetBlockId = await BeaconRestBlockIdForTargetAsync(
@@ -4507,6 +7582,11 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         {
             throw new ArgumentException(
                 "Ethereum mainnet Beacon REST target block is newer than the finalized header");
+        }
+        if (targetHeader.Slot < finalizedHeader.Slot)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST historical target blocks require an ancestry proof");
         }
         if (targetHeader.Slot == finalizedHeader.Slot
             && !string.Equals(targetHeader.Root, finalizedHeader.Root, StringComparison.Ordinal))
@@ -4682,6 +7762,7 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             ["finalizedHeaderRoot"] = finalityUpdate.FinalizedHeaderRoot,
             ["syncCommitteeRoot"] = syncCommitteeRoot,
             ["beaconSlot"] = finalityUpdate.BeaconSlot.ToString(),
+            ["finalityBranch"] = finalityUpdate.FinalityBranch,
             ["syncCommitteeBits"] = finalityUpdate.SyncCommitteeBits,
             ["syncCommitteeSignature"] = finalityUpdate.SyncCommitteeSignature,
             ["syncCommitteeParticipation"] = finalityUpdate.SyncCommitteeParticipation.ToString(),
@@ -4905,15 +7986,19 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
                 RequireProperty(syncAggregate, $"{Label}.data.sync_aggregate", "sync_committee_bits"),
                 $"{Label}.data.sync_aggregate.sync_committee_bits"),
             $"{Label}.data.sync_aggregate.sync_committee_bits");
+        var finalityBranch = NormalizeFinalityBranch(
+            RequireProperty(data, $"{Label}.data", "finality_branch"),
+            $"{Label}.data.finality_branch");
         var syncCommitteeSignature = NormalizeRpcHex(
             RequireString(
                 RequireProperty(syncAggregate, $"{Label}.data.sync_aggregate", "sync_committee_signature"),
                 $"{Label}.data.sync_aggregate.sync_committee_signature"),
             $"{Label}.data.sync_aggregate.sync_committee_signature",
-            96);
+                96);
         return new BeaconRestFinalityUpdateSummary(
             finalizedHeaderRoot,
             finalizedSlot,
+            finalityBranch,
             syncCommitteeBits,
             syncCommitteeSignature,
             SyncCommitteeParticipation(syncCommitteeBits),
@@ -5114,7 +8199,7 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         return value;
     }
 
-    private static object FirstPresent(IReadOnlyDictionary<string, object?> value, params string[] names)
+    private static object? FirstPresent(IReadOnlyDictionary<string, object?> value, params string[] names)
     {
         foreach (var name in names)
         {
@@ -5123,7 +8208,38 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
                 return item;
             }
         }
-        throw new ArgumentException($"{names[0]} is required");
+        return null;
+    }
+
+    private static object? StrictFirstPresent(
+        IReadOnlyDictionary<string, object?> value,
+        string parameterName,
+        params string[] names)
+    {
+        object? selected = null;
+        var found = false;
+        foreach (var name in names)
+        {
+            if (value.TryGetValue(name, out var item))
+            {
+                if (found)
+                {
+                    throw new ArgumentException(
+                        $"{parameterName} must not use multiple aliases.",
+                        parameterName);
+                }
+
+                selected = item;
+                found = true;
+            }
+        }
+
+        if (!found)
+        {
+            throw new ArgumentException($"{parameterName} is required.", parameterName);
+        }
+
+        return selected;
     }
 
     private static string NormalizeRpcHex(
@@ -5151,11 +8267,38 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
     private static string NormalizeSyncCommitteeBits(object? value, string parameterName)
     {
         var bits = NormalizeRpcHex(value, parameterName, 64, allowZero: true);
-        if (SyncCommitteeParticipation(bits) == 0)
+        var participation = SyncCommitteeParticipation(bits);
+        if (participation == 0)
         {
             throw new ArgumentException($"{parameterName} must contain at least one participant", parameterName);
         }
+        if (participation * 3 < 512 * 2)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must contain Ethereum sync committee supermajority",
+                parameterName);
+        }
         return bits;
+    }
+
+    private static IReadOnlyList<string> NormalizeFinalityBranch(JsonElement value, string parameterName)
+    {
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException($"{parameterName} must be an array", parameterName);
+        }
+        var branch = value.EnumerateArray()
+            .Select((sibling, index) => NormalizeRpcHex(
+                RequireString(sibling, $"{parameterName}[{index}]"),
+                $"{parameterName}[{index}]",
+                32,
+                allowZero: true))
+            .ToArray();
+        if (branch.Length != 6)
+        {
+            throw new ArgumentException($"{parameterName} must contain 6 siblings", parameterName);
+        }
+        return Array.AsReadOnly(branch);
     }
 
     private static ulong SyncCommitteeParticipation(string bits)
@@ -5283,6 +8426,15 @@ public interface IEthereumMainnetOutboundProver
 {
     ValueTask<byte[]> ProveAsync(
         EthereumMainnetOutboundProofRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IEthereumMainnetNativeProverSelfTest
+{
+    ValueTask<EthereumMainnetNativeEvmProverSelfTestSdkResult> RunAsync(
+        EthereumMainnetNativeEvmProverSelfTestFixture fixture,
+        EthereumMainnetNativeEvmProverSelfTestSdkResult expectedResult,
+        EthereumMainnetNativeEvmProverArtifacts artifacts,
         CancellationToken cancellationToken = default);
 }
 

@@ -582,7 +582,8 @@ pub mod oracle {
 
     fn deterministic_account(seed: &[u8], domain: &str) -> AccountId {
         let _domain_id = DomainId::parse_fully_qualified(domain).expect("default oracle domain");
-        let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
+        let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
+            .expect("fixed oracle Ed25519 account seed must derive");
         AccountId::new(keypair.public_key().clone())
     }
 
@@ -3859,7 +3860,10 @@ pub mod settlement {
 
 #[cfg(test)]
 mod tests {
-    use super::{governance, queue, torii};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::account::AccountId;
+
+    use super::{governance, oracle, queue, torii};
 
     #[test]
     fn jdg_signature_schemes_includes_simple_threshold() {
@@ -3888,5 +3892,24 @@ mod tests {
     fn queue_defaults_allow_four_times_legacy_soak_capacity() {
         assert_eq!(queue::CAPACITY.get(), 262_144);
         assert_eq!(queue::CAPACITY_PER_USER.get(), queue::CAPACITY.get());
+    }
+
+    #[test]
+    fn oracle_fixed_accounts_use_checked_ed25519_derivation() {
+        let reward_pool_keypair =
+            KeyPair::try_from_seed(b"oracle-reward-pool".to_vec(), Algorithm::Ed25519)
+                .expect("fixed reward-pool seed must derive");
+        let slash_receiver_keypair =
+            KeyPair::try_from_seed(b"oracle-slash-receiver".to_vec(), Algorithm::Ed25519)
+                .expect("fixed slash-receiver seed must derive");
+
+        assert_eq!(
+            oracle::reward_pool(),
+            AccountId::new(reward_pool_keypair.public_key().clone())
+        );
+        assert_eq!(
+            oracle::slash_receiver(),
+            AccountId::new(slash_receiver_keypair.public_key().clone())
+        );
     }
 }

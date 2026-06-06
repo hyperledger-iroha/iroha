@@ -8,12 +8,22 @@ public final class IdentifierBfvPublicParameters {
   private final Parameters parameters;
   private final PublicKey publicKey;
   private final int maxInputBytes;
+  private final String noritoLengthEncoding;
 
   public IdentifierBfvPublicParameters(
       final Parameters parameters, final PublicKey publicKey, final int maxInputBytes) {
+    this(parameters, publicKey, maxInputBytes, null);
+  }
+
+  public IdentifierBfvPublicParameters(
+      final Parameters parameters,
+      final PublicKey publicKey,
+      final int maxInputBytes,
+      final String noritoLengthEncoding) {
     this.parameters = Objects.requireNonNull(parameters, "parameters");
     this.publicKey = Objects.requireNonNull(publicKey, "publicKey");
     this.maxInputBytes = maxInputBytes;
+    this.noritoLengthEncoding = noritoLengthEncoding;
   }
 
   public Parameters parameters() {
@@ -26,6 +36,10 @@ public final class IdentifierBfvPublicParameters {
 
   public int maxInputBytes() {
     return maxInputBytes;
+  }
+
+  public String noritoLengthEncoding() {
+    return noritoLengthEncoding;
   }
 
   /** Scalar BFV parameter set. */

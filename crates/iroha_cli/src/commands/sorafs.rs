@@ -58,7 +58,11 @@ use norito::{
     codec::Encode,
     json::{Map, Number, Value},
 };
-use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
+use rand::{
+    CryptoRng, RngCore, SeedableRng,
+    rand_core::TryCryptoRng,
+    rngs::{OsRng, StdRng},
+};
 use reqwest::blocking::Client as BlockingHttpClient;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, FilePlan, PorMerkleTree,
@@ -601,10 +605,10 @@ impl RepairClaimArgs {
         let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
         let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
         let claimed_at_unix = parse_timestamp_or_now(self.claimed_at.as_deref(), "claimed-at")?;
-        let idempotency_key = self
-            .idempotency_key
-            .clone()
-            .unwrap_or_else(|| generate_nonce_hex(12));
+        let idempotency_key = match self.idempotency_key.clone() {
+            Some(idempotency_key) => idempotency_key,
+            None => generate_nonce_hex(12)?,
+        };
         let action = RepairWorkerActionV1::Claim { claimed_at_unix };
         let (worker_id, signature) = build_repair_worker_signature(
             context.config(),
@@ -669,10 +673,10 @@ impl RepairCompleteArgs {
         let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
         let completed_at_unix =
             parse_timestamp_or_now(self.completed_at.as_deref(), "completed-at")?;
-        let idempotency_key = self
-            .idempotency_key
-            .clone()
-            .unwrap_or_else(|| generate_nonce_hex(12));
+        let idempotency_key = match self.idempotency_key.clone() {
+            Some(idempotency_key) => idempotency_key,
+            None => generate_nonce_hex(12)?,
+        };
         let action = RepairWorkerActionV1::Complete {
             completed_at_unix,
             resolution_notes: self.resolution_notes.clone(),
@@ -742,10 +746,10 @@ impl RepairFailArgs {
         let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
         let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
         let failed_at_unix = parse_timestamp_or_now(self.failed_at.as_deref(), "failed-at")?;
-        let idempotency_key = self
-            .idempotency_key
-            .clone()
-            .unwrap_or_else(|| generate_nonce_hex(12));
+        let idempotency_key = match self.idempotency_key.clone() {
+            Some(idempotency_key) => idempotency_key,
+            None => generate_nonce_hex(12)?,
+        };
         let action = RepairWorkerActionV1::Fail {
             failed_at_unix,
             reason: self.reason.clone(),
@@ -1383,12 +1387,19 @@ impl GarReceiptArgs {
 }
 
 fn parse_receipt_id(receipt_id_hex: Option<&str>) -> Result<[u8; 16]> {
+    parse_receipt_id_with_rng(receipt_id_hex, &mut OsRng)
+}
+
+fn parse_receipt_id_with_rng<R: TryCryptoRng>(
+    receipt_id_hex: Option<&str>,
+    rng: &mut R,
+) -> Result<[u8; 16]> {
     if let Some(hex) = receipt_id_hex {
         return parse_hex_array::<16>(hex, "--receipt-id");
     }
     let mut bytes = [0u8; 16];
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut bytes);
+    rng.try_fill_bytes(&mut bytes)
+        .map_err(|error| eyre!("SoraFS receipt-id OS RNG failed: {error}"))?;
     Ok(bytes)
 }
 
@@ -6703,8 +6714,7 @@ struct TokenIssueArtifacts {
 
 impl HandshakeTokenIssueArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let mut thread_rng = rand::rng();
-        let mut rng = StdRng::from_rng(&mut thread_rng);
+        let mut rng = token_issue_rng()?;
         let now = SystemTime::now();
         let artifacts = self.issue_with_rng(context, &mut rng, now)?;
         Self::emit(
@@ -6879,6 +6889,16 @@ impl HandshakeTokenIssueArgs {
         let text = render_token_issue_text(artifacts, &obj, output, format.describe());
         print_with_optional_text(context, Some(text), &Value::Object(obj))
     }
+}
+
+fn token_issue_rng() -> Result<StdRng> {
+    token_issue_rng_from_rng(&mut OsRng)
+}
+
+fn token_issue_rng_from_rng<R: TryCryptoRng>(rng: &mut R) -> Result<StdRng> {
+    StdRng::try_from_rng(rng).map_err(|error| {
+        eyre!("failed to seed SoraNet admission-token RNG from OS entropy: {error}")
+    })
 }
 
 fn render_token_issue_text(
@@ -8117,7 +8137,7 @@ impl Run for ToolkitPackArgs {
                 chunk_digest_sha3,
                 manifest_filename.as_deref(),
             );
-            let mut rng = rand::rng();
+            let mut rng = OsRng;
             let envelope = encrypt_payload(&manifest_bytes, &aad, &recipient, &mut rng)
                 .wrap_err("failed to encrypt hybrid payload envelope")?;
             let envelope_bytes =
@@ -11656,7 +11676,10 @@ impl StorageTokenIssueArgs {
             &SorafsTokenOverrides,
         ) -> Result<Response<Vec<u8>>>,
     {
-        let nonce = self.nonce.clone().unwrap_or_else(|| generate_nonce_hex(12));
+        let nonce = match self.nonce.clone() {
+            Some(nonce) => nonce,
+            None => generate_nonce_hex(12)?,
+        };
         let overrides = SorafsTokenOverrides {
             ttl_secs: self.ttl_secs,
             max_streams: self.max_streams,
@@ -11729,11 +11752,15 @@ fn format_datetime(value: OffsetDateTime) -> String {
         .expect("RFC3339 formatting should be infallible")
 }
 
-fn generate_nonce_hex(bytes: usize) -> String {
-    let mut rng = rand::rng();
+fn generate_nonce_hex(bytes: usize) -> Result<String> {
+    generate_nonce_hex_with_rng(bytes, &mut OsRng)
+}
+
+fn generate_nonce_hex_with_rng<R: TryCryptoRng>(bytes: usize, rng: &mut R) -> Result<String> {
     let mut data = vec![0u8; bytes];
-    rng.fill_bytes(&mut data);
-    hex::encode(data)
+    rng.try_fill_bytes(&mut data)
+        .map_err(|error| eyre!("SoraFS CLI nonce OS RNG failed: {error}"))?;
+    Ok(hex::encode(data))
 }
 
 fn render_json_response<C: RunContext>(context: &mut C, response: Response<Vec<u8>>) -> Result<()> {
@@ -12124,7 +12151,11 @@ mod tests {
     use iroha_primitives::numeric::Numeric;
     use norito::json::{Map, Value};
     use norito::{decode_from_bytes, json::JsonSerialize, to_bytes};
-    use rand::{RngCore, SeedableRng, rngs::StdRng};
+    use rand::{
+        RngCore, SeedableRng,
+        rand_core::{TryCryptoRng, TryRngCore},
+        rngs::StdRng,
+    };
     use sorafs_manifest::{
         BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, DagCodecId, ManifestBuilder, PinPolicy,
         ProfileId, StorageClass as ManifestStorageClass,
@@ -12135,7 +12166,7 @@ mod tests {
         MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
     };
     use std::{
-        fmt::Display,
+        fmt::{self, Display},
         fs,
         io::Write,
         path::Path,
@@ -12144,6 +12175,71 @@ mod tests {
     };
     use tempfile::{NamedTempFile, TempDir};
     use url::Url;
+
+    struct FailingSorafsCliNonceRng;
+
+    #[derive(Debug)]
+    struct FailingSorafsCliNonceRngError;
+
+    impl fmt::Display for FailingSorafsCliNonceRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing SoraFS CLI nonce RNG")
+        }
+    }
+
+    impl TryRngCore for FailingSorafsCliNonceRng {
+        type Error = FailingSorafsCliNonceRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingSorafsCliNonceRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingSorafsCliNonceRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingSorafsCliNonceRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingSorafsCliNonceRng {}
+
+    #[test]
+    fn parse_receipt_id_reports_rng_failure() {
+        let mut rng = FailingSorafsCliNonceRng;
+
+        let error = parse_receipt_id_with_rng(None, &mut rng)
+            .expect_err("receipt-id generation should fail when entropy fails");
+        let message = format!("{error:?}");
+
+        assert!(message.contains("SoraFS receipt-id OS RNG failed"));
+        assert!(message.contains("failing SoraFS CLI nonce RNG"));
+    }
+
+    #[test]
+    fn generate_nonce_hex_reports_rng_failure() {
+        let mut rng = FailingSorafsCliNonceRng;
+
+        let error = generate_nonce_hex_with_rng(12, &mut rng)
+            .expect_err("nonce generation should fail when entropy fails");
+        let message = format!("{error:?}");
+
+        assert!(message.contains("SoraFS CLI nonce OS RNG failed"));
+        assert!(message.contains("failing SoraFS CLI nonce RNG"));
+    }
+
+    #[test]
+    fn token_issue_rng_reports_os_seed_failure() {
+        let mut rng = FailingSorafsCliNonceRng;
+
+        let error = token_issue_rng_from_rng(&mut rng)
+            .expect_err("token RNG seeding should fail when entropy fails");
+        let message = format!("{error:?}");
+
+        assert!(message.contains("failed to seed SoraNet admission-token RNG"));
+        assert!(message.contains("failing SoraFS CLI nonce RNG"));
+    }
 
     fn sample_account_literals() -> (String, String, String) {
         let public_key: PublicKey =

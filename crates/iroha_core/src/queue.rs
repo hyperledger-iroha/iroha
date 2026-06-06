@@ -5760,7 +5760,10 @@ pub mod tests {
         collections::{BTreeMap, BTreeSet},
         num::NonZeroU32,
         path::PathBuf,
-        sync::{Arc, atomic::Ordering},
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
         thread,
         time::Duration,
     };
@@ -5801,7 +5804,6 @@ pub mod tests {
     use iroha_test_samples::{ALICE_KEYPAIR, gen_account_in};
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
-    use rand::Rng as _;
 
     #[allow(unused_imports)]
     use super::*;
@@ -5820,6 +5822,13 @@ pub mod tests {
         smartcontracts::Execute,
         state::{State, World},
     };
+
+    static NEXT_TEST_DOMAIN_SUFFIX: AtomicU64 = AtomicU64::new(1);
+
+    fn unique_test_domain_name(prefix: &str) -> String {
+        let suffix = NEXT_TEST_DOMAIN_SUFFIX.fetch_add(1, Ordering::Relaxed);
+        format!("{prefix}{suffix}")
+    }
 
     impl Queue {
         /// Construct a `Queue` instance suitable for unit tests.
@@ -8976,7 +8985,7 @@ pub mod tests {
     }
 
     fn sample_unregister_instruction() -> InstructionBox {
-        let domain_name = format!("dummy{}", rand::random::<u64>());
+        let domain_name = unique_test_domain_name("dummy");
         InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").unwrap(),
         ))
@@ -10504,7 +10513,7 @@ pub mod tests {
 
         let (account_id, key_pair) = gen_account_in("wonderland");
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-        let domain_name = format!("tagged{}", rand::random::<u64>());
+        let domain_name = unique_test_domain_name("tagged");
         let unregister = Unregister::domain(DomainId::try_new(&domain_name, "universal").unwrap());
         let tx =
             TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, &time_source)
@@ -11982,9 +11991,7 @@ pub mod tests {
                     }
                     height = height.checked_add(1).unwrap();
 
-                    // Simulate random small delays
-                    let mut rng = rand::rng();
-                    let delay = Duration::from_millis(rng.random_range(0..25));
+                    let delay = Duration::from_millis((height.get() as u64 * 17) % 25);
                     thread::sleep(delay);
                     time_handle.advance(delay);
                 }

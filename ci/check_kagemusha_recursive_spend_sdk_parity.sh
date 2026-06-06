@@ -1102,11 +1102,12 @@ def check_javascript_sdk_script(errors):
         errors,
     )
     require(
-        "Kagemusha recursive spend|Kagemusha .* SDK runner" in script
+        "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs" in script
+        and "test/crypto.browser.test.js" in script
         and "test/kagemushaFfiContractParity.test.js" in script
         and "test/kagemushaRecursiveSpend.test.js" in script
         and "test/package_dist.test.js" in script,
-        "Kagemusha JavaScript SDK script must run recursive spend, package-dist, and runtime-gate meta tests",
+        "Kagemusha JavaScript SDK script must run recursive spend, browser-stub, package-dist, and runtime-gate meta tests",
         errors,
     )
 

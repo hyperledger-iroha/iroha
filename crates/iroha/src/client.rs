@@ -52,7 +52,6 @@ use norito::{
     json::{Map as JsonMap, Value as JsonValue},
     to_bytes,
 };
-use rand::Rng;
 use sha2::{Digest as _, Sha256};
 use sorafs_manifest::{
     alias_cache::{decode_alias_proof, unix_now_secs},
@@ -4943,7 +4942,7 @@ impl Client {
     pub fn get_sumeragi_pacemaker_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/pacemaker");
         let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi pacemaker")
@@ -4956,7 +4955,7 @@ impl Client {
     pub fn get_sumeragi_phases_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/phases");
         let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi phases")
@@ -4982,7 +4981,7 @@ impl Client {
     pub fn get_sumeragi_rbc_status_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc");
         let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi rbc status")
@@ -5072,7 +5071,7 @@ impl Client {
         let body = Self::build_evidence_request_body(evidence_hex)?;
         let response = self.send_builder(
             // Evidence submission is an operator endpoint guarded by operator signatures.
-            self.operator_signed_request(HttpMethod::POST, url, body)
+            self.operator_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
@@ -9240,20 +9239,61 @@ impl Client {
         message
     }
 
+    fn signed_request_nonce() -> Result<String> {
+        Self::signed_request_nonce_with_rng(&mut rand::rngs::OsRng)
+    }
+
+    fn signed_request_nonce_with_rng<R: rand::rand_core::TryCryptoRng>(
+        rng: &mut R,
+    ) -> Result<String> {
+        let mut nonce_bytes = [0_u8; 12];
+        rand::rand_core::TryRngCore::try_fill_bytes(rng, &mut nonce_bytes)
+            .map_err(|error| eyre!("signed request nonce OS RNG failed: {error}"))?;
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes))
+    }
+
+    fn transaction_nonce_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
+        rng: &mut R,
+    ) -> Result<NonZeroU32> {
+        for _ in 0..16 {
+            let value = rand::rand_core::TryRngCore::try_next_u32(rng)
+                .map_err(|error| eyre!("transaction nonce OS RNG failed: {error}"))?;
+            if let Some(nonce) = NonZeroU32::new(value) {
+                return Ok(nonce);
+            }
+        }
+
+        Err(eyre!("transaction nonce OS RNG returned zero repeatedly"))
+    }
+
+    fn apply_transaction_defaults_with_rng<R: rand::rand_core::TryCryptoRng + ?Sized>(
+        &self,
+        tx_builder: &mut TransactionBuilder,
+        rng: &mut R,
+    ) -> Result<()> {
+        if let Some(transaction_ttl) = self.transaction_ttl {
+            tx_builder.set_ttl(transaction_ttl);
+        }
+        if self.add_transaction_nonce {
+            tx_builder.set_nonce(Self::transaction_nonce_with_rng(rng)?);
+        }
+
+        Ok(())
+    }
+
     fn account_signed_request(
         &self,
         method: HttpMethod,
         url: Url,
         body: Vec<u8>,
-    ) -> DefaultRequestBuilder {
+    ) -> Result<DefaultRequestBuilder> {
         let timestamp_ms: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis()
             .try_into()
             .unwrap_or(u64::MAX);
-        let nonce_bytes: [u8; 12] = rand::rng().random();
-        let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+        let nonce = Self::signed_request_nonce()?;
         let message = Self::operator_request_message(&method, &url, &body, timestamp_ms, &nonce);
         let signature = Signature::new(self.key_pair.private_key(), &message);
         let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
@@ -9268,7 +9308,7 @@ impl Client {
             builder = builder.body(body);
         }
 
-        builder
+        Ok(builder)
     }
 
     fn operator_signed_request(
@@ -9276,16 +9316,15 @@ impl Client {
         method: HttpMethod,
         url: Url,
         body: Vec<u8>,
-    ) -> DefaultRequestBuilder {
-        let operator_headers = self.operator_key_pair.as_ref().map(|operator_key_pair| {
+    ) -> Result<DefaultRequestBuilder> {
+        let operator_headers = if let Some(operator_key_pair) = self.operator_key_pair.as_ref() {
             let timestamp_ms: u64 = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX);
-            let nonce_bytes: [u8; 12] = rand::rng().random();
-            let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+            let nonce = Self::signed_request_nonce()?;
             let message =
                 Self::operator_request_message(&method, &url, &body, timestamp_ms, nonce.as_str());
             let signature = Signature::new(operator_key_pair.private_key(), &message);
@@ -9294,8 +9333,10 @@ impl Client {
             let signature_b64 =
                 base64::engine::general_purpose::STANDARD.encode(signature.payload());
 
-            (public_key, timestamp, nonce, signature_b64)
-        });
+            Some((public_key, timestamp, nonce, signature_b64))
+        } else {
+            None
+        };
         let mut builder = self.default_request(method, url);
 
         if let Some((public_key, timestamp, nonce, signature_b64)) = operator_headers {
@@ -9307,9 +9348,9 @@ impl Client {
         }
 
         if body.is_empty() {
-            builder
+            Ok(builder)
         } else {
-            builder.body(body)
+            Ok(builder.body(body))
         }
     }
 
@@ -9442,33 +9483,62 @@ impl Client {
 
     /// Builds transaction out of supplied instructions or IVM bytecode.
     ///
-    /// # Errors
-    /// Fails if signing transaction fails
+    /// Prefer [`Self::try_build_transaction`] when callers need to handle OS
+    /// entropy failures from configured transaction nonce generation.
+    ///
+    /// # Panics
+    /// Panics if `transaction_add_nonce` is enabled and OS entropy is
+    /// unavailable while generating a transaction nonce.
     pub fn build_transaction<Exec: Into<Executable>>(
         &self,
         instructions: Exec,
         metadata: Metadata,
     ) -> SignedTransaction {
+        self.try_build_transaction(instructions, metadata)
+            .expect("failed to build transaction")
+    }
+
+    /// Builds transaction out of supplied instructions or IVM bytecode.
+    ///
+    /// # Errors
+    /// Fails if configured transaction nonce generation cannot read OS entropy.
+    pub fn try_build_transaction<Exec: Into<Executable>>(
+        &self,
+        instructions: Exec,
+        metadata: Metadata,
+    ) -> Result<SignedTransaction> {
+        self.try_build_transaction_with_rng(instructions, metadata, &mut rand::rngs::OsRng)
+    }
+
+    fn try_build_transaction_with_rng<Exec, R>(
+        &self,
+        instructions: Exec,
+        metadata: Metadata,
+        rng: &mut R,
+    ) -> Result<SignedTransaction>
+    where
+        Exec: Into<Executable>,
+        R: rand::rand_core::TryCryptoRng + ?Sized,
+    {
         let tx_builder = TransactionBuilder::new(self.chain.clone(), self.account.clone());
         let mut tx_builder = tx_builder.with_executable(instructions.into());
 
-        if let Some(transaction_ttl) = self.transaction_ttl {
-            tx_builder.set_ttl(transaction_ttl);
-        }
-        if self.add_transaction_nonce {
-            let mut rng = rand::rng();
-            let nonce: NonZeroU32 = rng.random();
-            tx_builder.set_nonce(nonce);
-        }
+        self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
 
-        tx_builder
+        Ok(tx_builder
             .with_metadata(metadata)
-            .sign(self.key_pair.private_key())
+            .sign(self.key_pair.private_key()))
     }
 
     /// Builds a transaction from a collection of items convertible into `InstructionBox`.
     ///
     /// This avoids re-boxing already boxed instructions.
+    /// Prefer [`Self::try_build_transaction_from_items`] when callers need to
+    /// handle OS entropy failures from configured transaction nonce generation.
+    ///
+    /// # Panics
+    /// Panics if `transaction_add_nonce` is enabled and OS entropy is
+    /// unavailable while generating a transaction nonce.
     pub fn build_transaction_from_items<I>(
         &self,
         instructions: impl IntoIterator<Item = I>,
@@ -9477,21 +9547,49 @@ impl Client {
     where
         I: Into<InstructionBox>,
     {
+        self.try_build_transaction_from_items(instructions, metadata)
+            .expect("failed to build transaction from instruction items")
+    }
+
+    /// Builds a transaction from a collection of items convertible into `InstructionBox`.
+    ///
+    /// This avoids re-boxing already boxed instructions.
+    ///
+    /// # Errors
+    /// Fails if configured transaction nonce generation cannot read OS entropy.
+    pub fn try_build_transaction_from_items<I>(
+        &self,
+        instructions: impl IntoIterator<Item = I>,
+        metadata: Metadata,
+    ) -> Result<SignedTransaction>
+    where
+        I: Into<InstructionBox>,
+    {
+        self.try_build_transaction_from_items_with_rng(
+            instructions,
+            metadata,
+            &mut rand::rngs::OsRng,
+        )
+    }
+
+    fn try_build_transaction_from_items_with_rng<I, R>(
+        &self,
+        instructions: impl IntoIterator<Item = I>,
+        metadata: Metadata,
+        rng: &mut R,
+    ) -> Result<SignedTransaction>
+    where
+        I: Into<InstructionBox>,
+        R: rand::rand_core::TryCryptoRng + ?Sized,
+    {
         let mut tx_builder = TransactionBuilder::new(self.chain.clone(), self.account.clone())
             .with_instructions(instructions);
 
-        if let Some(transaction_ttl) = self.transaction_ttl {
-            tx_builder.set_ttl(transaction_ttl);
-        }
-        if self.add_transaction_nonce {
-            let mut rng = rand::rng();
-            let nonce: NonZeroU32 = rng.random();
-            tx_builder.set_nonce(nonce);
-        }
+        self.apply_transaction_defaults_with_rng(&mut tx_builder, rng)?;
 
-        tx_builder
+        Ok(tx_builder
             .with_metadata(metadata)
-            .sign(self.key_pair.private_key())
+            .sign(self.key_pair.private_key()))
     }
 
     /// Encode and hash a signed transaction once for later submission.
@@ -9575,7 +9673,8 @@ impl Client {
     where
         I: Into<InstructionBox>,
     {
-        self.submit_transaction(&self.build_transaction_from_items(instructions, metadata))
+        let transaction = self.try_build_transaction_from_items(instructions, metadata)?;
+        self.submit_transaction(&transaction)
     }
 
     pub(crate) fn ensure_data_model_compatibility(&self) -> Result<()> {
@@ -10710,7 +10809,7 @@ impl Client {
             }
         }
 
-        let transaction = self.build_transaction_from_items(instructions, metadata);
+        let transaction = self.try_build_transaction_from_items(instructions, metadata)?;
         self.submit_transaction_blocking(&transaction)
     }
 
@@ -10803,7 +10902,7 @@ impl Client {
     pub fn get_config(&self) -> Result<ConfigGetDTO> {
         let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
         let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
         )?;
 
@@ -10841,7 +10940,7 @@ impl Client {
             .wrap_err(format!("Failed to serialize {dto:?}"))?;
         let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
         let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::POST, url, body)
+            self.operator_signed_request(HttpMethod::POST, url, body)?
                 .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
         )?;
 
@@ -11247,7 +11346,7 @@ impl Client {
             .wrap_err("failed to encode multisig approvals list request")?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/list_for_authority");
         let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
@@ -11275,7 +11374,7 @@ impl Client {
             .wrap_err("failed to encode multisig approvals get request")?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/get_for_authority");
         let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON),
         )?;
@@ -17316,6 +17415,128 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    struct FailingClientRng;
+
+    #[derive(Debug)]
+    struct FailingClientRngError;
+
+    impl std::fmt::Display for FailingClientRngError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("failing client RNG")
+        }
+    }
+
+    impl rand::rand_core::TryRngCore for FailingClientRng {
+        type Error = FailingClientRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingClientRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingClientRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingClientRngError)
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for FailingClientRng {}
+
+    #[test]
+    fn signed_request_nonce_reports_rng_failure() {
+        let mut rng = FailingClientRng;
+
+        let error =
+            Client::signed_request_nonce_with_rng(&mut rng).expect_err("RNG failure must report");
+
+        let message = error.to_string();
+        assert!(message.contains("signed request nonce OS RNG failed"));
+        assert!(message.contains("failing client RNG"));
+    }
+
+    #[test]
+    fn transaction_nonce_reports_rng_failure() {
+        let mut rng = FailingClientRng;
+
+        let error =
+            Client::transaction_nonce_with_rng(&mut rng).expect_err("RNG failure must report");
+
+        let message = error.to_string();
+        assert!(message.contains("transaction nonce OS RNG failed"));
+        assert!(message.contains("failing client RNG"));
+    }
+
+    #[test]
+    fn try_build_transaction_reports_nonce_rng_failure_when_enabled() {
+        let client = Client::new(Config {
+            transaction_add_nonce: true,
+            ..config_factory()
+        });
+        let mut rng = FailingClientRng;
+
+        let error = match client.try_build_transaction_with_rng(
+            Vec::<InstructionBox>::new(),
+            Metadata::default(),
+            &mut rng,
+        ) {
+            Ok(transaction) => panic!(
+                "transaction nonce RNG unexpectedly succeeded with hash `{}`",
+                transaction.hash()
+            ),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(message.contains("transaction nonce OS RNG failed"));
+        assert!(message.contains("failing client RNG"));
+    }
+
+    #[test]
+    fn try_build_transaction_from_items_reports_nonce_rng_failure_when_enabled() {
+        let client = Client::new(Config {
+            transaction_add_nonce: true,
+            ..config_factory()
+        });
+        let mut rng = FailingClientRng;
+
+        let error = match client.try_build_transaction_from_items_with_rng(
+            Vec::<InstructionBox>::new(),
+            Metadata::default(),
+            &mut rng,
+        ) {
+            Ok(transaction) => panic!(
+                "transaction item nonce RNG unexpectedly succeeded with hash `{}`",
+                transaction.hash()
+            ),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(message.contains("transaction nonce OS RNG failed"));
+        assert!(message.contains("failing client RNG"));
+    }
+
+    #[test]
+    fn try_build_transaction_skips_rng_when_nonce_disabled() {
+        let client = Client::new(Config {
+            transaction_add_nonce: false,
+            ..config_factory()
+        });
+        let mut rng = FailingClientRng;
+
+        let transaction = client
+            .try_build_transaction_with_rng(
+                Vec::<InstructionBox>::new(),
+                Metadata::default(),
+                &mut rng,
+            )
+            .expect("transaction builder should not read RNG when nonce is disabled");
+
+        assert_eq!(transaction.nonce(), None);
+    }
 
     fn sample_commit_qc(block_header: &BlockHeader) -> Qc {
         let validator_set: Vec<PeerId> = Vec::new();

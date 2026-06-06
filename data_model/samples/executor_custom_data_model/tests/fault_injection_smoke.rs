@@ -1,3 +1,5 @@
+//! Fault-injection smoke coverage for the custom data-model sample crate.
+
 use std::str::FromStr;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -15,9 +17,9 @@ fn overlay_entries(tx: &SignedTransaction) -> Vec<String> {
 }
 
 #[test]
-fn kotodama_bytecode_fault_injection_smoke() {
+fn kotodama_bytecode_fault_injection_smoke() -> Result<(), iroha_crypto::Error> {
     let chain: ChainId = "fi-smoke-chain".parse().unwrap();
-    let keypair = iroha_crypto::KeyPair::random();
+    let keypair = iroha_crypto::KeyPair::try_random()?;
     let account_id = AccountId::new(keypair.public_key().clone());
 
     let mut tx = TransactionBuilder::new(chain, account_id)
@@ -55,4 +57,5 @@ fn kotodama_bytecode_fault_injection_smoke() {
         ],
         "overlay must retain encoded instruction payloads"
     );
+    Ok(())
 }

@@ -4780,7 +4780,9 @@ fn kagemusha_recursive_spend_redeem_py(
 /// Generate an X25519 keypair for Connect.
 fn generate_connect_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let scheme = X25519Sha256::new();
-    let (public, secret) = scheme.keypair(KeyGenOption::Random);
+    let (public, secret) = scheme.try_keypair(KeyGenOption::Random).map_err(|err| {
+        PyRuntimeError::new_err(format!("failed to generate X25519 keypair: {err}"))
+    })?;
     let public_bytes = Py::from(PyBytes::new(py, public.as_bytes()));
     let private_bytes = Py::from(PyBytes::new(py, secret.to_bytes().as_ref()));
     Ok((private_bytes, public_bytes))

@@ -54,12 +54,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_fixture() -> Result<Value, Box<dyn Error>> {
-    let issuer_key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-    let sender_account_key_pair = KeyPair::from_seed(vec![0x21; 32], Algorithm::Ed25519);
-    let recipient_account_key_pair = KeyPair::from_seed(vec![0x22; 32], Algorithm::Ed25519);
-    let sender_note_key_pair = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
-    let recipient_note_key_pair = KeyPair::from_seed(vec![0x32; 32], Algorithm::Ed25519);
+    let issuer_key_pair = fixed_ed25519_keypair("issuer", 0x11)?;
+    let sender_account_key_pair = fixed_ed25519_keypair("sender account", 0x21)?;
+    let recipient_account_key_pair = fixed_ed25519_keypair("recipient account", 0x22)?;
+    let sender_note_key_pair = fixed_ed25519_keypair("sender note", 0x31)?;
+    let recipient_note_key_pair = fixed_ed25519_keypair("recipient note", 0x32)?;
 
     let sender_account_id = AccountId::new(sender_account_key_pair.public_key().clone());
     let recipient_account_id = AccountId::new(recipient_account_key_pair.public_key().clone());
@@ -78,7 +79,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     let sender_certificate = signed_certificate(
         &issuer_key_pair,
         &sender_note_key_pair,
-        sender_account_id.clone(),
+        &sender_account_id,
         "ios-appattest",
         SENDER_KEY_ID,
         SENDER_DEVICE_ID,
@@ -86,7 +87,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     let recipient_certificate = signed_certificate(
         &issuer_key_pair,
         &recipient_note_key_pair,
-        recipient_account_id.clone(),
+        &recipient_account_id,
         "ios-appattest",
         RECIPIENT_KEY_ID,
         RECIPIENT_DEVICE_ID,
@@ -216,14 +217,14 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
             &recipient_account_id_string,
             &asset_definition_id_string,
             AMOUNT,
-        )?,
+        ),
         mobile_output_claim_json(
             &change_commitment_string,
             &sender_certificate,
             &sender_account_id_string,
             &asset_definition_id_string,
             CHANGE_AMOUNT,
-        )?,
+        ),
     ];
 
     let public_inputs_hash_hex = audit_public_inputs_hash.to_string();
@@ -249,7 +250,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         public_inputs_hash_hex: &public_inputs_hash_hex,
         assertion_base64: &one_use_signature_base64,
         proof_bytes_base64: &proof_bytes_base64,
-    })?;
+    });
     let receive_challenge = object(vec![
         ("version", Value::from(2_u64)),
         ("type", Value::from("offline_receive_challenge_v2")),
@@ -467,6 +468,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     ]))
 }
 
+#[derive(Clone, Copy)]
 struct PaymentTokenJsonFields<'a> {
     token_id: &'a str,
     sender_account_id: &'a str,
@@ -503,10 +505,20 @@ struct VectorCertificate {
     issuer_signature_payload_base64: String,
 }
 
+fn fixed_ed25519_keypair(label: &str, seed_byte: u8) -> Result<KeyPair, Box<dyn Error>> {
+    KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to derive offline v2 fixture {label} Ed25519 keypair: {err}"),
+        )
+        .into()
+    })
+}
+
 fn signed_certificate(
     issuer_key_pair: &KeyPair,
     note_key_pair: &KeyPair,
-    account_id: AccountId,
+    account_id: &AccountId,
     platform: &str,
     key_id: &str,
     device_id: &str,
@@ -644,8 +656,7 @@ fn mobile_certificate_json(certificate: &VectorCertificate) -> Value {
             certificate
                 .assertion_usage_count_limit
                 .map(u64::from)
-                .map(Value::from)
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, Value::from),
         ),
         ("one_use", Value::from(certificate.one_use)),
         (
@@ -665,14 +676,14 @@ fn mobile_output_claim_json(
     account_id: &str,
     asset_definition_id: &str,
     amount: &str,
-) -> Result<Value, Box<dyn Error>> {
-    Ok(object(vec![
+) -> Value {
+    object(vec![
         ("note_commitment", Value::from(note_commitment)),
         ("key_certificate", mobile_certificate_json(certificate)),
         ("account_id", Value::from(account_id)),
         ("asset_definition_id", Value::from(asset_definition_id)),
         ("amount", Value::from(amount)),
-    ]))
+    ])
 }
 
 fn mobile_input_claim_json(claim: &OfflineNoteIssuedClaim) -> Result<Value, Box<dyn Error>> {
@@ -692,8 +703,8 @@ fn mobile_input_claim_json(claim: &OfflineNoteIssuedClaim) -> Result<Value, Box<
     ]))
 }
 
-fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Result<Value, Box<dyn Error>> {
-    Ok(object(vec![
+fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Value {
+    object(vec![
         ("version", Value::from(2_u64)),
         ("type", Value::from("offline_payment_token_v2")),
         ("token_id", Value::from(fields.token_id)),
@@ -756,7 +767,7 @@ fn payment_token_json(fields: PaymentTokenJsonFields<'_>) -> Result<Value, Box<d
             ]),
         ),
         ("created_at_ms", Value::from(CREATED_AT_MS)),
-    ]))
+    ])
 }
 
 fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
@@ -782,7 +793,10 @@ fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
             "payload_sha256_hex",
             Value::from(encode(Sha256::digest(payload))),
         ),
-        ("frame_size_bytes", Value::from(options.chunk_size as u64)),
+        (
+            "frame_size_bytes",
+            Value::from(u64::from(options.chunk_size)),
+        ),
         (
             "required_unique_frames",
             Value::from(
@@ -1044,13 +1058,15 @@ mod tests {
 
     #[test]
     fn android_keymint_certificate_uses_valid_p256_assertion_key() {
-        let issuer_key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
-        let note_key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
+        let issuer_key_pair =
+            fixed_ed25519_keypair("issuer", 0x11).expect("fixed issuer key derives");
+        let note_key_pair =
+            fixed_ed25519_keypair("android note", 0x41).expect("fixed note key derives");
         let account_id = AccountId::new(note_key_pair.public_key().clone());
         let certificate = signed_certificate(
             &issuer_key_pair,
             &note_key_pair,
-            account_id,
+            &account_id,
             "android-keymint",
             "android-key-v2-1",
             "android-device-v2-1",
@@ -1079,5 +1095,19 @@ mod tests {
         verifying_key
             .verify(challenge, &signature)
             .expect("Android assertion verifies against certificate key");
+    }
+
+    #[test]
+    fn fixed_ed25519_keypair_uses_checked_seed_derivation() {
+        let keypair =
+            fixed_ed25519_keypair("issuer", 0x11).expect("fixed issuer Ed25519 key derives");
+
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("fixed public key algorithm"),
+            Algorithm::Ed25519
+        );
     }
 }

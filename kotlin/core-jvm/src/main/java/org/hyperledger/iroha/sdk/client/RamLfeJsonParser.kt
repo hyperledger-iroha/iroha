@@ -109,6 +109,7 @@ object RamLfeJsonParser {
     }
 
     private fun asLong(value: Any?, path: String): Long {
+        if (value is String) return value.toLongOrNull() ?: error("$path must be an integer string")
         return JsonNumbers.asLong(value, path)
     }
 
@@ -156,7 +157,8 @@ object RamLfeJsonParser {
                 asLongList(publicKey["b"], "$context.public_key.b"),
                 asLongList(publicKey["a"], "$context.public_key.a")
             ),
-            JsonNumbers.asInt(root["max_input_bytes"], "$context.max_input_bytes")
+            JsonNumbers.asInt(root["max_input_bytes"], "$context.max_input_bytes"),
+            root["norito_length_encoding"] as? String
         )
     }
 

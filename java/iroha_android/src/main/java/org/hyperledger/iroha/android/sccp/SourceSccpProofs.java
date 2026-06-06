@@ -79,16 +79,16 @@ public final class SourceSccpProofs {
   private static final int EVM_MAX_BLOCK_RECEIPTS = 4096;
   private static final int ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX = 9;
   private static final int ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH = 4;
-  private static final int ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512;
+  private static final int ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES = 512;
+  private static final int ETH_MAX_SYNC_COMMITTEE_AUTHORITIES =
+      ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES;
   private static final int ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48;
   private static final int ETH_SYNC_COMMITTEE_POP_BYTES = 96;
   private static final int ETH_SYNC_COMMITTEE_SIGNATURE_BYTES = 96;
-  private static final int ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 96;
-  private static final int ETH_MAX_SYNC_COMMITTEE_POP_BYTES = 256;
   private static final int ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES =
       1 + 4 + ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
-          * (4 + ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4
-              + ETH_MAX_SYNC_COMMITTEE_POP_BYTES);
+          * (4 + ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES + 8 + 4
+              + ETH_SYNC_COMMITTEE_POP_BYTES);
   private static final int TON_MAX_VALIDATORS = 1024;
   private static final int TRON_MAX_MPT_PROOF_NODES = 64;
   private static final int TRON_MAX_MPT_NODE_BYTES = 16 * 1024;
@@ -1719,16 +1719,15 @@ public final class SourceSccpProofs {
     Objects.requireNonNull(syncCommitteePublicKeys, "syncCommitteePublicKeys");
     Objects.requireNonNull(syncCommitteeWeights, "syncCommitteeWeights");
     Objects.requireNonNull(syncCommitteePops, "syncCommitteePops");
-    if (syncCommitteePublicKeys.isEmpty()
-        || syncCommitteePublicKeys.size() != syncCommitteeWeights.size()
+    if (syncCommitteePublicKeys.size() != syncCommitteeWeights.size()
         || syncCommitteePublicKeys.size() != syncCommitteePops.size()) {
       throw new IllegalArgumentException(
-          "syncCommitteePublicKeys, syncCommitteeWeights, and syncCommitteePops must be non-empty equal-length arrays");
+          "syncCommitteePublicKeys, syncCommitteeWeights, and syncCommitteePops must be equal-length arrays");
     }
-    if (syncCommitteePublicKeys.size() > ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
+    if (syncCommitteePublicKeys.size() != ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES) {
       throw new IllegalArgumentException(
-          "syncCommitteePublicKeys must contain at most "
-              + ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
+          "syncCommitteePublicKeys must contain exactly "
+              + ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES
               + " entries");
     }
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -1755,8 +1754,9 @@ public final class SourceSccpProofs {
       }
       final BigInteger weight =
           normalizeU64(syncCommitteeWeights.get(i), "syncCommitteeWeights[" + i + "]");
-      if (BigInteger.ZERO.equals(weight)) {
-        throw new IllegalArgumentException("syncCommitteeWeights[" + i + "] must not be zero");
+      if (!BigInteger.ONE.equals(weight)) {
+        throw new IllegalArgumentException(
+            "syncCommitteeWeights[" + i + "] must be 1 for Ethereum mainnet");
       }
       final byte[] pop =
           Objects.requireNonNull(syncCommitteePops.get(i), "syncCommitteePops[" + i + "]");
@@ -6045,13 +6045,17 @@ public final class SourceSccpProofs {
         rlpBytes(
             minimalBigEndianBytes(
                 requireEthereumRpcQuantity(
-                    firstPresent(receipt, "cumulativeGasUsed", "cumulative_gas_used"),
+                    strictFirstPresent(
+                        receipt,
+                        "receipt.cumulativeGasUsed",
+                        "cumulativeGasUsed",
+                        "cumulative_gas_used"),
                     "receipt.cumulativeGasUsed"),
                 "receipt.cumulativeGasUsed")));
     fields.add(
         rlpBytes(
             ethereumRpcHexBytes(
-                firstPresent(receipt, "logsBloom", "logs_bloom"),
+                strictFirstPresent(receipt, "receipt.logsBloom", "logsBloom", "logs_bloom"),
                 "receipt.logsBloom",
                 Integer.valueOf(256),
                 false,
@@ -6100,14 +6104,22 @@ public final class SourceSccpProofs {
           Objects.requireNonNull(receipts.get(index), "blockReceipts[" + index + "]");
       final BigInteger receiptIndex =
           requireEthereumRpcQuantity(
-              firstPresent(receipt, "transactionIndex", "transaction_index"),
+              strictFirstPresent(
+                  receipt,
+                  "blockReceipts[" + index + "].transactionIndex",
+                  "transactionIndex",
+                  "transaction_index"),
               "blockReceipts[" + index + "].transactionIndex");
       if (!receiptIndex.equals(BigInteger.valueOf(index))) {
         throw new IllegalArgumentException("block receipt transactionIndex must match receipt order");
       }
       final byte[] transactionHash =
           ethereumRpcHexBytes(
-              firstPresent(receipt, "transactionHash", "transaction_hash"),
+              strictFirstPresent(
+                  receipt,
+                  "blockReceipts[" + index + "].transactionHash",
+                  "transactionHash",
+                  "transaction_hash"),
               "blockReceipts[" + index + "].transactionHash",
               32,
               true,
@@ -6445,6 +6457,22 @@ public final class SourceSccpProofs {
       }
     }
     return null;
+  }
+
+  private static Object strictFirstPresent(
+      final Map<String, Object> input, final String label, final String... keys) {
+    Object selected = null;
+    boolean found = false;
+    for (final String key : keys) {
+      if (input.containsKey(key)) {
+        if (found) {
+          throw new IllegalArgumentException(label + " must not use multiple aliases");
+        }
+        selected = input.get(key);
+        found = true;
+      }
+    }
+    return selected;
   }
 
   private static BigInteger requireEthereumRpcQuantity(final Object value, final String label) {
@@ -7243,13 +7271,10 @@ public final class SourceSccpProofs {
     cursor += 1;
     final int count = readU32Le(payload, cursor);
     cursor += 4;
-    if (count <= 0) {
-      throw new IllegalArgumentException("syncCommitteePayload must not be empty");
-    }
-    if (count > ETH_MAX_SYNC_COMMITTEE_AUTHORITIES) {
+    if (count != ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES) {
       throw new IllegalArgumentException(
-          "syncCommitteePayload must contain at most "
-              + ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
+          "syncCommitteePayload must contain exactly "
+              + ETH_MAINNET_SYNC_COMMITTEE_AUTHORITIES
               + " entries");
     }
     final Set<String> seenPublicKeys = new HashSet<>();
@@ -7270,8 +7295,9 @@ public final class SourceSccpProofs {
       }
       final BigInteger weight = readU64Le(payload, cursor);
       cursor += 8;
-      if (BigInteger.ZERO.equals(weight)) {
-        throw new IllegalArgumentException("syncCommitteeWeights[" + i + "] must not be zero");
+      if (!BigInteger.ONE.equals(weight)) {
+        throw new IllegalArgumentException(
+            "syncCommitteeWeights[" + i + "] must be 1 for Ethereum mainnet");
       }
       final int popLen = readU32Le(payload, cursor);
       cursor += 4;

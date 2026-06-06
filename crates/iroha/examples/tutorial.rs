@@ -15,7 +15,7 @@ fn main() {
 
     domain_registration_test(config.clone())
         .expect("Domain registration example is expected to work correctly");
-    account_definition_test();
+    account_definition_test().expect("Account definition example is expected to work correctly");
     account_registration_test(config.clone())
         .expect("Account registration example is expected to work correctly");
     asset_registration_test(config.clone())
@@ -72,12 +72,14 @@ fn domain_registration_test(config: Config) -> Result<(), Error> {
     Ok(())
 }
 
-fn account_definition_test() {
+fn account_definition_test() -> Result<(), Error> {
     // #region account_definition_comparison
     use iroha::{crypto::KeyPair, data_model::prelude::AccountId};
 
     // Generate a new public key for a new account
-    let (public_key, _) = KeyPair::random().into_parts();
+    let (public_key, _) = KeyPair::try_random()
+        .wrap_err("Failed to generate tutorial account keypair")?
+        .into_parts();
     // Materialize a scoped AccountId for `looking_glass` from the account subject's public key
     let longhand_account_id = AccountId::new(public_key.clone());
     // Create an AccountId instance by parsing the canonical I105 account address form
@@ -92,6 +94,8 @@ fn account_definition_test() {
     assert_eq!(account_id, longhand_account_id);
 
     // #endregion account_definition_comparison
+
+    Ok(())
 }
 
 fn account_registration_test(config: Config) -> Result<(), Error> {
@@ -111,7 +115,9 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
 
     // #region register_account_create
     // Generate a new public key for a new account
-    let (public_key, _) = KeyPair::random().into_parts();
+    let (public_key, _) = KeyPair::try_random()
+        .wrap_err("Failed to generate tutorial account-registration keypair")?
+        .into_parts();
     // Materialize a scoped AccountId in the domain where this registration is performed
     let account_id = AccountId::new(public_key);
     // #endregion register_account_create
@@ -175,7 +181,9 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
     // #endregion register_asset_init_submit
 
     // Generate a new public key for a new account
-    let (public_key, _) = KeyPair::random().into_parts();
+    let (public_key, _) = KeyPair::try_random()
+        .wrap_err("Failed to generate tutorial asset-holder keypair")?
+        .into_parts();
     // Materialize a scoped AccountId in the domain used for this minting example
     let account_id = AccountId::new(public_key);
 
@@ -299,4 +307,22 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // Finish the test successfully
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha::crypto::{Algorithm, KeyPair};
+
+    #[test]
+    fn tutorial_key_generation_uses_checked_default_keypair() {
+        let key_pair = KeyPair::try_random().expect("checked tutorial key generation");
+
+        assert_eq!(
+            key_pair
+                .public_key()
+                .try_algorithm()
+                .expect("generated public key algorithm"),
+            Algorithm::Ed25519
+        );
+    }
 }

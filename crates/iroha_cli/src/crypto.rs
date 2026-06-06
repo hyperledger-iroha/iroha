@@ -10,9 +10,9 @@ use iroha_crypto::{
     sm::{encode_sm2_private_key_payload, encode_sm2_public_key_payload},
 };
 use norito::json;
-use rand::random;
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use std::{fs, path::PathBuf};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 enum PrivateInput {
     Hex(String),
@@ -117,17 +117,21 @@ pub struct Sm2KeygenArgs {
 
 impl Sm2KeygenArgs {
     fn material(&self) -> Result<Sm2KeyMaterial> {
+        self.material_with_rng(&mut OsRng)
+    }
+
+    fn material_with_rng<R: TryCryptoRng>(&self, rng: &mut R) -> Result<Sm2KeyMaterial> {
         let distid = parse_distid(self.distid.clone())?;
         let private = if let Some(seed_hex) = &self.seed_hex {
             let seed = decode_hex_bytes("seed", seed_hex)?;
             Sm2PrivateKey::from_seed(distid.clone(), &seed)
                 .wrap_err("failed to derive SM2 key from seed")?
         } else {
-            let mut seed = random::<[u8; 32]>();
-            let key = Sm2PrivateKey::from_seed(distid.clone(), &seed)
-                .wrap_err("failed to derive SM2 key from random seed")?;
-            seed.zeroize();
-            key
+            let mut seed = Zeroizing::new([0_u8; 32]);
+            rng.try_fill_bytes(seed.as_mut())
+                .map_err(|error| eyre!("failed to generate random SM2 seed: {error}"))?;
+            Sm2PrivateKey::from_seed(distid.clone(), seed.as_ref())
+                .wrap_err("failed to derive SM2 key from random seed")?
         };
 
         Ok(Sm2KeyMaterial::new(&private))
@@ -1005,7 +1009,38 @@ mod tests {
     };
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::{self, JsonSerialize};
+    use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use std::fmt;
     use url::Url;
+
+    struct FailingSm2SeedRng;
+
+    #[derive(Debug)]
+    struct FailingSm2SeedRngError;
+
+    impl fmt::Display for FailingSm2SeedRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing SM2 seed RNG")
+        }
+    }
+
+    impl TryRngCore for FailingSm2SeedRng {
+        type Error = FailingSm2SeedRngError;
+
+        fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+            Err(FailingSm2SeedRngError)
+        }
+
+        fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+            Err(FailingSm2SeedRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> std::result::Result<(), Self::Error> {
+            Err(FailingSm2SeedRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingSm2SeedRng {}
 
     #[test]
     fn sm2_keygen_seed_produces_expected_public_key() {
@@ -1048,6 +1083,26 @@ mod tests {
             private_pem.contains("BEGIN PRIVATE KEY"),
             "private key PEM missing header"
         );
+    }
+
+    #[test]
+    fn sm2_keygen_random_reports_rng_failure() {
+        let args = Sm2KeygenArgs {
+            distid: Some("CN12345678901234".to_string()),
+            seed_hex: None,
+            output: None,
+            quiet: false,
+        };
+        let mut rng = FailingSm2SeedRng;
+
+        let error = match args.material_with_rng(&mut rng) {
+            Ok(_) => panic!("random SM2 keygen should fail when entropy fails"),
+            Err(error) => error,
+        };
+        let message = format!("{error:?}");
+
+        assert!(message.contains("failed to generate random SM2 seed"));
+        assert!(message.contains("failing SM2 seed RNG"));
     }
 
     #[test]

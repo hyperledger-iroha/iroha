@@ -37,9 +37,9 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{
     Algorithm, BfvEvaluationKeyBundle, BfvParameters, Hash, HashOf, KeyPair, MerkleTree, PublicKey,
     RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
-    bfv_programmed_policy_commitment_with_program, bfv_programmed_public_parameters_with_program,
-    default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
-    ram_lfe_bfv_parameters_v1,
+    bfv_programmed_policy_commitment_with_program, default_bfv_programmed_hidden_program,
+    derive_identifier_key_material_from_seed, ram_lfe_bfv_parameters_v1,
+    try_bfv_programmed_public_parameters_with_program,
 };
 use iroha_data_model::{
     ChainId, Encode as _, Level, Registrable,
@@ -148605,7 +148605,7 @@ async fn rescue_rbc_missing_ready_peers_keeps_frontier_stub_and_hydrated_session
 
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
-    actor.rescue_rbc_missing_ready_peers(key, &stub, &missing_ready_peers, 0);
+    actor.rescue_rbc_missing_ready_peers(key, &stub, &missing_ready_peers, 0, Instant::now());
 
     let entries = take_background_log(&background_log);
     let init_only_targets: BTreeSet<_> = entries
@@ -148642,7 +148642,7 @@ async fn rescue_rbc_missing_ready_peers_keeps_frontier_stub_and_hydrated_session
         "init-only targeted rescue must not arm the targeted payload rescue cooldown"
     );
 
-    actor.rescue_rbc_missing_ready_peers(key, &hydrated, &missing_ready_peers, 0);
+    actor.rescue_rbc_missing_ready_peers(key, &hydrated, &missing_ready_peers, 0, Instant::now());
 
     let entries = take_background_log(&background_log);
     let targeted_init_peers: BTreeSet<_> = entries
@@ -148768,6 +148768,7 @@ async fn rescue_rbc_missing_ready_peers_ignores_broad_payload_cooldown_after_hyd
         &session,
         &missing_ready_peers,
         session.ready_signatures.len(),
+        Instant::now(),
     );
 
     let entries = take_background_log(&background_log);
@@ -148916,6 +148917,7 @@ async fn rescue_rbc_missing_ready_peers_sends_payload_after_deliver() {
         &session,
         &missing_ready_peers,
         session.ready_signatures.len(),
+        Instant::now(),
     );
 
     let entries = take_background_log(&background_log);
@@ -149053,6 +149055,7 @@ async fn rescue_rbc_missing_ready_peers_repairs_delivered_contiguous_frontier() 
         &session,
         &missing_ready_peers,
         session.ready_signatures.len(),
+        Instant::now(),
     );
 
     assert!(
@@ -149175,6 +149178,7 @@ async fn rescue_rbc_missing_ready_peers_skips_delivered_session_when_no_ready_is
         &session,
         missing_ready_peers.as_slice(),
         session.ready_signatures.len(),
+        Instant::now(),
     );
 
     assert!(
@@ -149266,6 +149270,7 @@ async fn rescue_rbc_missing_ready_peers_skips_contiguous_frontier_hot_loop() {
         &session,
         &missing_ready_peers,
         session.ready_signatures.len(),
+        Instant::now(),
     );
 
     assert!(
@@ -161082,13 +161087,14 @@ fn sample_ram_lfe_policy_transaction(note_len: usize) -> SignedTransaction {
         galois_keys: Vec::new(),
         bootstrap_key: None,
     };
-    let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+    let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
         public_parameters,
         evaluation_keys,
         &hidden_program,
         RamLfeVerificationMode::Signed,
         None,
-    );
+    )
+    .expect("build programmed BFV public parameters");
     let encoded_public_parameters =
         norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
     let commitment = bfv_programmed_policy_commitment_with_program(

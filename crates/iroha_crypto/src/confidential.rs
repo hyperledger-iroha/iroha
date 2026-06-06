@@ -6,7 +6,7 @@
 //! on-chain host.
 
 use hkdf::Hkdf;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::TryCryptoRng;
 use sha3::Sha3_512;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -28,6 +28,9 @@ pub enum ConfidentialKeyError {
     /// Spend key must be exactly 32 bytes.
     #[error("expected 32-byte spend key, got {0} bytes")]
     InvalidSpendKeyLength(usize),
+    /// Random spend-key generation failed.
+    #[error("random spend-key generation failed")]
+    RandomBytes,
     /// HKDF expansion failed for the labelled derived key.
     #[error("HKDF expand for {label} failed")]
     HkdfExpand {
@@ -145,10 +148,12 @@ pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> 
 /// Generate a fresh random spend key and derive the associated hierarchy.
 ///
 /// # Errors
-/// Returns [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
-pub fn generate_keyset<R: RngCore + CryptoRng>(rng: &mut R) -> Result<ConfidentialKeyset> {
+/// Returns [`ConfidentialKeyError::RandomBytes`] if the RNG cannot provide a spend key, or
+/// [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
+pub fn generate_keyset<R: TryCryptoRng>(rng: &mut R) -> Result<ConfidentialKeyset> {
     let mut seed = [0u8; 32];
-    rng.fill_bytes(&mut seed);
+    rng.try_fill_bytes(&mut seed)
+        .map_err(|_| ConfidentialKeyError::RandomBytes)?;
     derive_keyset(seed)
 }
 
@@ -156,6 +161,7 @@ pub fn generate_keyset<R: RngCore + CryptoRng>(rng: &mut R) -> Result<Confidenti
 mod tests {
     use super::*;
     use rand::SeedableRng as _;
+    use rand_core::TryRngCore;
 
     #[test]
     fn derive_keyset_is_deterministic() {
@@ -200,7 +206,9 @@ mod tests {
         let mut rng = rand::rngs::StdRng::from_seed([0xA5; 32]);
         let mut expected_rng = rand::rngs::StdRng::from_seed([0xA5; 32]);
         let mut expected_seed = [0u8; 32];
-        expected_rng.fill_bytes(&mut expected_seed);
+        expected_rng
+            .try_fill_bytes(&mut expected_seed)
+            .expect("test RNG should fill expected seed");
 
         let generated = generate_keyset(&mut rng).expect("generate keyset");
         let expected = derive_keyset(expected_seed).expect("derive expected keyset");
@@ -210,6 +218,50 @@ mod tests {
         assert_eq!(generated.incoming_view_key(), expected.incoming_view_key());
         assert_eq!(generated.outgoing_view_key(), expected.outgoing_view_key());
         assert_eq!(generated.full_view_key(), expected.full_view_key());
+    }
+
+    #[test]
+    fn generate_keyset_reports_rng_failure() {
+        struct FailingRng;
+
+        #[derive(Debug)]
+        struct FailingRngError;
+
+        impl core::fmt::Display for FailingRngError {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("failing confidential rng")
+            }
+        }
+
+        impl std::error::Error for FailingRngError {}
+
+        impl TryRngCore for FailingRng {
+            type Error = FailingRngError;
+
+            fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
+                Err(FailingRngError)
+            }
+
+            fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
+                Err(FailingRngError)
+            }
+
+            fn try_fill_bytes(
+                &mut self,
+                _dest: &mut [u8],
+            ) -> core::result::Result<(), Self::Error> {
+                Err(FailingRngError)
+            }
+        }
+
+        impl TryCryptoRng for FailingRng {}
+
+        let mut rng = FailingRng;
+
+        assert!(matches!(
+            generate_keyset(&mut rng),
+            Err(ConfidentialKeyError::RandomBytes)
+        ));
     }
 
     #[test]

@@ -17,14 +17,14 @@ use crate::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
-        FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
+        AgentApartmentManifestV1, BfvEvaluationKeyRefreshTranscriptV1, DecryptionAuthorityPolicyV1,
+        DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
         SoraAppInfraManifestV1, SoraDeploymentBundleV1, SoraHfResourceProfileV1,
         SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
         SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBundleV1,
+        SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheInputAdmissionProofV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -338,6 +338,9 @@ pub struct MutateSoracloudState {
     pub encryption: SoraStateEncryptionV1,
     /// Governance transaction hash attached to the mutation.
     pub governance_tx_hash: Hash,
+    /// Optional verifier-backed proof admitting FHE ciphertext input metadata.
+    #[norito(default)]
+    pub fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
     /// Provenance attestation over the mutation payload.
     pub provenance: ManifestProvenance,
 }
@@ -369,6 +372,8 @@ pub struct RunSoracloudFheJob {
     pub param_set: FheParamSetV1,
     /// Public evaluation keys used for homomorphic execution.
     pub evaluation_keys: BfvEvaluationKeyBundle,
+    /// Public deterministic refresh transcript inventory for evaluation keys.
+    pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     /// Governance transaction hash attached to the job.
     pub governance_tx_hash: Hash,
     /// Provenance attestation over the job payload.
@@ -1551,6 +1556,7 @@ impl_soracloud_decode_from_slice!(MutateSoracloudState {
     value_payload: Option<Vec<u8>>,
     encryption: SoraStateEncryptionV1,
     governance_tx_hash: Hash,
+    fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
     provenance: ManifestProvenance,
 });
 
@@ -1561,6 +1567,7 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
+    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
 });

@@ -28,7 +28,10 @@ npx --yes "solc@$SOLC_VERSION" --bin --base-path . -o "$WORK_DIR/solc-bin" \
   contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol \
   contracts/tron/sccp/SccpTronSourceBridge.sol \
   contracts/tron/sccp/TairaXOR.sol \
-  contracts/tron/sccp/TairaXorSccpBridge.sol
+  contracts/tron/sccp/TairaXorSccpBridge.sol \
+  contracts/bsc/sccp/SccpBscSourceBridge.sol \
+  contracts/bsc/sccp/TairaXOR.sol \
+  contracts/bsc/sccp/TairaXorBscSccpBridge.sol
 
 npm --prefix "$WORK_DIR" install --no-save --no-package-lock --loglevel=error \
   "solc@$SOLC_VERSION" \

@@ -13,7 +13,7 @@ use iroha_config::parameters::actual::{
     DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry, Network as NetworkConfig,
     RestrictedPublicPayload, TransactionGossiper as Config,
 };
-use iroha_crypto::{HashOf, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     ChainId, DataSpaceId,
     account::AccountId,
@@ -75,6 +75,7 @@ const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
 const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
+const TX_GOSSIP_FRAME_PROBE_KEY_SEED: &[u8] = b"iroha:tx-gossip-frame-probe:v1";
 
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
@@ -95,7 +96,7 @@ fn tx_gossip_frame_payload_cap(
     if plaintext_cap == 0 {
         return 0;
     }
-    let dummy_keypair = KeyPair::random();
+    let dummy_keypair = tx_gossip_frame_probe_keypair();
     let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
     let dummy_signed =
         iroha_data_model::transaction::TransactionBuilder::new(chain_id.clone(), dummy_authority)
@@ -133,6 +134,11 @@ fn tx_gossip_frame_payload_cap(
     );
     let envelope_len = direct_len.max(broadcast_len).saturating_sub(gossip_len);
     plaintext_cap.saturating_sub(envelope_len)
+}
+
+fn tx_gossip_frame_probe_keypair() -> KeyPair {
+    KeyPair::try_from_seed(TX_GOSSIP_FRAME_PROBE_KEY_SEED.to_vec(), Algorithm::Ed25519)
+        .expect("fixed transaction gossip frame probe Ed25519 seed must derive")
 }
 
 fn splitmix64(mut state: u64) -> u64 {
@@ -308,10 +314,23 @@ impl TransactionGossiper {
     ) -> Self {
         let now = Instant::now();
         let dataspace_cfg = dataspace;
-        let public_seed =
-            GossipTargetSeed::new(rand::random(), dataspace_cfg.public_target_reshuffle, now);
+        let public_seed = GossipTargetSeed::new(
+            Self::initial_target_seed(
+                &chain_id,
+                &self_peer_id,
+                &max_peer_id,
+                GOSSIP_SEED_PUBLIC_DOMAIN,
+            ),
+            dataspace_cfg.public_target_reshuffle,
+            now,
+        );
         let restricted_seed = GossipTargetSeed::new(
-            rand::random(),
+            Self::initial_target_seed(
+                &chain_id,
+                &self_peer_id,
+                &max_peer_id,
+                GOSSIP_SEED_RESTRICTED_DOMAIN,
+            ),
             dataspace_cfg.restricted_target_reshuffle,
             now,
         );
@@ -1150,6 +1169,21 @@ impl TransactionGossiper {
 
     fn seed_for_plane(seed: u64, dataspace_id: DataSpaceId, domain: u64) -> u64 {
         splitmix64(seed ^ dataspace_id.as_u64() ^ domain)
+    }
+
+    fn initial_target_seed(
+        chain_id: &ChainId,
+        self_peer_id: &PeerId,
+        max_peer_id: &PeerId,
+        domain: u64,
+    ) -> u64 {
+        let material = format!(
+            "iroha:tx-gossip-target-seed:v1\n{domain:016x}\n{chain_id}\n{self_peer_id}\n{max_peer_id}"
+        );
+        let digest = Hash::new(material.as_bytes());
+        let mut seed = [0_u8; 8];
+        seed.copy_from_slice(&digest.as_ref()[..8]);
+        u64::from_le_bytes(seed)
     }
 
     /// Deterministically shuffle targets by seed and return a capped subset.
@@ -3252,8 +3286,8 @@ mod tests {
     use iroha_crypto::{
         Algorithm, BfvEvaluationKeyBundle, BfvParameters, KeyPair, RamLfeBackend,
         RamLfeVerificationMode, bfv_programmed_policy_commitment_with_program,
-        bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
-        derive_identifier_key_material_from_seed, ram_lfe_bfv_parameters_v1,
+        default_bfv_programmed_hidden_program, derive_identifier_key_material_from_seed,
+        ram_lfe_bfv_parameters_v1, try_bfv_programmed_public_parameters_with_program,
     };
     use iroha_data_model::{
         ChainId, DataSpaceId, Level,
@@ -3399,13 +3433,14 @@ mod tests {
             galois_keys: Vec::new(),
             bootstrap_key: None,
         };
-        let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+        let programmed_public_parameters = try_bfv_programmed_public_parameters_with_program(
             public_parameters,
             evaluation_keys,
             &hidden_program,
             RamLfeVerificationMode::Signed,
             None,
-        );
+        )
+        .expect("build programmed BFV public parameters");
         let encoded_public_parameters =
             norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
         let commitment = bfv_programmed_policy_commitment_with_program(
@@ -3642,6 +3677,18 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
             restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
         }
+    }
+
+    #[test]
+    fn tx_gossip_frame_probe_keypair_uses_checked_ed25519_derivation() {
+        let keypair = tx_gossip_frame_probe_keypair();
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("checked probe public key algorithm"),
+            Algorithm::Ed25519
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -4679,6 +4726,51 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             GOSSIP_SEED_PUBLIC_DOMAIN,
         );
         assert_ne!(first, second, "dataspace should perturb the gossip seed");
+    }
+
+    #[test]
+    fn initial_target_seed_is_stable_and_peer_specific() {
+        let chain_id: ChainId = "test-chain".parse().expect("chain id");
+        let self_peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let other_peer: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let max_peer: PeerId = (*CARPENTER_KEYPAIR).public_key().clone().into();
+
+        let seed = TransactionGossiper::initial_target_seed(
+            &chain_id,
+            &self_peer,
+            &max_peer,
+            GOSSIP_SEED_PUBLIC_DOMAIN,
+        );
+        assert_eq!(
+            seed,
+            TransactionGossiper::initial_target_seed(
+                &chain_id,
+                &self_peer,
+                &max_peer,
+                GOSSIP_SEED_PUBLIC_DOMAIN,
+            ),
+            "initial target seed should be stable for the same identity inputs"
+        );
+        assert_ne!(
+            seed,
+            TransactionGossiper::initial_target_seed(
+                &chain_id,
+                &self_peer,
+                &max_peer,
+                GOSSIP_SEED_RESTRICTED_DOMAIN,
+            ),
+            "public and restricted gossip planes should start from distinct seeds"
+        );
+        assert_ne!(
+            seed,
+            TransactionGossiper::initial_target_seed(
+                &chain_id,
+                &other_peer,
+                &max_peer,
+                GOSSIP_SEED_PUBLIC_DOMAIN,
+            ),
+            "local peer identity should perturb initial target seed"
+        );
     }
 
     #[test]

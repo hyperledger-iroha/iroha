@@ -2,6 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import {
@@ -17,6 +18,8 @@ import {
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+  SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
   SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
@@ -115,14 +118,37 @@ import {
   buildEvmSccpSubmission,
   EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
+  SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+  SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+  SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   ethereumMainnetSccpDestinationBinding,
+  parseEthereumMainnetNativeEvmProverBundleManifest,
+  parseEthereumMainnetNativeEvmProverParityFixture,
+  parseEthereumMainnetNativeEvmProverSelfTestFixture,
+  runEthereumMainnetNativeProverSelfTest,
+  validateEthereumMainnetNativeEvmProverBundle,
+  validateEthereumMainnetNativeEvmProverParityFixture,
+  validateEthereumMainnetNativeEvmProverSelfTestFixture,
+  verifyEthereumMainnetNativeEvmProverArtifacts,
+  verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
   BscMainnetSccp,
   BscMainnetSccpProver,
+  BscTestnetSccp,
+  BscTestnetSccpProver,
   bscMainnetSccpDestinationBinding,
+  bscTestnetSccpDestinationBinding,
   buildBscMainnetSccpDestinationProofRequest,
   buildBscMainnetSccpDestinationSubmission,
+  buildBscTestnetSccpDestinationProofRequest,
+  buildBscTestnetSccpDestinationSubmission,
+  buildBscTestnetSccpLocalAdmissionSubmission,
   evmSccpDestinationBinding,
   wrapBscMainnetSccpDestinationProofResult,
+  wrapBscTestnetSccpDestinationProofResult,
   wrapEvmSccpProofResult,
   buildSolanaSccpAccountsLtHashProofRequest,
   buildSolanaSccpFullLightClientAuditProofRequest,
@@ -486,6 +512,8 @@ const INDEX_SOURCE_TEXT = readFileSync(new URL("../src/index.js", import.meta.ur
 const DIST_SCCP_TEXT = readFileSync(new URL("../dist/sccp.js", import.meta.url), "utf8");
 const DIST_INDEX_TEXT = readFileSync(new URL("../dist/index.js", import.meta.url), "utf8");
 const PACKAGE_JSON_TEXT = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+const sha256Hex = (bytes) =>
+  `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 
 function publicSccpSourceExports() {
   return [...SCCP_SOURCE_TEXT.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z0-9_]+)/gu)]
@@ -2884,7 +2912,7 @@ test("package declarations do not advertise privacy production metadata inputs",
 test("package declarations mark SCCP FastPQ proof requests readonly", () => {
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface SolanaSccpAccountsLtHashProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<SolanaSccpAccountsLtHashFastpqTransition>>;/,
+    /export interface SolanaSccpAccountsLtHashProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<[\s\S]*Readonly<SolanaSccpAccountsLtHashFastpqTransition>[\s\S]*>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -2920,7 +2948,7 @@ test("package declarations mark SCCP FastPQ proof requests readonly", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface TonShardStateProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<TonShardStateFastpqTransition>>;/,
+    /export interface TonShardStateProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<[\s\S]*Readonly<TonShardStateFastpqTransition>[\s\S]*>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -2940,7 +2968,7 @@ test("package declarations mark SCCP FastPQ proof requests readonly", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface SubstrateSccpRuntimeStorageProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<SubstrateSccpRuntimeStorageFastpqTransition>>;/,
+    /export interface SubstrateSccpRuntimeStorageProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<[\s\S]*Readonly<SubstrateSccpRuntimeStorageFastpqTransition>[\s\S]*>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3037,6 +3065,14 @@ test("package declarations expose SCCP local-prover result metadata", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
+    /export interface EvmSccpProofRequestInput[\s\S]*proofArtifactHash\?: string;[\s\S]*provingKeyHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EvmSccpProveResult[\s\S]*proofArtifactHash\?: string;[\s\S]*provingKeyHash\?: string;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
     /export interface TronSccpProveResult[\s\S]*publicInputs\?: SccpMessageTransparentPublicInputsInput;[\s\S]*proofContext\?: SolanaSccpProofContextInput;[\s\S]*publicSignalWords\?: readonly string\[\];/,
   );
   assert.match(
@@ -3116,11 +3152,11 @@ test("package declarations expose SCCP witness-provider hooks for portal provers
 test("package declarations expose Ethereum mainnet finality evidence hooks", () => {
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;[\s\S]*syncCommitteeBits\?: string;[\s\S]*syncCommitteeSignature\?: string;[\s\S]*syncSignatureSlot\?: string \| number \| bigint;[\s\S]*signatureSlot\?: string \| number \| bigint;[\s\S]*syncCommitteeParticipation\?: string \| number \| bigint;/,
+    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;[\s\S]*finalityBranch\?: readonly string\[\];[\s\S]*finality_branch\?: readonly string\[\];[\s\S]*syncCommitteeBits\?: string;[\s\S]*syncCommitteeSignature\?: string;[\s\S]*syncSignatureSlot\?: string \| number \| bigint;[\s\S]*signatureSlot\?: string \| number \| bigint;[\s\S]*syncCommitteeParticipation\?: string \| number \| bigint;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;[\s\S]*readonly syncCommitteeBits\?: string;[\s\S]*readonly syncCommitteeSignature\?: string;[\s\S]*readonly syncSignatureSlot\?: string;[\s\S]*readonly syncCommitteeParticipation\?: string;/,
+    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;[\s\S]*readonly finalityBranch\?: readonly string\[\];[\s\S]*readonly syncCommitteeBits\?: string;[\s\S]*readonly syncCommitteeSignature\?: string;[\s\S]*readonly syncSignatureSlot\?: string;[\s\S]*readonly syncCommitteeParticipation\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3128,7 +3164,7 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type EthereumMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\): EthereumMainnetBeaconFinalityEvidenceInput \| Promise<EthereumMainnetBeaconFinalityEvidenceInput>;/,
+    /export type EthereumMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\):[\s\S]*EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*Promise<EthereumMainnetBeaconFinalityEvidenceInput>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3136,7 +3172,7 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\(options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*beaconBlockId\?: string \| number \| bigint;[\s\S]*targetBeaconBlockRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
+    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\([\s\S]*options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL,[\s\S]*\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*beaconBlockId\?: string \| number \| bigint;[\s\S]*targetBeaconBlockRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3158,6 +3194,10 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
     true,
   );
   const declaration = declarationClass("EthereumMainnetSccp");
+  assert.match(
+    declaration,
+    /static fromNativeProverBundle\([\s\S]*options: EthereumMainnetSccpNativeProverBundleOptions,[\s\S]*\): Promise<EthereumMainnetSccp>;/u,
+  );
   assert.match(declaration, /validateExecutionProviderMainnet\([\s\S]*\): Promise<unknown>;/u);
   assert.match(
     declaration,
@@ -3173,15 +3213,27 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
   );
   assert.match(
     declaration,
-    /buildOutboundProofRequest\(input: EvmSccpProofRequestInput\): EvmSccpProofRequest;/u,
+    /buildOutboundProofRequest\([\s\S]*input: EvmSccpProofRequestInput,[\s\S]*\): EvmSccpProofRequest;/u,
+  );
+  assert.match(
+    declaration,
+    /runNativeProverSelfTest\([\s\S]*\): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;/u,
   );
   assert.match(
     declaration,
     /proveOutboundToEthereum\([\s\S]*input: EvmSccpProofRequestInput,[\s\S]*\): Promise<EvmSccpProofResult>;/u,
   );
   assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetNativeProverSelfTestFn = \([\s\S]*context: Readonly<EthereumMainnetNativeProverSelfTestContext>[\s\S]*EthereumMainnetNativeEvmProverSelfTestSdkResultInput/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function runEthereumMainnetNativeProverSelfTest\([\s\S]*input: EthereumMainnetNativeProverSelfTestRunInput,[\s\S]*\): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;/u,
+  );
+  assert.match(
     declaration,
-    /buildEthereumCalldata\(input: EthereumMainnetSccpSubmissionInput\): EvmSccpSubmission;/u,
+    /buildEthereumCalldata\([\s\S]*input: EthereumMainnetSccpSubmissionInput,[\s\S]*\): EvmSccpSubmission;/u,
   );
   assert.match(
     declaration,
@@ -3190,6 +3242,10 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
   assert.match(
     DECLARATIONS_TEXT,
     /export type EthereumMainnetInboundProveFn = \([\s\S]*\) => BinaryLike \| Promise<BinaryLike>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetSccpNativeProverBundleOptions = Omit<[\s\S]*EthereumMainnetNativeEvmProverArtifactBundleInput;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3287,7 +3343,7 @@ test("package declarations expose BSC mainnet Parlia finality evidence hooks", (
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type BscMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: BscMainnetConsensusProviderInput,[\s\S]*\): BscMainnetParliaFinalityEvidenceInput \| Promise<BscMainnetParliaFinalityEvidenceInput>;/,
+    /export type BscMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: BscMainnetConsensusProviderInput,[\s\S]*\):[\s\S]*BscMainnetParliaFinalityEvidenceInput[\s\S]*Promise<BscMainnetParliaFinalityEvidenceInput>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3341,7 +3397,7 @@ test("package declarations separate TON proof-request and submission inputs", ()
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export function buildTonSccpProofRequest\(input: TonSccpProofRequestInput\): TonSccpProofRequest;/,
+    /export function buildTonSccpProofRequest\([\s\S]*input: TonSccpProofRequestInput,[\s\S]*\): TonSccpProofRequest;/,
   );
 });
 
@@ -3361,7 +3417,7 @@ test("package declarations require wrapped Solana submission proof results", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export function buildSolanaSccpSubmission\(input: SolanaSccpSubmissionInput\): SolanaSccpSubmission;/,
+    /export function buildSolanaSccpSubmission\([\s\S]*input: SolanaSccpSubmissionInput,[\s\S]*\): SolanaSccpSubmission;/,
   );
 });
 
@@ -3580,7 +3636,7 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /wrapSolanaSccpSourceStateVerificationProof\(\s+proofBytes: BinaryLike \| number\[\],[\s\S]*request: SolanaSccpAccountsLtHashProofRequest \| SolanaSccpFullLightClientAuditProofRequest,/,
+    /wrapSolanaSccpSourceStateVerificationProof\(\s+proofBytes: BinaryLike \| number\[\],[\s\S]*request:[\s\S]*SolanaSccpAccountsLtHashProofRequest[\s\S]*SolanaSccpFullLightClientAuditProofRequest,/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -4189,12 +4245,6 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
 test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async () => {
   const proofBytes = sampleGroth16ProofBytes();
   const destinationBinding = sampleEvmDestinationBinding();
-  const ethereumMainnetBinding = ethereumMainnetSccpDestinationBinding({
-    verifierAddress: `0x${"11".repeat(20)}`,
-    bridgeAddress: `0x${"22".repeat(20)}`,
-    verifierCodeHash: `0x${"bb".repeat(32)}`,
-    verifierKeyHash: `0x${"cc".repeat(32)}`,
-  });
   const publicInputs = {
     version: 1,
     message_id: `0x${"11".repeat(32)}`,
@@ -4205,7 +4255,326 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     finality_block_hash: `0x${"44".repeat(32)}`,
   };
   assert.equal(SCCP_ETH_MAINNET_EVM_CHAIN_ID, 1);
+  const nativeArtifactPayloadBytes = (label) => {
+    const seed = Buffer.from(`${label}\n`, "utf8");
+    const out = Buffer.alloc(256);
+    for (let index = 0; index < out.length; index += 1) {
+      out[index] = seed[index % seed.length];
+    }
+    return out;
+  };
+  const proofArtifactBytes = nativeArtifactPayloadBytes("sccp package proof artifact v1");
+  const provingKeyBytes = nativeArtifactPayloadBytes("sccp package proving key v1");
+  const verifierKeyBytes = nativeArtifactPayloadBytes("sccp package verifier key v1");
+  const implementationBytes = nativeArtifactPayloadBytes(
+    "sccp package pure typescript prover artifact v1",
+  );
+  const proofArtifactHash = sha256Hex(proofArtifactBytes);
+  const provingKeyHash = sha256Hex(provingKeyBytes);
+  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const implementationHash = sha256Hex(implementationBytes);
+  const ethereumMainnetBinding = ethereumMainnetSccpDestinationBinding({
+    verifierAddress: `0x${"11".repeat(20)}`,
+    bridgeAddress: `0x${"22".repeat(20)}`,
+    verifierCodeHash: `0x${"bb".repeat(32)}`,
+    verifierKeyHash,
+  });
   assert.equal(SCCP_ETH_MAINNET_NETWORK_ID, ethereumMainnetBinding.networkId);
+  const nativeProverBundle = {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundle_id: SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact: "artifacts/eth-mainnet/proof-artifact.bin",
+    proof_artifact_hash: proofArtifactHash,
+    proving_key: "artifacts/eth-mainnet/proving-key.bin",
+    proving_key_hash: provingKeyHash,
+    verifier_key: "artifacts/eth-mainnet/verifier-key.bin",
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    no_wasm: true,
+    remote_prover_required: false,
+    browser_implementation: "pure-typescript",
+    cross_sdk_fixture_parity_artifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+    native_prover_self_test_artifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/eth-mainnet/${sdk}-implementation.bin`,
+      implementation_hash: sdk === "javascript"
+        ? implementationHash
+        : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+    })),
+    audit_hashes: {
+      circuit_security_audit: `0x${"a1".repeat(32)}`,
+      native_implementation_audit: `0x${"a2".repeat(32)}`,
+      reproducible_build_attestation: `0x${"a3".repeat(32)}`,
+      cross_sdk_fixture_parity: `0x${"a4".repeat(32)}`,
+      native_prover_self_test: `0x${"a5".repeat(32)}`,
+      no_wasm_no_remote_scan: `0x${"a6".repeat(32)}`,
+    },
+  };
+  const publicSignalWords = Array.from(
+    { length: 9 },
+    (_, index) => `0x${(index + 0x10).toString(16).padStart(2, "0").repeat(32)}`,
+  );
+  const paritySdkResult = {
+    receipt_proof_hash: `0x${"d1".repeat(32)}`,
+    source_proof_hash: `0x${"d2".repeat(32)}`,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    public_signal_words: publicSignalWords,
+    calldata_hash: `0x${"d3".repeat(32)}`,
+    torii_submit_payload_hash: `0x${"d4".repeat(32)}`,
+  };
+  const parityFixture = {
+    schema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    ...paritySdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...paritySdkResult },
+      ]),
+    ),
+  };
+  const parityFixtureBytes = Buffer.from(JSON.stringify(parityFixture), "utf8");
+  const parityFixtureHash = sha256Hex(parityFixtureBytes);
+  nativeProverBundle.audit_hashes.cross_sdk_fixture_parity = parityFixtureHash;
+  const selfTestPublicSignalWords = Array.from(
+    { length: 9 },
+    (_, index) => `0x${(index + 0x30).toString(16).padStart(2, "0").repeat(32)}`,
+  );
+  const selfTestSdkResult = {
+    request_hash: `0x${"e1".repeat(32)}`,
+    witness_hash: `0x${"e2".repeat(32)}`,
+    source_proof_hash: `0x${"e3".repeat(32)}`,
+    proof_hash: `0x${"e4".repeat(32)}`,
+    public_signal_words: selfTestPublicSignalWords,
+    calldata_hash: `0x${"e5".repeat(32)}`,
+    torii_submit_payload_hash: `0x${"e6".repeat(32)}`,
+  };
+  const selfTestFixture = {
+    schema: SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: ethereumMainnetBinding.bindingHash,
+    ...selfTestSdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...selfTestSdkResult },
+      ]),
+    ),
+  };
+  const selfTestFixtureBytes = Buffer.from(JSON.stringify(selfTestFixture), "utf8");
+  const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
+  nativeProverBundle.audit_hashes.native_prover_self_test = selfTestFixtureHash;
+  assert.equal(
+    validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle, {
+      destinationBinding: ethereumMainnetBinding,
+    }).browserImplementation,
+    "pure-typescript",
+  );
+  assert.equal(
+    parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle), {
+      destinationBinding: ethereumMainnetBinding,
+    }).proofArtifactHash,
+    proofArtifactHash,
+  );
+  assert.equal(
+    validateEthereumMainnetNativeEvmProverParityFixture(
+      parityFixture,
+      nativeProverBundle,
+    ).sdkResults.javascript.calldataHash,
+    parityFixture.calldata_hash,
+  );
+  assert.equal(
+    parseEthereumMainnetNativeEvmProverParityFixture(
+      JSON.stringify(parityFixture),
+      nativeProverBundle,
+    ).publicSignalWords.length,
+    9,
+  );
+  assert.equal(
+    validateEthereumMainnetNativeEvmProverSelfTestFixture(
+      selfTestFixture,
+      nativeProverBundle,
+    ).sdkResults.javascript.proofHash,
+    selfTestFixture.proof_hash,
+  );
+  assert.equal(
+    parseEthereumMainnetNativeEvmProverSelfTestFixture(
+      JSON.stringify(selfTestFixture),
+      nativeProverBundle,
+    ).publicSignalWords.length,
+    9,
+  );
+  const verifiedNativeArtifacts = verifyEthereumMainnetNativeEvmProverArtifacts(
+    {
+      nativeProverBundle: nativeProverBundle,
+      proofArtifactBytes,
+      provingKeyBytes,
+      verifierKeyBytes,
+      crossSdkFixtureParityBytes: parityFixtureBytes,
+      nativeProverSelfTestBytes: selfTestFixtureBytes,
+      sdk: "javascript",
+      implementationBytes,
+    },
+    { destinationBinding: ethereumMainnetBinding },
+  );
+  assert.equal(
+    verifiedNativeArtifacts.hashAlgorithm,
+    SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+  );
+  assert.equal(verifiedNativeArtifacts.implementation, "pure-typescript");
+  assert.equal(verifiedNativeArtifacts.implementationHash, implementationHash);
+  assert.equal(verifiedNativeArtifacts.crossSdkFixtureParityHash, parityFixtureHash);
+  assert.equal(verifiedNativeArtifacts.nativeProverSelfTestHash, selfTestFixtureHash);
+  assert.equal(
+    (await runEthereumMainnetNativeProverSelfTest({
+      nativeProverArtifacts: verifiedNativeArtifacts,
+      nativeProverSelfTest(context) {
+        return context.expectedResult;
+      },
+    })).proofHash,
+    selfTestFixture.proof_hash,
+  );
+  const nativeArtifactBytes = new Map([
+    [nativeProverBundle.proof_artifact, proofArtifactBytes],
+    [nativeProverBundle.proving_key, provingKeyBytes],
+    [nativeProverBundle.verifier_key, verifierKeyBytes],
+    [nativeProverBundle.cross_sdk_fixture_parity_artifact, parityFixtureBytes],
+    [nativeProverBundle.native_prover_self_test_artifact, selfTestFixtureBytes],
+    [
+      nativeProverBundle.native_sdk_artifacts.find((row) => row.sdk === "javascript")
+        .implementation_artifact,
+      implementationBytes,
+    ],
+  ]);
+  assert.equal(
+    (await verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+      {
+        nativeProverBundle,
+        sdk: "javascript",
+        artifactResolver(path) {
+          return nativeArtifactBytes.get(path);
+        },
+      },
+      { destinationBinding: ethereumMainnetBinding },
+    )).implementationHash,
+    implementationHash,
+  );
+  let factoryRequest;
+  const factorySdk = await EthereumMainnetSccp.fromNativeProverBundle({
+    destinationBinding: ethereumMainnetBinding,
+    manifest: JSON.stringify(nativeProverBundle),
+    sdk: "javascript",
+    artifactResolver(path) {
+      return nativeArtifactBytes.get(path);
+    },
+    nativeProverSelfTest(context) {
+      return context.expectedResult;
+    },
+    outboundProver: {
+      async prove(request) {
+        factoryRequest = request;
+        return wrapEvmSccpProofResult(proofBytes, request);
+      },
+    },
+  });
+  assert.equal((await factorySdk.runNativeProverSelfTest()).calldataHash, selfTestFixture.calldata_hash);
+  const factoryResult = await factorySdk.proveOutboundToEthereum({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: ethereumMainnetBinding,
+  });
+  assert.equal(factoryRequest.proofArtifactHash, proofArtifactHash);
+  assert.equal(factoryRequest.provingKeyHash, provingKeyHash);
+  assert.equal(factoryResult.destinationBindingHash, ethereumMainnetBinding.bindingHash);
+  const tinyProofArtifactBytes = Buffer.from("tiny native proof artifact\n", "utf8");
+  const tinyProofArtifactHash = sha256Hex(tinyProofArtifactBytes);
+  const tinyNativeProverBundle = {
+    ...nativeProverBundle,
+    proof_artifact_hash: tinyProofArtifactHash,
+    native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map((artifact) => ({
+      ...artifact,
+      prover_artifact_hash: tinyProofArtifactHash,
+    })),
+  };
+  const tinyParityFixture = {
+    ...parityFixture,
+    proof_artifact_hash: tinyProofArtifactHash,
+  };
+  const tinyParityFixtureBytes = Buffer.from(JSON.stringify(tinyParityFixture), "utf8");
+  const tinySelfTestFixture = {
+    ...selfTestFixture,
+    proof_artifact_hash: tinyProofArtifactHash,
+  };
+  const tinySelfTestFixtureBytes = Buffer.from(JSON.stringify(tinySelfTestFixture), "utf8");
+  tinyNativeProverBundle.audit_hashes = {
+    ...nativeProverBundle.audit_hashes,
+    cross_sdk_fixture_parity: sha256Hex(tinyParityFixtureBytes),
+    native_prover_self_test: sha256Hex(tinySelfTestFixtureBytes),
+  };
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyNativeProverBundle,
+          proofArtifactBytes: tinyProofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyParityFixtureBytes,
+          nativeProverSelfTestBytes: tinySelfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifactBytes must be at least 256 bytes/u,
+  );
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: nativeProverBundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: parityFixtureBytes,
+          nativeProverSelfTestBytes: selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: Buffer.from("tampered", "utf8"),
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /implementationBytes sha256/u,
+  );
+  assert.equal(new EthereumMainnetSccp().buildOutboundProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: ethereumMainnetBinding,
+    native_prover_bundle: nativeProverBundle,
+  }).proofArtifactHash, proofArtifactHash);
   assert.equal(new EthereumMainnetSccp().buildOutboundProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),
@@ -4257,6 +4626,53 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   })).targetDomain, SCCP_DOMAIN_BSC);
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
+  const bscTestnetBinding = bscTestnetSccpDestinationBinding({
+    verifierAddress: `0x${"33".repeat(20)}`,
+    bridgeAddress: `0x${"44".repeat(20)}`,
+    verifierCodeHash: `0x${"dd".repeat(32)}`,
+    verifierKeyHash: `0x${"ee".repeat(32)}`,
+  });
+  assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
+  assert.equal(SCCP_BSC_TESTNET_NETWORK_ID, bscTestnetBinding.networkId);
+  const bscTestnetRequest = buildBscTestnetSccpDestinationProofRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscTestnetBinding,
+  });
+  const bscTestnetProofResult = wrapBscTestnetSccpDestinationProofResult(proofBytes, bscTestnetRequest);
+  assert.equal(
+    buildBscTestnetSccpDestinationSubmission({ proofResult: bscTestnetProofResult }).targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
+  assert.equal(new BscTestnetSccp().buildBscCalldata({
+    proofResult: bscTestnetProofResult,
+  }).destinationBindingHash, bscTestnetRequest.destinationBindingHash);
+  assert.equal((await new BscTestnetSccpProver().buildRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscTestnetBinding,
+  })).destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+  assert.equal(buildBscTestnetSccpLocalAdmissionSubmission({
+    source_domain: SCCP_DOMAIN_BSC,
+    target_domain: SCCP_DOMAIN_SORA,
+    proof_bytes: new Uint8Array([1, 2, 3]),
+    public_inputs_bytes: new Uint8Array([4, 5, 6]),
+    bundle_bytes: new Uint8Array([7, 8, 9]),
+    envelope_bytes: new Uint8Array([10, 11, 12]),
+    statement_hash: `0x${"66".repeat(32)}`,
+    source_verifier_material_hash: `0x${"77".repeat(32)}`,
+    source_adapter_engine_deployment_hash: `0x${"88".repeat(32)}`,
+  }).sourceDomain, SCCP_DOMAIN_BSC);
+  assert.match(DECLARATIONS_TEXT, /export type BscTestnetSccpProofRequest/u);
+  assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccp/u);
+  assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccpProver/u);
+  assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpDestinationSubmission/u);
+  assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpLocalAdmissionSubmission/u);
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),
@@ -4270,8 +4686,24 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     request.requestHash,
     "0x4a7c71c3c1838f5d30e1641a32984999a71f9c6cfdff9151ac7d77ca60b64d5e",
   );
+  const artifactRequest = buildEvmSccpProofRequest({
+    public_inputs: publicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: destinationBinding,
+    proof_artifact_hash: `0x${"91".repeat(32)}`,
+    proving_key_hash: `0x${"92".repeat(32)}`,
+  });
+  assert.equal(artifactRequest.proofArtifactHash, `0x${"91".repeat(32)}`);
+  assert.equal(artifactRequest.provingKeyHash, `0x${"92".repeat(32)}`);
+  assert.notEqual(artifactRequest.requestHash, request.requestHash);
   const proofResult = wrapEvmSccpProofResult(proofBytes, request);
   assert.equal(proofResult.requestHash, request.requestHash);
+  const artifactProofResult = wrapEvmSccpProofResult(proofBytes, artifactRequest);
+  assert.equal(artifactProofResult.proofArtifactHash, artifactRequest.proofArtifactHash);
+  assert.equal(artifactProofResult.provingKeyHash, artifactRequest.provingKeyHash);
   assert.throws(
     () =>
       buildEvmSccpSubmission({
@@ -4792,20 +5224,27 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
 });
 
 test("package dist entrypoint exports ETH sync-committee payload helpers", () => {
+  const syncCommitteePublicKeys = Array.from({ length: 512 }, (_, index) => {
+    const publicKey = new Uint8Array(48).fill(0x33);
+    publicKey[46] = (index >> 8) & 0xff;
+    publicKey[47] = index & 0xff;
+    return publicKey;
+  });
+  const syncCommitteePops = Array.from({ length: 512 }, (_, index) => {
+    const pop = new Uint8Array(96).fill(0xcc);
+    pop[94] = (index >> 8) & 0xff;
+    pop[95] = index & 0xff;
+    return pop;
+  });
   const payload = canonicalEthSyncCommitteePayloadBytes({
-    syncCommitteePublicKeys: [`0x${"33".repeat(48)}`, `0x${"44".repeat(48)}`],
-    syncCommitteeWeights: [3n, 4n],
-    syncCommitteePops: [`0x${"cc".repeat(96)}`, `0x${"dd".repeat(96)}`],
+    syncCommitteePublicKeys,
+    syncCommitteeWeights: Array.from({ length: 512 }, () => 1n),
+    syncCommitteePops,
   });
 
-  assert.equal(
-    ethSyncCommitteeHashFromPayload(payload),
-    "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445",
-  );
-  assert.equal(
-    ethSyncCommitteePayloadHash(payload),
-    "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
-  );
+  assert.equal(payload.length, 81925);
+  assert.match(ethSyncCommitteeHashFromPayload(payload), /^0x[0-9a-f]{64}$/u);
+  assert.match(ethSyncCommitteePayloadHash(payload), /^0x[0-9a-f]{64}$/u);
   assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
   assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);

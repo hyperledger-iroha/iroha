@@ -15,9 +15,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::name::Name;
 use iroha_data_model::{
     account::{AccountId, address},
-    isi::{
-        Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload,
-    },
+    isi::{Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload},
     metadata::Metadata,
     prelude::*,
     transaction::signed::{TransactionPayload, TransactionSignature},
@@ -40,7 +38,10 @@ use iroha_primitives::json::Json;
 use norito::codec::{Decode, Encode};
 use norito::json::{self, Map, Number, Value};
 #[cfg(test)]
-use {iroha_data_model::domain::DomainId, iroha_data_model::domain::Domain, iroha_data_model::isi::Register};
+use {
+    iroha_data_model::domain::Domain, iroha_data_model::domain::DomainId,
+    iroha_data_model::isi::Register,
+};
 
 const DEFAULT_FIXTURES_PATH: &str =
     "java/iroha_android/src/test/resources/transaction_payloads.json";
@@ -114,7 +115,9 @@ fn run(args: Args) -> Result<()> {
 
 fn signing_keypair() -> Result<KeyPair> {
     let seed = hex::decode(SIGNING_SEED_HEX).context("invalid signing seed hex")?;
-    Ok(KeyPair::from_seed(seed, Algorithm::Ed25519))
+    KeyPair::try_from_seed(seed, Algorithm::Ed25519).map_err(|err| {
+        anyhow::anyhow!("failed to derive fixture signing Ed25519 key from fixed seed: {err}")
+    })
 }
 
 #[derive(Clone)]
@@ -199,18 +202,19 @@ impl RawFixture {
         let _chain_guard = authority_source
             .and_then(authority_chain_discriminant)
             .map(address::ChainDiscriminantGuard::enter);
-        let payload = self.payload.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("fixture '{}' missing canonical payload", self.name)
-        })?;
-        if let Some(chain_hint) = &self.chain_hint {
-            if chain_hint != &payload.chain {
-                bail!(
-                    "fixture '{}' chain mismatch: expected {}, got {}",
-                    self.name,
-                    chain_hint,
-                    payload.chain
-                );
-            }
+        let payload = self
+            .payload
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("fixture '{}' missing canonical payload", self.name))?;
+        if let Some(chain_hint) = &self.chain_hint
+            && chain_hint != &payload.chain
+        {
+            bail!(
+                "fixture '{}' chain mismatch: expected {}, got {}",
+                self.name,
+                chain_hint,
+                payload.chain
+            );
         }
         if let Some(authority_hint) = &self.authority_hint {
             let expected = normalize_authority_hint(authority_hint);
@@ -224,35 +228,35 @@ impl RawFixture {
                 );
             }
         }
-        if let Some(creation_hint) = self.creation_time_ms_hint {
-            if creation_hint != payload.creation_time_ms {
-                bail!(
-                    "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
-                    self.name,
-                    creation_hint,
-                    payload.creation_time_ms
-                );
-            }
+        if let Some(creation_hint) = self.creation_time_ms_hint
+            && creation_hint != payload.creation_time_ms
+        {
+            bail!(
+                "fixture '{}' creation_time_ms mismatch: expected {}, got {}",
+                self.name,
+                creation_hint,
+                payload.creation_time_ms
+            );
         }
-        if let Some(ttl_hint) = self.ttl_ms_hint {
-            if Some(ttl_hint) != payload.ttl_ms {
-                bail!(
-                    "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
-                    self.name,
-                    ttl_hint,
-                    payload.ttl_ms
-                );
-            }
+        if let Some(ttl_hint) = self.ttl_ms_hint
+            && Some(ttl_hint) != payload.ttl_ms
+        {
+            bail!(
+                "fixture '{}' time_to_live_ms mismatch: expected {}, got {:?}",
+                self.name,
+                ttl_hint,
+                payload.ttl_ms
+            );
         }
-        if let Some(nonce_hint) = self.nonce_hint {
-            if Some(nonce_hint) != payload.nonce {
-                bail!(
-                    "fixture '{}' nonce mismatch: expected {}, got {:?}",
-                    self.name,
-                    nonce_hint,
-                    payload.nonce
-                );
-            }
+        if let Some(nonce_hint) = self.nonce_hint
+            && Some(nonce_hint) != payload.nonce
+        {
+            bail!(
+                "fixture '{}' nonce mismatch: expected {}, got {:?}",
+                self.name,
+                nonce_hint,
+                payload.nonce
+            );
         }
 
         let builder = payload
@@ -279,38 +283,38 @@ impl RawFixture {
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = format!("{}", Hash::new(&encoded));
         let signed_hash_hex = format!("{}", Hash::new(&signed_bytes));
-        if let Some(hash_hint) = &self.payload_hash_hint {
-            if hash_hint != &payload_hash_hex {
-                if check_hints {
-                    bail!(
-                        "fixture '{}' payload_hash mismatch: expected {}, got {}",
-                        self.name,
-                        hash_hint,
-                        payload_hash_hex
-                    );
-                } else {
-                    eprintln!(
-                        "fixture '{}' payload_hash updated: {} -> {}",
-                        self.name, hash_hint, payload_hash_hex
-                    );
-                }
+        if let Some(hash_hint) = &self.payload_hash_hint
+            && hash_hint != &payload_hash_hex
+        {
+            if check_hints {
+                bail!(
+                    "fixture '{}' payload_hash mismatch: expected {}, got {}",
+                    self.name,
+                    hash_hint,
+                    payload_hash_hex
+                );
+            } else {
+                eprintln!(
+                    "fixture '{}' payload_hash updated: {} -> {}",
+                    self.name, hash_hint, payload_hash_hex
+                );
             }
         }
-        if let Some(hash_hint) = &self.signed_hash_hint {
-            if hash_hint != &signed_hash_hex {
-                if check_hints {
-                    bail!(
-                        "fixture '{}' signed_hash mismatch: expected {}, got {}",
-                        self.name,
-                        hash_hint,
-                        signed_hash_hex
-                    );
-                } else {
-                    eprintln!(
-                        "fixture '{}' signed_hash updated: {} -> {}",
-                        self.name, hash_hint, signed_hash_hex
-                    );
-                }
+        if let Some(hash_hint) = &self.signed_hash_hint
+            && hash_hint != &signed_hash_hex
+        {
+            if check_hints {
+                bail!(
+                    "fixture '{}' signed_hash mismatch: expected {}, got {}",
+                    self.name,
+                    hash_hint,
+                    signed_hash_hex
+                );
+            } else {
+                eprintln!(
+                    "fixture '{}' signed_hash updated: {} -> {}",
+                    self.name, hash_hint, signed_hash_hex
+                );
             }
         }
 
@@ -1038,6 +1042,18 @@ mod tests {
         assert_eq!(value_to_string(&Value::String("abc".into())), "abc");
         assert_eq!(value_to_string(&Value::Bool(true)), "true");
         assert_eq!(value_to_string(&Value::Null), "null");
+    }
+
+    #[test]
+    fn signing_keypair_uses_checked_ed25519_derivation() {
+        let keypair = signing_keypair().expect("fixture signing keypair");
+        assert_eq!(
+            keypair
+                .public_key()
+                .try_algorithm()
+                .expect("fixture signing public-key algorithm"),
+            Algorithm::Ed25519
+        );
     }
 
     #[test]

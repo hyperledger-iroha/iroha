@@ -31,7 +31,7 @@ use iroha_crypto::soranet::{
 use iroha_data_model::soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayId};
 use iroha_logger::info;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
-use rand::random;
+use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use thiserror::Error;
 
 use crate::{AnonymityPolicy, SORANET_BANDWIDTH_UNIT_BYTES};
@@ -1052,8 +1052,22 @@ struct GuardCacheTag {
 }
 
 impl GuardCacheTag {
-    fn generate(key: &GuardCacheKey, payload: &[u8]) -> Self {
-        let nonce: [u8; CACHE_NONCE_LEN] = random();
+    fn generate(key: &GuardCacheKey, payload: &[u8]) -> Result<Self, GuardSetPersistenceError> {
+        let mut rng = OsRng;
+        Self::generate_with_rng(key, payload, &mut rng)
+    }
+
+    fn generate_with_rng<R: TryCryptoRng>(
+        key: &GuardCacheKey,
+        payload: &[u8],
+        rng: &mut R,
+    ) -> Result<Self, GuardSetPersistenceError> {
+        let mut nonce = [0u8; CACHE_NONCE_LEN];
+        rng.try_fill_bytes(&mut nonce)
+            .map_err(|err| GuardSetPersistenceError::RandomBytes {
+                operation: "generating guard cache tag nonce",
+                message: err.to_string(),
+            })?;
         let mut hasher = Blake3Hasher::new_keyed(key.as_bytes());
         hasher.update(CACHE_TAG_LABEL);
         hasher.update(&nonce);
@@ -1061,10 +1075,10 @@ impl GuardCacheTag {
         let mac = hasher.finalize();
         let mut mac_bytes = [0u8; CACHE_TAG_LEN];
         mac_bytes.copy_from_slice(mac.as_bytes());
-        Self {
+        Ok(Self {
             nonce,
             mac: mac_bytes,
-        }
+        })
     }
 
     fn verify(&self, key: &GuardCacheKey, payload: &[u8]) -> bool {
@@ -1155,7 +1169,7 @@ impl GuardSet {
         };
         if let Some(key) = key {
             let payload = to_bytes(&persist).map_err(GuardSetPersistenceError::Encode)?;
-            let tag = GuardCacheTag::generate(key, &payload);
+            let tag = GuardCacheTag::generate(key, &payload)?;
             persist.cache_tag_hex = Some(tag.to_hex());
         }
         to_bytes(&persist).map_err(GuardSetPersistenceError::Encode)
@@ -1786,6 +1800,14 @@ pub enum GuardSetPersistenceError {
         expected: usize,
         /// Actual number of characters received.
         actual: usize,
+    },
+    /// Random byte generation failed while persisting a guard set.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
     },
 }
 
@@ -2505,12 +2527,42 @@ mod tests {
         soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1},
     };
     use iroha_primitives::numeric::Numeric;
+    use rand::rand_core::TryRngCore;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
     use soranet_pq::{
         MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
     };
 
     use super::*;
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing guard cache RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     fn build_directory_snapshot(
         validation_phase: CertificateValidationPhase,
@@ -3710,6 +3762,21 @@ mod tests {
         let decoded = GuardSet::decode(&bytes).expect("decode guard set");
 
         assert_eq!(decoded, guards);
+    }
+
+    #[test]
+    fn guard_cache_tag_reports_rng_failure() {
+        let key = GuardCacheKey::from_bytes([0xA5; 32]);
+        let mut rng = FailingTryRng;
+
+        match GuardCacheTag::generate_with_rng(&key, b"guard payload", &mut rng) {
+            Err(GuardSetPersistenceError::RandomBytes { operation, message }) => {
+                assert_eq!(operation, "generating guard cache tag nonce");
+                assert!(message.contains("failing guard cache RNG"));
+            }
+            Ok(_) => panic!("RNG failure must be reported"),
+            Err(other) => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

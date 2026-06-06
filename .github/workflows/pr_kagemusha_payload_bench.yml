@@ -61,6 +61,7 @@ on:
       - "javascript/iroha_js/index.d.ts"
       - "javascript/iroha_js/package.json"
       - "javascript/iroha_js/package-lock.json"
+      - "javascript/iroha_js/test/crypto.browser.test.js"
       - "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
       - "javascript/iroha_js/test/package_dist.test.js"
       - "python/iroha_python/src/iroha_python/__init__.py"

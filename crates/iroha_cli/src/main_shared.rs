@@ -408,7 +408,9 @@ trait RunContext {
         };
         validate_executable_metadata(&executable, &metadata)?;
         let client = self.client_from_config();
-        let transaction = client.build_transaction(executable, metadata);
+        let transaction = client
+            .try_build_transaction(executable, metadata)
+            .wrap_err("Failed to build transaction")?;
         let i18n = self.i18n().clone();
 
         let err_msg = if cfg!(debug_assertions) {
@@ -1085,7 +1087,11 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         Err(_)
             if !config_was_explicit && !args.machine && args.command.allows_fallback_config() =>
         {
-            fallback_config()
+            try_fallback_config().map_err(|err| {
+                Report::new(MainError::Config)
+                    .attach("failed to derive offline fallback signing key")
+                    .attach(err.to_string())
+            })?
         }
         Err(report) => {
             let mut report = report
@@ -1286,11 +1292,11 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn fallback_config() -> Config {
+fn try_fallback_config() -> Result<Config> {
     let chain = ChainId::from("offline-cli");
     let seed = vec![0u8; 32];
-    let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
+        .wrap_err("failed to derive offline fallback Ed25519 key pair")?;
     let account = AccountId::new(key_pair.public_key().clone());
     let alias_cache = AliasCachePolicy::new(
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
@@ -1302,7 +1308,7 @@ pub(crate) fn fallback_config() -> Config {
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
         Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
     );
-    Config {
+    Ok(Config {
         chain,
         account,
         account_chain_discriminant: defaults::common::chain_discriminant(),
@@ -1320,7 +1326,12 @@ pub(crate) fn fallback_config() -> Config {
         sorafs_alias_cache: alias_cache,
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: SorafsRolloutPhase::Default,
-    }
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn fallback_config() -> Config {
+    try_fallback_config().expect("offline fallback config should derive a deterministic key pair")
 }
 
 static WORKSPACE_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
@@ -3796,7 +3807,8 @@ mod multisig {
             let account = if let Some(literal) = self.account {
                 resolve_account_id(context, &literal).wrap_err("failed to resolve --account")?
             } else {
-                let generated = KeyPair::random();
+                let generated =
+                    KeyPair::try_random().wrap_err("failed to generate multisig account id")?;
                 AccountId::new(generated.public_key().clone())
             };
             let quorum =
@@ -4811,7 +4823,9 @@ mod transaction {
                         if let Some(seed) = ping_seed {
                             let _ = maybe_add_ping_nonce(&mut metadata, seed, index);
                         }
-                        let transaction = client.build_transaction([instruction], metadata);
+                        let transaction = client
+                            .try_build_transaction([instruction], metadata)
+                            .wrap_err("Failed to build ping transaction")?;
                         let submit = if no_wait {
                             client.submit_transaction(&transaction).map(|_| ())
                         } else {
@@ -5409,7 +5423,9 @@ mod trigger {
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             validate_executable_metadata(&executable, &metadata)?;
             let client = context.client_from_config();
-            let transaction = client.build_transaction(executable, metadata);
+            let transaction = client
+                .try_build_transaction(executable, metadata)
+                .wrap_err("Failed to build trigger execution transaction")?;
             let hash = transaction.hash();
             client
                 .submit_transaction(&transaction)

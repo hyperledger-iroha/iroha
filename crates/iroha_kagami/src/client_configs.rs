@@ -66,7 +66,8 @@ impl<T: Write> RunArgs<T> for Args {
 
         for name in names {
             let seed = format!("{}-{}", self.seed_prefix, name);
-            let key_pair = KeyPair::from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519);
+            let key_pair = KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
+                .wrap_err_with(|| format!("failed to derive key pair for client `{name}`"))?;
             let rendered = render_client_config(&base, &self.domain, &key_pair);
             let path = out_dir.join(format!("{name}.toml"));
             fs::write(&path, rendered)
@@ -258,7 +259,8 @@ web_login = "demo"
                 password: "secret".to_owned(),
             }),
         };
-        let key_pair = KeyPair::from_seed(b"demo-admin1".to_vec(), Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(b"demo-admin1".to_vec(), Algorithm::Ed25519)
+            .expect("seeded client key should derive");
         let rendered = render_client_config(&base, "acme.universal", &key_pair);
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
 
@@ -335,7 +337,8 @@ web_login = "demo"
             torii_url: "http://127.0.0.1:8080/".to_owned(),
             basic_auth: None,
         };
-        let key_pair = KeyPair::from_seed(b"demo-sender".to_vec(), Algorithm::Ed25519);
+        let key_pair = KeyPair::try_from_seed(b"demo-sender".to_vec(), Algorithm::Ed25519)
+            .expect("seeded client key should derive");
         let rendered = render_client_config(&base, "cbuae", &key_pair);
         let value: toml::Value = toml::from_str(&rendered).expect("parse rendered config");
 

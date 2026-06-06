@@ -55,6 +55,7 @@ pub mod proof_stream;
 #[path = "proof_stream_transport.rs"]
 pub mod proof_stream_transport;
 pub mod scoreboard;
+#[cfg(feature = "manifest")]
 pub mod streaming_verifier;
 #[cfg(feature = "cli")]
 pub mod taikai;

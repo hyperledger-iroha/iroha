@@ -14,6 +14,9 @@ contract SccpMessageBridge {
     uint32 private constant SCCP_DOMAIN_SORA = 0;
     uint32 private constant SCCP_DOMAIN_ETH = 1;
     uint32 private constant SCCP_DOMAIN_BSC = 2;
+    bytes32 private constant ETH_MAINNET_NETWORK_ID = bytes32(uint256(1));
+    bytes32 private constant BSC_MAINNET_NETWORK_ID = bytes32(uint256(56));
+    bytes32 private constant BSC_TESTNET_NETWORK_ID = bytes32(uint256(97));
     bytes32 private constant DESTINATION_BINDING_DOMAIN_SEPARATOR =
         keccak256("iroha:sccp:evm-destination-binding:v1");
     bytes32 private constant PRODUCTION_GROTH16_BACKEND_HASH =
@@ -77,6 +80,19 @@ contract SccpMessageBridge {
                 configuredTargetDomain == SCCP_DOMAIN_BSC,
             "Target domain must be ETH or BSC"
         );
+        if (configuredTargetDomain == SCCP_DOMAIN_ETH) {
+            require(
+                configuredNetworkId == ETH_MAINNET_NETWORK_ID,
+                "Network id must be ETH mainnet"
+            );
+        }
+        if (configuredTargetDomain == SCCP_DOMAIN_BSC) {
+            require(
+                configuredNetworkId == BSC_MAINNET_NETWORK_ID ||
+                    configuredNetworkId == BSC_TESTNET_NETWORK_ID,
+                "Network id must be BSC mainnet or testnet"
+            );
+        }
         require(
             configuredSourceDomain != configuredTargetDomain,
             "Source and target domains must differ"
@@ -148,6 +164,10 @@ contract SccpMessageBridge {
         require(publicInputs[3] != bytes32(0), "Commitment root is required");
         require(publicInputs[4] != bytes32(0), "Finality height is required");
         require(publicInputs[5] != bytes32(0), "Finality block hash is required");
+        require(
+            !usedMessageProofs[publicInputs[0]],
+            "Message proof already used"
+        );
 
         bytes32 bindingHash = _destinationBindingHash();
         uint32 sourceDomain;

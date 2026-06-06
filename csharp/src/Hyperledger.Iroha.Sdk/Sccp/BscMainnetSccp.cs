@@ -224,6 +224,9 @@ public static partial class BscMainnetSccp
                 32);
         }
 
+        receipt = SnapshotDictionaryOrNull(receipt);
+        block = SnapshotDictionaryOrNull(block);
+
         var parliaFinality = input.ParliaFinality;
         if (parliaFinality is null && consensusProvider is not null)
         {
@@ -248,7 +251,7 @@ public static partial class BscMainnetSccp
             normalizedParliaFinality,
             sourceEventDigest);
 
-        return input with
+        return SnapshotInboundEvidence(input with
         {
             SourceDomain = DomainBsc,
             TargetDomain = DomainSora,
@@ -260,7 +263,7 @@ public static partial class BscMainnetSccp
             ReceiptProofHash = NormalizeReceiptProofHash(receiptProof, input.ReceiptProofHash),
             SourceEventDigest = sourceEventDigest,
             SourceBridgeEmitterAddress = normalizedSourceBridgeEmitterAddress,
-        };
+        });
     }
 
     public static async ValueTask<byte[]> ProveInboundToSoraAsync(

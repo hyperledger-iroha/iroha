@@ -14,7 +14,7 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
     to_bytes,
 };
-use rand::{CryptoRng, RngCore};
+use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
@@ -938,9 +938,29 @@ pub enum MintError {
     /// Requested TTL cannot be represented as a `SystemTime` expiry.
     #[error("requested ttl {0:?} overflows system time")]
     ExpiryTimestampOverflow(Duration),
+    /// Random byte generation failed while minting the ticket.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
     /// System clock unavailable.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
+}
+
+fn fill_random<R: TryCryptoRng>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), MintError> {
+    rng.try_fill_bytes(dest)
+        .map_err(|err| MintError::RandomBytes {
+            operation,
+            message: err.to_string(),
+        })
 }
 
 /// Verify a ticket using the local `PoW` parameters.
@@ -1139,9 +1159,9 @@ pub fn record_revocation(
 /// Mint a ticket satisfying the policy, returning the serialized structure.
 ///
 /// # Errors
-/// Returns [`MintError`] when the requested TTL violates the policy constraints or if the
-/// system clock cannot be queried.
-pub fn mint_ticket<R: RngCore + CryptoRng>(
+/// Returns [`MintError`] when the requested TTL violates the policy constraints,
+/// random bytes cannot be generated, or the system clock cannot be queried.
+pub fn mint_ticket<R: TryCryptoRng>(
     params: &Parameters,
     binding: &ChallengeBinding<'_>,
     ttl: Duration,
@@ -1166,12 +1186,12 @@ pub fn mint_ticket<R: RngCore + CryptoRng>(
         .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
     let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
     let mut client_nonce = [0u8; 32];
-    rng.fill_bytes(&mut client_nonce);
+    fill_random(rng, "minting PoW client nonce", &mut client_nonce)?;
     let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
 
     loop {
         let mut solution = [0u8; 32];
-        rng.fill_bytes(&mut solution);
+        fill_random(rng, "minting PoW solution nonce", &mut solution)?;
         let digest = derive_solution_digest(&challenge, &solution);
         if leading_zero_bits_at_least(digest.as_bytes(), params.difficulty) {
             return Ok(Ticket {
@@ -1315,6 +1335,7 @@ impl fmt::Display for Parameters {
 #[cfg(test)]
 mod tests {
     use rand::SeedableRng;
+    use rand_core::{TryCryptoRng, TryRngCore};
     use tempfile::tempdir;
 
     use super::*;
@@ -1333,6 +1354,35 @@ mod tests {
     fn other_binding(descriptor: &[u8; 32]) -> ChallengeBinding<'_> {
         ChallengeBinding::new(descriptor, &RELAY_B, None)
     }
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing PoW ticket RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     fn signed_ticket_with_expiry(expires_at: u64, signature_byte: u8) -> SignedTicket {
         SignedTicket {
@@ -1507,6 +1557,27 @@ mod tests {
             verify_err,
             Error::ExpiryWindowTooSmall(Duration::MAX)
         ));
+    }
+
+    #[test]
+    fn mint_ticket_reports_rng_failure() {
+        let descriptor = [0xAB; 32];
+        let binding = binding(&descriptor);
+        let mut rng = FailingTryRng;
+
+        let err = mint_ticket(&params(), &binding, Duration::from_secs(30), &mut rng)
+            .expect_err("failing RNG must abort ticket minting");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting PoW client nonce");
+                assert!(
+                    message.contains("failing PoW ticket RNG"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

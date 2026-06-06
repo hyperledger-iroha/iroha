@@ -82,23 +82,25 @@ Substrate-family proof engines alongside their existing bundle-byte snapshot
 checks.
 Core admission tests pin the same production gate ordering: lane-specific
 source-adapter evidence is checked before destination or route activation. The
-active launch policy is BSC-mainnet lane readiness, so complete BSC mainnet
-source-proof, source-adapter deployment, destination-rollout, route-allowlist,
-and route-canary records can open without waiting for Ethereum, Solana, TON,
-TRON, or Substrate-family lanes. Non-BSC lanes remain fail-closed until their
-own launch policy opens, while the all-lanes checker remains as a diagnostic
-and release-evidence consistency helper. Strict release-bundle verification
-applies complete cryptographic-evidence row checks to the active BSC launch lane
-and keeps future-lane rows diagnostic until their launch policy opens. Core
-admission regressions now assert that Ethereum, Solana, TON, and TRON
-route-canary, route-allowlist, and destination-rollout drift checks remain
-behind that non-BSC lane-launch gate in the first-release policy.
+active launch policy is Ethereum-mainnet lane readiness, so complete Ethereum
+mainnet source-proof, source-adapter deployment, destination-rollout,
+route-allowlist, and route-canary records can open without waiting for BSC,
+Solana, TON, TRON, or Substrate-family lanes. Non-Ethereum lanes remain
+fail-closed until their own launch policy opens, while the all-lanes checker
+remains as a diagnostic and release-evidence consistency helper. Strict
+release-bundle verification applies complete cryptographic-evidence row checks
+to the active Ethereum launch lane and keeps future-lane rows diagnostic until
+their launch policy opens. Core admission regressions now assert that BSC,
+Solana, TON, and TRON route-canary, route-allowlist, and destination-rollout
+drift checks remain behind that non-Ethereum lane-launch gate in the
+first-release policy.
 The Rust helper API exposes `build_sccp_eth_mainnet_source_adapter_deployment`,
 `verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production`, and
 `verify_sccp_eth_mainnet_source_chain_proof_envelope_production` for the
-deployment-bound ETH -> SORA source-admission path. The active BSC lane uses the
-parallel BSC helper family and requires governed source-adapter deployment
-evidence before BSC -> SORA source proofs can pass admission.
+deployment-bound ETH -> SORA source-admission path. BSC keeps the parallel
+helper family, but BSC -> SORA source proofs remain behind the non-active lane
+gate until a BSC launch policy opens with governed source-adapter deployment
+evidence.
 Release-readiness user-prover surface rows therefore require the
 `core-admission` corridor phase in addition to the web, Python,
 Swift, Kotlin, Java Android, and .NET SDK phases, so a portal/mobile proof path
@@ -812,10 +814,78 @@ source files for JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET,
 rejecting missing facade files or any `WebAssembly`, `wasm`, `snarkjs`,
 remote-prover, prover-URL, or prover-endpoint dependency marker. That keeps the
 Ethereum and BSC mainnet SDK launch paths native or local-prover owned across
-browser and native SDKs. The strict release-bundle verifier also inventories
-those readiness guard definitions themselves, so dropping the source-scan tests
-or the common remote-prover/prover-endpoint spelling checks blocks a published
-BSC release bundle.
+browser and native SDKs. Native EVM Groth16 prover bundles must also attach
+non-empty proof-artifact, proving-key, verifier-key, and per-SDK implementation
+payload files; readiness generation, bundle generation, and strict bundle
+verification reject a manifest that merely hashes an empty payload. All bundle
+hash fields must be canonical lowercase `0x`-prefixed 32-byte hex values, and
+the JS/browser, Swift, Kotlin/JVM, Java Android, and .NET SDK bundle parsers
+enforce the same canonical form before exposing descriptor hashes to apps. The
+same parsers treat the signed bundle manifest as a closed schema: unknown
+top-level fields, unknown per-SDK artifact fields, and duplicate accepted
+camelCase/snake_case aliases are rejected before descriptor hashes can reach
+app prover code. Manifest domain strings must also be canonical decimal text,
+so leading-zero forms such as `"01"` cannot be accepted as Ethereum mainnet.
+Readiness generation and public release-bundle generation also reject duplicate
+JSON keys in the signed native prover manifest before schema, hash, or payload
+path checks run, so reviewed bundle fields cannot rely on last-key-wins JSON
+parsing.
+The proof-artifact hash, proving-key hash, verifier-key hash,
+destination-binding hash, and per-SDK implementation hashes are also
+role-separated, so one manifest hash cannot stand in for another. The SDK
+parsers enforce that same role separation before app prover callbacks can
+observe descriptor hashes. Bundle `audit_hashes` are treated as named evidence
+roles: the manifest must provide `circuit_security_audit`,
+`native_implementation_audit`, `reproducible_build_attestation`,
+`cross_sdk_fixture_parity`, `native_prover_self_test`, and
+`no_wasm_no_remote_scan`, and each value must be canonical, unique, and separate
+from the proof-artifact hash, proving-key hash, verifier-key hash,
+destination-binding hash, and per-SDK implementation hashes. The
+`cross_sdk_fixture_parity` value must also be the SHA-256 of a
+manifest-declared `cross_sdk_fixture_parity_artifact` JSON file. That fixture
+binds the active Ethereum mainnet artifact hashes, receipt-proof hash,
+source-proof hash, nine public signal words, destination-binding hash,
+calldata hash, and Torii submit-payload hash, and every required SDK row
+(`javascript`, `swift`, `kotlin`, `java-android`, and `dotnet`) must repeat the
+same values. The `native_prover_self_test` value must likewise be the SHA-256
+of a manifest-declared `native_prover_self_test_artifact` JSON file. That
+self-test fixture binds the same bundle hashes and destination binding plus the
+request hash, witness hash, source-proof hash, native proof hash, nine public
+signal words, calldata hash, and Torii submit-payload hash that each SDK must
+produce for the release self-test vector. Product facades run the app-linked
+native prover self-test hook after verifying bundle artifacts and before
+production proof callbacks, then compare the normalized result to the
+manifest-bound SDK row. The JS/browser SDK also exposes
+`runEthereumMainnetNativeProverSelfTest(...)`, and the JS/browser, Swift,
+Kotlin/JVM, and Java Android facades expose `runNativeProverSelfTest(...)`;
+.NET exposes `RunNativeProverSelfTestAsync(...)`. Apps can use these preflight
+entry points to verify the local native prover bundle at startup without
+invoking the outbound prover. Replayed audit hashes, cross-SDK vector drift,
+missing self-test hooks, and self-test vector drift are rejected by SDK code,
+release tooling, and strict public bundle verification before the lane can be
+advertised.
+JS/browser, Swift, Kotlin/JVM, Java Android, and .NET signed manifest parsers
+expose the same `cross_sdk_fixture_parity_artifact` and
+`native_prover_self_test_artifact` paths so SDK product code can locate the
+release-bundled vectors; those SDKs also parse both JSON files locally, require
+the same schema/domain/backend/hash bindings, require exactly nine canonical
+public signal words, and reject per-SDK result drift before apps compare local
+prover outputs. Verified
+artifact descriptors must also bind the bundle verifier-key hash, a non-empty
+SDK id, the manifest's expected implementation label, and the SHA-256 hash of
+that SDK's implementation bytes before app prover callbacks can run. When a
+native prover bundle is applied to an Ethereum mainnet outbound proof request,
+the SDKs also require the bundle verifier-key hash to match the request's
+destination binding verifier-key hash, so a manifest tied to another verifier
+key cannot ride on a matching destination-binding hash. The strict
+release-bundle verifier also
+inventories those
+readiness guard definitions themselves, so dropping the source-scan tests,
+empty-payload tests, native hash-role tests, SDK parser closed-schema helpers,
+SDK parser canonical-domain helpers, SDK parser canonical-hash helpers, SDK
+parser role-separation helpers, canonical-hash tests, audit-hash
+role-separation tests, or the common remote-prover/prover-endpoint spelling
+checks blocks a published BSC release bundle.
 BSC mainnet inbound proving now follows the same receipt-observed source-event
 binding model as Ethereum: JavaScript, Python, Swift, Kotlin/JVM, Java Android,
 and .NET derive `sourceEventDigest` from the BSC receipt log emitted by the
@@ -1075,32 +1145,47 @@ quantity, so padded values such as `0x01` cannot alias the Ethereum mainnet
 launch lane. The JavaScript `BscMainnetSccp` facade is also exported from the
 package root, validates canonical `eth_chainId == 0x38`, and exposes the same
 easy inbound receipt-collection and outbound calldata paths for BSC mainnet.
+The package root also exports `BscTestnetSccp` and `BscTestnetSccpProver` for
+BSC testnet rollout; those helpers validate canonical `eth_chainId == 0x61`,
+bind outbound proofs to network id `97`, and reuse the BSC-family Parlia
+receipt-proof corridor for BSC -> SORA admission.
 Both browser receipt collectors reject failed receipts, non-canonical
 transaction/block hashes, missing or zero `receipt.blockNumber`, missing or
 zero `block.number`, receipt transaction-hash drift, block hash/number drift,
 and block objects without a canonical `receiptsRoot` before calling the
 app-linked local prover; the BSC collector preserves Parlia finality evidence
 from the app-linked consensus provider. The BSC browser submit helper also
-rejects empty or all-zero inbound proof bytes and copies accepted proof bytes
-before invoking the app-linked Iroha submitter, and the browser prove helper
-rejects empty or all-zero local prover output before returning it to callers.
-The Swift, Kotlin/JVM, Java Android,
+rejects empty, all-zero, or over-2 MiB inbound proof bytes and copies accepted
+proof bytes before invoking the app-linked Iroha submitter, and the browser
+prove helper applies the same native-recursive proof-byte corridor before
+returning local prover output to callers.
+The Python, Swift, Kotlin/JVM, Java Android,
 and .NET `EthereumMainnetSccp` facades expose the same easy inbound method shape
-(`collectInboundEvidenceFromReceipt`/`CollectInboundEvidenceFromReceiptAsync`,
-`proveInboundToSora`/`ProveInboundToSoraAsync`, and
-`submitInboundToIroha`/`SubmitInboundToIrohaAsync`) for native apps: execution
-data must come from an app-supplied Ethereum JSON-RPC provider that validates
-canonical `eth_chainId == 0x1`, and collected receipts/blocks are checked for
-failed status, transaction-hash drift, block hash/number drift, missing or zero
-receipt/block numbers, non-canonical hashes, and missing receipt roots before
-native proof code is invoked. Swift, Kotlin/JVM, Java Android, and .NET callers
+(`collect_inbound_evidence_from_receipt`/`collectInboundEvidenceFromReceipt`/
+`CollectInboundEvidenceFromReceiptAsync`,
+`prove_inbound_to_sora`/`proveInboundToSora`/`ProveInboundToSoraAsync`, and
+`submit_inbound_to_iroha`/`submitInboundToIroha`/`SubmitInboundToIrohaAsync`)
+for local SDK users: execution data must come from an app-supplied Ethereum
+JSON-RPC provider that validates canonical `eth_chainId == 0x1`, and collected
+receipts/blocks are checked for failed status, transaction-hash drift, block
+hash/number drift, missing or zero receipt/block numbers, non-canonical hashes,
+and missing receipt roots before native proof code is invoked. The Ethereum
+mainnet browser, Python, Swift, Kotlin/JVM, Java Android, and .NET facades also
+reject inbound prover output and submit payloads that are empty, all-zero, or
+larger than the 2 MiB native-recursive payload cap before app submitter
+callbacks can see them. Swift, Kotlin/JVM,
+Java Android, and .NET callers
 can also link an app-supplied Ethereum consensus/finality provider so
 `collectInboundEvidenceFromReceipt` attaches beacon finality evidence from the
-same local collection path when the caller did not pre-supply it. Browser and
-native Ethereum collectors now bind any supplied or collected beacon finality
+same local collection path when the caller did not pre-supply it. Before those
+app-owned consensus-provider callbacks run, browser and native collectors pass a
+detached snapshot of the validated receipt/block evidence and return detached
+collected evidence, so mutable RPC response containers and byte buffers cannot be
+changed after SDK validation by callback code or caller-owned references. Browser
+and native Ethereum collectors now bind any supplied or collected beacon finality
 evidence back to the execution block by requiring the finality execution block
-number, execution block hash, and execution receipts root to match the
-validated receipt/block before local source-prover callbacks run. The
+number, execution block hash, and execution receipts root to match the validated
+receipt/block before local source-prover callbacks run. The
 JavaScript `proveInboundToSora` easy path now runs the same collection step
 before invoking the app-linked prover, and precomputed `receiptProofHash`
 values are accepted as already-collected receipt proof material. Across
@@ -1134,10 +1219,58 @@ dependency. Swift, Kotlin/JVM, and Java Android now also provide
 `submitOutboundToEthereum` methods backed by app-owned outbound submitter
 callbacks, so their Ethereum mainnet easy paths build and validate verifier
 calldata before handing it to the wallet/RPC integration supplied by the app.
+Those Ethereum mainnet easy proof paths now require verified native prover
+artifact descriptors before local proof execution: JS/browser, Swift,
+Kotlin/JVM, and Java Android reject missing or mismatched artifact descriptors
+after Ethereum request construction and before invoking the app-owned prover
+callback, while .NET/C# exposes an artifact-bound
+`ProveOutboundToEthereumAsync` overload that applies the verified bundle
+before calling the native prover interface. A descriptor is not considered
+verified unless it also carries the verifier-key hash, the SDK implementation
+row, a matching implementation-byte hash from the signed native prover bundle,
+and the bytes for the bundle's `cross_sdk_fixture_parity_artifact` and
+`native_prover_self_test_artifact`; each SDK hashes those files against
+`audit_hashes.cross_sdk_fixture_parity` and
+`audit_hashes.native_prover_self_test`, parses the fixtures locally, and carries
+the normalized parity and self-test vectors in the verified descriptor. The
+self-test fixture also binds the request, witness, source-proof, proof,
+calldata, Torii payload, destination-binding, bundle-hash, and public-signal
+outputs that every native SDK must reproduce. The outbound Ethereum mainnet
+facades now require an SDK-owned native prover self-test runner for that vector,
+fail before production proof execution when the runner is absent, and reject
+any runner output that drifts from the verified descriptor. JS/browser apps can
+call the same check directly with `runEthereumMainnetNativeProverSelfTest(...)`
+or through a configured facade's `runNativeProverSelfTest(...)`; Swift,
+Kotlin/JVM, Java Android, and .NET expose matching startup preflight helpers
+for native app integrations. Product integrations can fail closed during
+startup before the first outbound proof request. JS/browser, Swift, Kotlin/JVM,
+Java Android, and C# also expose
+bundle-resolver helpers that accept
+an app-owned local artifact resolver, load the manifest-declared proof artifact,
+proving key, verifier key, cross-SDK parity fixture, native prover self-test
+fixture, and selected SDK implementation bytes, and then run the same
+hash/vector checks without a WASM or remote-prover dependency. JS/browser,
+Swift, Kotlin/JVM, and Java Android
+provide `EthereumMainnetSccp.fromNativeProverBundle(...)` helpers that verify
+those local bundle resources and return Ethereum mainnet facades already bound
+to the verified native artifacts; the C# static API exposes
+`ProveOutboundToEthereumFromNativeProverBundleAsync(...)`,
+`BuildEthereumCalldataFromNativeProverBundle(...)`, and
+`SubmitOutboundToEthereumFromNativeProverBundleAsync(...)` for the same
+resolver-backed proof, calldata, and submission path. The same verified
+descriptor gate also runs when Ethereum mainnet calldata is built or submitted:
+JS/browser, Swift, Kotlin/JVM, Java Android, and C# refuse the easy product path
+unless the wrapped proof result is bound to matching native prover artifacts,
+while the older generic EVM helpers remain available only for callers that
+choose those explicit APIs.
+The signed native prover bundle manifest parsers in JS/browser, Swift,
+Kotlin/JVM, Java Android, and C# also reject duplicate JSON object keys before
+building descriptor objects, including escaped-key aliases, so app-side bundle
+loading cannot depend on last-key-wins parsing.
 When an Ethereum execution provider is configured on those facades, the
-outbound submitter path checks `eth_chainId == 1` before invoking the app-owned
-submit callback, so a configured BSC or non-mainnet provider cannot be silently
-ignored during SORA -> Ethereum submission.
+outbound submitter path checks `eth_chainId == 1` before invoking the
+app-owned submit callback, so a configured BSC or non-mainnet provider cannot
+be silently ignored during SORA -> Ethereum submission.
 The Python Ethereum mainnet facade mirrors that final step with
 `submit_outbound_to_ethereum`, which passes the validated calldata package to an
 app-owned transaction hook.
@@ -1158,6 +1291,13 @@ EVM chain id to `56`, require the deployment-bound SORA -> BSC destination
 binding before request, prebuilt-result wrapping, proof-job, or submission
 packaging, and require wrapped proof results to carry the same binding before
 calldata is built.
+The JavaScript BSC testnet facade mirrors those binding checks for EVM chain id
+`97`, rejects mainnet proof results on the testnet calldata path, and includes
+`chainId: "0x61"` when it falls back to an EIP-1193 `eth_sendTransaction`
+submission. JavaScript BSC mainnet and testnet outbound submit paths also
+validate any configured execution provider before invoking app-owned submit
+callbacks, so a wrong-chain provider cannot be silently bypassed by a custom
+transaction hook.
 The Python package exposes the same easy `BscMainnetSccp` facade shape as the
 native SDKs, with static BSC chain-id and destination-binding guards,
 `build_outbound_proof_request`, `prove_outbound_to_bsc`, `build_bsc_calldata`,
@@ -1665,6 +1805,37 @@ hash of this full evidence record, so a source proof generated without the
 deployment hash and receipt cannot satisfy a configured production source
 adapter deployment.
 
+### Source-chain trust boundary
+
+The SDK receipt, block, and finality objects are witness inputs, not trust
+anchors. SDK facades reject malformed or inconsistent evidence before invoking
+an app-owned prover, but a JSON-RPC endpoint, `eth_chainId`, receipt metadata,
+or app-supplied finality map is never enough to prove that evidence came from
+the real source chain. The production trust boundary starts at the configured
+source verifier material and source-adapter deployment admitted by Iroha
+governance.
+
+For every non-SORA source, `SubmitBridgeProof` must see a source-chain proof
+envelope whose verifier evidence recomputes to the configured
+`SccpSourceAdapterEngineDeploymentV1` hash. That deployment record binds the
+source domain and chain key, source proof plan, finality model, source trust
+anchor id/hash, consensus verifier id/hash, message-inclusion verifier id/hash,
+finality-policy id/hash, source bridge emitter id/address/code hash/network id,
+bridge owner/config hash, adapter verifier key hash, and mined deployment
+receipt hash. If any of those governed values drift, admission rejects the
+bundle before treating it as a production source proof.
+
+This is the fake-chain rejection rule. A fake BSC-like or ETH-like chain may
+claim the same EVM chain id, expose a bridge contract at the same address, and
+return self-consistent receipts and block roots through RPC. That data is still
+only a witness. To pass admission, the proof must verify under the configured
+source-adapter verifier key and must connect its consensus/finality path to the
+configured `source_trust_anchor_hash`, while the receipt proof must open the
+governed source bridge emitter and SCCP source-event digest under that
+consensus-approved receipt root. Chain-id checks and SDK preflight prevent
+obvious lane mixups; the configured trust anchor, verifier hashes, and
+deployment hash are the security root.
+
 The IDs and hashes used by the evidence record come from
 `SccpSourceVerifierMaterialV1`. Today the built-in material catalog is
 explicitly marked `placeholder_material = true`; those records are accepted
@@ -1880,9 +2051,25 @@ equal to the governed source bridge emitter address before checking the
 receipt-proof transcript hash. The same strict receipt decoder rejects
 failed or malformed receipts, rejects logs with more than four topics, permits
 unrelated valid `LOG0` entries, and accepts the typed EVM-family receipt-root
-envelope only for placeholder structural fixtures. The active BSC lane still
-fails closed unless configured governance records supply the source material,
+envelope only for placeholder structural fixtures. Under the active Ethereum
+mainnet launch policy, the BSC lane remains fail-closed until a BSC launch
+policy opens and configured governance records supply the source material,
 source-adapter deployment evidence, destination rollout, and route allowlist.
+
+For BSC specifically, the root of trust is not `eth_chainId == 56` and not a
+provider's claim that a block is finalized. The configured BSC
+`source_trust_anchor_hash` names the approved validator-set/checkpoint anchor,
+and the `BscValidatorSetReceiptProof` must show either the active validator set
+matches that anchor or a strictly ordered epoch-by-epoch
+`SccpBscValidatorSetTransitionProofV1` chain derives the active set from it.
+The active set must then seal the receipt block, or the final transition set
+must seal the message that authorizes the next set, with strict `> 2/3` signed
+power and canonical secp256k1 recovery. Only after that validator-set path is
+accepted does the receipt-trie proof bind the SCCP source-event log to the
+governed BSC source bridge emitter. A fake chain that merely returns
+BSC-shaped headers, receipts, validator-set hashes, or commit-seal hashes
+cannot satisfy this path unless it can produce the required source-adapter
+proof against the governed deployment and trust anchor.
 
 Operators can now render the BSC -> SORA source material and source-adapter
 deployment records from governed live evidence with
@@ -3115,12 +3302,13 @@ material, replayed adapter verifier commitment, non-SORA source-adapter target,
 missing source-record hash comments, stale source-record hash comments,
 missing destination rollout, missing route allowlist, or replayed route material
 fails closed. Admission also enforces the configured launch policy against
-configured material: with the first-release BSC-mainnet launch policy, complete
-BSC evidence can open the BSC inbound lane independently, while non-BSC lanes
-remain blocked until their own lane policy opens. The all-lanes checker remains
-available as a diagnostic for future coordinated launches. The default
-production verifier continues to use the built-in catalog and therefore remains
-closed when no explicit lane material is configured.
+configured material: with the first-release Ethereum-mainnet launch policy,
+complete Ethereum evidence can open the Ethereum inbound lane independently,
+while BSC, Solana, TON, TRON, and Substrate-family lanes remain blocked until
+their own lane policy opens. The all-lanes checker remains available as a
+diagnostic for future coordinated launches. The default production verifier
+continues to use the built-in catalog and therefore remains closed when no
+explicit lane material is configured.
 
 Production destination rollout records must carry explicit binding evidence in
 `destination_network_id`, `destination_bridge_address`,

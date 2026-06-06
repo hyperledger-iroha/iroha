@@ -10,7 +10,7 @@ import json
 import os
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -18,6 +18,30 @@ ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
 REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
 VERIFY_SCRIPT = ROOT / "scripts" / "sccp_verify_release_bundle.py"
+
+
+class DuplicateJsonKeyError(ValueError):
+    """Raised when a JSON object contains a duplicate key."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise DuplicateJsonKeyError(key)
+        payload[key] = value
+    return payload
+
+
+def _load_json_without_duplicate_keys(path: Path) -> Any:
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_reject_duplicate_json_keys,
+    )
 
 
 def _load_module(name: str, path: Path) -> Any:
@@ -156,6 +180,125 @@ def _copy_phase_evidence(
     return args, copied
 
 
+def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"native EVM Groth16 prover bundle {label} path must be a "
+            "non-empty relative POSIX file path"
+        )
+    control_character = _path_control_character(value)
+    if control_character is not None:
+        raise ValueError(
+            "native EVM Groth16 prover bundle "
+            f"{label} path contains control character {control_character}: {value!r}"
+        )
+    if "\\" in value:
+        raise ValueError(
+            f"native EVM Groth16 prover bundle {label} path must use POSIX separators"
+        )
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or not path.parts
+        or value != path.as_posix()
+    ):
+        raise ValueError(
+            f"native EVM Groth16 prover bundle {label} path must be relative "
+            "and stay under the manifest directory"
+        )
+    return path
+
+
+def _native_evm_prover_payload_sources(
+    source: Path | None,
+) -> list[tuple[PurePosixPath, Path]]:
+    if source is None:
+        return []
+    try:
+        payload = _load_json_without_duplicate_keys(source)
+    except DuplicateJsonKeyError as exc:
+        raise ValueError(
+            "native EVM Groth16 prover bundle JSON contains duplicate key: "
+            f"{exc.key}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError("native EVM Groth16 prover bundle must be a JSON object")
+
+    paths: list[tuple[PurePosixPath, Path]] = []
+
+    def add_path(raw_path: Any, label: str) -> None:
+        relative_path = _native_evm_manifest_relative_path(raw_path, label)
+        artifact_path = source.parent.joinpath(*relative_path.parts)
+        if artifact_path.resolve() == source.resolve():
+            raise ValueError(
+                f"native EVM Groth16 prover bundle {label} must not reference "
+                "the manifest itself"
+            )
+        if not artifact_path.is_file():
+            raise FileNotFoundError(
+                "native EVM Groth16 prover bundle "
+                f"{label} file is missing or is not a regular file: "
+                f"{relative_path.as_posix()}"
+            )
+        paths.append((relative_path, artifact_path))
+
+    for field in ("proof_artifact", "proving_key", "verifier_key"):
+        if field in payload:
+            add_path(payload[field], field)
+    if "cross_sdk_fixture_parity_artifact" in payload:
+        add_path(
+            payload["cross_sdk_fixture_parity_artifact"],
+            "cross_sdk_fixture_parity_artifact",
+        )
+    if "native_prover_self_test_artifact" in payload:
+        add_path(
+            payload["native_prover_self_test_artifact"],
+            "native_prover_self_test_artifact",
+        )
+
+    native_sdk_artifacts = payload.get("native_sdk_artifacts")
+    if isinstance(native_sdk_artifacts, list):
+        for index, artifact in enumerate(native_sdk_artifacts):
+            if not isinstance(artifact, dict) or "implementation_artifact" not in artifact:
+                continue
+            sdk = artifact.get("sdk")
+            label = (
+                f"{sdk} implementation_artifact"
+                if isinstance(sdk, str) and sdk
+                else f"native_sdk_artifacts[{index}].implementation_artifact"
+            )
+            add_path(artifact["implementation_artifact"], label)
+    return paths
+
+
+def _copy_native_evm_prover_bundle(
+    source: Path | None,
+    output_dir: Path,
+) -> tuple[Path | None, list[Path]]:
+    if source is None:
+        return None, []
+    copied_manifest = _copy_file(
+        source,
+        output_dir / "native-prover" / _safe_name(source, 0),
+    )
+    copied_payloads: list[Path] = []
+    seen_payloads: set[str] = set()
+    for relative_path, artifact_source in _native_evm_prover_payload_sources(source):
+        relative_text = relative_path.as_posix()
+        if relative_text in seen_payloads:
+            continue
+        seen_payloads.add(relative_text)
+        destination = copied_manifest.parent.joinpath(*relative_path.parts)
+        if destination == copied_manifest:
+            raise ValueError(
+                "native EVM Groth16 prover bundle payload path would overwrite "
+                "the copied manifest"
+            )
+        copied_payloads.append(_copy_file(artifact_source, destination))
+    return copied_manifest, copied_payloads
+
+
 def _all_lanes_summary(paths: list[Path]) -> dict[str, Any]:
     module = _all_lanes_module()
     records = module.load_evidence_bundle(paths)
@@ -227,6 +370,7 @@ def _build_bundle_report(
     evidence_paths: list[Path],
     phase_results: list[str],
     phase_evidence_args: list[str],
+    native_evm_prover_bundle: Path | None,
 ) -> dict[str, Any]:
     relative_evidence = [
         _relative_to_bundle(output_dir, path)
@@ -242,11 +386,17 @@ def _build_bundle_report(
     original_cwd = Path.cwd()
     try:
         os.chdir(output_dir)
+        relative_native_bundle = (
+            _relative_to_bundle(output_dir, native_evm_prover_bundle)
+            if native_evm_prover_bundle is not None
+            else None
+        )
         return report_module._build_report(
             relative_evidence,
             phase_results,
             relative_phase_evidence,
             require_phase_evidence=True,
+            native_evm_prover_bundle=relative_native_bundle,
         )
     finally:
         os.chdir(original_cwd)
@@ -296,6 +446,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--native-evm-prover-bundle",
+        type=Path,
+        help=(
+            "Audited Ethereum mainnet no-WASM native EVM Groth16 prover bundle "
+            "manifest to copy, hash, and validate."
+        ),
+    )
+    parser.add_argument(
         "--allow-not-ready",
         action="store_true",
         help="Write a blocked bundle for review instead of failing on readiness blockers.",
@@ -329,6 +487,7 @@ def _validate_output_dir(
     *,
     input_paths: list[Path],
     phase_sources: dict[str, Path],
+    native_evm_prover_bundle: Path | None,
     force: bool,
 ) -> None:
     resolved_output = output_dir.resolve()
@@ -348,6 +507,14 @@ def _validate_output_dir(
         return
 
     protected_paths = [*input_paths, *phase_sources.values()]
+    if native_evm_prover_bundle is not None:
+        protected_paths.append(native_evm_prover_bundle)
+        protected_paths.extend(
+            source
+            for _, source in _native_evm_prover_payload_sources(
+                native_evm_prover_bundle
+            )
+        )
     for protected_path in protected_paths:
         resolved_protected = protected_path.resolve()
         if _path_contains(resolved_output, resolved_protected):
@@ -373,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output_dir,
             input_paths=args.toml,
             phase_sources=phase_sources,
+            native_evm_prover_bundle=args.native_evm_prover_bundle,
             force=args.force,
         )
         preflight_report = report_module._build_report(
@@ -380,6 +548,7 @@ def main(argv: list[str] | None = None) -> int:
             args.phase_result,
             _phase_evidence_args(phase_sources),
             require_phase_evidence=True,
+            native_evm_prover_bundle=args.native_evm_prover_bundle,
         )
         if not preflight_report["production_ready"] and not args.allow_not_ready:
             blockers = "\n".join(f"- {blocker}" for blocker in preflight_report["blockers"])
@@ -392,12 +561,20 @@ def main(argv: list[str] | None = None) -> int:
             phase_sources,
             args.output_dir,
         )
+        (
+            copied_native_evm_prover_bundle,
+            copied_native_evm_prover_payloads,
+        ) = _copy_native_evm_prover_bundle(
+            args.native_evm_prover_bundle,
+            args.output_dir,
+        )
         report = _build_bundle_report(
             report_module,
             args.output_dir,
             copied_evidence,
             args.phase_result,
             copied_phase_args,
+            copied_native_evm_prover_bundle,
         )
         summary = _all_lanes_summary(copied_evidence)
 
@@ -419,6 +596,12 @@ def main(argv: list[str] | None = None) -> int:
             report_json,
             summary_json,
             *copied_evidence,
+            *(
+                [copied_native_evm_prover_bundle]
+                if copied_native_evm_prover_bundle is not None
+                else []
+            ),
+            *copied_native_evm_prover_payloads,
             *copied_phase_logs,
         ]
         attachment_artifacts = _bundle_artifacts(args.output_dir, attachment_paths)

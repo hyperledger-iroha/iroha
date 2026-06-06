@@ -16,7 +16,7 @@ use std::{
 
 use iroha_crypto::KeyPair;
 #[cfg(feature = "rand")]
-use iroha_crypto::{Algorithm, Hash};
+use iroha_crypto::{Algorithm, Error as CryptoError, Hash};
 use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
 
 /// Generate a domainless [`AccountId`] using the given `domain` label as seed scope.
@@ -26,16 +26,36 @@ use iroha_data_model::prelude::{AccountId, DomainId, IvmBytecode};
 /// Panics if the given `domain` is invalid as [`Name`](iroha_data_model::name::Name).
 #[cfg(feature = "rand")]
 pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
+    try_gen_account_in(domain).expect("test sample account key generation should succeed")
+}
+
+/// Fallibly generate a domainless [`AccountId`] using the given `domain` label as seed scope.
+///
+/// # Errors
+///
+/// Returns a crypto error if OS-backed random key generation fails or if seeded
+/// calibration key derivation fails.
+///
+/// # Panics
+///
+/// Panics if the given `domain` is invalid as [`Name`](iroha_data_model::name::Name).
+#[cfg(feature = "rand")]
+pub fn try_gen_account_in(
+    domain: impl core::fmt::Display,
+) -> Result<(AccountId, KeyPair), CryptoError> {
     let domain_str = domain.to_string();
-    let key_pair = calibration_base_seed().map_or_else(KeyPair::random, |base_seed| {
-        log_active_seed_once(&base_seed);
-        let seed_bytes = next_calibration_seed(&base_seed, &domain_str);
-        KeyPair::from_seed(seed_bytes, Algorithm::default())
-    });
+    let key_pair = match calibration_base_seed() {
+        Some(base_seed) => {
+            log_active_seed_once(&base_seed);
+            let seed_bytes = next_calibration_seed(&base_seed, &domain_str);
+            KeyPair::try_from_seed(seed_bytes, Algorithm::default())?
+        }
+        None => KeyPair::try_random()?,
+    };
     let _: DomainId =
         DomainId::try_new(domain_str.as_str(), "universal").expect("domain name should be valid");
     let account_id = AccountId::new(key_pair.public_key().clone());
-    (account_id, key_pair)
+    Ok((account_id, key_pair))
 }
 
 #[cfg(feature = "rand")]
@@ -105,9 +125,37 @@ mod calibration_tests {
 
         let material = format!("{seed_value}:wonderland:0");
         let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
-        let expected_key = KeyPair::from_seed(hash_bytes.to_vec(), Algorithm::default());
+        let expected_key = KeyPair::try_from_seed(hash_bytes.to_vec(), Algorithm::default())
+            .expect("fixed calibration seed must derive");
         let expected_account = AccountId::new(expected_key.public_key().clone());
         assert_eq!(account, expected_account);
+        assert_eq!(key_pair.public_key(), expected_key.public_key());
+
+        set_calibration_seed_override(None);
+        CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn try_gen_account_in_uses_checked_seed_derivation() {
+        let seed_value = "checked-test-seed";
+        set_calibration_seed_override(Some(seed_value));
+        CALIBRATION_COUNTER.store(0, Ordering::Relaxed);
+
+        let (account, key_pair) =
+            super::try_gen_account_in("wonderland").expect("checked sample account");
+
+        let material = format!("{seed_value}:wonderland:0");
+        let hash_bytes: [u8; Hash::LENGTH] = Hash::new(material).into();
+        let expected_key = KeyPair::try_from_seed(hash_bytes.to_vec(), Algorithm::default())
+            .expect("fixed calibration seed must derive");
+        assert_eq!(account, AccountId::new(expected_key.public_key().clone()));
+        assert_eq!(
+            key_pair
+                .public_key()
+                .try_algorithm()
+                .expect("sample account public-key algorithm"),
+            Algorithm::default()
+        );
         assert_eq!(key_pair.public_key(), expected_key.public_key());
 
         set_calibration_seed_override(None);

@@ -1,3 +1,4 @@
+#[cfg(test)]
 use rand::rngs::OsRng;
 use rand_chacha::ChaChaRng;
 use rand_core::{
@@ -89,6 +90,7 @@ pub fn rng_from_seed(mut seed: Vec<u8>) -> CompatRng<ChaChaRng> {
 }
 
 /// Operating-system RNG wrapped in the dual-trait adapter.
+#[cfg(test)]
 pub fn os_rng() -> CompatRng<OsRng> {
     CompatRng::new(OsRng)
 }

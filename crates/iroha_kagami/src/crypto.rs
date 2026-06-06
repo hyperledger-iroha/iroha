@@ -178,15 +178,18 @@ impl Args {
         let algorithm = self.algorithm.0;
 
         let key_pair = match (self.seed, self.private_key) {
-            (None, None) => KeyPair::random_with_algorithm(algorithm),
+            (None, None) => KeyPair::try_random_with_algorithm(algorithm)
+                .wrap_err("Failed to generate random key pair")?,
             (None, Some(private_key_hex)) => {
                 let private_key = PrivateKey::from_hex(algorithm, private_key_hex)
                     .wrap_err("Failed to decode private key")?;
-                KeyPair::from(private_key)
+                KeyPair::from_private_key(private_key)
+                    .wrap_err("Failed to derive key pair from private key")?
             }
             (Some(seed), None) => {
                 let seed: Vec<u8> = seed.as_bytes().into();
-                KeyPair::from_seed(seed, algorithm)
+                KeyPair::try_from_seed(seed, algorithm)
+                    .wrap_err("Failed to derive seeded key pair")?
             }
             _ => unreachable!("Clap group invariant"),
         };
@@ -292,5 +295,21 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some(expected_private.as_str())
         );
+    }
+
+    #[test]
+    fn key_pair_random_path_uses_checked_generation() {
+        let args = Args {
+            algorithm: AlgorithmArg(Algorithm::Ed25519),
+            private_key: None,
+            seed: None,
+            json: false,
+            json_mh_prefixed: false,
+            compact: false,
+            pop: false,
+        };
+
+        let key_pair = args.key_pair().expect("checked random keypair");
+        assert_eq!(key_pair.algorithm(), Algorithm::Ed25519);
     }
 }

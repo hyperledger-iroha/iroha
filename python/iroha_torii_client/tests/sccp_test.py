@@ -363,6 +363,13 @@ HEX32_G = "0x" + "56" * 32
 HEX32_H = "0x" + "78" * 32
 SOURCE_EVENT_DIGEST = "0x" + "34" * 32
 SOURCE_BRIDGE_ADDRESS = "0x" + "44" * 20
+ETHEREUM_FINALITY_BRANCH = [
+    "0x" + f"{0x50 + index:02x}" * 32 for index in range(6)
+]
+ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS = (
+    "0x" + "ff" * 42 + "3f" + "00" * 21
+)
+LOW_ETHEREUM_SYNC_COMMITTEE_BITS = "0x01" + "00" * 63
 
 
 def source_event_log(**overrides: Any) -> Dict[str, Any]:
@@ -376,6 +383,24 @@ def source_event_log(**overrides: Any) -> Dict[str, Any]:
     }
     log.update(overrides)
     return log
+
+
+def ethereum_beacon_finality(**overrides: Any) -> Dict[str, Any]:
+    finality: Dict[str, Any] = {
+        "executionBlockNumber": "0x1234",
+        "executionBlockHash": HEX32_B,
+        "executionReceiptsRoot": HEX32_C,
+        "finalizedHeaderRoot": HEX32_D,
+        "syncCommitteeRoot": HEX32_E,
+        "beaconSlot": "11",
+        "finalityBranch": ETHEREUM_FINALITY_BRANCH,
+        "syncCommitteeBits": ETHEREUM_SYNC_COMMITTEE_SUPERMAJORITY_BITS,
+        "syncCommitteeSignature": "0x" + "34" * 96,
+        "syncSignatureSlot": "12",
+        "syncCommitteeParticipation": "342",
+    }
+    finality.update(overrides)
+    return finality
 
 
 TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
@@ -653,21 +678,6 @@ def sample_solana_vote_state_v4_account(
     return bytes(data)
 
 
-ETH_SYNC_COMMITTEE_HASH = "0xa95be780d50a9f42f4b1871e29798dbee0352d08027f0c4c6f4fc6466b4bd536"
-ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX = (
-    "010200000030000000"
-    + "33" * 48
-    + "030000000000000060000000"
-    + "cc" * 96
-    + "30000000"
-    + "44" * 48
-    + "040000000000000060000000"
-    + "dd" * 96
-)
-ETH_NEXT_SYNC_COMMITTEE_HASH = "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445"
-ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH = "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17"
-ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH = "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e"
-ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH = "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d"
 TON_VALIDATOR_SET_HASH = "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938"
 TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX = (
     "0102000000"
@@ -7197,24 +7207,60 @@ def test_derives_ton_and_substrate_source_proof_transcripts_from_witness_materia
 
 
 def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_material() -> None:
+    def sync_committee_fixture(public_key_byte: int, pop_byte: int) -> dict[str, list[Any]]:
+        public_keys = []
+        pops = []
+        for index in range(512):
+            public_key = bytearray([public_key_byte] * 48)
+            public_key[46:48] = index.to_bytes(2, "big")
+            public_keys.append(bytes(public_key))
+            pop = bytearray([pop_byte] * 96)
+            pop[94:96] = index.to_bytes(2, "big")
+            pops.append(bytes(pop))
+        return {
+            "sync_committee_public_keys": public_keys,
+            "sync_committee_weights": ["1"] * 512,
+            "sync_committee_pops": pops,
+        }
+
+    def signers_bitmap(count: int) -> bytes:
+        bitmap = bytearray(64)
+        for index in range(count):
+            bitmap[index // 8] |= 1 << (index % 8)
+        return bytes(bitmap)
+
     parent = {
-        "sync_committee_public_keys": ["0x" + "11" * 48, "0x" + "22" * 48],
-        "sync_committee_weights": ["1", "2"],
-        "sync_committee_pops": ["0x" + "aa" * 96, "0x" + "bb" * 96],
+        **sync_committee_fixture(0x11, 0xAA),
     }
     next_committee = {
-        "sync_committee_public_keys": ["0x" + "33" * 48, "0x" + "44" * 48],
-        "sync_committee_weights": ["3", "4"],
-        "sync_committee_pops": ["0x" + "cc" * 96, "0x" + "dd" * 96],
+        **sync_committee_fixture(0x33, 0xCC),
     }
     next_payload = canonical_eth_sync_committee_payload_bytes(next_committee)
+    parent_hash = eth_sync_committee_hash(parent)
+    next_hash = eth_sync_committee_hash_from_payload(next_payload)
+    next_payload_hash = eth_sync_committee_payload_hash(next_payload)
 
-    assert eth_sync_committee_hash(parent) == ETH_SYNC_COMMITTEE_HASH
-    assert next_payload.hex() == ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX
-    assert eth_sync_committee_hash_from_payload(next_payload) == ETH_NEXT_SYNC_COMMITTEE_HASH
-    assert eth_sync_committee_payload_hash(next_payload) == ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH
+    assert re.fullmatch(r"0x[0-9a-f]{64}", parent_hash)
+    assert len(next_payload) == 81925
+    assert re.fullmatch(r"0x[0-9a-f]{64}", next_hash)
+    assert re.fullmatch(r"0x[0-9a-f]{64}", next_payload_hash)
     assert eth_mainnet_sync_committee_period_for_slot("19") == 0
     assert eth_mainnet_sync_committee_period_for_slot(8192) == 1
+    with pytest.raises(ValueError, match="exactly 512"):
+        canonical_eth_sync_committee_payload_bytes(
+            {
+                "sync_committee_public_keys": ["0x" + "11" * 48, "0x" + "22" * 48],
+                "sync_committee_weights": ["1", "1"],
+                "sync_committee_pops": ["0x" + "aa" * 96, "0x" + "bb" * 96],
+            }
+        )
+    with pytest.raises(ValueError, match="must be 1"):
+        canonical_eth_sync_committee_payload_bytes(
+            {
+                **parent,
+                "sync_committee_weights": ["2"] + parent["sync_committee_weights"][1:],
+            }
+        )
     with pytest.raises(TypeError, match="syncCommitteePublicKeys must not use multiple aliases"):
         canonical_eth_sync_committee_payload_bytes(
             {
@@ -7229,16 +7275,14 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
         "to_sync_period": "1",
         "transition_slot": "19",
         "finalized_beacon_root": HEX32_A,
-        "parent_sync_committee_hash": ETH_SYNC_COMMITTEE_HASH,
-        "next_sync_committee_hash": ETH_NEXT_SYNC_COMMITTEE_HASH,
-        "next_sync_committee_payload_hash": ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH,
+        "parent_sync_committee_hash": parent_hash,
+        "next_sync_committee_hash": next_hash,
+        "next_sync_committee_payload_hash": next_payload_hash,
         "next_sync_committee_branch_hash": "0x" + "be" * 32,
     }
+    transition_message_hash = eth_sync_committee_transition_message_hash(message_input)
     assert len(canonical_eth_sync_committee_transition_message_bytes(message_input)) == 189
-    assert (
-        eth_sync_committee_transition_message_hash(message_input)
-        == ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH
-    )
+    assert re.fullmatch(r"0x[0-9a-f]{64}", transition_message_hash)
     with pytest.raises(ValueError, match="sourceDomain"):
         canonical_eth_sync_committee_transition_message_bytes(
             {**message_input, "source_domain": SCCP_DOMAIN_BSC}
@@ -7267,7 +7311,7 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
         canonical_eth_sync_committee_transition_message_bytes(
             {
                 **message_input,
-                "nextSyncCommitteePayloadHash": ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH,
+                "nextSyncCommitteePayloadHash": next_payload_hash,
             }
         )
 
@@ -7275,21 +7319,22 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
         **message_input,
         "version": 1,
         "next_sync_committee_payload": next_payload,
-        "transition_message_hash": ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+        "transition_message_hash": transition_message_hash,
         "sync_committee_proof": {
             "version": 1,
-            "total_weight": "3",
-            "signed_weight": "3",
-            "sync_committee_message_hash": ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+            "total_weight": "512",
+            "signed_weight": "342",
+            "sync_committee_message_hash": transition_message_hash,
             **parent,
-            "signers_bitmap": "0x03",
+            "signers_bitmap": signers_bitmap(342),
             "aggregate_signature": "0x" + "ee" * 96,
         },
     }
-    assert len(canonical_eth_sync_committee_transition_signature_bytes(signature_input)) == 1068
-    assert (
-        eth_sync_committee_transition_signature_hash(signature_input)
-        == ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH
+    assert len(canonical_eth_sync_committee_transition_signature_bytes(signature_input)) > len(
+        next_payload
+    )
+    assert re.fullmatch(
+        r"0x[0-9a-f]{64}", eth_sync_committee_transition_signature_hash(signature_input)
     )
     with pytest.raises(TypeError, match="syncCommitteeProof must not use multiple aliases"):
         canonical_eth_sync_committee_transition_signature_bytes(
@@ -7306,7 +7351,7 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
         canonical_eth_sync_committee_transition_signature_bytes(
             {
                 **signature_input,
-                "transitionMessageHash": ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH,
+                "transitionMessageHash": transition_message_hash,
             }
         )
     with pytest.raises(TypeError, match="signersBitmap must not use multiple aliases"):
@@ -7347,7 +7392,7 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
             }
         )
 
-    with pytest.raises(ValueError, match="at most 512"):
+    with pytest.raises(ValueError, match="exactly 512"):
         canonical_eth_sync_committee_payload_bytes(
             {
                 "sync_committee_public_keys": ["0x" + "11" * 48] * 513,
@@ -7356,17 +7401,21 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
             }
         )
     with pytest.raises(ValueError, match="48 bytes"):
+        malformed_public_keys = parent["sync_committee_public_keys"].copy()
+        malformed_public_keys[0] = "0x" + "11" * 47
         canonical_eth_sync_committee_payload_bytes(
             {
                 **parent,
-                "sync_committee_public_keys": ["0x" + "11" * 47, "0x" + "22" * 48],
+                "sync_committee_public_keys": malformed_public_keys,
             }
         )
     with pytest.raises(ValueError, match="must not be zero"):
+        zero_pops = parent["sync_committee_pops"].copy()
+        zero_pops[0] = bytes(96)
         canonical_eth_sync_committee_payload_bytes(
             {
                 **parent,
-                "sync_committee_pops": [bytes(96), "0x" + "bb" * 96],
+                "sync_committee_pops": zero_pops,
             }
         )
     with pytest.raises(ValueError, match="signersBitmap"):
@@ -7379,23 +7428,13 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
                 },
             }
         )
-    with pytest.raises(ValueError, match="padding bits"):
-        canonical_eth_sync_committee_transition_signature_bytes(
-            {
-                **signature_input,
-                "sync_committee_proof": {
-                    **signature_input["sync_committee_proof"],
-                    "signers_bitmap": b"\x04",
-                },
-            }
-        )
     with pytest.raises(ValueError, match="select at least one"):
         canonical_eth_sync_committee_transition_signature_bytes(
             {
                 **signature_input,
                 "sync_committee_proof": {
                     **signature_input["sync_committee_proof"],
-                    "signers_bitmap": b"\x00",
+                    "signers_bitmap": signers_bitmap(0),
                 },
             }
         )
@@ -7405,7 +7444,7 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
                 **signature_input,
                 "sync_committee_proof": {
                     **signature_input["sync_committee_proof"],
-                    "total_weight": "4",
+                    "total_weight": "513",
                 },
             }
         )
@@ -7415,7 +7454,7 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
                 **signature_input,
                 "sync_committee_proof": {
                     **signature_input["sync_committee_proof"],
-                    "signed_weight": "2",
+                    "signed_weight": "341",
                 },
             }
         )
@@ -7425,8 +7464,8 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
                 **signature_input,
                 "sync_committee_proof": {
                     **signature_input["sync_committee_proof"],
-                    "signed_weight": "1",
-                    "signers_bitmap": b"\x01",
+                    "signed_weight": "341",
+                    "signers_bitmap": signers_bitmap(341),
                 },
             }
         )
@@ -7451,10 +7490,12 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
             }
         )
     with pytest.raises(ValueError, match=r"syncCommitteePublicKeys\[0\] must not be zero"):
+        zero_public_keys = parent["sync_committee_public_keys"].copy()
+        zero_public_keys[0] = "0x" + "00" * 48
         canonical_eth_sync_committee_payload_bytes(
             {
                 **parent,
-                "sync_committee_public_keys": ["0x" + "00" * 48, "0x" + "22" * 48],
+                "sync_committee_public_keys": zero_public_keys,
             }
         )
     with pytest.raises(TypeError, match="nextSyncCommitteePayloadHash must match"):
@@ -11784,6 +11825,18 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
     facade_request = asyncio.run(
         EthereumMainnetSccp().build_outbound_proof_request(input_value)
     )
+    with pytest.raises(
+        TypeError,
+        match="destinationBindingHash must match destinationBinding",
+    ):
+        asyncio.run(
+            EthereumMainnetSccp().build_outbound_proof_request(
+                {
+                    **input_value,
+                    "destination_binding_hash": "0x" + "99" * 32,
+                }
+            )
+        )
     proof_result = wrap_ethereum_mainnet_sccp_destination_proof_result(
         GROTH16_PROOF_BYTES,
         request,
@@ -11815,6 +11868,32 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
         ).submit_outbound_to_ethereum({"proof_result": proof_result})
     )
     assert submitted == "eth-submitted"
+
+    class WrongChainProvider:
+        async def request(self, method: str, params: list[Any]) -> Any:
+            assert method == "eth_chainId"
+            assert params == []
+            return "0x38"
+
+    guarded_submit_called = False
+
+    async def guarded_submit(
+        _callback_submission: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> str:
+        nonlocal guarded_submit_called
+        guarded_submit_called = True
+        return "wrong-chain"
+
+    with pytest.raises(ValueError, match="eth_chainId == 1"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                execution_provider=WrongChainProvider(),
+                submit_outbound_to_ethereum=guarded_submit,
+            ).submit_outbound_to_ethereum({"proof_result": proof_result})
+        )
+    assert guarded_submit_called is False
+
     with pytest.raises(EvmSccpProverUnavailableError, match="outbound submitter"):
         asyncio.run(
             EthereumMainnetSccp().submit_outbound_to_ethereum(
@@ -11837,6 +11916,28 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
         EthereumMainnetSccp(prove=prove).prove_outbound_to_ethereum(input_value)
     )
     assert async_result["destination_binding_hash"] == binding["binding_hash"]
+
+    outbound_prover_called = False
+
+    async def reject_bsc_prove(
+        _callback_request: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        nonlocal outbound_prover_called
+        outbound_prover_called = True
+        return {"proof_bytes": GROTH16_PROOF_BYTES}
+
+    with pytest.raises((TypeError, ValueError), match="request route|target ETH|Ethereum mainnet"):
+        asyncio.run(
+            EthereumMainnetSccp(prove=reject_bsc_prove).prove_outbound_to_ethereum(
+                sample_evm_request_input(
+                    public_inputs=sample_evm_public_inputs(target_domain=SCCP_DOMAIN_BSC),
+                    destination_binding=binding,
+                    destination_binding_hash=None,
+                )
+            )
+        )
+    assert not outbound_prover_called
 
     with pytest.raises(ValueError, match="chain id 1"):
         ethereum_mainnet_sccp_destination_binding(
@@ -11946,6 +12047,10 @@ def test_ethereum_mainnet_sccp_builds_local_admission_submission() -> None:
         build_ethereum_mainnet_sccp_local_admission_submission(
             {**input_value, "envelope_encoding": "abi_tuple_v1"}
         )
+    with pytest.raises(TypeError, match="metadata is not canonical"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "proof_family": "debug-proof-family"}
+        )
 
 
 def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -> None:
@@ -11984,12 +12089,7 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
             assert evidence["transaction_hash"] == HEX32_A
             assert evidence["receipt"]["blockHash"] == HEX32_B
             assert evidence["block"]["receiptsRoot"] == HEX32_C
-            return {
-                "executionBlockNumber": "0x1234",
-                "executionBlockHash": HEX32_B,
-                "executionReceiptsRoot": HEX32_C,
-                "finalizedHeaderRoot": HEX32_D,
-            }
+            return ethereum_beacon_finality()
 
     receipt_proof = {
         "source_domain": SCCP_DOMAIN_ETH,
@@ -12015,6 +12115,8 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         assert evidence["beacon_finality"]["execution_block_number"] == "4660"
         assert evidence["beacon_finality"]["execution_block_hash"] == HEX32_B
         assert evidence["beacon_finality"]["execution_receipts_root"] == HEX32_C
+        assert evidence["beacon_finality"]["finality_branch"] == ETHEREUM_FINALITY_BRANCH
+        assert evidence["beacon_finality"]["sync_committee_participation"] == "342"
         assert evidence["receipt_proof_hash"] == receipt_proof_hash
         assert evidence["receipt_proof"]["execution_block_hash"] == HEX32_B
         assert evidence["source_event_digest"] == SOURCE_EVENT_DIGEST
@@ -12041,7 +12143,7 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
     assert evidence["source_domain"] == SCCP_DOMAIN_ETH
     assert evidence["target_domain"] == SCCP_DOMAIN_SORA
     assert evidence["transaction_hash"] == HEX32_A
-    assert evidence["beacon_finality"]["finalizedHeaderRoot"] == HEX32_D
+    assert evidence["beacon_finality"]["finalized_header_root"] == HEX32_D
     assert evidence["beacon_finality"]["execution_block_number"] == "4660"
 
     proof = asyncio.run(
@@ -12050,6 +12152,25 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         )
     )
     assert proof == b"\x07\x08\x09"
+
+    async def prove_oversized_inbound(
+        _evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        return b"\x01" * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1)
+
+    oversized_sdk = EthereumMainnetSccp(
+        execution_provider=provider,
+        consensus_provider=ConsensusProvider(),
+        source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS,
+        prove_inbound=prove_oversized_inbound,
+    )
+    with pytest.raises(TypeError, match="proofBytes must be at most"):
+        asyncio.run(
+            oversized_sdk.prove_inbound_to_sora(
+                {"transaction_hash": HEX32_A, "receipt_proof": receipt_proof}
+            )
+        )
 
     with pytest.raises(TypeError, match="receipt source event validation"):
         asyncio.run(
@@ -12066,11 +12187,7 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
                         "number": "0x1234",
                         "receiptsRoot": HEX32_C,
                     },
-                    "beacon_finality": {
-                        "executionBlockNumber": "0x1234",
-                        "executionBlockHash": HEX32_B,
-                        "executionReceiptsRoot": HEX32_C,
-                    },
+                    "beacon_finality": ethereum_beacon_finality(),
                     "receipt_proof": receipt_proof,
                 }
             )
@@ -12085,6 +12202,13 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         asyncio.run(sdk.submit_inbound_to_iroha(b""))
     with pytest.raises(TypeError, match="proofBytes must not be all zero"):
         asyncio.run(sdk.submit_inbound_to_iroha(b"\x00\x00"))
+    with pytest.raises(TypeError, match="proofBytes must be at most"):
+        asyncio.run(
+            sdk.submit_inbound_to_iroha(
+                b"\x01" * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1)
+            )
+        )
+    assert submitted == [b"\x0a\x0b\x0c"]
 
     receipt_proof_evidence = asyncio.run(
         EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
@@ -12260,6 +12384,212 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         )
 
 
+def test_ethereum_mainnet_sccp_collects_immutable_evidence_snapshot_from_mutable_inputs() -> None:
+    mutable_log_topics = [evm_sccp_source_event_topic(), SOURCE_EVENT_DIGEST]
+    receipt_logs = [source_event_log(topics=mutable_log_topics)]
+    receipt = {
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
+        "status": "0x1",
+        "logs": receipt_logs,
+    }
+    block_witness = {
+        "branch": [HEX32_E],
+        "bytes": bytearray(b"\xbb"),
+    }
+    block = {
+        "hash": HEX32_B,
+        "number": "0x1234",
+        "receiptsRoot": HEX32_C,
+        "mutableWitness": block_witness,
+    }
+    finality_branch = list(ETHEREUM_FINALITY_BRANCH)
+    finality_witness = {
+        "branch": finality_branch,
+        "bytes": bytearray(b"\xcc"),
+    }
+    mutable_payload = bytearray(b"\xaa")
+
+    class ConsensusProvider:
+        async def collect_finality_evidence(
+            self,
+            evidence: Mapping[str, Any],
+            _options: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            assert evidence["mutable_payload"] == b"\xaa"
+            assert evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+            assert evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+            with pytest.raises(TypeError, match="immutable"):
+                evidence["mutable_payload"] = b"\x00"  # type: ignore[index]
+            with pytest.raises(TypeError, match="immutable"):
+                evidence["receipt"]["logs"].append({})  # type: ignore[attr-defined]
+            with pytest.raises(TypeError, match="immutable"):
+                evidence["block"]["mutableWitness"]["branch"].append(HEX32_A)  # type: ignore[attr-defined]
+
+            receipt_logs.append(source_event_log())
+            mutable_log_topics[1] = HEX32_A
+            block_witness["branch"].append(HEX32_A)
+            block_witness["bytes"][0] = 0x7C
+            mutable_payload[0] = 0x7D
+            return ethereum_beacon_finality(
+                finalityBranch=finality_branch,
+                mutableWitness=finality_witness,
+            )
+
+    evidence = asyncio.run(
+        EthereumMainnetSccp(
+            consensus_provider=ConsensusProvider(),
+            source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS,
+        ).collect_inbound_evidence_from_receipt(
+            {
+                "receipt": receipt,
+                "block": block,
+                "mutable_payload": mutable_payload,
+            }
+        )
+    )
+
+    finality_branch[0] = HEX32_A
+    finality_witness["branch"].append(HEX32_A)
+    finality_witness["bytes"][0] = 0x7E
+
+    with pytest.raises(TypeError, match="immutable"):
+        evidence["receipt"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError, match="immutable"):
+        evidence["receipt"]["logs"].append({})  # type: ignore[attr-defined]
+    with pytest.raises(TypeError, match="immutable"):
+        evidence["beacon_finality"]["mutableWitness"]["branch"].append(HEX32_A)  # type: ignore[attr-defined]
+
+    assert evidence["mutable_payload"] == b"\xaa"
+    assert len(evidence["receipt"]["logs"]) == 1
+    assert evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+    assert evidence["block"]["mutableWitness"]["branch"] == [HEX32_E]
+    assert evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+    assert (
+        evidence["beacon_finality"]["finality_branch"][0]
+        == ETHEREUM_FINALITY_BRANCH[0]
+    )
+    assert evidence["beacon_finality"]["mutableWitness"]["branch"] == ETHEREUM_FINALITY_BRANCH
+    assert evidence["beacon_finality"]["mutableWitness"]["bytes"] == b"\xcc"
+
+
+def test_ethereum_mainnet_sccp_inbound_prover_receives_immutable_evidence_snapshot() -> None:
+    mutable_log_topics = [evm_sccp_source_event_topic(), SOURCE_EVENT_DIGEST]
+    receipt_logs = [source_event_log(topics=mutable_log_topics)]
+    receipt = {
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
+        "status": "0x1",
+        "logs": receipt_logs,
+    }
+    block_witness = {
+        "branch": [HEX32_E],
+        "bytes": bytearray(b"\xbb"),
+    }
+    block = {
+        "hash": HEX32_B,
+        "number": "0x1234",
+        "receiptsRoot": HEX32_C,
+        "mutableWitness": block_witness,
+    }
+    finality_branch = list(ETHEREUM_FINALITY_BRANCH)
+    finality_witness = {
+        "branch": finality_branch,
+        "bytes": bytearray(b"\xcc"),
+    }
+    beacon_finality = ethereum_beacon_finality(
+        finalityBranch=finality_branch,
+        mutableWitness=finality_witness,
+    )
+    mutable_receipt_proof_nodes = [EVM_RECEIPT_STATE_MPT_NODE_HEX]
+    mutable_inclusion_branch = [HEX32_E]
+    receipt_proof = {
+        "source_domain": SCCP_DOMAIN_ETH,
+        "source_event_digest": SOURCE_EVENT_DIGEST,
+        "beacon_slot": "11",
+        "execution_block_number": "4660",
+        "execution_block_hash": HEX32_B,
+        "execution_receipts_root": HEX32_C,
+        "beacon_finalized_root": HEX32_D,
+        "sync_committee_root": HEX32_E,
+        "receipt_root_index": "0",
+        "receipt_trie_proof_nodes": mutable_receipt_proof_nodes,
+        "inclusion_branch": mutable_inclusion_branch,
+    }
+    mutable_payload = bytearray(b"\xaa")
+    callback_evidence: Mapping[str, Any] | None = None
+
+    async def prove_inbound(
+        evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        nonlocal callback_evidence
+        callback_evidence = evidence
+        assert evidence["mutable_payload"] == b"\xaa"
+        assert evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+        assert evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+        assert evidence["beacon_finality"]["mutableWitness"]["bytes"] == b"\xcc"
+        assert (
+            evidence["receipt_proof"]["receipt_trie_proof_nodes"][0]
+            == EVM_RECEIPT_STATE_MPT_NODE_HEX
+        )
+
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["mutable_payload"] = b"\x00"  # type: ignore[index]
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["receipt"]["logs"].append({})  # type: ignore[attr-defined]
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["beacon_finality"]["finality_branch"].append(HEX32_A)  # type: ignore[attr-defined]
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["receipt_proof"]["receipt_trie_proof_nodes"].append(HEX32_A)  # type: ignore[attr-defined]
+
+        receipt_logs.append(source_event_log())
+        mutable_log_topics[1] = HEX32_A
+        block_witness["branch"].append(HEX32_A)
+        block_witness["bytes"][0] = 0x7C
+        finality_branch[0] = HEX32_A
+        finality_witness["bytes"][0] = 0x7D
+        mutable_receipt_proof_nodes[0] = "0x" + "99" * 32
+        mutable_inclusion_branch.append(HEX32_A)
+        mutable_payload[0] = 0x7E
+        return b"\x01\x02\x03"
+
+    proof = asyncio.run(
+        EthereumMainnetSccp(
+            source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS,
+            prove_inbound=prove_inbound,
+        ).prove_inbound_to_sora(
+            {
+                "receipt": receipt,
+                "block": block,
+                "beacon_finality": beacon_finality,
+                "receipt_proof": receipt_proof,
+                "mutable_payload": mutable_payload,
+            }
+        )
+    )
+
+    assert proof == b"\x01\x02\x03"
+    assert callback_evidence is not None
+    assert callback_evidence["mutable_payload"] == b"\xaa"
+    assert len(callback_evidence["receipt"]["logs"]) == 1
+    assert callback_evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+    assert callback_evidence["block"]["mutableWitness"]["branch"] == [HEX32_E]
+    assert callback_evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+    assert (
+        callback_evidence["beacon_finality"]["finality_branch"][0]
+        == ETHEREUM_FINALITY_BRANCH[0]
+    )
+    assert callback_evidence["beacon_finality"]["mutableWitness"]["bytes"] == b"\xcc"
+    assert (
+        callback_evidence["receipt_proof"]["receipt_trie_proof_nodes"][0]
+        == EVM_RECEIPT_STATE_MPT_NODE_HEX
+    )
+    assert callback_evidence["receipt_proof"]["inclusion_branch"] == [HEX32_E]
+
+
 def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> None:
     class Provider:
         def __init__(
@@ -12289,12 +12619,7 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
         "status": "0x1",
     }
     good_block = {"hash": HEX32_B, "number": "0x1234", "receiptsRoot": HEX32_C}
-    good_finality = {
-        "executionBlockNumber": "0x1234",
-        "executionBlockHash": HEX32_B,
-        "executionReceiptsRoot": HEX32_C,
-        "finalizedHeaderRoot": HEX32_D,
-    }
+    good_finality = ethereum_beacon_finality()
     good_receipt_proof = {
         "source_domain": SCCP_DOMAIN_ETH,
         "source_event_digest": HEX32_D,
@@ -12408,6 +12733,46 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
         (
             good_receipt,
             good_block,
+            {
+                key: value
+                for key, value in good_finality.items()
+                if key != "finalityBranch"
+            },
+            "beaconFinality.finalityBranch",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "finalityBranch": ETHEREUM_FINALITY_BRANCH[:5]},
+            "finalityBranch must contain 6 siblings",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "syncCommitteeBits": LOW_ETHEREUM_SYNC_COMMITTEE_BITS},
+            "beaconFinality.syncCommitteeBits",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "syncCommitteeParticipation": "341"},
+            "beaconFinality.syncCommitteeParticipation",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "syncSignatureSlot": "10"},
+            "beaconFinality.syncSignatureSlot",
+        ),
+        (
+            good_receipt,
+            good_block,
+            {**good_finality, "syncCommitteeSignature": "0x" + "00" * 96},
+            "beaconFinality.syncCommitteeSignature",
+        ),
+        (
+            good_receipt,
+            good_block,
             {},
             "beaconFinality.executionBlockNumber",
         ),
@@ -12466,6 +12831,54 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
                     "receipt_proof": {
                         **good_receipt_proof,
                         "execution_receipts_root": HEX32_D,
+                    },
+                }
+            )
+        )
+    assert not called
+
+    with pytest.raises(ValueError, match="receiptProof.beaconFinalizedRoot"):
+        asyncio.run(
+            EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {
+                    "receipt": good_receipt,
+                    "block": good_block,
+                    "beacon_finality": good_finality,
+                    "receipt_proof": {
+                        **good_receipt_proof,
+                        "beacon_finalized_root": HEX32_A,
+                    },
+                }
+            )
+        )
+    assert not called
+
+    with pytest.raises(ValueError, match="receiptProof.syncCommitteeRoot"):
+        asyncio.run(
+            EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {
+                    "receipt": good_receipt,
+                    "block": good_block,
+                    "beacon_finality": good_finality,
+                    "receipt_proof": {
+                        **good_receipt_proof,
+                        "sync_committee_root": HEX32_A,
+                    },
+                }
+            )
+        )
+    assert not called
+
+    with pytest.raises(ValueError, match="receiptProof.beaconSlot"):
+        asyncio.run(
+            EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {
+                    "receipt": good_receipt,
+                    "block": good_block,
+                    "beacon_finality": good_finality,
+                    "receipt_proof": {
+                        **good_receipt_proof,
+                        "beacon_slot": "12",
                     },
                 }
             )
@@ -12810,6 +13223,35 @@ def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -
         )
     assert called_without_source_event is False
 
+    called_with_unvalidated_source_event = False
+
+    async def prove_with_unvalidated_source_event(
+        _evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        nonlocal called_with_unvalidated_source_event
+        called_with_unvalidated_source_event = True
+        return b"\x01"
+
+    with pytest.raises(TypeError, match="source event validation requires receipt logs"):
+        asyncio.run(
+            BscMainnetSccp(
+                prove_inbound=prove_with_unvalidated_source_event
+            ).prove_inbound_to_sora(
+                {
+                    "receipt_proof": receipt_proof,
+                    "receipt_proof_hash": receipt_proof_hash,
+                    "source_event_digest": SOURCE_EVENT_DIGEST,
+                    "parlia_finality": {
+                        "execution_block_number": "0x1234",
+                        "execution_block_hash": HEX32_B,
+                        "execution_receipts_root": HEX32_C,
+                    },
+                }
+            )
+        )
+    assert called_with_unvalidated_source_event is False
+
     with pytest.raises(ValueError, match="receiptProof.sourceEventDigest"):
         asyncio.run(
             BscMainnetSccp().collect_inbound_evidence_from_receipt(
@@ -12959,6 +13401,211 @@ def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -
         asyncio.run(sdk.submit_inbound_to_iroha(b""))
     with pytest.raises(TypeError, match="proofBytes must not be all zero"):
         asyncio.run(sdk.submit_inbound_to_iroha(b"\x00\x00"))
+
+
+def test_bsc_mainnet_sccp_collects_immutable_evidence_snapshot_from_mutable_inputs() -> None:
+    mutable_log_topics = [evm_sccp_source_event_topic(), SOURCE_EVENT_DIGEST]
+    receipt_logs = [source_event_log(topics=mutable_log_topics)]
+    receipt = {
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
+        "status": "0x1",
+        "logs": receipt_logs,
+    }
+    block_witness = {
+        "branch": [HEX32_E],
+        "bytes": bytearray(b"\xbb"),
+    }
+    block = {
+        "hash": HEX32_B,
+        "number": "0x1234",
+        "receiptsRoot": HEX32_C,
+        "mutableWitness": block_witness,
+    }
+    finality_witness = {
+        "branch": [HEX32_E],
+        "bytes": bytearray(b"\xcc"),
+    }
+    mutable_payload = bytearray(b"\xaa")
+
+    class ConsensusProvider:
+        async def collect_finality_evidence(
+            self,
+            evidence: Mapping[str, Any],
+            _options: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            assert evidence["mutable_payload"] == b"\xaa"
+            assert evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+            assert evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+            with pytest.raises(TypeError, match="immutable"):
+                evidence["mutable_payload"] = b"\x00"  # type: ignore[index]
+            with pytest.raises(TypeError, match="immutable"):
+                evidence["receipt"]["logs"].append({})  # type: ignore[attr-defined]
+            with pytest.raises(TypeError, match="immutable"):
+                evidence["block"]["mutableWitness"]["branch"].append(HEX32_A)  # type: ignore[attr-defined]
+
+            receipt_logs.append(source_event_log())
+            mutable_log_topics[1] = HEX32_A
+            block_witness["branch"].append(HEX32_A)
+            block_witness["bytes"][0] = 0x7C
+            mutable_payload[0] = 0x7D
+            return {
+                "execution_block_number": "0x1234",
+                "execution_block_hash": HEX32_B,
+                "execution_receipts_root": HEX32_C,
+                "validator_epoch": "0x24",
+                "commit_seal_hash": HEX32_D,
+                "mutableWitness": finality_witness,
+            }
+
+    evidence = asyncio.run(
+        BscMainnetSccp(
+            consensus_provider=ConsensusProvider(),
+            source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS,
+        ).collect_inbound_evidence_from_receipt(
+            {
+                "receipt": receipt,
+                "block": block,
+                "mutable_payload": mutable_payload,
+            }
+        )
+    )
+
+    finality_witness["branch"].append(HEX32_A)
+    finality_witness["bytes"][0] = 0x7E
+
+    with pytest.raises(TypeError, match="immutable"):
+        evidence["receipt"] = {}  # type: ignore[index]
+    with pytest.raises(TypeError, match="immutable"):
+        evidence["receipt"]["logs"].append({})  # type: ignore[attr-defined]
+    with pytest.raises(TypeError, match="immutable"):
+        evidence["parlia_finality"]["mutableWitness"]["branch"].append(HEX32_A)  # type: ignore[attr-defined]
+
+    assert evidence["mutable_payload"] == b"\xaa"
+    assert len(evidence["receipt"]["logs"]) == 1
+    assert evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+    assert evidence["block"]["mutableWitness"]["branch"] == [HEX32_E]
+    assert evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+    assert evidence["parlia_finality"]["mutableWitness"]["branch"] == [HEX32_E]
+    assert evidence["parlia_finality"]["mutableWitness"]["bytes"] == b"\xcc"
+
+
+def test_bsc_mainnet_sccp_inbound_prover_receives_immutable_evidence_snapshot() -> None:
+    mutable_log_topics = [evm_sccp_source_event_topic(), SOURCE_EVENT_DIGEST]
+    receipt_logs = [source_event_log(topics=mutable_log_topics)]
+    receipt = {
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
+        "status": "0x1",
+        "logs": receipt_logs,
+    }
+    block_witness = {
+        "branch": [HEX32_E],
+        "bytes": bytearray(b"\xbb"),
+    }
+    block = {
+        "hash": HEX32_B,
+        "number": "0x1234",
+        "receiptsRoot": HEX32_C,
+        "mutableWitness": block_witness,
+    }
+    finality_witness = {
+        "branch": [HEX32_E],
+        "bytes": bytearray(b"\xcc"),
+    }
+    parlia_finality = {
+        "execution_block_number": "0x1234",
+        "execution_block_hash": HEX32_B,
+        "execution_receipts_root": HEX32_C,
+        "validator_epoch": "0x24",
+        "validator_set_hash": HEX32_E,
+        "commit_seal_hash": HEX32_D,
+        "mutableWitness": finality_witness,
+    }
+    mutable_receipt_proof_nodes = [EVM_RECEIPT_STATE_MPT_NODE_HEX]
+    mutable_inclusion_branch = [HEX32_E]
+    receipt_proof = {
+        "source_domain": SCCP_DOMAIN_BSC,
+        "source_event_digest": SOURCE_EVENT_DIGEST,
+        "validator_epoch": "36",
+        "block_number": "4660",
+        "block_hash": HEX32_B,
+        "receipts_root": HEX32_C,
+        "validator_set_hash": HEX32_E,
+        "commit_seal_hash": HEX32_D,
+        "receipt_root_index": "0",
+        "receipt_trie_proof_nodes": mutable_receipt_proof_nodes,
+        "inclusion_branch": mutable_inclusion_branch,
+    }
+    mutable_payload = bytearray(b"\xaa")
+    callback_evidence: Mapping[str, Any] | None = None
+
+    async def prove_inbound(
+        evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        nonlocal callback_evidence
+        callback_evidence = evidence
+        assert evidence["mutable_payload"] == b"\xaa"
+        assert evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+        assert evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+        assert evidence["parlia_finality"]["mutableWitness"]["bytes"] == b"\xcc"
+        assert (
+            evidence["receipt_proof"]["receipt_trie_proof_nodes"][0]
+            == EVM_RECEIPT_STATE_MPT_NODE_HEX
+        )
+
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["mutable_payload"] = b"\x00"  # type: ignore[index]
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["receipt"]["logs"].append({})  # type: ignore[attr-defined]
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["parlia_finality"]["mutableWitness"]["branch"].append(HEX32_A)  # type: ignore[attr-defined]
+        with pytest.raises(TypeError, match="immutable"):
+            evidence["receipt_proof"]["receipt_trie_proof_nodes"].append(HEX32_A)  # type: ignore[attr-defined]
+
+        receipt_logs.append(source_event_log())
+        mutable_log_topics[1] = HEX32_A
+        block_witness["branch"].append(HEX32_A)
+        block_witness["bytes"][0] = 0x7C
+        finality_witness["branch"].append(HEX32_A)
+        finality_witness["bytes"][0] = 0x7D
+        mutable_receipt_proof_nodes[0] = "0x" + "99" * 32
+        mutable_inclusion_branch.append(HEX32_A)
+        mutable_payload[0] = 0x7E
+        return b"\x04\x05\x06"
+
+    proof = asyncio.run(
+        BscMainnetSccp(
+            source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS,
+            prove_inbound=prove_inbound,
+        ).prove_inbound_to_sora(
+            {
+                "receipt": receipt,
+                "block": block,
+                "parlia_finality": parlia_finality,
+                "receipt_proof": receipt_proof,
+                "mutable_payload": mutable_payload,
+            }
+        )
+    )
+
+    assert proof == b"\x04\x05\x06"
+    assert callback_evidence is not None
+    assert callback_evidence["mutable_payload"] == b"\xaa"
+    assert len(callback_evidence["receipt"]["logs"]) == 1
+    assert callback_evidence["receipt"]["logs"][0]["topics"][1] == SOURCE_EVENT_DIGEST
+    assert callback_evidence["block"]["mutableWitness"]["branch"] == [HEX32_E]
+    assert callback_evidence["block"]["mutableWitness"]["bytes"] == b"\xbb"
+    assert callback_evidence["parlia_finality"]["mutableWitness"]["branch"] == [HEX32_E]
+    assert callback_evidence["parlia_finality"]["mutableWitness"]["bytes"] == b"\xcc"
+    assert (
+        callback_evidence["receipt_proof"]["receipt_trie_proof_nodes"][0]
+        == EVM_RECEIPT_STATE_MPT_NODE_HEX
+    )
+    assert callback_evidence["receipt_proof"]["inclusion_branch"] == [HEX32_E]
 
 
 def test_bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> None:

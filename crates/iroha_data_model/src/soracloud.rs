@@ -17,7 +17,14 @@ use std::{
 
 use iroha_crypto::{
     Hash, PublicKey, Signature,
-    fhe_bfv::BfvEvaluationKeyBundle,
+    fhe_bfv::{
+        BFV_BOOTSTRAP_KEY_ID_MAX_BYTES, BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
+        BFV_DETERMINISTIC_SEED_MAX_BYTES, BFV_EVALUATION_KEY_MAX_ROTATION_KEYS,
+        BfvBootstrapKeyTranscriptSeed, BfvEvaluationBudget, BfvEvaluationKeyBundle, BfvPublicKey,
+        BfvRotationKeyTranscriptSeed, bfv_balanced_multiplication_depth, ram_lfe_bfv_parameters_v1,
+        validate_bfv_bounded_noise_bound, validate_bfv_exact_residual_multiple_capacity,
+        validate_public_key as validate_bfv_public_key,
+    },
     kex::{KeyExchangeScheme as _, X25519Sha256},
 };
 use iroha_primitives::json::Json;
@@ -31,7 +38,12 @@ use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
+    proof::ProofAttachment,
     sorafs::pin_registry::{ManifestDigest, StorageClass},
+    zk::{
+        BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
+        is_stark_fri_v1_backend_label,
+    },
 };
 
 /// Schema version for [`SoraContainerManifestV1`].
@@ -50,10 +62,24 @@ pub const SORA_DEPLOYMENT_BUNDLE_VERSION_V1: u16 = 1;
 pub const AGENT_APARTMENT_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`FheParamSetV1`].
 pub const FHE_PARAM_SET_VERSION_V1: u16 = 1;
+/// Registered Soracloud BFV backend profile admitted by first-release FHE manifests.
+pub const REGISTERED_SORACLOUD_BFV_BACKEND_V1: &str = "fhe/bfv-rns/v1";
 /// Schema version for [`FheExecutionPolicyV1`].
 pub const FHE_EXECUTION_POLICY_VERSION_V1: u16 = 1;
 /// Schema version for [`FheGovernanceBundleV1`].
 pub const FHE_GOVERNANCE_BUNDLE_VERSION_V1: u16 = 1;
+/// Maximum public rotation refresh transcript entries admitted for one BFV key bundle.
+pub const BFV_REFRESH_TRANSCRIPT_MAX_ROTATION_TRANSCRIPTS: usize =
+    BFV_EVALUATION_KEY_MAX_ROTATION_KEYS;
+/// Maximum byte length for public BFV bootstrap refresh transcript key ids.
+pub const BFV_REFRESH_TRANSCRIPT_BOOTSTRAP_KEY_ID_MAX_BYTES: usize = BFV_BOOTSTRAP_KEY_ID_MAX_BYTES;
+/// Maximum public bootstrap refresh rounds admitted by BFV refresh transcripts.
+pub const BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS: u16 =
+    BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS;
+/// Maximum byte length for public BFV refresh transcript seeds.
+pub const BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES: usize = BFV_DETERMINISTIC_SEED_MAX_BYTES;
+/// Schema version for [`SoracloudFheInputAdmissionProofV1`].
+pub const SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1: u16 = 1;
 /// Schema version for [`SecretEnvelopeV1`].
 pub const SECRET_ENVELOPE_VERSION_V1: u16 = 1;
 /// Schema version for [`CiphertextStateRecordV1`].
@@ -70,6 +96,19 @@ pub const CIPHERTEXT_QUERY_SPEC_VERSION_V1: u16 = 1;
 pub const CIPHERTEXT_QUERY_RESPONSE_VERSION_V1: u16 = 1;
 /// Schema version for [`CiphertextInclusionProofV1`].
 pub const CIPHERTEXT_QUERY_PROOF_VERSION_V1: u16 = 1;
+/// Public-input schema for Soracloud BFV input-admission proofs.
+pub const SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
+    br#"{"schema":"soracloud_fhe_input_admission_v1","public_inputs":["statement_hash"],"statement_layout":"((service_name,binding_name,key,operation,value_size_bytes,payload_commitment,encryption,governance_tx_hash),(bfv_parameter_digest,bfv_rns_modulus_chain_digest,bfv_key_switch_decomposition_chain_digest),residual_multiple_bound,bound_mode)"}"#;
+/// Canonical STARK/FRI circuit id for Soracloud BFV input-admission proofs.
+pub const SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1: &str = "soracloud_fhe_input_admission_v1";
+/// Maximum backend-native STARK/FRI envelope bytes for Soracloud FHE input admission.
+pub const SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum STARK/FRI public-input wrapper bytes for Soracloud FHE input admission.
+pub const SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES: usize =
+    SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES + 16 * 1024;
+/// Maximum encoded `OpenVerify` envelope bytes for Soracloud FHE input admission.
+pub const SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES: usize =
+    SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES + 16 * 1024;
 /// Schema version for [`SoraServiceStateEntryV1`].
 pub const SORA_SERVICE_STATE_ENTRY_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceConfigEntryV1`].
@@ -2857,7 +2896,7 @@ pub struct FheParamSetV1 {
     pub param_set: Name,
     /// Monotonic version number under the same `param_set` name.
     pub version: NonZeroU32,
-    /// Backend profile identifier (`fhe/bfv-rns/v2`, etc.).
+    /// Backend profile identifier.
     pub backend: String,
     /// Cryptosystem family used by this parameter set.
     pub scheme: FheSchemeV1,
@@ -2889,6 +2928,8 @@ pub struct FheParamSetV1 {
     pub parameter_digest: Hash,
     /// Domain-separated digest of the backend RNS coefficient-modulus chain.
     pub rns_modulus_chain_digest: Hash,
+    /// Domain-separated digest of the backend key-switch decomposition RNS chain.
+    pub key_switch_decomposition_chain_digest: Hash,
 }
 
 impl FheParamSetV1 {
@@ -2911,6 +2952,24 @@ impl FheParamSetV1 {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "fhe parameter set",
                 field: "backend",
+            });
+        }
+
+        if self.scheme != FheSchemeV1::Bfv {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "scheme",
+                reason: "first-release FHE parameter sets currently support BFV only".to_string(),
+            });
+        }
+
+        if self.backend != REGISTERED_SORACLOUD_BFV_BACKEND_V1 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "backend",
+                reason: format!(
+                    "must match registered BFV backend `{REGISTERED_SORACLOUD_BFV_BACKEND_V1}`"
+                ),
             });
         }
 
@@ -2977,6 +3036,17 @@ impl FheParamSetV1 {
                 field: "max_multiplicative_depth",
                 reason: format!(
                     "must be smaller than ciphertext modulus chain length ({chain_len})"
+                ),
+            });
+        }
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+        if self.max_multiplicative_depth.get() > evaluator_budget.max_multiplicative_depth {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe parameter set",
+                field: "max_multiplicative_depth",
+                reason: format!(
+                    "cannot exceed exact BFV evaluator multiplicative-depth budget ({})",
+                    evaluator_budget.max_multiplicative_depth
                 ),
             });
         }
@@ -3087,6 +3157,294 @@ pub enum FheDeterministicRoundingModeV1 {
     NearestTiesToEven,
 }
 
+/// Public BFV refresh transcript derivation mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "refresh_transcript_mode", content = "value")
+)]
+pub enum BfvRefreshTranscriptModeV1 {
+    /// First-release exact-lift encrypted-zero refresh transcript derivation.
+    #[default]
+    ExactLift,
+    /// Rounded bounded-noise encrypted-zero refresh transcript derivation.
+    BoundedNoise,
+}
+
+/// Public BFV ciphertext bound semantics attached to FHE state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "bound_mode", content = "value"))]
+pub enum BfvCiphertextBoundModeV1 {
+    /// Bound is an exact plaintext-modulus residual multiple.
+    #[default]
+    ExactResidualMultiple,
+    /// Bound is a rounded BFV centered-noise bound.
+    BoundedNoise,
+}
+
+/// Public transcript seed for one BFV rotation refresh key.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BfvRotationRefreshTranscriptV1 {
+    /// Rotation step count whose public refresh key is derived from `seed`.
+    pub rotation_steps: u32,
+    /// Public deterministic seed for the encrypted-zero refresh key.
+    pub seed: Vec<u8>,
+}
+
+/// Public transcript seed for the BFV bootstrap refresh key.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BfvBootstrapRefreshTranscriptV1 {
+    /// Bootstrap key id whose refresh rounds are derived from `seed`.
+    pub key_id: String,
+    /// Maximum refresh-round capacity bound into the transcript.
+    pub max_refresh_rounds: u16,
+    /// Public deterministic seed for the encrypted-zero refresh rounds.
+    pub seed: Vec<u8>,
+}
+
+/// Public transcript inventory for BFV evaluation-key refresh material.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BfvEvaluationKeyRefreshTranscriptV1 {
+    /// Public BFV key used to derive rotation/bootstrap encrypted-zero masks.
+    pub public_key: BfvPublicKey,
+    /// One transcript seed per public rotation refresh key.
+    #[norito(default)]
+    pub rotation_transcripts: Vec<BfvRotationRefreshTranscriptV1>,
+    /// Optional bootstrap refresh transcript.
+    #[norito(default)]
+    pub bootstrap_transcript: Option<BfvBootstrapRefreshTranscriptV1>,
+}
+
+fn validate_bfv_refresh_transcript_seed(
+    manifest: &'static str,
+    field: &'static str,
+    seed: &[u8],
+) -> Result<(), SoracloudManifestError> {
+    if seed.is_empty() {
+        return Err(SoracloudManifestError::EmptyField { manifest, field });
+    }
+    if seed.len() > BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!("cannot exceed {BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES} bytes"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_bfv_refresh_transcript_bootstrap_key_id(
+    key_id: &str,
+) -> Result<(), SoracloudManifestError> {
+    if key_id.is_empty() {
+        return Err(SoracloudManifestError::EmptyField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "bootstrap_transcript.key_id",
+        });
+    }
+    if key_id.len() > BFV_REFRESH_TRANSCRIPT_BOOTSTRAP_KEY_ID_MAX_BYTES {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "bootstrap_transcript.key_id",
+            reason: format!(
+                "cannot exceed {BFV_REFRESH_TRANSCRIPT_BOOTSTRAP_KEY_ID_MAX_BYTES} bytes"
+            ),
+        });
+    }
+    if key_id.trim() != key_id {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "bootstrap_transcript.key_id",
+            reason: "must be canonical without surrounding whitespace".to_string(),
+        });
+    }
+    if !key_id
+        .bytes()
+        .all(is_bfv_refresh_transcript_bootstrap_key_id_byte)
+    {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "bootstrap_transcript.key_id",
+            reason: "must contain only ASCII alphanumeric, '.', '_', or '-' bytes".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn is_bfv_refresh_transcript_bootstrap_key_id_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+}
+
+fn validate_bfv_refresh_transcript_bootstrap_rounds(
+    max_refresh_rounds: u16,
+) -> Result<(), SoracloudManifestError> {
+    if max_refresh_rounds == 0 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "bootstrap_transcript.max_refresh_rounds",
+            reason: "must be greater than zero".to_string(),
+        });
+    }
+    if max_refresh_rounds > BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "bootstrap_transcript.max_refresh_rounds",
+            reason: format!(
+                "cannot exceed BFV bootstrap-key refresh-round limit ({BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS})"
+            ),
+        });
+    }
+    Ok(())
+}
+
+impl BfvEvaluationKeyRefreshTranscriptV1 {
+    /// Validate bounded public transcript metadata before recomputing refresh keys.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the transcript inventory is
+    /// unbounded or carries non-canonical public seed/key-id metadata.
+    pub fn validate_seed_bounds(&self) -> Result<(), SoracloudManifestError> {
+        if self.rotation_transcripts.len() > BFV_REFRESH_TRANSCRIPT_MAX_ROTATION_TRANSCRIPTS {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "rotation_transcripts",
+                reason: format!(
+                    "cannot exceed {BFV_REFRESH_TRANSCRIPT_MAX_ROTATION_TRANSCRIPTS} entries"
+                ),
+            });
+        }
+        let mut seen_rotation_steps = BTreeSet::new();
+        for transcript in &self.rotation_transcripts {
+            if transcript.rotation_steps == 0 {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "bfv evaluation-key refresh transcript",
+                    field: "rotation_transcripts.rotation_steps",
+                    reason: "must be greater than zero".to_string(),
+                });
+            }
+            if !seen_rotation_steps.insert(transcript.rotation_steps) {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "bfv evaluation-key refresh transcript",
+                    field: "rotation_transcripts.rotation_steps",
+                    reason: format!(
+                        "duplicate rotation transcript for {} steps",
+                        transcript.rotation_steps
+                    ),
+                });
+            }
+            validate_bfv_refresh_transcript_seed(
+                "bfv evaluation-key refresh transcript",
+                "rotation_transcripts.seed",
+                &transcript.seed,
+            )?;
+        }
+        if let Some(transcript) = self.bootstrap_transcript.as_ref() {
+            validate_bfv_refresh_transcript_bootstrap_key_id(&transcript.key_id)?;
+            validate_bfv_refresh_transcript_bootstrap_rounds(transcript.max_refresh_rounds)?;
+            validate_bfv_refresh_transcript_seed(
+                "bfv evaluation-key refresh transcript",
+                "bootstrap_transcript.seed",
+                &transcript.seed,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Validate and digest this transcript inventory against evaluation keys.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the transcript inventory does
+    /// not cover the public refresh material or canonical digesting fails.
+    pub fn digest_for_evaluation_keys(
+        &self,
+        params: &iroha_crypto::fhe_bfv::BfvParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) -> Result<Hash, SoracloudManifestError> {
+        self.digest_for_evaluation_keys_with_mode(
+            params,
+            evaluation_keys,
+            BfvRefreshTranscriptModeV1::ExactLift,
+        )
+    }
+
+    /// Validate and digest this transcript inventory for the selected BFV mode.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the transcript inventory does
+    /// not cover the public refresh material or canonical digesting fails.
+    pub fn digest_for_evaluation_keys_with_mode(
+        &self,
+        params: &iroha_crypto::fhe_bfv::BfvParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+        mode: BfvRefreshTranscriptModeV1,
+    ) -> Result<Hash, SoracloudManifestError> {
+        self.validate_seed_bounds()?;
+        validate_bfv_public_key(params, &self.public_key).map_err(|err| {
+            SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "public_key",
+                reason: err.to_string(),
+            }
+        })?;
+        let rotation_transcripts = self
+            .rotation_transcripts
+            .iter()
+            .map(|transcript| BfvRotationKeyTranscriptSeed {
+                rotation_steps: transcript.rotation_steps,
+                seed: transcript.seed.as_slice(),
+            })
+            .collect::<Vec<_>>();
+        let bootstrap_transcript =
+            self.bootstrap_transcript
+                .as_ref()
+                .map(|transcript| BfvBootstrapKeyTranscriptSeed {
+                    key_id: transcript.key_id.as_str(),
+                    max_refresh_rounds: transcript.max_refresh_rounds,
+                    seed: transcript.seed.as_slice(),
+                });
+        let digest = match mode {
+            BfvRefreshTranscriptModeV1::ExactLift => evaluation_keys.refresh_transcript_digest(
+                params,
+                &self.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            ),
+            BfvRefreshTranscriptModeV1::BoundedNoise => evaluation_keys
+                .bounded_noise_refresh_transcript_digest(
+                    params,
+                    &self.public_key,
+                    &rotation_transcripts,
+                    bootstrap_transcript,
+                ),
+        };
+        digest.map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: "bfv evaluation-key refresh transcript",
+            field: "refresh_transcript",
+            reason: err.to_string(),
+        })
+    }
+}
+
 /// Deterministic execution policy for validator-side ciphertext operations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3104,6 +3462,11 @@ pub struct FheExecutionPolicyV1 {
     pub param_set_version: NonZeroU32,
     /// Domain-separated digest of the BFV evaluation-key bundle admitted for this policy.
     pub evaluation_key_digest: Hash,
+    /// Domain-separated digest of the BFV refresh transcript inventory.
+    pub evaluation_key_refresh_transcript_digest: Hash,
+    /// BFV refresh transcript derivation mode bound by this policy.
+    #[norito(default)]
+    pub refresh_transcript_mode: BfvRefreshTranscriptModeV1,
     /// Maximum admitted ciphertext size in bytes.
     pub max_ciphertext_bytes: NonZeroU64,
     /// Maximum admitted plaintext input size in bytes.
@@ -3151,6 +3514,37 @@ impl FheExecutionPolicyV1 {
                 manifest: "fhe execution policy",
                 field: "max_output_ciphertexts",
                 reason: "cannot exceed max_input_ciphertexts".to_string(),
+            });
+        }
+
+        if self.rounding_mode != FheDeterministicRoundingModeV1::NearestTiesToEven {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "rounding_mode",
+                reason: "only nearest-ties-to-even rounding is supported for first-release BFV execution policies"
+                    .to_string(),
+            });
+        }
+
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+        if self.max_multiplication_depth.get() > evaluator_budget.max_multiplicative_depth {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "max_multiplication_depth",
+                reason: format!(
+                    "cannot exceed exact BFV evaluator multiplicative-depth budget ({})",
+                    evaluator_budget.max_multiplicative_depth
+                ),
+            });
+        }
+        if self.max_bootstrap_count > evaluator_budget.max_bootstrap_refresh_rounds {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "max_bootstrap_count",
+                reason: format!(
+                    "cannot exceed exact BFV evaluator bootstrap-refresh budget ({})",
+                    evaluator_budget.max_bootstrap_refresh_rounds
+                ),
             });
         }
 
@@ -3250,6 +3644,289 @@ impl FheGovernanceBundleV1 {
         }
         self.execution_policy
             .validate_for_param_set(&self.param_set)
+    }
+}
+
+/// Proof envelope admitting a client-provided BFV ciphertext as Soracloud FHE input.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudFheInputAdmissionProofV1 {
+    /// Schema version; must equal [`SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1`].
+    pub schema_version: u16,
+    /// Public BFV ciphertext bound value proven for the ciphertext.
+    pub residual_multiple_bound: u128,
+    /// Semantics of `residual_multiple_bound`.
+    #[norito(default)]
+    pub bound_mode: BfvCiphertextBoundModeV1,
+    /// Canonical statement hash carried as the proof public input.
+    pub statement_hash: Hash,
+    /// Verifier-backed proof attachment for the input-admission statement.
+    pub proof: ProofAttachment,
+}
+
+impl SoracloudFheInputAdmissionProofV1 {
+    /// Validate proof-envelope structure before verifier execution.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the envelope version is unsupported
+    /// or the nested proof attachment is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.schema_version != SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1 {
+            return Err(SoracloudManifestError::UnsupportedVersion {
+                manifest: "soracloud fhe input admission proof",
+                expected: SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        validate_soracloud_fhe_input_admission_bound_capacity(
+            self.residual_multiple_bound,
+            self.bound_mode,
+        )?;
+        if self.proof.backend.as_str().trim().is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.backend",
+            });
+        }
+        validate_soracloud_fhe_input_admission_backend(self.proof.backend.as_str())?;
+        if self.proof.proof.backend != self.proof.backend {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.proof.backend",
+                reason: "must match proof.backend".to_string(),
+            });
+        }
+        if self.proof.proof.bytes.is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.proof.bytes",
+            });
+        }
+        if self.proof.vk_ref.backend != self.proof.backend {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.vk_ref.backend",
+                reason: "must match proof.backend".to_string(),
+            });
+        }
+        if self.proof.vk_ref.name.trim().is_empty() {
+            return Err(SoracloudManifestError::EmptyField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.vk_ref.name",
+            });
+        }
+        if self.proof.vk_ref.name != SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.vk_ref.name",
+                reason: "must use the canonical v1 circuit id".to_string(),
+            });
+        }
+        if let Some((field, reason)) = self.proof.structural_error() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof",
+                reason: format!("{field} {reason}"),
+            });
+        }
+        let vk_commitment =
+            self.proof
+                .vk_commitment
+                .ok_or_else(|| SoracloudManifestError::InvalidField {
+                    manifest: "soracloud fhe input admission proof",
+                    field: "proof.vk_commitment",
+                    reason: "must be present and match verifier-key hash".to_string(),
+                })?;
+        if self.proof.envelope_hash.is_none() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud fhe input admission proof",
+                field: "proof.envelope_hash",
+                reason: "must be present and match proof bytes".to_string(),
+            });
+        }
+        validate_soracloud_fhe_input_admission_open_verify_envelope(
+            &self.proof.proof.bytes,
+            vk_commitment,
+            self.statement_hash,
+        )?;
+        Ok(())
+    }
+}
+
+fn validate_soracloud_fhe_input_admission_backend(
+    backend: &str,
+) -> Result<(), SoracloudManifestError> {
+    if is_stark_fri_v1_backend_label(backend) {
+        return Ok(());
+    }
+    Err(SoracloudManifestError::InvalidField {
+        manifest: "soracloud fhe input admission proof",
+        field: "proof.backend",
+        reason: "must use a supported STARK/FRI v1 backend".to_string(),
+    })
+}
+
+fn validate_soracloud_fhe_input_admission_bound_capacity(
+    residual_multiple_bound: u128,
+    bound_mode: BfvCiphertextBoundModeV1,
+) -> Result<(), SoracloudManifestError> {
+    validate_soracloud_bfv_ciphertext_bound_capacity(
+        residual_multiple_bound,
+        bound_mode,
+        "soracloud fhe input admission proof",
+        "residual_multiple_bound",
+        "soracloud fhe input admission bound",
+    )
+}
+
+fn validate_soracloud_bfv_ciphertext_bound_capacity(
+    residual_multiple_bound: u128,
+    bound_mode: BfvCiphertextBoundModeV1,
+    manifest: &'static str,
+    field: &'static str,
+    label: &str,
+) -> Result<(), SoracloudManifestError> {
+    let params = ram_lfe_bfv_parameters_v1();
+    let result = match bound_mode {
+        BfvCiphertextBoundModeV1::ExactResidualMultiple => {
+            validate_bfv_exact_residual_multiple_capacity(
+                &params,
+                residual_multiple_bound,
+                &format!("{label} exact residual"),
+            )
+        }
+        BfvCiphertextBoundModeV1::BoundedNoise => validate_bfv_bounded_noise_bound(
+            &params,
+            residual_multiple_bound,
+            &format!("{label} bounded-noise"),
+        ),
+    };
+    result.map_err(|err| SoracloudManifestError::InvalidField {
+        manifest,
+        field,
+        reason: format!("exceeds registered BFV capacity: {err}"),
+    })
+}
+
+fn validate_soracloud_fhe_input_admission_open_verify_envelope(
+    proof_bytes: &[u8],
+    vk_commitment: [u8; 32],
+    statement_hash: Hash,
+) -> Result<(), SoracloudManifestError> {
+    if proof_bytes.len() > SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope length {} exceeds maximum {}",
+                proof_bytes.len(),
+                SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES
+            ),
+        });
+    }
+    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+        SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: format!("must encode a Soracloud FHE OpenVerifyEnvelope: {err}"),
+        }
+    })?;
+    envelope
+        .validate_with_bounds(soracloud_fhe_input_admission_open_verify_bounds())
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: format!("invalid OpenVerifyEnvelope shape: {err}"),
+        })?;
+    if envelope.backend != BackendTag::Stark {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope backend must be STARK".to_string(),
+        });
+    }
+    if envelope.circuit_id != SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope circuit id must be canonical v1".to_string(),
+        });
+    }
+    if envelope.public_inputs != SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: "OpenVerifyEnvelope public-input schema must be canonical v1".to_string(),
+        });
+    }
+    if vk_commitment != envelope.vk_hash {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.vk_commitment",
+            reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
+        });
+    }
+    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+        .map_err(|err| SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: format!(
+                "OpenVerifyEnvelope proof bytes must encode STARK public inputs: {err}"
+            ),
+        })?;
+    if open_proof.version != 1 {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: "STARK public-input wrapper version must be 1".to_string(),
+        });
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open_proof.public_inputs != expected_public_inputs {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: "STARK public inputs must match statement_hash".to_string(),
+        });
+    }
+    if open_proof.envelope_bytes.is_empty() {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: "STARK native envelope bytes must be non-empty".to_string(),
+        });
+    }
+    if open_proof.envelope_bytes.len() > SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "soracloud fhe input admission proof",
+            field: "proof.proof.bytes",
+            reason: format!(
+                "STARK native envelope bytes length {} exceeds maximum {}",
+                open_proof.envelope_bytes.len(),
+                SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Return shared `OpenVerifyEnvelope` bounds for Soracloud FHE input admission.
+///
+/// Data-model validation and Core runtime admission both use these limits so
+/// outer envelope, STARK wrapper, canonical metadata, and auxiliary-byte policy
+/// cannot drift.
+#[must_use]
+pub fn soracloud_fhe_input_admission_open_verify_bounds() -> OpenVerifyEnvelopeBounds {
+    OpenVerifyEnvelopeBounds {
+        max_circuit_id_bytes: SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1.len(),
+        max_public_input_bytes: SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.len(),
+        max_proof_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES,
+        max_aux_bytes: 0,
+        allow_aux: false,
+        ..OpenVerifyEnvelopeBounds::default()
     }
 }
 
@@ -3517,6 +4194,11 @@ pub enum FheJobOperationV1 {
     /// Element-wise homomorphic multiplication over two or more inputs.
     Multiply,
     /// Deterministic left-rotation over one ciphertext input.
+    ///
+    /// Single-ciphertext packed BFV envelopes use public Galois key switching,
+    /// including masked key schedules for rotations that are not one
+    /// automorphism. Multi-slot identifier envelopes use the outer
+    /// ciphertext-slot rotation path.
     RotateLeft,
     /// Deterministic bootstrap/relinearization refresh over one input.
     Bootstrap,
@@ -3651,13 +4333,6 @@ impl FheJobSpecV1 {
 
         match self.operation {
             FheJobOperationV1::Add => {
-                if self.inputs.len() < 2 {
-                    return Err(SoracloudManifestError::InvalidField {
-                        manifest: "fhe job spec",
-                        field: "inputs",
-                        reason: "add operation requires at least two inputs".to_string(),
-                    });
-                }
                 if self.requested_multiplication_depth != 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
@@ -3672,15 +4347,15 @@ impl FheJobSpecV1 {
                         reason: "add operation cannot request rotation/bootstrap".to_string(),
                     });
                 }
-            }
-            FheJobOperationV1::Multiply => {
                 if self.inputs.len() < 2 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
                         field: "inputs",
-                        reason: "multiply operation requires at least two inputs".to_string(),
+                        reason: "add operation requires at least two inputs".to_string(),
                     });
                 }
+            }
+            FheJobOperationV1::Multiply => {
                 if self.requested_multiplication_depth == 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
@@ -3695,15 +4370,33 @@ impl FheJobSpecV1 {
                         reason: "multiply operation cannot request rotation/bootstrap".to_string(),
                     });
                 }
-            }
-            FheJobOperationV1::RotateLeft => {
-                if self.inputs.len() != 1 {
+                if self.inputs.len() < 2 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
                         field: "inputs",
-                        reason: "rotate operation requires exactly one input".to_string(),
+                        reason: "multiply operation requires at least two inputs".to_string(),
                     });
                 }
+                let balanced_depth =
+                    bfv_balanced_multiplication_depth(self.inputs.len()).map_err(|err| {
+                        SoracloudManifestError::InvalidField {
+                            manifest: "fhe job spec",
+                            field: "inputs",
+                            reason: err.to_string(),
+                        }
+                    })?;
+                if self.requested_multiplication_depth < balanced_depth {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "requested_multiplication_depth",
+                        reason: format!(
+                            "requested depth {} under-declares balanced multiply depth {balanced_depth}",
+                            self.requested_multiplication_depth
+                        ),
+                    });
+                }
+            }
+            FheJobOperationV1::RotateLeft => {
                 if self.rotation_steps == 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
@@ -3718,15 +4411,15 @@ impl FheJobSpecV1 {
                         reason: "rotate operation cannot request depth/bootstrap".to_string(),
                     });
                 }
-            }
-            FheJobOperationV1::Bootstrap => {
                 if self.inputs.len() != 1 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
                         field: "inputs",
-                        reason: "bootstrap operation requires exactly one input".to_string(),
+                        reason: "rotate operation requires exactly one input".to_string(),
                     });
                 }
+            }
+            FheJobOperationV1::Bootstrap => {
                 if self.bootstrap_count == 0 {
                     return Err(SoracloudManifestError::InvalidField {
                         manifest: "fhe job spec",
@@ -3739,6 +4432,13 @@ impl FheJobSpecV1 {
                         manifest: "fhe job spec",
                         field: "operation",
                         reason: "bootstrap operation cannot request depth/rotation".to_string(),
+                    });
+                }
+                if self.inputs.len() != 1 {
+                    return Err(SoracloudManifestError::InvalidField {
+                        manifest: "fhe job spec",
+                        field: "inputs",
+                        reason: "bootstrap operation requires exactly one input".to_string(),
                     });
                 }
             }
@@ -3853,7 +4553,7 @@ impl FheJobSpecV1 {
             }
         }
 
-        let output_bytes = self.deterministic_output_payload_bytes();
+        let output_bytes = self.try_deterministic_output_payload_bytes()?;
         if output_bytes > policy.max_ciphertext_bytes.get() {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "fhe job spec",
@@ -3868,24 +4568,48 @@ impl FheJobSpecV1 {
         Ok(())
     }
 
-    /// Deterministic projected output payload size in bytes for admission checks.
-    #[must_use]
-    pub fn deterministic_output_payload_bytes(&self) -> u64 {
+    /// Try to compute the deterministic projected output payload size in bytes.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the operation overhead or final
+    /// projected output size cannot be represented as a `u64`.
+    pub fn try_deterministic_output_payload_bytes(&self) -> Result<u64, SoracloudManifestError> {
         let max_input = self
             .inputs
             .iter()
             .map(|input| input.payload_bytes.get())
             .max()
             .unwrap_or(0);
+        let overflow = |reason: String| SoracloudManifestError::InvalidField {
+            manifest: "fhe job spec",
+            field: "output_state_key",
+            reason,
+        };
         let op_overhead = match self.operation {
             FheJobOperationV1::Add => 16,
-            FheJobOperationV1::Multiply => {
-                u64::from(self.requested_multiplication_depth).saturating_mul(64)
-            }
+            FheJobOperationV1::Multiply => u64::from(self.requested_multiplication_depth)
+                .checked_mul(64)
+                .ok_or_else(|| overflow("multiply output overhead exceeds u64".to_string()))?,
             FheJobOperationV1::RotateLeft => u64::from(self.rotation_steps).min(1_024),
-            FheJobOperationV1::Bootstrap => u64::from(self.bootstrap_count).saturating_mul(128),
+            FheJobOperationV1::Bootstrap => u64::from(self.bootstrap_count)
+                .checked_mul(128)
+                .ok_or_else(|| overflow("bootstrap output overhead exceeds u64".to_string()))?,
         };
-        max_input.saturating_add(op_overhead).max(1)
+        max_input
+            .checked_add(op_overhead)
+            .map(|output_bytes| output_bytes.max(1))
+            .ok_or_else(|| {
+                overflow(format!(
+                    "deterministic output size overflows u64: max input {max_input} plus overhead {op_overhead}"
+                ))
+            })
+    }
+
+    /// Deterministic projected output payload size in bytes for admission checks.
+    #[must_use]
+    pub fn deterministic_output_payload_bytes(&self) -> u64 {
+        self.try_deterministic_output_payload_bytes()
+            .unwrap_or(u64::MAX)
     }
 
     /// Deterministic output commitment derived from operation + input commitments.
@@ -5681,6 +6405,19 @@ pub struct SoraServiceStateEntryV1 {
     pub payload_bytes: NonZeroU64,
     /// Deterministic payload commitment.
     pub payload_commitment: Hash,
+    /// Public BFV residual-multiple or noise bound for FHE ciphertext rows, when known.
+    ///
+    /// This is public deterministic metadata for chained validator-side FHE
+    /// jobs. Client-provided FHE rows may omit it until proof-carrying input
+    /// admission is available.
+    #[norito(default)]
+    pub fhe_residual_multiple_bound: Option<u128>,
+    /// Semantics of `fhe_residual_multiple_bound`.
+    ///
+    /// `None` means no bound is available; legacy rows with a residual bound and
+    /// no mode are interpreted as [`BfvCiphertextBoundModeV1::ExactResidualMultiple`].
+    #[norito(default)]
+    pub fhe_bound_mode: Option<BfvCiphertextBoundModeV1>,
     /// Audit sequence of the last update affecting this state key.
     pub last_update_sequence: u64,
     /// Governance linkage hash bound to the last mutation.
@@ -5754,6 +6491,11 @@ impl SoraServiceStateEntryV1 {
                 reason: "must equal the hash of payload bytes".to_string(),
             });
         }
+        validate_service_state_fhe_bound_metadata(
+            self.encryption,
+            self.fhe_residual_multiple_bound,
+            self.fhe_bound_mode,
+        )?;
         if !matches!(
             self.source_action,
             SoraServiceLifecycleActionV1::StateMutation | SoraServiceLifecycleActionV1::FheJobRun
@@ -5766,6 +6508,46 @@ impl SoraServiceStateEntryV1 {
         }
         Ok(())
     }
+}
+
+fn validate_service_state_fhe_bound_metadata(
+    encryption: SoraStateEncryptionV1,
+    bound: Option<u128>,
+    bound_mode: Option<BfvCiphertextBoundModeV1>,
+) -> Result<(), SoracloudManifestError> {
+    if encryption != SoraStateEncryptionV1::FheCiphertext && bound.is_some() {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "sora service state entry",
+            field: "fhe_residual_multiple_bound",
+            reason: "requires FHE ciphertext encryption".to_string(),
+        });
+    }
+    if encryption != SoraStateEncryptionV1::FheCiphertext && bound_mode.is_some() {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "sora service state entry",
+            field: "fhe_bound_mode",
+            reason: "requires FHE ciphertext encryption".to_string(),
+        });
+    }
+    if encryption == SoraStateEncryptionV1::FheCiphertext && bound_mode.is_some() && bound.is_none()
+    {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest: "sora service state entry",
+            field: "fhe_bound_mode",
+            reason: "requires fhe_residual_multiple_bound".to_string(),
+        });
+    }
+    if let Some(bound) = bound {
+        let bound_mode = bound_mode.unwrap_or(BfvCiphertextBoundModeV1::ExactResidualMultiple);
+        validate_soracloud_bfv_ciphertext_bound_capacity(
+            bound,
+            bound_mode,
+            "sora service state entry",
+            "fhe_residual_multiple_bound",
+            "sora service state entry FHE ciphertext bound",
+        )?;
+    }
+    Ok(())
 }
 
 /// Authoritative record of a policy-gated decryption or health-access request.
@@ -11045,7 +11827,9 @@ pub fn encode_delete_service_secret_provenance_payload(
 /// Encode the canonical provenance signature payload for state mutations.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, key, operation, value_size_bytes, payload_commitment, encryption, governance_tx_hash)`.
+/// `(service_name, binding_name, key, operation, value_size_bytes,
+/// payload_commitment, encryption, governance_tx_hash,
+/// fhe_input_admission_proof)`.
 ///
 /// `operation` is expected to be a deterministic symbolic label such as
 /// `"upsert"` or `"delete"`.
@@ -11062,6 +11846,7 @@ pub fn encode_state_mutation_provenance_payload(
     payload_commitment: Option<Hash>,
     encryption: SoraStateEncryptionV1,
     governance_tx_hash: Hash,
+    fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::to_bytes(&(
         service_name,
@@ -11072,7 +11857,109 @@ pub fn encode_state_mutation_provenance_payload(
         payload_commitment,
         encryption,
         governance_tx_hash,
+        fhe_input_admission_proof,
     ))
+}
+
+/// Return the Soracloud FHE input-admission public-input schema hash.
+#[must_use]
+pub fn soracloud_fhe_input_admission_public_inputs_schema_hash_v1() -> [u8; 32] {
+    Hash::new(SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1).into()
+}
+
+/// Derive the canonical statement hash for Soracloud FHE input admission.
+///
+/// The statement layout is a nested Norito tuple in this exact field order:
+/// `((service_name, binding_name, key, operation, value_size_bytes,
+/// payload_commitment, encryption, governance_tx_hash),
+/// (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
+/// bfv_key_switch_decomposition_chain_digest), residual_multiple_bound,
+/// ExactResidualMultiple)`.
+///
+/// `operation` is expected to be a deterministic symbolic label such as
+/// `"upsert"`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_soracloud_fhe_input_admission_statement_hash(
+    service_name: &str,
+    binding_name: &str,
+    key: &str,
+    operation: &str,
+    value_size_bytes: u64,
+    payload_commitment: Hash,
+    encryption: SoraStateEncryptionV1,
+    governance_tx_hash: Hash,
+    bfv_parameter_digest: Hash,
+    bfv_rns_modulus_chain_digest: Hash,
+    bfv_key_switch_decomposition_chain_digest: Hash,
+    residual_multiple_bound: u128,
+) -> Result<Hash, norito::Error> {
+    derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
+        service_name,
+        binding_name,
+        key,
+        operation,
+        value_size_bytes,
+        payload_commitment,
+        encryption,
+        governance_tx_hash,
+        bfv_parameter_digest,
+        bfv_rns_modulus_chain_digest,
+        bfv_key_switch_decomposition_chain_digest,
+        residual_multiple_bound,
+        BfvCiphertextBoundModeV1::ExactResidualMultiple,
+    )
+}
+
+/// Derive a canonical statement hash for Soracloud FHE input admission with bound mode.
+///
+/// The statement layout is a nested Norito tuple in this exact field order:
+/// `((service_name, binding_name, key, operation, value_size_bytes,
+/// payload_commitment, encryption, governance_tx_hash),
+/// (bfv_parameter_digest, bfv_rns_modulus_chain_digest,
+/// bfv_key_switch_decomposition_chain_digest), residual_multiple_bound,
+/// bound_mode)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
+    service_name: &str,
+    binding_name: &str,
+    key: &str,
+    operation: &str,
+    value_size_bytes: u64,
+    payload_commitment: Hash,
+    encryption: SoraStateEncryptionV1,
+    governance_tx_hash: Hash,
+    bfv_parameter_digest: Hash,
+    bfv_rns_modulus_chain_digest: Hash,
+    bfv_key_switch_decomposition_chain_digest: Hash,
+    residual_multiple_bound: u128,
+    bound_mode: BfvCiphertextBoundModeV1,
+) -> Result<Hash, norito::Error> {
+    let payload = norito::to_bytes(&(
+        (
+            service_name,
+            binding_name,
+            key,
+            operation,
+            value_size_bytes,
+            payload_commitment,
+            encryption,
+            governance_tx_hash,
+        ),
+        (
+            bfv_parameter_digest,
+            bfv_rns_modulus_chain_digest,
+            bfv_key_switch_decomposition_chain_digest,
+        ),
+        residual_multiple_bound,
+        bound_mode,
+    ))?;
+    Ok(Hash::new(&payload))
 }
 
 /// Encode the canonical provenance signature payload for rollout advancement.
@@ -11680,10 +12567,12 @@ pub fn encode_inrou_host_withdraw_provenance_payload(
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(service_name, binding_name, job, policy, param_set, evaluation_keys, governance_tx_hash)`.
+/// `(service_name, binding_name, job, policy, param_set, evaluation_keys,
+/// evaluation_key_refresh_transcript, governance_tx_hash)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_fhe_job_run_provenance_payload(
     service_name: &str,
     binding_name: &str,
@@ -11691,6 +12580,7 @@ pub fn encode_fhe_job_run_provenance_payload(
     policy: FheExecutionPolicyV1,
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
+    evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::to_bytes(&(
@@ -11700,6 +12590,7 @@ pub fn encode_fhe_job_run_provenance_payload(
         policy,
         param_set,
         evaluation_keys,
+        evaluation_key_refresh_transcript,
         governance_tx_hash,
     ))
 }
@@ -11735,7 +12626,12 @@ pub fn encode_ciphertext_query_provenance_payload(
 pub mod prelude {
     pub use super::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
-        AgentToolCapabilityV1, AgentUpgradePolicyV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1,
+        BFV_REFRESH_TRANSCRIPT_BOOTSTRAP_KEY_ID_MAX_BYTES,
+        BFV_REFRESH_TRANSCRIPT_MAX_ROTATION_TRANSCRIPTS, BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES,
+        BfvBootstrapRefreshTranscriptV1, BfvCiphertextBoundModeV1,
+        BfvEvaluationKeyRefreshTranscriptV1, BfvRefreshTranscriptModeV1,
+        BfvRotationRefreshTranscriptV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
         CIPHERTEXT_QUERY_PROOF_VERSION_V1, CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
         CIPHERTEXT_QUERY_SPEC_VERSION_V1, CIPHERTEXT_STATE_RECORD_VERSION_V1,
         CanonicalRequestSignatureWitnessV1, CanonicalRequestWitnessV1, CiphertextInclusionProofV1,
@@ -11762,24 +12658,27 @@ pub mod prelude {
         SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
         SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
         SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
-        SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
-        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
-        SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1,
-        SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
-        SoraArtifactKindV1, SoraArtifactRefV1, SoraCapabilityPolicyV1,
-        SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1, SoraConfigExportV1,
-        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
-        SoraHfModelFormatV1, SoraHfModelSizeBucketV1, SoraHfPlacementHostAssignmentV1,
-        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
-        SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
-        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-        SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
-        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
-        SoraModelHostCapabilityRecordV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
-        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
+        SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
+        SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1, SecretEnvelopeEncryptionV1,
+        SecretEnvelopeV1, SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
+        SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1,
+        SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
+        SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1, SoraArtifactKindV1,
+        SoraArtifactRefV1, SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1,
+        SoraConfigExportTargetV1, SoraConfigExportV1, SoraContainerManifestRefV1,
+        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
+        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+        SoraHfModelSizeBucketV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
+        SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
+        SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
+        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
+        SoraLifecycleHooksV1, SoraMailboxContractV1, SoraModelArtifactActionV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
         SoraRolloutStageV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
         SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
@@ -11788,7 +12687,9 @@ pub mod prelude {
         SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
         SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
         SoraStateScopeV1, SoraTlsModeV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
-        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoracloudManifestError,
+        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoracloudFheInputAdmissionProofV1,
+        SoracloudManifestError, derive_soracloud_fhe_input_admission_statement_hash,
+        derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
@@ -11810,6 +12711,7 @@ pub mod prelude {
         encode_rollout_provenance_payload, encode_state_mutation_provenance_payload,
         encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
+        soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
     };
 }
 
@@ -12386,6 +13288,7 @@ mod tests {
             Some(governance_tx_hash),
             SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
+            None,
         )
         .expect("encode payload");
         let expected = norito::to_bytes(&(
@@ -12397,9 +13300,566 @@ mod tests {
             Some(governance_tx_hash),
             SoraStateEncryptionV1::ClientCiphertext,
             governance_tx_hash,
+            None::<SoracloudFheInputAdmissionProofV1>,
         ))
         .expect("encode tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn fhe_input_admission_statement_hash_encodes_canonical_tuple() {
+        let payload_commitment = sample_hash(1);
+        let governance_tx_hash = sample_hash(2);
+        let parameter_digest = sample_hash(3);
+        let rns_digest = sample_hash(4);
+        let key_switch_decomposition_digest = sample_hash(5);
+        let statement_hash = derive_soracloud_fhe_input_admission_statement_hash(
+            "health_portal",
+            "private_state",
+            "/state/private/records/1",
+            "upsert",
+            512,
+            payload_commitment,
+            SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            parameter_digest,
+            rns_digest,
+            key_switch_decomposition_digest,
+            129,
+        )
+        .expect("derive statement hash");
+        let expected_payload = norito::to_bytes(&(
+            (
+                "health_portal",
+                "private_state",
+                "/state/private/records/1",
+                "upsert",
+                512_u64,
+                payload_commitment,
+                SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash,
+            ),
+            (
+                parameter_digest,
+                rns_digest,
+                key_switch_decomposition_digest,
+            ),
+            129_u128,
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+        ))
+        .expect("encode tuple");
+        assert_eq!(statement_hash, Hash::new(&expected_payload));
+        let bounded_statement_hash =
+            derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
+                "health_portal",
+                "private_state",
+                "/state/private/records/1",
+                "upsert",
+                512,
+                payload_commitment,
+                SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash,
+                parameter_digest,
+                rns_digest,
+                key_switch_decomposition_digest,
+                129,
+                BfvCiphertextBoundModeV1::BoundedNoise,
+            )
+            .expect("derive bounded statement hash");
+        assert_ne!(statement_hash, bounded_statement_hash);
+        assert_eq!(
+            soracloud_fhe_input_admission_public_inputs_schema_hash_v1(),
+            <[u8; 32]>::from(Hash::new(
+                SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+            ))
+        );
+    }
+
+    fn sample_fhe_input_admission_proof() -> SoracloudFheInputAdmissionProofV1 {
+        let vk_hash = [0x42; 32];
+        let statement_hash = sample_hash(9);
+        let open_proof = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+            envelope_bytes: vec![0xA5; 32],
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            vk_hash,
+            SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+            norito::to_bytes(&open_proof).expect("encode FHE input admission STARK wrapper"),
+        );
+        let proof = crate::proof::ProofBox::new(
+            "stark/fri/sha256-goldilocks".into(),
+            norito::to_bytes(&envelope).expect("encode FHE input admission OpenVerifyEnvelope"),
+        );
+        let mut attachment = ProofAttachment::new_ref(
+            "stark/fri/sha256-goldilocks".into(),
+            proof,
+            crate::proof::VerifyingKeyId::new(
+                "stark/fri/sha256-goldilocks",
+                SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+            ),
+        );
+        attachment.vk_commitment = Some(vk_hash);
+        attachment.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&attachment.proof.bytes)));
+        SoracloudFheInputAdmissionProofV1 {
+            schema_version: SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
+            residual_multiple_bound: 17,
+            bound_mode: BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            statement_hash,
+            proof: attachment,
+        }
+    }
+
+    fn replace_fhe_input_admission_open_verify_envelope(
+        admission: &mut SoracloudFheInputAdmissionProofV1,
+        envelope: &OpenVerifyEnvelope,
+    ) {
+        admission.proof.proof.bytes =
+            norito::to_bytes(envelope).expect("encode FHE input admission OpenVerifyEnvelope");
+        admission.proof.envelope_hash =
+            Some(<[u8; 32]>::from(Hash::new(&admission.proof.proof.bytes)));
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_validate_requires_vk_commitment_and_matching_envelope_hash() {
+        let mut admission = sample_fhe_input_admission_proof();
+        admission.proof.vk_commitment = None;
+
+        let err = admission
+            .validate()
+            .expect_err("missing vk_commitment must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_commitment",
+                ..
+            }
+        ));
+
+        admission.proof.vk_commitment = Some([0x42; 32]);
+        admission.proof.envelope_hash = None;
+        let err = admission
+            .validate()
+            .expect_err("missing envelope hash must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.envelope_hash",
+                ..
+            }
+        ));
+
+        admission.proof.envelope_hash =
+            Some(<[u8; 32]>::from(Hash::new(&admission.proof.proof.bytes)));
+        admission
+            .validate()
+            .expect("matching envelope hash must be accepted");
+
+        let mut forged_commitment = admission.clone();
+        forged_commitment.proof.vk_commitment = Some([0x24; 32]);
+        let err = forged_commitment
+            .validate()
+            .expect_err("forged vk_commitment must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_commitment",
+                ..
+            }
+        ));
+
+        let mut forged_hash = admission.proof.envelope_hash.expect("matching hash");
+        forged_hash[0] ^= 0x01;
+        admission.proof.envelope_hash = Some(forged_hash);
+        let err = admission
+            .validate()
+            .expect_err("forged envelope hash must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField { field: "proof", .. }
+        ));
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_validate_rejects_over_capacity_bounds() {
+        let mut exact = sample_fhe_input_admission_proof();
+        exact.residual_multiple_bound = u128::MAX;
+        exact.bound_mode = BfvCiphertextBoundModeV1::ExactResidualMultiple;
+        let err = exact
+            .validate()
+            .expect_err("over-capacity exact residual bound must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "residual_multiple_bound",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("exact residual"),
+            "unexpected error: {err}"
+        );
+
+        let mut bounded = sample_fhe_input_admission_proof();
+        bounded.residual_multiple_bound = u128::MAX;
+        bounded.bound_mode = BfvCiphertextBoundModeV1::BoundedNoise;
+        let err = bounded
+            .validate()
+            .expect_err("over-capacity bounded-noise bound must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "residual_multiple_bound",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("bounded-noise"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_validate_rejects_open_verify_envelope_drift() {
+        let sample = sample_fhe_input_admission_proof();
+        let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
+            .expect("decode sample OpenVerifyEnvelope");
+
+        let mut malformed = sample.clone();
+        malformed.proof.proof.bytes = vec![0xA5];
+        malformed.proof.envelope_hash =
+            Some(<[u8; 32]>::from(Hash::new(&malformed.proof.proof.bytes)));
+        let err = malformed
+            .validate()
+            .expect_err("malformed OpenVerify bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_backend = sample.clone();
+        let mut wrong_backend_envelope = envelope.clone();
+        wrong_backend_envelope.backend = BackendTag::Groth16;
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut wrong_backend,
+            &wrong_backend_envelope,
+        );
+        let err = wrong_backend
+            .validate()
+            .expect_err("OpenVerify backend drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_circuit = sample.clone();
+        let mut wrong_circuit_envelope = envelope.clone();
+        wrong_circuit_envelope.circuit_id = "soracloud_fhe_input_admission_shadow_v1".to_string();
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut wrong_circuit,
+            &wrong_circuit_envelope,
+        );
+        let err = wrong_circuit
+            .validate()
+            .expect_err("OpenVerify circuit id drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .expect("decode sample STARK public-input wrapper");
+
+        let mut wrong_wrapper_version = sample.clone();
+        let mut wrong_wrapper_version_envelope = envelope.clone();
+        let mut version_drift = open_proof.clone();
+        version_drift.version = 2;
+        wrong_wrapper_version_envelope.proof_bytes =
+            norito::to_bytes(&version_drift).expect("encode version-drifted STARK wrapper");
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut wrong_wrapper_version,
+            &wrong_wrapper_version_envelope,
+        );
+        let err = wrong_wrapper_version
+            .validate()
+            .expect_err("STARK wrapper version drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut empty_native_envelope = sample.clone();
+        let mut empty_native_open_verify = envelope.clone();
+        let mut empty_native_proof = open_proof.clone();
+        empty_native_proof.envelope_bytes.clear();
+        empty_native_open_verify.proof_bytes =
+            norito::to_bytes(&empty_native_proof).expect("encode empty-native STARK wrapper");
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut empty_native_envelope,
+            &empty_native_open_verify,
+        );
+        let err = empty_native_envelope
+            .validate()
+            .expect_err("empty native STARK envelope bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("native envelope bytes"),
+            "unexpected error: {err}"
+        );
+
+        let mut wrong_statement = sample.clone();
+        let mut wrong_statement_envelope = envelope.clone();
+        let mut statement_drift = open_proof;
+        statement_drift.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(sample_hash(99))]];
+        wrong_statement_envelope.proof_bytes =
+            norito::to_bytes(&statement_drift).expect("encode statement-drifted STARK wrapper");
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut wrong_statement,
+            &wrong_statement_envelope,
+        );
+        let err = wrong_statement
+            .validate()
+            .expect_err("STARK wrapper statement drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_schema = sample;
+        let mut wrong_schema_envelope = envelope;
+        wrong_schema_envelope.public_inputs =
+            b"soracloud:fhe-input-admission:public-inputs:v2".to_vec();
+        replace_fhe_input_admission_open_verify_envelope(&mut wrong_schema, &wrong_schema_envelope);
+        let err = wrong_schema
+            .validate()
+            .expect_err("OpenVerify public-input schema drift must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_input_admission_open_verify_bounds_match_published_caps() {
+        let bounds = soracloud_fhe_input_admission_open_verify_bounds();
+        assert_eq!(
+            bounds.max_circuit_id_bytes,
+            SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1.len()
+        );
+        assert_eq!(
+            bounds.max_public_input_bytes,
+            SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.len()
+        );
+        assert_eq!(
+            bounds.max_proof_bytes,
+            SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES
+        );
+        assert_eq!(bounds.max_aux_bytes, 0);
+        assert!(!bounds.allow_aux);
+        assert!(bounds.require_nonzero_vk_hash);
+        assert!(!bounds.allow_pending_production_backends);
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_validate_rejects_oversized_proof_payloads() {
+        let sample = sample_fhe_input_admission_proof();
+        let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
+            .expect("decode sample OpenVerifyEnvelope");
+        let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .expect("decode sample STARK public-input wrapper");
+
+        let mut oversized_outer = sample.clone();
+        oversized_outer.proof.proof.bytes =
+            vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES + 1];
+        oversized_outer.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(
+            &oversized_outer.proof.proof.bytes,
+        )));
+        let err = oversized_outer
+            .validate()
+            .expect_err("oversized OpenVerify envelope bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("OpenVerifyEnvelope length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_circuit = sample.clone();
+        let mut oversized_circuit_envelope = envelope.clone();
+        oversized_circuit_envelope.circuit_id =
+            format!("{SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1}_x");
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut oversized_circuit,
+            &oversized_circuit_envelope,
+        );
+        let err = oversized_circuit
+            .validate()
+            .expect_err("oversized OpenVerify circuit id must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("circuit id length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_schema = sample.clone();
+        let mut oversized_schema_envelope = envelope.clone();
+        oversized_schema_envelope.public_inputs =
+            SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+        oversized_schema_envelope.public_inputs.push(b'x');
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut oversized_schema,
+            &oversized_schema_envelope,
+        );
+        let err = oversized_schema
+            .validate()
+            .expect_err("oversized OpenVerify public-input schema must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("public inputs length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_wrapper = sample.clone();
+        let mut oversized_wrapper_envelope = envelope.clone();
+        oversized_wrapper_envelope.proof_bytes =
+            vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES + 1];
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut oversized_wrapper,
+            &oversized_wrapper_envelope,
+        );
+        let err = oversized_wrapper
+            .validate()
+            .expect_err("oversized STARK wrapper bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("proof bytes length"),
+            "unexpected error: {err}"
+        );
+
+        let mut oversized_native = sample;
+        let mut oversized_native_envelope = envelope;
+        let mut oversized_native_open = open_proof;
+        oversized_native_open.envelope_bytes =
+            vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES + 1];
+        oversized_native_envelope.proof_bytes =
+            norito::to_bytes(&oversized_native_open).expect("encode oversized STARK wrapper");
+        replace_fhe_input_admission_open_verify_envelope(
+            &mut oversized_native,
+            &oversized_native_envelope,
+        );
+        let err = oversized_native
+            .validate()
+            .expect_err("oversized native STARK envelope bytes must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.bytes",
+                ..
+            }
+        ));
+        assert!(
+            err.to_string().contains("native envelope bytes length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_validate_requires_canonical_vk_ref_name() {
+        let mut admission = sample_fhe_input_admission_proof();
+        admission.proof.vk_ref.name = "soracloud_fhe_input_admission_alias_v1".to_string();
+
+        let err = admission
+            .validate()
+            .expect_err("non-canonical FHE verifier id must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_ref.name",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_validate_rejects_backend_mismatch() {
+        let mut admission = sample_fhe_input_admission_proof();
+        admission.proof.proof.backend = "stark/fri/other".into();
+
+        let err = admission
+            .validate()
+            .expect_err("mismatched proof backend must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.backend",
+                ..
+            }
+        ));
+
+        let mut unsupported = sample_fhe_input_admission_proof();
+        unsupported.proof.backend = "stark/fri/debug-proof".into();
+        unsupported.proof.proof.backend = unsupported.proof.backend.clone();
+        unsupported.proof.vk_ref.backend = unsupported.proof.backend.clone();
+        let err = unsupported
+            .validate()
+            .expect_err("unsupported FHE admission backend must be rejected");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.backend",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -12934,6 +14394,7 @@ mod tests {
         let policy = sample_fhe_execution_policy();
         let param_set = sample_fhe_param_set();
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
         let governance_tx_hash = sample_hash(21);
         let encoded = encode_fhe_job_run_provenance_payload(
             "health_portal",
@@ -12942,6 +14403,7 @@ mod tests {
             policy.clone(),
             param_set.clone(),
             evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
             governance_tx_hash,
         )
         .expect("encode payload");
@@ -12952,6 +14414,7 @@ mod tests {
             policy,
             param_set,
             evaluation_keys,
+            evaluation_key_refresh_transcript,
             governance_tx_hash,
         ))
         .expect("encode tuple");
@@ -13367,7 +14830,7 @@ mod tests {
             schema_version: FHE_PARAM_SET_VERSION_V1,
             param_set: "fhe_bfv_med".parse().expect("valid name"),
             version: NonZeroU32::new(2).expect("nonzero"),
-            backend: "fhe/bfv-rns/v2".to_string(),
+            backend: REGISTERED_SORACLOUD_BFV_BACKEND_V1.to_string(),
             scheme: FheSchemeV1::Bfv,
             ciphertext_modulus_bits: vec![
                 NonZeroU16::new(60).expect("nonzero"),
@@ -13385,6 +14848,7 @@ mod tests {
             withdraw_height: Some(40_000),
             parameter_digest: sample_hash(77),
             rns_modulus_chain_digest: sample_hash(78),
+            key_switch_decomposition_chain_digest: sample_hash(79),
         }
     }
 
@@ -13399,6 +14863,17 @@ mod tests {
         }
     }
 
+    fn sample_bfv_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
+        BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key: BfvPublicKey {
+                b: Vec::new(),
+                a: Vec::new(),
+            },
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: None,
+        }
+    }
+
     fn sample_fhe_execution_policy() -> FheExecutionPolicyV1 {
         FheExecutionPolicyV1 {
             schema_version: FHE_EXECUTION_POLICY_VERSION_V1,
@@ -13406,6 +14881,8 @@ mod tests {
             param_set: "fhe_bfv_med".parse().expect("valid name"),
             param_set_version: NonZeroU32::new(2).expect("nonzero"),
             evaluation_key_digest: sample_hash(90),
+            evaluation_key_refresh_transcript_digest: sample_hash(91),
+            refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(16_384).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(8).expect("nonzero"),
@@ -13585,6 +15062,8 @@ mod tests {
             payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
             payload,
             payload_commitment,
+            fhe_residual_multiple_bound: None,
+            fhe_bound_mode: None,
             last_update_sequence: 12,
             governance_tx_hash: sample_hash(149),
             source_action: SoraServiceLifecycleActionV1::StateMutation,
@@ -14917,6 +16396,93 @@ mod tests {
     }
 
     #[test]
+    fn service_state_entry_validate_rejects_fhe_residual_bound_on_non_fhe_rows() {
+        let mut entry = sample_state_entry();
+        entry.encryption = SoraStateEncryptionV1::ClientCiphertext;
+        entry.fhe_residual_multiple_bound = Some(17);
+
+        let error = entry
+            .validate()
+            .expect_err("BFV residual bounds must only annotate FHE rows");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "fhe_residual_multiple_bound",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn service_state_entry_validate_rejects_fhe_bound_mode_without_fhe_bound() {
+        let mut non_fhe_entry = sample_state_entry();
+        non_fhe_entry.encryption = SoraStateEncryptionV1::ClientCiphertext;
+        non_fhe_entry.fhe_bound_mode = Some(BfvCiphertextBoundModeV1::ExactResidualMultiple);
+        let error = non_fhe_entry
+            .validate()
+            .expect_err("BFV bound modes must only annotate FHE rows");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "fhe_bound_mode",
+                ..
+            }
+        ));
+
+        let mut missing_bound_entry = sample_state_entry();
+        missing_bound_entry.fhe_bound_mode = Some(BfvCiphertextBoundModeV1::ExactResidualMultiple);
+        let error = missing_bound_entry
+            .validate()
+            .expect_err("BFV bound mode must require a bound value");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "fhe_bound_mode",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn service_state_entry_validate_rejects_over_capacity_fhe_bounds() {
+        let mut exact_entry = sample_state_entry();
+        exact_entry.fhe_residual_multiple_bound = Some(u128::MAX);
+        exact_entry.fhe_bound_mode = None;
+        let error = exact_entry
+            .validate()
+            .expect_err("legacy exact FHE bound above capacity must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "fhe_residual_multiple_bound",
+                ..
+            }
+        ));
+        assert!(
+            error.to_string().contains("exact residual"),
+            "unexpected error: {error}"
+        );
+
+        let mut bounded_entry = sample_state_entry();
+        bounded_entry.fhe_residual_multiple_bound = Some(u128::MAX);
+        bounded_entry.fhe_bound_mode = Some(BfvCiphertextBoundModeV1::BoundedNoise);
+        let error = bounded_entry
+            .validate()
+            .expect_err("bounded-noise FHE bound above capacity must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "fhe_residual_multiple_bound",
+                ..
+            }
+        ));
+        assert!(
+            error.to_string().contains("bounded-noise"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn decryption_request_record_policy_snapshot_hash_is_deterministic() {
         let record = sample_decryption_request_record();
         let expected = Hash::new(Encode::encode(&record.policy));
@@ -15189,6 +16755,38 @@ mod tests {
     }
 
     #[test]
+    fn fhe_param_set_validate_rejects_unregistered_backend() {
+        let mut param_set = sample_fhe_param_set();
+        param_set.backend = "fhe/bfv-rns/v2".to_string();
+        let error = param_set
+            .validate()
+            .expect_err("first-release parameter-set admission must reject unregistered backends");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "backend",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_param_set_validate_rejects_unsupported_scheme() {
+        let mut param_set = sample_fhe_param_set();
+        param_set.scheme = FheSchemeV1::Ckks;
+        let error = param_set
+            .validate()
+            .expect_err("first-release parameter-set admission must reject non-BFV schemes");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "scheme",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn fhe_param_set_validate_rejects_empty_modulus_chain() {
         let mut param_set = sample_fhe_param_set();
         param_set.ciphertext_modulus_bits.clear();
@@ -15276,6 +16874,26 @@ mod tests {
                 ..
             }
         ));
+
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+        let mut over_evaluator_depth = sample_fhe_param_set();
+        over_evaluator_depth.ciphertext_modulus_bits =
+            vec![
+                NonZeroU16::new(60).expect("nonzero");
+                usize::from(evaluator_budget.max_multiplicative_depth) + 2
+            ];
+        over_evaluator_depth.max_multiplicative_depth =
+            NonZeroU16::new(evaluator_budget.max_multiplicative_depth + 1).expect("nonzero");
+        let error = over_evaluator_depth
+            .validate()
+            .expect_err("depth above exact evaluator budget must be rejected");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_multiplicative_depth",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -15347,6 +16965,453 @@ mod tests {
             error,
             SoracloudManifestError::InvalidField {
                 field: "max_output_ciphertexts",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_rejects_unsupported_rounding_mode() {
+        let mut policy = sample_fhe_execution_policy();
+        policy.rounding_mode = FheDeterministicRoundingModeV1::Floor;
+        let error = policy
+            .validate()
+            .expect_err("unsupported rounding mode must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rounding_mode",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_rejects_exact_evaluator_budget_overflow() {
+        let evaluator_budget = BfvEvaluationBudget::exact_evaluator_v1();
+
+        let mut depth_overflow = sample_fhe_execution_policy();
+        depth_overflow.max_multiplication_depth =
+            NonZeroU16::new(evaluator_budget.max_multiplicative_depth + 1).expect("nonzero");
+        let error = depth_overflow
+            .validate()
+            .expect_err("policy depth above exact evaluator budget must fail");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_multiplication_depth",
+                ..
+            }
+        ));
+
+        let mut bootstrap_overflow = sample_fhe_execution_policy();
+        bootstrap_overflow.max_bootstrap_count = evaluator_budget.max_bootstrap_refresh_rounds + 1;
+        let error = bootstrap_overflow
+            .validate()
+            .expect_err("policy bootstrap count above exact evaluator budget must fail");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "max_bootstrap_count",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_caps_match_crypto_key_caps() {
+        assert_eq!(
+            BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES, BFV_DETERMINISTIC_SEED_MAX_BYTES,
+            "Soracloud transcript admission must share the BFV deterministic seed cap"
+        );
+        assert_eq!(
+            BFV_REFRESH_TRANSCRIPT_BOOTSTRAP_KEY_ID_MAX_BYTES, BFV_BOOTSTRAP_KEY_ID_MAX_BYTES,
+            "Soracloud transcript admission must share the BFV bootstrap key-id cap"
+        );
+        assert_eq!(
+            BFV_REFRESH_TRANSCRIPT_MAX_ROTATION_TRANSCRIPTS, BFV_EVALUATION_KEY_MAX_ROTATION_KEYS,
+            "Soracloud transcript admission must share the BFV rotation-key cap"
+        );
+        assert_eq!(
+            BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS,
+            BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
+            "Soracloud transcript admission must share the BFV bootstrap round cap"
+        );
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_validate_rejects_empty_seeds() {
+        let mut empty_rotation_seed = sample_bfv_refresh_transcript();
+        empty_rotation_seed
+            .rotation_transcripts
+            .push(BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 1,
+                seed: Vec::new(),
+            });
+        let error = empty_rotation_seed
+            .validate_seed_bounds()
+            .expect_err("empty rotation transcript seeds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::EmptyField {
+                field: "rotation_transcripts.seed",
+                ..
+            }
+        ));
+
+        let mut empty_bootstrap_seed = sample_bfv_refresh_transcript();
+        empty_bootstrap_seed.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap-test-key".to_string(),
+            max_refresh_rounds: 1,
+            seed: Vec::new(),
+        });
+        let error = empty_bootstrap_seed
+            .validate_seed_bounds()
+            .expect_err("empty bootstrap transcript seeds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::EmptyField {
+                field: "bootstrap_transcript.seed",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_validate_rejects_unbounded_rotation_inventory() {
+        let mut transcript = sample_bfv_refresh_transcript();
+        transcript.rotation_transcripts = (0..=BFV_REFRESH_TRANSCRIPT_MAX_ROTATION_TRANSCRIPTS)
+            .map(|index| BfvRotationRefreshTranscriptV1 {
+                rotation_steps: u32::try_from(index + 1).expect("index fits u32"),
+                seed: vec![0xA5],
+            })
+            .collect();
+        let error = transcript
+            .validate_seed_bounds()
+            .expect_err("too many rotation transcript seeds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rotation_transcripts",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_validate_rejects_malformed_rotation_steps() {
+        let mut zero_rotation_steps = sample_bfv_refresh_transcript();
+        zero_rotation_steps
+            .rotation_transcripts
+            .push(BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 0,
+                seed: vec![0xA5],
+            });
+        let error = zero_rotation_steps
+            .validate_seed_bounds()
+            .expect_err("zero rotation transcript steps must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rotation_transcripts.rotation_steps",
+                ..
+            }
+        ));
+
+        let mut duplicate_rotation_steps = sample_bfv_refresh_transcript();
+        duplicate_rotation_steps.rotation_transcripts = vec![
+            BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 7,
+                seed: vec![0xA5],
+            },
+            BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 7,
+                seed: vec![0x5A],
+            },
+        ];
+        let error = duplicate_rotation_steps
+            .validate_seed_bounds()
+            .expect_err("duplicate rotation transcript steps must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rotation_transcripts.rotation_steps",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_validate_rejects_oversized_seeds() {
+        let mut oversized_rotation_seed = sample_bfv_refresh_transcript();
+        oversized_rotation_seed
+            .rotation_transcripts
+            .push(BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 1,
+                seed: vec![0xA5; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1],
+            });
+        let error = oversized_rotation_seed
+            .validate_seed_bounds()
+            .expect_err("oversized rotation transcript seeds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "rotation_transcripts.seed",
+                ..
+            }
+        ));
+
+        let mut oversized_bootstrap_seed = sample_bfv_refresh_transcript();
+        oversized_bootstrap_seed.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap-test-key".to_string(),
+            max_refresh_rounds: 1,
+            seed: vec![0xA5; BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES + 1],
+        });
+        let error = oversized_bootstrap_seed
+            .validate_seed_bounds()
+            .expect_err("oversized bootstrap transcript seeds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript.seed",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_validate_rejects_malformed_bootstrap_key_ids() {
+        let mut empty_key_id = sample_bfv_refresh_transcript();
+        empty_key_id.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: String::new(),
+            max_refresh_rounds: 1,
+            seed: vec![0xA5],
+        });
+        let error = empty_key_id
+            .validate_seed_bounds()
+            .expect_err("empty bootstrap transcript key ids must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::EmptyField {
+                field: "bootstrap_transcript.key_id",
+                ..
+            }
+        ));
+
+        let mut oversized_key_id = sample_bfv_refresh_transcript();
+        oversized_key_id.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "k".repeat(BFV_REFRESH_TRANSCRIPT_BOOTSTRAP_KEY_ID_MAX_BYTES + 1),
+            max_refresh_rounds: 1,
+            seed: vec![0xA5],
+        });
+        let error = oversized_key_id
+            .validate_seed_bounds()
+            .expect_err("oversized bootstrap transcript key ids must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript.key_id",
+                ..
+            }
+        ));
+
+        let mut padded_key_id = sample_bfv_refresh_transcript();
+        padded_key_id.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: " bootstrap-test-key ".to_string(),
+            max_refresh_rounds: 1,
+            seed: vec![0xA5],
+        });
+        let error = padded_key_id
+            .validate_seed_bounds()
+            .expect_err("padded bootstrap transcript key ids must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript.key_id",
+                ..
+            }
+        ));
+
+        let mut control_byte_key_id = sample_bfv_refresh_transcript();
+        control_byte_key_id.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap\nkey".to_string(),
+            max_refresh_rounds: 1,
+            seed: vec![0xA5],
+        });
+        let error = control_byte_key_id
+            .validate_seed_bounds()
+            .expect_err("non-printable bootstrap transcript key ids must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript.key_id",
+                ..
+            }
+        ));
+
+        let mut delimiter_key_id = sample_bfv_refresh_transcript();
+        delimiter_key_id.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap/key".to_string(),
+            max_refresh_rounds: 1,
+            seed: vec![0xA5],
+        });
+        let error = delimiter_key_id
+            .validate_seed_bounds()
+            .expect_err("delimiter bootstrap transcript key ids must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript.key_id",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_validate_rejects_malformed_bootstrap_round_counts() {
+        let mut zero_rounds = sample_bfv_refresh_transcript();
+        zero_rounds.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap-test-key".to_string(),
+            max_refresh_rounds: 0,
+            seed: vec![0xA5],
+        });
+        let error = zero_rounds
+            .validate_seed_bounds()
+            .expect_err("zero bootstrap transcript rounds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript.max_refresh_rounds",
+                ..
+            }
+        ));
+
+        let mut over_budget_rounds = sample_bfv_refresh_transcript();
+        over_budget_rounds.bootstrap_transcript = Some(BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap-test-key".to_string(),
+            max_refresh_rounds: BFV_REFRESH_TRANSCRIPT_MAX_BOOTSTRAP_REFRESH_ROUNDS
+                .checked_add(1)
+                .expect("test budget fits u16"),
+            seed: vec![0xA5],
+        });
+        let error = over_budget_rounds
+            .validate_seed_bounds()
+            .expect_err("over-budget bootstrap transcript rounds must fail admission preflight");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript.max_refresh_rounds",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_digest_rejects_public_key_shape_before_bundle_shape() {
+        let params = iroha_crypto::fhe_bfv::BfvParameters {
+            polynomial_degree: 8,
+            ciphertext_modulus: 16_777_216,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        };
+        let mut transcript = sample_bfv_refresh_transcript();
+        transcript.public_key = BfvPublicKey {
+            b: vec![0; 7],
+            a: vec![0; 8],
+        };
+        let error = transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &sample_bfv_evaluation_key_bundle(),
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect_err("malformed transcript public keys must fail before bundle validation");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "public_key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_digest_uses_policy_mode() {
+        let params = iroha_crypto::fhe_bfv::BfvParameters {
+            polynomial_degree: 8,
+            ciphertext_modulus: 4_294_967_296,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        };
+        let (secret_key, public_key, relinearization_key) =
+            iroha_crypto::fhe_bfv::keygen_bounded_noise_with_relinearization_from_seed(
+                &params,
+                b"soracloud-bounded-refresh-mode-keygen",
+            )
+            .expect("bounded-noise keygen");
+        let rotation_seed = b"soracloud-bounded-refresh-mode-rotation".to_vec();
+        let rotation_key = iroha_crypto::fhe_bfv::rotation_key_bounded_noise_from_seed(
+            &params,
+            &public_key,
+            1,
+            &rotation_seed,
+        )
+        .expect("bounded-noise rotation key");
+        let bootstrap_seed = b"soracloud-bounded-refresh-mode-bootstrap".to_vec();
+        let bootstrap_key =
+            iroha_crypto::fhe_bfv::bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+                &params,
+                &public_key,
+                "soracloud-bounded-bootstrap",
+                2,
+                &bootstrap_seed,
+            )
+            .expect("bounded-noise bootstrap key");
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![rotation_key],
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key),
+        };
+        bundle
+            .validate_bounded_noise_zero_refreshes(&params, &secret_key)
+            .expect("bounded-noise refresh masks decrypt to zero");
+        let transcript = BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key,
+            rotation_transcripts: vec![BfvRotationRefreshTranscriptV1 {
+                rotation_steps: 1,
+                seed: rotation_seed,
+            }],
+            bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
+                key_id: "soracloud-bounded-bootstrap".to_string(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed,
+            }),
+        };
+
+        let bounded_digest = transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &bundle,
+                BfvRefreshTranscriptModeV1::BoundedNoise,
+            )
+            .expect("bounded-noise transcript digest");
+        let repeated_bounded_digest = transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &bundle,
+                BfvRefreshTranscriptModeV1::BoundedNoise,
+            )
+            .expect("repeat bounded-noise transcript digest");
+        assert_eq!(bounded_digest, repeated_bounded_digest);
+
+        let err = transcript
+            .digest_for_evaluation_keys(&params, &bundle)
+            .expect_err("legacy exact digest must reject bounded-noise refresh masks");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "refresh_transcript",
                 ..
             }
         ));
@@ -15462,6 +17527,28 @@ mod tests {
     }
 
     #[test]
+    fn fhe_job_spec_balanced_multiply_depth_matches_tree_shape() {
+        assert!(bfv_balanced_multiplication_depth(0).is_err());
+        assert_eq!(
+            bfv_balanced_multiplication_depth(1).expect("single input"),
+            0
+        );
+        assert_eq!(bfv_balanced_multiplication_depth(2).expect("two inputs"), 1);
+        assert_eq!(
+            bfv_balanced_multiplication_depth(3).expect("three inputs"),
+            2
+        );
+        assert_eq!(
+            bfv_balanced_multiplication_depth(4).expect("four inputs"),
+            2
+        );
+        assert_eq!(
+            bfv_balanced_multiplication_depth(5).expect("five inputs"),
+            3
+        );
+    }
+
+    #[test]
     fn fhe_job_spec_validate_rejects_adversarial_operation_shapes() {
         assert_fhe_job_invalid_field(
             "add jobs require at least two inputs",
@@ -15476,8 +17563,37 @@ mod tests {
             "requested_multiplication_depth",
         );
         assert_fhe_job_invalid_field(
+            "add depth metadata fails before input arity",
+            |job| {
+                job.inputs.pop();
+                job.requested_multiplication_depth = 1;
+            },
+            "requested_multiplication_depth",
+        );
+        assert_fhe_job_invalid_field(
             "multiply jobs require non-zero depth",
             |job| job.operation = FheJobOperationV1::Multiply,
+            "requested_multiplication_depth",
+        );
+        assert_fhe_job_invalid_field(
+            "multiply zero-depth metadata fails before input arity",
+            |job| {
+                job.operation = FheJobOperationV1::Multiply;
+                job.inputs.pop();
+            },
+            "requested_multiplication_depth",
+        );
+        assert_fhe_job_invalid_field(
+            "multiply jobs must declare balanced depth",
+            |job| {
+                job.operation = FheJobOperationV1::Multiply;
+                job.requested_multiplication_depth = 1;
+                job.inputs.push(FheJobInputRefV1 {
+                    state_key: "/state/health/patient-3".to_string(),
+                    payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+                    commitment: sample_hash(123),
+                });
+            },
             "requested_multiplication_depth",
         );
         assert_fhe_job_invalid_field(
@@ -15496,6 +17612,13 @@ mod tests {
                 job.rotation_steps = 1;
             },
             "inputs",
+        );
+        assert_fhe_job_invalid_field(
+            "rotate zero-step metadata fails before input shape",
+            |job| {
+                job.operation = FheJobOperationV1::RotateLeft;
+            },
+            "rotation_steps",
         );
         assert_fhe_job_invalid_field(
             "rotate jobs require non-zero rotation steps",
@@ -15520,6 +17643,23 @@ mod tests {
                 job.inputs.truncate(1);
             },
             "bootstrap_count",
+        );
+        assert_fhe_job_invalid_field(
+            "zero-count bootstrap jobs fail before input shape",
+            |job| {
+                job.operation = FheJobOperationV1::Bootstrap;
+                job.bootstrap_count = 0;
+            },
+            "bootstrap_count",
+        );
+        assert_fhe_job_invalid_field(
+            "bootstrap depth metadata fails before input shape",
+            |job| {
+                job.operation = FheJobOperationV1::Bootstrap;
+                job.bootstrap_count = 1;
+                job.requested_multiplication_depth = 1;
+            },
+            "operation",
         );
     }
 
@@ -15670,6 +17810,43 @@ mod tests {
             .expect_err("deterministic output above ciphertext size policy must fail admission");
         assert!(matches!(
             output_error,
+            SoracloudManifestError::InvalidField {
+                field: "output_state_key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_for_execution_rejects_output_size_overflow() {
+        let mut policy = sample_fhe_execution_policy();
+        policy.max_ciphertext_bytes = NonZeroU64::new(u64::MAX).expect("nonzero");
+        policy.max_plaintext_bytes = NonZeroU64::new(u64::MAX).expect("nonzero");
+
+        let mut job = sample_fhe_job_spec();
+        job.inputs[0].payload_bytes = NonZeroU64::new(u64::MAX).expect("nonzero");
+
+        let projection_error = job
+            .try_deterministic_output_payload_bytes()
+            .expect_err("projected FHE output overflow must be reported");
+        assert!(matches!(
+            projection_error,
+            SoracloudManifestError::InvalidField {
+                field: "output_state_key",
+                ..
+            }
+        ));
+        assert_eq!(
+            job.deterministic_output_payload_bytes(),
+            u64::MAX,
+            "legacy infallible output projection must remain conservative"
+        );
+
+        let admission_error = job
+            .validate_for_execution(&policy, &sample_fhe_param_set())
+            .expect_err("overflowed FHE output projection must fail execution admission");
+        assert!(matches!(
+            admission_error,
             SoracloudManifestError::InvalidField {
                 field: "output_state_key",
                 ..

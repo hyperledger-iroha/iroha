@@ -476,7 +476,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   ASCII control characters at preflight time, and production readiness rejects
   digest-correct archived XSD summaries whose reviewed gap reasons are present
   but empty or non-string, or whose schema-backed fixtures still carry a
-  missing-schema reason. Checked-in XSD source provenance paths now reject
+  missing-schema reason. Rejected XSD manifest and archived summary path
+  validation errors report label-only failures without echoing raw path values
+  that may contain secret-looking segments. Checked-in XSD source provenance paths now reject
   embedded whitespace and semicolon path parameters during preflight, and
   archived profile-catalog paths get the same readiness recheck when production
   readiness consumes archived XSD summaries.

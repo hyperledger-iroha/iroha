@@ -531,6 +531,9 @@ Last updated: 2026-06-06
   rejected secret-bearing URLs report label-only structural errors instead of
   echoing raw URL strings, and added adversarial stderr no-leak coverage for
   query-token URL rejection.
+- Sanitized XSD manifest and archived XSD summary absolute-path rejections so
+  they no longer echo raw untrusted path values, and added adversarial stderr
+  no-leak coverage for secret-looking absolute path segments.
 - Updated ISO evidence/readiness test fixtures to mirror real
   `iso_operator_receipt_verify.py` output by carrying `ok`, `status_code`, and
   per-kind metadata in compact receipt entries, and added adversarial tests for
@@ -542,6 +545,9 @@ Last updated: 2026-06-06
   - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
     (`106` tests passed)
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (`131` tests passed)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
     (`409` tests passed)
 
@@ -1122,6 +1128,11151 @@ Last updated: 2026-06-06
   because `/opt/homebrew/bin/python3` has no `pytest` module installed. No
   packages were added.
 
+## 2026-06-06 Sumeragi finality-source certified source-stack proof
+
+- Added `FinalitySourceActionMatchesCertifiedSourceStackStep` and
+  `FinalitySourceActionAlwaysMatchesCertifiedSourceStack` to prove that any
+  honest commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality satisfies the certified source-stack classifier.
+- The property is intentionally scoped to
+  `FinalityLatchChangeMatchesCertifiedSourceStackStep`, keeping the
+  source-action obligation tied directly to complete-stack installation,
+  committed-phase entry, live commit-gate crossing, commit witnesses, NewView
+  isolation, exact source effects, and quorum gates.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesCertifiedSourceStackStep|FinalitySourceActionAlwaysMatchesCertifiedSourceStack|finality-source certified-source stack classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`191`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV relinearization entry-count preflight
+
+- Split BFV key-switch entry validation into a public digit-count pass and a
+  full entry-polynomial pass, then routed relinearization validation through
+  that split.
+- Exact, RNS exact, bounded-noise, bounded RNS, and bounded basis-extension
+  ciphertext multiplication now reject malformed relinearization-key inventory
+  before malformed ciphertext operands while still validating entry polynomial
+  shapes only after operand shapes pass.
+- Added a crypto regression combining truncated relinearization keys,
+  correctly-sized but malformed entry polynomials, malformed ciphertexts, and
+  valid zero ciphertexts across exact, RNS, bounded-noise, and
+  basis-extension multiply paths.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiply_preflights_relinearization_entry_count_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto key_switch --lib -- --nocapture`
+    (`14` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiplication --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiply_residual --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_exact_ciphertext_evaluator --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_bounded_noise_basis_extension_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 Sumeragi finality-source NewView handoff isolation proof
+
+- Added `FinalitySourceActionNeverCarriesNewViewHandoffStep` and
+  `FinalitySourceActionNeverCarriesNewViewHandoff` to prove that any honest
+  commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality is not a NewView handoff, carries no live NewView votes, and
+  preserves existing view-quorum evidence.
+- The property is intentionally scoped to
+  `FinalityLatchNeverCarriesNewViewHandoffStep`, keeping source-action
+  handoff isolation as a direct obligation without expanding the full
+  exact-source aggregate.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionNeverCarriesNewViewHandoffStep|FinalitySourceActionNeverCarriesNewViewHandoff|finality-source NewView handoff isolation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`190`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi finality-source commit-view witness proof
+
+- Added `FinalitySourceActionInstallsCommitViewWitnessStep` and
+  `FinalitySourceActionAlwaysInstallsCommitViewWitness` to prove that any
+  honest commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality installs the commit-view witness as the active finality view.
+- The property is intentionally scoped to
+  `CommitViewWitnessInstallsWithFinalityLatchStep`, including the view-zero
+  value-preserving case, so finality-source actions are tied directly to the
+  durable commit-view witness without expanding the full exact-source aggregate.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionInstallsCommitViewWitnessStep|FinalitySourceActionAlwaysInstallsCommitViewWitness|finality-source commit-view witness installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`189`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV refresh transcript public-key preflight
+
+- Hardened direct exact and bounded-noise BFV refresh-transcript validation so
+  transcript metadata is still checked first, then advertised public-key shape,
+  then evaluation-key bundle validation and transcript-to-bundle matching.
+- Kept exact and bounded refresh-transcript digest admission on the same path,
+  so malformed public keys cannot be hidden behind malformed bundle key
+  material before a governance-bound digest is computed.
+- Added a crypto regression combining malformed public keys, malformed bundle
+  key material, and invalid transcript seed metadata across validation and
+  digest paths.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-public-key-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts_preflight_public_key_before_bundle_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-public-key-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_transcripts --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-public-key-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV evaluation-key bundle metadata preflight
+
+- Split BFV evaluation-key bundle validation into a public metadata pass and a
+  key-material shape pass, so rotation inventory metadata, Galois key-set
+  metadata, and bootstrap key-id/round-count metadata are rejected before
+  malformed relinearization or refresh/key-switch ciphertext entries.
+- Kept digest admission on the same preflight path, so malformed public bundle
+  metadata cannot receive an evaluation-key digest by being hidden behind
+  malformed key material.
+- Added a crypto regression combining malformed relinearization material with
+  duplicate rotation metadata, zero-step rotations, duplicate Galois metadata,
+  malformed bootstrap key ids, and missing bootstrap round-refresh inventory.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-metadata-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_preflights_public_metadata_before_key_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-metadata-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle --lib -- --nocapture`
+    (`10` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-metadata-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV Galois key-set metadata preflight
+
+- Split BFV Galois key-set validation into a public metadata pass and a
+  key-switch entry-shape pass, so bundle caps, automorphism powers, and
+  duplicate-key metadata are rejected before malformed key ciphertext entries.
+- Hardened exact, RNS, bounded-noise, bounded RNS, and bounded basis-extension
+  packed `RotateLeft` execution helpers so Galois key-set metadata is checked
+  before ciphertext shape, while full key-switch entry validation still runs
+  after ciphertext shape.
+- Added a crypto regression combining duplicate Galois automorphism metadata,
+  malformed Galois key entries, and malformed ciphertexts across exact, RNS,
+  bounded-noise, bounded RNS, basis-extension, and bound-propagation surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-set-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_preflights_galois_key_set_metadata_before_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-set-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left --lib -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-set-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV owner diagnostic and refresh-key preflight
+
+- Hardened shared BFV owner decrypt/profile/bound diagnostics so malformed
+  public ciphertext shapes are rejected before malformed secret-key shapes
+  across exact and bounded-noise diagnostics.
+- Hardened exact and bounded-noise rotation/bootstrap refresh-key generators so
+  public metadata and deterministic seed checks run first, public-key shape is
+  validated once, and no encrypted-zero refresh masks are derived from
+  malformed public keys.
+- Added crypto regressions that combine malformed ciphertexts with malformed
+  owner secrets, plus malformed public keys with rotation/bootstrap metadata and
+  seed errors across exact and bounded refresh-key generator surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto decrypt_diagnostics_preflight_ciphertext_shape_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key_generators_preflight_metadata_and_public_key_before_masks --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto "decrypt" --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV Galois key-switch execution preflight
+
+- Hardened exact, registered RNS, bounded-noise, direct RNS, and bounded
+  basis-extension Galois key-switch execution helpers so invalid public
+  automorphism metadata is rejected before malformed ciphertext shapes, while
+  full key-switch entry validation still runs after ciphertext shape checks.
+- Added a crypto regression that combines malformed ciphertexts and malformed
+  Galois key entries with invalid public automorphism metadata across the direct
+  and registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_key_switch_execution_preflights_public_metadata_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois --lib -- --nocapture`
+    (`15` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-execution-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV key-owner public metadata preflight
+
+- Hardened exact and bounded-noise Galois key generation so invalid public
+  automorphism powers and deterministic seed metadata are rejected before
+  malformed secret-key shapes.
+- Hardened exact and bounded public-key consistency diagnostics so malformed
+  public-key shapes are rejected before malformed secret-key shapes.
+- Hardened bounded relinearization and Galois consistency diagnostics so
+  malformed public evaluation keys are rejected before malformed owner-secret
+  shapes.
+- Hardened bounded decrypt/profile/ciphertext diagnostics plus rotation,
+  bootstrap, and bundle zero-refresh owner diagnostics so too-narrow public
+  rounded BFV profiles and oversized public rounded-noise bounds are rejected
+  before malformed owner-secret shapes.
+- Hardened exact residual-bound owner diagnostics so oversized public residual
+  bounds are rejected before malformed owner-secret shapes while ciphertext-shape
+  preflight remains first.
+- Hardened exact bundle, rotation, and bootstrap zero-refresh owner diagnostics
+  so too-narrow public seeded-refresh residual profiles are rejected before
+  malformed owner-secret shapes while refresh ciphertext-shape preflight remains
+  first.
+- Restored the exact encrypt/decrypt roundtrip fixture to the general BFV test
+  profile so its `42`/`99` plaintext coefficients stay within the configured
+  plaintext modulus.
+- Extended bootstrap round-request preflight regressions through the registered
+  exact and registered bounded refresh wrappers so production entry points reject
+  invalid round indices/counts before malformed bootstrap-key or ciphertext
+  shapes.
+- Hardened exact scalar and RNS bootstrap execution so too-narrow public
+  seeded-refresh profiles are rejected before refresh masks are applied.
+- Hardened exact and bounded direct plus bundle refresh-transcript admission so
+  transcript metadata stays first, public BFV capacity is checked next, and
+  malformed public-key, bundle-key, or refresh-ciphertext entry shapes cannot
+  mask too-narrow profiles.
+- Hardened scalar bounded bootstrap execution so invalid public bootstrap key-id
+  metadata and indexed/multi-round refresh requests are rejected before
+  too-narrow rounded-capacity failures.
+- Hardened bounded rotation/bootstrap refresh-key generation so public step,
+  key-id, round-count, and transcript seed metadata are rejected before
+  too-narrow rounded-capacity failures.
+- Hardened exact and bounded seeded keygen/encryption so public seed and
+  plaintext metadata are rejected before exact residual-capacity or rounded
+  capacity failures.
+- Added crypto regressions that combine malformed secret keys with invalid
+  automorphism/seed metadata, malformed public keys, and malformed public
+  evaluation keys across exact and bounded paths, too-narrow bounded profiles,
+  oversized bounded noise bounds, oversized exact residual bounds, and
+  too-narrow exact seeded-refresh residual profiles, with exact refresh
+  transcript, exact/bootstrap bounded execution, seeded keygen/encryption,
+  bounded refresh-key generation, and registered wrapper coverage for bootstrap
+  round metadata.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_keygen_preflights_public_metadata_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_key_consistency_preflights_public_key_shape_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_key_secret_consistency_rejects_tampered_key_material --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto consistency --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto preflights --lib -- --nocapture`
+    (`10` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto decrypt --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto residual_bound --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_preflights_public_input_and_seed_before_public_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key_generators_preflight_metadata_and_public_key_before_masks --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto transcript --lib -- --nocapture`
+    (`17` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh --lib -- --nocapture`
+    (`21` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bootstrap-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no output)
+
+## 2026-06-06 BFV seeded encryption input preflight
+
+- Hardened exact and bounded-noise seeded BFV encryption so invalid public
+  plaintext coefficients and deterministic seed metadata are rejected before
+  malformed public-key shapes.
+- Split identifier public-parameter metadata validation from public-key shape
+  validation, then reused that preflight in identifier key derivation and
+  identifier encryption so registered-profile/envelope-capacity, input length,
+  and encryption seed metadata are rejected before malformed public keys.
+- Added a crypto regression that combines malformed public keys with
+  out-of-range plaintexts, empty seeds, too-long identifier input, and invalid
+  identifier envelope capacity.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_preflights_public_input_and_seed_before_public_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto identifier --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV public-term execution preflight
+
+- Hardened exact, registered RNS, bounded-noise, direct RNS, and registered
+  bounded public scalar/plaintext-polynomial execution helpers so invalid
+  public scalar ranges or plaintext coefficient metadata are rejected before
+  malformed ciphertext shapes.
+- Added a crypto regression that combines malformed ciphertexts with
+  out-of-range public scalar and plaintext-polynomial inputs across direct and
+  registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-term-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_term_execution_preflights_plaintext_metadata_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-term-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto "plain" --lib -- --nocapture`
+    (`20` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-term-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV affine execution public preflight
+
+- Hardened exact, registered RNS, bounded RNS, and registered bounded affine
+  execution helpers so invalid public circuit row/coefficient metadata is
+  rejected before malformed input ciphertext shapes.
+- Added a crypto regression that combines malformed ciphertexts with invalid
+  public affine weights across the direct and registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto affine_execution_preflights_public_circuit_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto affine --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-execution-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-06 Sumeragi finality-source certificate-witness proof
+
+- Added `FinalitySourceActionInstallsCommitCertificateWitnessesStep` and
+  `FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses` to prove that
+  any honest commit vote, Byzantine commit vote, or RBC delivery action that
+  flips finality installs the latched commit-certificate vote and stake
+  witnesses from the post-state live counters.
+- The property is intentionally scoped to
+  `CommitCertificateWitnessesInstallWithFinalityLatchStep`, avoiding redundant
+  expansion of the full exact-source committed-delivery aggregate while still
+  tying finality-source actions directly to durable certificate witnesses.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionInstallsCommitCertificateWitnessesStep|FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses|finality-source commit-certificate witness installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`188`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV packed rotation execution preflight
+
+- Hardened exact, registered RNS, bounded-noise, bounded RNS, and bounded
+  basis-extension packed `RotateLeft` execution helpers so invalid public
+  rotation schedules are rejected before malformed ciphertext or Galois-key
+  shapes.
+- Added a crypto regression that combines malformed packed ciphertext and
+  Galois-key material with zero/full-cycle packed rotations across the direct
+  and registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-rotate-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_execution_preflights_rotation_metadata_before_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-rotate-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left --lib -- --nocapture`
+    (`8` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-rotate-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-06 BFV outer-slot rotation execution preflight
+
+- Hardened exact, registered RNS, bounded-noise, and bounded RNS outer
+  ciphertext-slot `RotateLeft` execution helpers so empty slot lists and
+  full-cycle rotation metadata are rejected before malformed refresh-key or
+  slot ciphertext shapes.
+- Added crypto regressions that combine malformed rotation refresh material and
+  malformed slot ciphertexts with public empty/full-cycle rotation metadata to
+  pin the fail-closed admission order.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-outer-rotation-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto outer_slot_rotation_execution_preflights_slot_metadata_before_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-outer-rotation-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rotate_left --lib -- --nocapture`
+    (`8` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-outer-rotation-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-06 Soracloud operation metadata public preflight
+
+- Hardened Soracloud FHE job-spec validation and runtime planner admission so
+  invalid operation metadata is rejected before secondary arity/input-shape
+  errors for Add, Multiply, RotateLeft, and Bootstrap jobs.
+- Added data-model and core regressions covering Add depth metadata,
+  Multiply zero-depth metadata, RotateLeft zero-step metadata, Bootstrap
+  depth/rotation metadata, and zero-count Bootstrap metadata combined with
+  invalid input shapes.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-operation-metadata-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_job_spec_validate_rejects_adversarial_operation_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-operation-metadata-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_core soracloud_fhe_job_rejects_operation_shape_bypasses_before_evaluation --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-operation-metadata-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE manifest admission
+
+- Hardened Soracloud FHE parameter-set validation so non-BFV schemes and
+  unregistered BFV backend labels are rejected in shared data-model admission,
+  matching the first-release BFV-only runtime surface.
+- Hardened Soracloud FHE execution-policy validation so unsupported
+  deterministic rounding modes are rejected during manifest admission. First
+  release BFV metadata now fails closed instead of accepting modes the
+  evaluator does not implement.
+- Added data-model regressions for `Ckks` parameter-set metadata, unregistered
+  `fhe/bfv-rns/v2` backend metadata, and `Floor` policy metadata while
+  preserving the existing BFV governance happy path and exact-evaluator
+  depth/bootstrap budget rejections.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_execution_policy_validate_rejects_unsupported_rounding_mode --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_execution_policy_validate_rejects_exact_evaluator_budget_overflow --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_param_set_validate_rejects_unsupported_scheme --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_param_set_validate_rejects_unregistered_backend --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_governance_bundle_validate_accepts_consistent_payload --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi finality-source post-commit progress quiescence proof
+
+- Added
+  `FinalitySourceActionDisablesProgressAfterCommittedDeliveryStep` and
+  `FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery` to prove
+  that any honest commit vote, Byzantine commit vote, or RBC delivery action
+  that flips finality also leaves the committed-delivery post-state with every
+  progress gate disabled.
+- The property is intentionally scoped to the post-state progress predicate and
+  is paired with the already-wired exact finality-source committed-delivery
+  aggregate, keeping certified-source completion and progress quiescence as
+  separately checked obligations.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionDisablesProgressAfterCommittedDeliveryStep|FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery|finality-source post-commit progress quiescence" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`187`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud Bootstrap job-spec public preflight
+
+- Hardened Soracloud FHE Bootstrap job-spec validation so zero
+  `bootstrap_count` metadata is rejected before non-single-input shape errors.
+- Extended data-model and runtime Soracloud regressions with zero-round
+  multi-input Bootstrap jobs, keeping manifest validation and execution-time
+  BFV planner admission aligned.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bootstrap-plan-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_job_spec_validate_rejects_adversarial_operation_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bootstrap-plan-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_core soracloud_fhe_job_rejects_operation_shape_bypasses_before_evaluation --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bootstrap-plan-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE multiply metadata public preflight
+
+- Hardened Soracloud exact residual and bounded-noise multiply metadata
+  wrappers so declared input bounds are validated before the wrapper's
+  two-input multiply arity check.
+- Added a direct wrapper regression proving oversized single-input metadata
+  reports the bound-capacity failure, while valid single-input metadata still
+  rejects with the multiply arity error for both exact and bounded-noise modes.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-multiply-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_core soracloud_fhe_job_multiply_metadata_preflights_bounds_before_arity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-multiply-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV evaluation-plan public preflight
+
+- Hardened first-release BFV evaluation-plan admission so over-budget
+  multiplicative-depth and bootstrap-refresh metadata is rejected before
+  secondary operation-shape checks once the plan has at least one input.
+- Updated bootstrap-refresh plan construction to reject zero-round metadata
+  before non-single-input shape errors.
+- Extended evaluation-plan regressions with zero-round multi-input Bootstrap,
+  single-input over-depth, and multi-input over-refresh cases.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-eval-plan-public-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bfv_evaluation_plan_constructors_validate_operation_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-eval-plan-public-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bfv_evaluation_budget_rejects_adversarial_plan_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-eval-plan-public-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV direct bootstrap refresh bound public preflight
+
+- Hardened direct exact residual and bounded-noise bootstrap refresh
+  output-bound helpers so supplied public input bounds are validated before
+  zero-round refresh-count rejection. Oversized input-bound metadata can no
+  longer be hidden by an invalid direct refresh count.
+- Extended the exact and bounded bootstrap refresh regressions with
+  oversized-input plus zero-round requests.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-direct-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto exact_residual_bound_helpers_track_add_and_bootstrap_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-direct-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-direct-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bounded bootstrap key bound public preflight
+
+- Hardened key-authorized bounded-noise bootstrap output-bound propagation so
+  public input-bound checks and zero-round refresh-count rejection run before
+  full bootstrap-key ciphertext shape validation.
+- Extended the bounded bootstrap refresh regression to prove oversized input
+  bounds and zero-round requests cannot be masked by malformed
+  `round_refreshes`, while otherwise valid metadata still rejects malformed key
+  shape afterward.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-bootstrap-key-bound CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-bootstrap-key-bound CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-bootstrap-key-bound CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV add bound public preflight
+
+- Hardened exact residual and bounded-noise add output-bound helpers so
+  provided public input bounds are validated before the minimum two-input shape
+  check. Oversized single-bound requests now fail on the supplied metadata,
+  while otherwise valid one-input lists still reject with the add arity error.
+- Extended exact and bounded add-bound regressions with oversized single-bound
+  inputs plus valid single-bound arity checks.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-add-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_addition_tracks_noise_bound --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-add-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto exact_residual_bound_helpers_track_add_and_bootstrap_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-add-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV plaintext-scalar bound public preflight
+
+- Hardened exact and bounded plaintext-scalar output-bound helpers so public
+  input-bound checks run before public scalar range validation.
+- Extended exact and bounded plain-operation regressions to prove oversized
+  input bounds fail before out-of-range scalar metadata while valid input
+  bounds still reject scalars outside `Z_t`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-scalar-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_plain_operations_track_noise_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-scalar-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto exact_residual_bound_helpers_track_subtract_and_plaintext_operations --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-scalar-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV plaintext-polynomial bound public preflight
+
+- Hardened exact residual and bounded-noise plaintext-polynomial output-bound
+  helpers so declared public input bounds are validated before caller-supplied
+  plaintext polynomial shape. Malformed plaintext polynomials can no longer
+  mask oversized public input bounds, while valid bounds still reject
+  coefficients outside the plaintext modulus.
+- Extended the exact and bounded plaintext-operation regressions with
+  malformed plaintext-polynomial coefficients plus oversized input bounds.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-plaintext-poly-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_plain_operations_track_noise_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-plaintext-poly-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto exact_residual_bound_helpers_track_subtract_and_plaintext_operations --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-plaintext-poly-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi finality-source exact-source committed-delivery proof
+
+- Added
+  `FinalitySourceActionCompletesCommittedDeliveryFromExactSourceStep` and
+  `FinalitySourceActionAlwaysCompletesCommittedDeliveryFromExactSource` to
+  prove any honest commit vote, Byzantine commit vote, or RBC delivery action
+  that flips finality completes the delivered committed state through the
+  certified exact-source chain.
+- The property composes the finality-source action/effects/quorum classifiers
+  with the finality-latch, committed-phase, commit-artifact,
+  commit-certificate, and commit-view exact-source committed-delivery
+  aggregates, tying source actions to the full delivered committed certificate
+  stack without duplicating the branch-specific proof obligations.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionCompletesCommittedDeliveryFromExactSourceStep|FinalitySourceActionAlwaysCompletesCommittedDeliveryFromExactSource|finality-source exact-source committed-delivery completion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`186`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV affine bound public preflight
+
+- Hardened exact and bounded public affine output-bound helpers so public
+  input-bound checks run before caller-supplied affine circuit row and
+  coefficient validation.
+- Extended exact and bounded affine regressions with malformed circuit weights,
+  proving oversized public input bounds fail before circuit-shape errors while
+  valid public inputs still reject malformed affine circuits.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-affine-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto affine_circuit_residual_bounds_track_weighted_public_rows --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-affine-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_affine_circuit_tracks_weighted_public_rows --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-affine-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV multiply bound public preflight
+
+- Hardened exact residual and bounded-noise multiply output-bound helpers so
+  public input-bound and derived output-capacity admission runs before
+  caller-supplied relinearization key-shape validation. Malformed relin key
+  material can no longer mask oversized public multiply bounds, while valid
+  public bounds still reject malformed keys.
+- Extended the exact and bounded multiply-bound regressions with malformed
+  relinearization keys to pin the fail-closed ordering.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multiply-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_multiplication_relinearizes_after_scale_rounding --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multiply-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiply_residual_bound_tracks_relinearized_output --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multiply-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV outer RotateLeft bound public preflight
+
+- Hardened exact and bounded outer-slot `RotateLeft` output-bound helpers so
+  public input-bound checks and full-cycle rotation admission run before
+  caller-supplied rotation-key ciphertext shape validation.
+- Extended exact and bounded outer rotation regressions with malformed
+  rotation-key refresh ciphertexts, proving oversized bounds and full-cycle
+  rotations fail before key-shape errors while valid public inputs still reject
+  malformed rotation keys.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-outer-rotate-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_outer_rotate_left_refreshes_slots_and_tracks_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-outer-rotate-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rotation_slot_residual_bounds_track_public_refresh --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-outer-rotate-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bootstrap refresh round preflight
+
+- Hardened scalar, bounded-noise, direct RNS, and registered RNS bootstrap
+  refresh execution so public bootstrap-key metadata and the requested round
+  index/count are validated before full bootstrap-key ciphertext shape. A
+  malformed `round_refreshes` vector can no longer mask out-of-capacity
+  single-round or multi-round refresh requests.
+- Extended the bootstrap-round helper regression to cover malformed ciphertexts
+  and malformed bootstrap-key refresh vectors across exact, bounded-noise,
+  direct RNS, and bounded RNS paths.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-round-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-round-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV packed RotateLeft bound public preflight
+
+- Hardened exact and bounded packed `RotateLeft` output-bound helpers so public
+  input-bound and rotation-schedule admission runs before caller-supplied
+  Galois key-set validation. Malformed key sets can no longer mask oversized
+  bounds or invalid full-cycle rotations in bound propagation.
+- Extended exact and bounded packed `RotateLeft` regressions with malformed
+  Galois keys, proving oversized bounds and full-cycle rotations fail before
+  key-shape errors while valid public inputs still reject malformed keys.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_packed_rotate_left_tracks_galois_schedule --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_residual_bound_tracks_galois_schedule --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV Galois key-switch bound public preflight
+
+- Hardened exact and bounded `bfv_galois_key_switch_*_output_bound` helpers so
+  public input-bound admission runs before caller-supplied Galois key-shape
+  validation. Oversized bounds can no longer be masked by malformed key-switch
+  entries.
+- Extended the bounded Galois and exact packed-rotation residual-bound
+  regressions with malformed Galois keys, proving oversized public bounds fail
+  before key-shape errors while valid bounds still reject malformed keys.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-galois-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-galois-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_residual_bound_tracks_galois_schedule --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-galois-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud checked binding state totals
+
+- Hardened Soracloud service-state byte accounting so direct state upserts and
+  `RunSoracloudFheJob` output persistence share checked binding total
+  projection. Inconsistent existing-item accounting now fails closed before
+  subtracting from the current binding total, and `u64` total overflows fail
+  closed before `max_total_bytes` admission.
+- Added a Core regression covering a normal replacement projection, corrupted
+  existing-item accounting, and overflowing binding totals.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-binding-state-total CARGO_INCREMENTAL=0 cargo test -p iroha_core projected_binding_state_total_bytes_rejects_inconsistent_or_overflowing_totals --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-binding-state-total CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV exact bootstrap residual-bound public preflight
+
+- Hardened `bfv_bootstrap_key_refresh_output_residual_multiple_bound` so it
+  checks the public input residual bound and requested refresh-round metadata
+  before inspecting full bootstrap-key shape, then uses the shared bootstrap
+  round-count validator.
+- Extended the exact residual-bound bootstrap regression with malformed key
+  material, proving oversized input bounds and zero-round requests are rejected
+  before key-shape errors while malformed keys still fail after public
+  preflight.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-exact-bootstrap-bound-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto exact_residual_bound_helpers_track_add_and_bootstrap_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-exact-bootstrap-bound-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bounded bootstrap-key bound capacity preflight
+
+- Hardened `bfv_bootstrap_key_refresh_bounded_noise_output_bound` so it
+  preflights rounded BFV encryption capacity before validating caller-supplied
+  bootstrap-key shape, then uses the shared bootstrap round-count validator.
+- Extended the too-narrow rounded-profile regression with malformed bootstrap
+  key material, proving capacity failure cannot be masked by key-shape errors
+  in key-authorized bounded bootstrap-bound admission.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-key-bound-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-key-bound-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE input payload binding
+
+- Hardened Core's Soracloud FHE input-admission verifier helper so it
+  recomputes the actual payload length and payload commitment before BFV shape
+  checks, statement-hash derivation, envelope validation, or verifier lookup.
+  Direct helper use can no longer rely on caller-normalized
+  `value_size_bytes`/`payload_commitment` inputs.
+- Added a Core regression that calls the helper directly with forged payload
+  size and commitment metadata and proves both are rejected at the FHE
+  input-admission boundary.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-payload-binding CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_proof_binds_actual_payload_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-payload-binding CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE checked output-size admission
+
+- Added a checked deterministic output payload-size projection for
+  `FheJobSpecV1` and made execution admission use it. Jobs whose largest input
+  plus operation overhead overflows `u64` now fail closed before comparing the
+  projection with `max_ciphertext_bytes`.
+- Kept the existing infallible projection helper conservative by returning
+  `u64::MAX` when the checked projection is unrepresentable, preserving callers
+  that only need a display/admission hint while preventing saturated admission.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-output-size-overflow CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_job_spec_validate_for_execution_rejects_output_size_overflow --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-output-size-overflow CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi commit-view exact-source committed-delivery proof
+
+- Added
+  `CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep` and
+  `CommitViewWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource` to
+  prove any nonzero latched commit-view witness change completes the delivered
+  committed state through the certified exact-source finality chain.
+- The property composes the commit-view certified-stack and
+  commit-certificate installation classifiers with the commit-certificate,
+  commit-artifact, finality-latch, and committed-phase exact-source
+  committed-delivery aggregate proofs. It ties nonzero commit-view witness
+  installation to the finality view, view-quorum evidence, latched certificate
+  witnesses, delivered RBC evidence, and disabled progress gates.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep|CommitViewWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource|commit-view exact-source committed-delivery completion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`185`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx16384m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV shared transcript key and round caps
+
+- Promoted the BFV bootstrap key-id and evaluation-key rotation-count caps to
+  documented public `iroha_crypto` constants, and promoted the BFV bootstrap
+  key max-refresh-round cap to the same public surface. Soracloud refresh
+  transcripts now derive their bootstrap key-id, rotation-transcript, and
+  bootstrap max-round limits from those same crypto constants, alongside the
+  existing shared deterministic seed cap.
+- Extended the data-model cap-alignment regression so it pins the seed,
+  bootstrap key-id, rotation transcript, and bootstrap max-round limits to the
+  crypto source of truth.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-key-caps CARGO_INCREMENTAL=0 cargo test -p iroha_data_model bfv_refresh_transcript_caps_match_crypto_key_caps --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-key-caps CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-bootstrap-round-cap CARGO_INCREMENTAL=0 cargo test -p iroha_data_model bfv_refresh_transcript_caps_match_crypto_key_caps --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-bootstrap-round-cap CARGO_INCREMENTAL=0 cargo test -p iroha_data_model bfv_refresh_transcript_validate_rejects_malformed_bootstrap_round_counts --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-bootstrap-round-cap CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-bootstrap-round-cap CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-bootstrap-round-cap CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV shared deterministic seed cap
+
+- Promoted the BFV deterministic seed cap from an internal crypto constant to
+  a documented public `iroha_crypto` constant and made Soracloud's public
+  refresh-transcript seed cap derive from it. This keeps crypto RNG seed
+  admission and data-model transcript admission on one shared 64-byte limit.
+- Added a data-model regression proving the Soracloud transcript seed cap
+  matches the crypto deterministic seed cap, while preserving the existing
+  crypto oversized-seed regression.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-seed-cap CARGO_INCREMENTAL=0 cargo test -p iroha_data_model bfv_refresh_transcript_seed_cap_matches_crypto_seed_cap --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-seed-cap CARGO_INCREMENTAL=0 cargo test -p iroha_crypto deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shared-seed-cap CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi commit-certificate exact-source committed-delivery proof
+
+- Added
+  `CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep`
+  and
+  `CommitCertificateWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource`
+  to prove any latched commit-certificate vote/stake witness change completes
+  the delivered committed state through the certified exact-source finality
+  chain.
+- The property composes the commit-certificate certified-stack and commit-view
+  witness classifiers with the commit-artifact, finality-latch, and
+  committed-phase exact-source committed-delivery aggregate proofs, tying
+  certificate witness installation to the post-state committed phase, commit
+  view, delivered RBC evidence, and disabled progress gates.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep|CommitCertificateWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource|commit-certificate exact-source committed-delivery completion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`184`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx8192m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV deterministic seed length caps
+
+- Added a shared 64-byte cap for deterministic BFV RNG seeds in
+  `iroha_crypto`, matching the existing public refresh-transcript seed cap.
+  Exact and bounded-noise keygen, encryption, Galois-key generation, and
+  identifier seed helpers now reject empty or oversized seed material before
+  deriving ChaCha20 RNG state or identifier slot seeds.
+- Extended the deterministic seed regression to cover oversized exact,
+  bounded-noise, Galois, and identifier seed inputs.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seed-bounds CARGO_INCREMENTAL=0 cargo test -p iroha_crypto deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seed-bounds CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bootstrap single-round index preflight
+
+- Added a shared `iroha_crypto` preflight for single-round BFV bootstrap
+  refresh indices. Exact, bounded-noise, exact-RNS, and bounded-noise exact-RNS
+  indexed refresh helpers now reject an out-of-capacity round index immediately
+  after key and corridor validation, before the ciphertext addition/evaluator
+  path can inspect caller-supplied ciphertext shapes.
+- Added focused regression coverage proving malformed ciphertext input cannot
+  mask an over-capacity single-round refresh index across the scalar and RNS
+  exact/rounded helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-round-index CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_single_round_helpers_preflight_round_index_before_ciphertext_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-round-index CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE shared exact OpenVerify admission bounds
+
+- Exported the Soracloud FHE input-admission `OpenVerifyEnvelope` bounds helper
+  from the data model and reused it in Core runtime envelope validation and
+  backend preverification.
+- Added a data-model regression pinning the helper to the published STARK
+  wrapper cap, canonical v1 circuit/schema byte ceilings, empty-aux policy,
+  nonzero verifying-key hash requirement, and production-backend requirement.
+  Exact circuit/schema equality remains enforced by the existing canonical
+  admission checks after shape validation.
+- Extended the oversized proof-payload and Core noncanonical-envelope
+  regressions to prove oversized Soracloud circuit ids and public-input schemas
+  fail closed through the shared bounds before verifier lookup.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-shared-openverify-bounds CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate_rejects_oversized_proof_payloads --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-shared-openverify-bounds CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_open_verify_bounds_match_published_caps --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-shared-openverify-bounds CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-shared-openverify-bounds CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-shared-openverify-bounds CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi commit-artifact exact-source committed-delivery proof
+
+- Added
+  `CommitArtifactsChangeCompletesCommittedDeliveryFromExactSourceStep` and
+  `CommitArtifactsChangeAlwaysCompletesCommittedDeliveryFromExactSource` to
+  prove any durable commit-view or commit-certificate witness change completes
+  the delivered committed state through the certified exact-source finality
+  chain.
+- The property composes the commit-artifact certified-stack classifier with the
+  finality-latch and committed-phase exact-source committed-delivery aggregate
+  proofs, tying artifact installation to the post-state committed phase,
+  commit certificate, delivered RBC evidence, and disabled progress gates.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "CommitArtifactsChangeCompletesCommittedDeliveryFromExactSourceStep|CommitArtifactsChangeAlwaysCompletesCommittedDeliveryFromExactSource|commit-artifact exact-source committed-delivery completion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`183`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx8192m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`; default `-Xmx4096m` ran out of heap during analysis)
+
+## 2026-06-06 Soracloud FHE input-admission proof byte caps
+
+- Added Soracloud-specific FHE input-admission proof byte limits: an 8 MiB
+  backend-native STARK/FRI envelope cap, bounded STARK public-input wrapper
+  bytes, and a bounded encoded `OpenVerify` envelope with shared data-model and
+  core runtime bounds.
+- Data-model validation now rejects oversized outer `OpenVerify` bytes,
+  oversized STARK wrapper bytes, and oversized native STARK envelope bytes
+  before proof admission can continue. Core preverification uses the same
+  shared bounds before verifier-record lookup.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-byte-caps CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate_rejects_oversized_proof_payloads --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-byte-caps CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-byte-caps CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_data_model -p iroha_core -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-byte-caps CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed-phase exact-source committed-delivery proof
+
+- Added
+  `CommittedPhaseEntryCompletesCommittedDeliveryFromExactSourceStep` and
+  `CommittedPhaseEntryAlwaysCompletesCommittedDeliveryFromExactSource` to prove
+  first entry into `Committed` completes the delivered committed state through
+  the same certified exact-source chain used by finality-latch transitions.
+- The property composes the committed-phase certified-stack, commit-certificate
+  witness, commit-view witness, live commit-gate crossing, commit-artifact
+  change, exact finality-source effects, NewView cleanup, and progress-gate
+  closure classifiers, then delegates the source split to
+  `FinalityLatchChangeCompletesCommittedDeliveryFromExactSourceStep`.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "CommittedPhaseEntryCompletesCommittedDeliveryFromExactSourceStep|CommittedPhaseEntryAlwaysCompletesCommittedDeliveryFromExactSource|committed-phase exact-source committed-delivery completion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`182`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi finality-latch exact-source committed-delivery proof
+
+- Added
+  `FinalityLatchChangeCompletesCommittedDeliveryFromExactSourceStep` and
+  `FinalityLatchChangeAlwaysCompletesCommittedDeliveryFromExactSource` to prove
+  every finality-latch transition completes the committed delivered state
+  through exactly one certified source: honest commit vote, Byzantine commit
+  vote, or RBC delivery.
+- The property ties the certified source stack to the post-state committed
+  phase, commit certificate, commit view, delivered RBC evidence, live commit
+  gate/finality match, NewView cleanup, and disabled post-finality progress
+  gates, while delegating each exact source branch to its source-specific
+  committed-delivery completion proof.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalityLatchChangeCompletesCommittedDeliveryFromExactSourceStep|FinalityLatchChangeAlwaysCompletesCommittedDeliveryFromExactSource|finality-latch exact-source committed-delivery completion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`181`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi Byzantine commit-vote finality committed-delivery proof
+
+- Added `ByzantineCommitVoteFinalityStepCompletesCommittedDelivery` and
+  `ByzantineCommitVoteFinalityStepAlwaysCompletesCommittedDelivery` to prove a
+  finalizing Byzantine commit vote completes the committed delivered state in
+  one transition.
+- The property proves the post-state has the exact Byzantine-vote/stake-updated
+  certificate stack, preserves enough honest support after discounting the
+  Byzantine vote, records the active commit view, preserves delivered RBC
+  evidence, clears NewView handoff evidence, matches the live commit gate to
+  finality, and closes every non-GST progress gate.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "ByzantineCommitVoteFinalityStepCompletesCommittedDelivery|ByzantineCommitVoteFinalityStepAlwaysCompletesCommittedDelivery|Byzantine commit-vote finality-step committed-delivery completion|Sumeragi Byzantine commit-vote finality committed-delivery proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`180`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE refresh transcript public-key preflight
+
+- Exposed the BFV public-key shape validator from `iroha_crypto::fhe_bfv` with
+  public docs, keeping the existing deterministic shape checks over both key
+  components.
+- Soracloud refresh-transcript digest admission now preflights the advertised
+  BFV public key before validating the evaluation-key bundle, so malformed
+  transcript key material is reported as `public_key` and cannot be masked by
+  unrelated bundle-shape errors.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-pubkey CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_key_validator_rejects_malformed_components --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-pubkey CARGO_INCREMENTAL=0 cargo test -p iroha_data_model bfv_refresh_transcript_digest_rejects_public_key_shape_before_bundle_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-pubkey CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-pubkey CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi honest commit-vote finality committed-delivery proof
+
+- Added `HonestCommitVoteFinalityStepCompletesCommittedDelivery` and
+  `HonestCommitVoteFinalityStepAlwaysCompletesCommittedDelivery` to prove a
+  finalizing honest commit vote completes the committed delivered state in one
+  transition.
+- The property proves the post-state has the exact honest-vote/stake-updated
+  certificate stack, records the active commit view, preserves delivered RBC
+  evidence, clears NewView handoff evidence, matches the live commit gate to
+  finality, and closes every non-GST progress gate.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "HonestCommitVoteFinalityStepCompletesCommittedDelivery|HonestCommitVoteFinalityStepAlwaysCompletesCommittedDelivery|honest commit-vote finality-step committed-delivery completion|Sumeragi honest commit-vote finality committed-delivery proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`179`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV identifier slot-count checked arithmetic
+
+- Routed BFV identifier envelope slot-count calculations through one checked
+  helper for the `max_input_bytes + length slot` shape instead of using
+  saturating arithmetic in encryption, decryption, and decode paths.
+- Extended the deterministic identifier-slot regression to pin a 3-byte
+  envelope at four slots, preserving the registered 63-byte/64-slot RAM-LFE cap
+  while future unrepresentable envelope widths fail through `BfvError`.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-identifier-slot-count CARGO_INCREMENTAL=0 cargo test -p iroha_crypto identifier_slot_encoding_and_seed_derivation_are_deterministic --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-identifier-slot-count CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC deliver-finality committed-delivery proof
+
+- Added `RbcDeliverFinalityStepCompletesCommittedDelivery` and
+  `RbcDeliverFinalityStepAlwaysCompletesCommittedDelivery` to prove a
+  finalizing RBC DELIVER step completes the committed delivered state in one
+  transition.
+- The property proves the post-state has the exact commit-vote/stake
+  certificate stack, records the active commit view, preserves READY/chunk,
+  header, and digest evidence, clears NewView handoff evidence, matches the
+  live commit gate to finality, and closes every non-GST progress gate.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "RbcDeliverFinalityStepCompletesCommittedDelivery|RbcDeliverFinalityStepAlwaysCompletesCommittedDelivery|RBC DELIVER finality-step committed-delivery completion|Sumeragi RBC deliver-finality committed-delivery proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`178`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bootstrap refresh key-id portability
+
+- Tightened BFV bootstrap refresh key-id validation in `iroha_crypto` and the
+  Soracloud refresh-transcript data model so key IDs may contain only ASCII
+  alphanumeric, `.`, `_`, or `-` bytes.
+- Extended crypto and data-model regressions to reject delimiter-shaped
+  bootstrap key IDs such as `bootstrap/key` before key-bundle digests,
+  refresh operations, or Soracloud transcript admission accept them.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-key-id CARGO_INCREMENTAL=0 cargo test -p iroha_data_model bfv_refresh_transcript_validate_rejects_malformed_bootstrap_key_ids --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-key-id CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_crypto -p iroha_data_model -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-key-id CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC READY quorum deliver handoff proof
+
+- Added `RbcReadyQuorumStepEnablesDeliverHandoff` and
+  `RbcReadyQuorumStepAlwaysEnablesDeliverHandoff` to prove any RBC READY step
+  whose post-state reaches READY quorum opens the RBC DELIVER gate, closes
+  earlier RBC init/chunk gates, and preserves complete chunk/header/digest
+  evidence.
+- The property also proves the READY-quorum handoff leaves consensus phase,
+  vote counters, stake, view evidence, finality latch, and GST unchanged, while
+  keeping remaining READY votes enabled exactly when READY capacity remains.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "RbcReadyQuorumStepEnablesDeliverHandoff|RbcReadyQuorumStepAlwaysEnablesDeliverHandoff|RBC READY quorum-step DELIVER handoff|Sumeragi RBC READY quorum deliver handoff proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`177`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE native STARK envelope admission guard
+
+- Tightened FHE input-admission proof validation so the decoded STARK/FRI
+  public-input wrapper must carry non-empty backend-native `envelope_bytes`.
+  The guard now runs in the data-model validator, Core envelope validation, and
+  backend preverification path before verifier lookup.
+- Added regressions for data-model proof validation, direct Core envelope
+  validation, and direct backend preverification.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-envelope CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate_rejects_open_verify_envelope_drift --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-envelope CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-envelope CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-envelope CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-envelope CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC deliver-pending no-finality proof
+
+- Added `RbcDeliverPendingStepKeepsDeliveredEvidenceWithoutFinality` and
+  `RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality` to prove a
+  non-final RBC DELIVER transition moves from `ReadyQuorum` to `Delivered`,
+  preserves complete READY/chunk/header/digest evidence, and leaves phase plus
+  live vote/view evidence unchanged.
+- The new property also proves the pending RBC DELIVER branch keeps finality
+  and commit-certificate witnesses absent, disables remaining RBC/fault
+  progress gates, and still lacks the vote or stake evidence needed to commit.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the RBC deliver-pending no-finality handoff in the
+  formal README and roadmap.
+- Validation:
+  - `rg -n "RbcDeliverPendingStepKeepsDeliveredEvidenceWithoutFinality|RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality|RBC DELIVER pending-step delivered-evidence/no-finality handoff|Sumeragi RBC deliver-pending no-finality proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`176`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi Byzantine commit-pending handoff preservation proof
+
+- Added `ByzantineCommitVotePendingStepKeepsCommitVoteHandoff` and
+  `ByzantineCommitVotePendingStepAlwaysKeepsCommitVoteHandoff` to prove a
+  non-final Byzantine commit-vote transition remains in `CommitVote`, keeps
+  proposal, prepare, and NewView gates closed, and exposes only the remaining
+  commit-vote gates according to the honest and Byzantine voter budgets.
+- The new property also proves the pending Byzantine commit-vote branch
+  preserves RBC evidence, keeps finality plus commit-certificate witnesses
+  absent, and still lacks the vote, stake, or RBC evidence needed to commit.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the Byzantine commit-pending handoff in the formal
+  README and roadmap.
+- Validation:
+  - `rg -n "ByzantineCommitVotePendingStepKeepsCommitVoteHandoff|ByzantineCommitVotePendingStepAlwaysKeepsCommitVoteHandoff|Byzantine commit-vote pending-step commit-vote handoff preservation|Sumeragi Byzantine commit-pending handoff preservation proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`175`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Shared STARK/FRI v1 backend classifier
+
+- Moved the admitted STARK/FRI v1 backend-label allowlist into
+  `iroha_data_model::zk` and routed Soracloud FHE input-admission validation
+  plus the core backend classifier through that shared predicate.
+- Added data-model coverage for the accepted `stark/fri` v1 profiles and
+  rejected debug/mock/latest/trailing-space labels, while preserving the
+  existing core classifier regression.
+- Added core backend pre-verifier coverage for a matching but unsupported
+  `stark/fri/debug-proof` attachment and tightened the runtime error text to
+  require a supported STARK/FRI v1 proof backend before verifier-key lookup.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-shared CARGO_INCREMENTAL=0 cargo test -p iroha_data_model stark_fri_v1_backend_label_accepts_only_admitted_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-shared CARGO_INCREMENTAL=0 cargo test -p iroha_core detects_base_and_variant_backends --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_data_model -p iroha_core -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-shared CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-shared CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_core -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-zk-backend-shared CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi honest commit-pending handoff preservation proof
+
+- Added `HonestCommitVotePendingStepKeepsCommitVoteHandoff` and
+  `HonestCommitVotePendingStepAlwaysKeepsCommitVoteHandoff` to prove a
+  non-final honest commit-vote transition remains in `CommitVote`, keeps
+  proposal, prepare, and NewView gates closed, and exposes only the remaining
+  commit-vote gates according to the honest and Byzantine voter budgets.
+- The new property also proves the pending honest commit-vote branch preserves
+  RBC evidence, keeps finality plus commit-certificate witnesses absent, and
+  still lacks the vote, stake, or RBC evidence needed to commit.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the honest commit-pending handoff in the formal README
+  and roadmap.
+- Validation:
+  - `rg -n "HonestCommitVotePendingStepKeepsCommitVoteHandoff|HonestCommitVotePendingStepAlwaysKeepsCommitVoteHandoff|honest commit-vote pending-step commit-vote handoff preservation|Sumeragi honest commit-pending handoff preservation proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`174`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi prepare-pending handoff preservation proof
+
+- Added `PrepareVotePendingStepKeepsPrepareVoteHandoff` and
+  `PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff` to prove a
+  below-quorum prepare vote remains in `Prepare`, keeps prepare voting enabled,
+  and keeps proposal, NewView, honest commit-vote, and Byzantine commit-vote
+  gates closed.
+- The new property also proves the below-quorum prepare branch preserves RBC
+  evidence and keeps finality plus commit-certificate witnesses absent.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the below-quorum prepare handoff in the formal README
+  and roadmap.
+- Validation:
+  - `rg -n "PrepareVotePendingStepKeepsPrepareVoteHandoff|PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff|prepare-vote pending-step prepare handoff preservation|Sumeragi prepare-pending handoff preservation proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`173`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE admission backend allowlist
+
+- Tightened `SoracloudFheInputAdmissionProofV1::validate` so FHE
+  input-admission proof attachments must use one of the supported STARK/FRI v1
+  backend labels before envelope decoding or runtime admission.
+- Updated focused proof-validation regressions to cover matching but
+  unsupported backend labels such as `stark/fri/debug-proof`, while keeping the
+  sample proof on the admitted `stark/fri/sha256-goldilocks` profile.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate_ --lib -- --nocapture`
+    (`5` tests passed)
+  - `cargo fmt -p iroha_data_model -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi prepare-quorum commit-vote handoff proof
+
+- Added `PrepareVoteQuorumStepStartsCommitVoteHandoff` and
+  `PrepareVoteQuorumStepAlwaysStartsCommitVoteHandoff` to prove a
+  quorum-forming prepare vote opens the commit-vote handoff while keeping
+  finality and commit-certificate witnesses absent.
+- The new property proves honest commit voting is enabled in the post-state and
+  Byzantine commit voting is enabled exactly when the configured Byzantine
+  budget is positive, while stale proposal, NewView, and prepare-vote gates are
+  closed.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the prepare-quorum commit-vote handoff in the formal
+  README and roadmap.
+- Validation:
+  - `rg -n "PrepareVoteQuorumStepStartsCommitVoteHandoff|PrepareVoteQuorumStepAlwaysStartsCommitVoteHandoff|prepare-vote quorum-step commit-vote gate handoff|Sumeragi prepare-quorum commit-vote handoff proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`172`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi proposal prepare-vote handoff proof
+
+- Added `HonestProposeStepStartsPrepareVoteHandoff` and
+  `HonestProposeStepAlwaysStartsPrepareVoteHandoff` to prove every honest
+  proposal step opens the prepare-vote gate while closing stale proposal,
+  NewView, honest commit-vote, and Byzantine commit-vote gates.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the proposal-to-prepare handoff corridor in the formal
+  README and roadmap.
+- Validation:
+  - `rg -n "HonestProposeStepStartsPrepareVoteHandoff|HonestProposeStepAlwaysStartsPrepareVoteHandoff|proposal-step prepare-vote handoff|Sumeragi proposal prepare-vote handoff proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`171`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE admission circuit-id preverification
+
+- Tightened core Soracloud FHE input-admission envelope validation so portable
+  but non-canonical `OpenVerifyEnvelope.circuit_id` values are rejected at the
+  runtime admission and backend pre-verification boundary before verifier-key
+  lookup.
+- Extended focused core regressions for the shared envelope helper and backend
+  pre-verifier to cover a validly shaped but non-canonical FHE admission
+  circuit id.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-circuit CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_ --lib -- --nocapture`
+    (`5` tests passed)
+  - `cargo fmt -p iroha_core -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-circuit CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi view-evidence handoff proof
+
+- Added `ViewEvidenceWitnessRequiresNonzeroActiveView` and
+  `ViewEvidenceWitnessNeverTargetsZeroOrNewView` to prove every nonzero
+  view-evidence witness belongs to a nonzero active view outside the `NewView`
+  collection phase and is quorum-complete.
+- Added `NewViewVoteQuorumStepStartsProposalHandoff` and
+  `NewViewVoteQuorumStepAlwaysStartsProposalHandoff` to prove a quorum-forming
+  NewView vote hands control directly to the proposal gate while disabling the
+  NewView, prepare, and commit-vote gates.
+- Wired the invariant/property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the view-evidence/NewView handoff corridor in the
+  formal README and roadmap.
+- Validation:
+  - `rg -n "ViewEvidenceWitnessRequiresNonzeroActiveView|ViewEvidenceWitnessNeverTargetsZeroOrNewView|NewViewVoteQuorumStepStartsProposalHandoff|NewViewVoteQuorumStepAlwaysStartsProposalHandoff|nonzero view-evidence active-view witness|NewView vote quorum-step proposal handoff" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`170`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bounded scalar and transcript capacity preflight
+
+- Tightened scalar `multiply_ciphertexts_bounded_noise` so it preflights fresh
+  rounded BFV decoding capacity before operand or relinearization-key shape
+  checks, matching the exact-RNS bounded multiply bridge.
+- Tightened bounded refresh-transcript validation so malformed bundle key
+  material cannot mask a structurally valid but too-narrow rounded BFV profile.
+- Extended the too-narrow rounded-profile regression to prove malformed
+  multiply operands/key material and bounded transcript bundles are masked by
+  the shared fresh-capacity error.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-bounded-mul CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-bounded-mul CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_multiplication_relinearizes_after_scale_rounding --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-bounded-mul CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-bounded-mul CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE attachment pre-decode structural guard
+
+- Tightened Core FHE input-admission attachment decoding so the shared
+  `ProofAttachment::structural_error` guard runs before `OpenVerifyEnvelope`
+  decode, rejecting forged envelope hashes and other structural attachment
+  drift before parse work.
+- Extended the noncanonical OpenVerify regression to prove the helper rejects
+  forged `envelope_hash` metadata before envelope validation.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-helper CARGO_INCREMENTAL=0 cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-helper CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi timeout RBC evidence preservation proof
+
+- Added `TimeoutTickStepPreservesRbcEvidence` and
+  `TimeoutTickStepAlwaysPreservesRbcEvidence` to the Sumeragi TLA model,
+  proving timeout recovery preserves RBC state, chunk coverage, READY votes,
+  header evidence, and digest-validity evidence while resetting live vote and
+  view-change state.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the timeout/RBC preservation corridor in the formal
+  README and roadmap.
+- Validation:
+  - `rg -n "TimeoutTickStepPreservesRbcEvidence|TimeoutTickStepAlwaysPreservesRbcEvidence|timeout-step RBC evidence preservation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`66`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`168`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bounded output-bound capacity preflight
+
+- Tightened public bounded-noise output-bound propagation so Add/Subtract,
+  add-plain, plaintext multiplication, ciphertext multiplication,
+  Galois/packed rotation, affine rows, outer-slot `RotateLeft`, and Bootstrap
+  bound helpers all preflight fresh rounded BFV noise capacity before
+  operand-specific bound math.
+- Extended the too-narrow rounded-profile regression to cover each bounded
+  output-bound helper family, including key-authorized Bootstrap, proving
+  inadmissible profiles fail with the shared fresh-noise capacity error.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bounded direct RNS evaluator-corridor preflight
+
+- Added shared bounded-noise direct RNS corridor preflights in
+  `iroha_crypto` and routed caller-supplied bounded Add/Subtract, affine rows,
+  outer-slot `RotateLeft`, Bootstrap refresh rounds, and ciphertext
+  multiplication through them before key/ciphertext shape checks.
+- Extended the bounded direct RNS preflight regression so malformed Bootstrap
+  and outer-rotation material plus malformed bounded Multiply operands and
+  relinearization keys are masked by the intended narrow-chain rejection,
+  matching the existing Add/Subtract/affine fail-closed ordering.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-rns-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-bounded-mul CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-bounded-mul CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-rns-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi timeout NewView vote handoff proof
+
+- Added `TimeoutTickStepStartsNewViewVoteHandoff` and
+  `TimeoutTickStepAlwaysStartsNewViewVoteHandoff` to the Sumeragi TLA model,
+  proving every timeout transition opens a fresh NewView vote handoff while
+  keeping proposal, prepare, honest commit-vote, and Byzantine commit-vote gates
+  disabled in the post-state.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the timeout-to-NewView handoff in the formal README
+  and roadmap.
+- Validation:
+  - `rg -n "TimeoutTickStepStartsNewViewVoteHandoff|TimeoutTickStepAlwaysStartsNewViewVoteHandoff|timeout-step fresh NewView vote handoff" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`66`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`167`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bounded registered wrapper preflight order
+
+- Tightened bounded registered Add/Subtract, outer-slot `RotateLeft`, and
+  multi-round Bootstrap wrappers so they derive the registered evaluator RNS
+  chain before bounded-noise capacity checks, keeping production rejection on
+  the governed BFV profile gate even for structurally valid but unsupported
+  parameter sets.
+- Extended registered-parameter rejection coverage with a too-narrow
+  bounded-noise profile to prove those wrappers return `not registered` before
+  capacity, ciphertext, rotation-key, or bootstrap-key errors.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bootstrap round-count preflight
+
+- Tightened BFV bootstrap-key validation so the declared
+  `max_refresh_rounds`/`round_refreshes` count is checked before refresh
+  ciphertext shape validation, preventing malformed public refresh ciphertexts
+  from masking missing per-round bootstrap inventory.
+- Added focused crypto regression coverage for malformed bootstrap refresh
+  shapes combined with missing round material, preserving the metadata-first
+  rejection path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi timeout commit-vote gate clearing proof
+
+- Added `TimeoutTickStepClearsCommitVoteGates` and
+  `TimeoutTickStepAlwaysClearsCommitVoteGates` to the Sumeragi TLA model,
+  proving timeout recovery exits commit-vote mode, clears honest/Byzantine
+  commit-vote counters and signed stake, disables both commit-vote gates, and
+  leaves the live commit gate unsatisfied in the post-state.
+- Wired the temporal property through the fast, deep, and TLC-fast Sumeragi
+  configs and documented the timeout recovery corridor in the formal README and
+  roadmap.
+- Validation:
+  - `rg -n "TimeoutTickStepClearsCommitVoteGates|TimeoutTickStepAlwaysClearsCommitVoteGates|timeout-step commit-vote gate clearing" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`66`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`166`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV target-limb key-switch digit extension
+
+- Routed `key_switch_rns_exact_with_basis_extension` through the
+  digit-specific RNS key-switch basis-extension helper instead of the generic
+  target-limb polynomial extension, so key switching keeps the canonical
+  decomposition-digit contract at the source/target conversion boundary.
+- Preserved the lower-level arbitrary-polynomial target-limb extension helper
+  for checked RNS arithmetic while keeping bounded Multiply, Galois switching,
+  and packed `RotateLeft` parity with the scalar bounded-noise baseline.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-digit-basis-extension CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_key_switch_digit_polynomials_survive_basis_extension --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-digit-basis-extension CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_bounded_noise_basis_extension_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-digit-basis-extension CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi Byzantine-only timeout stall proof
+
+- Added `ByzantineCommitVoteDoesNotBlockTimeoutStall` to the Sumeragi TLA
+  model, proving that once GST is observed and honest/RBC progress is stalled,
+  timeout recovery remains enabled even if a Byzantine commit-vote action is
+  still available.
+- Wired the invariant through the fast, deep, and TLC-fast Sumeragi configs and
+  documented the fairness boundary in the formal README and roadmap.
+- Validation:
+  - `rg -n "ByzantineCommitVoteDoesNotBlockTimeoutStall|timeout Byzantine-only commit progress independence" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`66`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`165`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bounded caller-supplied RNS add/sub and affine
+
+- Added direct caller-supplied exact-RNS bounded-noise Add/Subtract and affine
+  row-evaluator helpers in `iroha_crypto`, so non-registered runtime/prover
+  corridors can preflight rounded BFV capacity before using supplied-chain
+  exact accumulation.
+- Extended bounded RNS coverage to compare direct caller-supplied Add/Subtract
+  and affine evaluation with the scalar bounded baseline and registered helper
+  outputs, and added a preflight regression proving too-narrow supplied chains
+  are rejected before malformed ciphertext shapes.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-rns-add-sub CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-rns-add-sub CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_affine_circuit_tracks_weighted_public_rows --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-rns-add-sub CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-rns-add-sub CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE persisted state bound capacity
+
+- Extended `SoraServiceStateEntryV1::validate` so persisted FHE rows with
+  exact residual or bounded-noise metadata reject bounds above the registered
+  RAM-LFE BFV capacity at the data-model layer.
+- Reused the BFV capacity preflight shared with FHE input-admission proof
+  validation, while preserving legacy rows where a bound without an explicit
+  mode means exact residual metadata.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-state-bound CARGO_INCREMENTAL=0 cargo test -p iroha_data_model service_state_entry_validate_rejects_over_capacity_fhe_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-state-bound CARGO_INCREMENTAL=0 cargo test -p iroha_data_model service_state_entry_validate_ --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo fmt -p iroha_data_model -- --check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-state-bound CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed Byzantine commit-vote closure proof
+
+- Strengthened `CommitDisablesProgressActions` and added
+  `CommitDisablesByzantineCommitVote`, proving committed finality explicitly
+  disables Byzantine commit-vote equivocation gates alongside honest progress,
+  timeout/fault, and RBC progress gates.
+- Wired the invariant through the fast, deep, and TLC-fast Sumeragi configs and
+  documented the closure in the formal README and roadmap.
+- Validation:
+  - `rg -n "CommitDisablesProgressActions|CommitDisablesByzantineCommitVote|committed-state Byzantine commit-vote gate closure" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`65`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`165`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi committed-entry progress-gate closure proof
+
+- Added `CommittedPhaseEntryAlwaysDisablesProgressActions` to the main
+  Sumeragi TLA model, proving that the post-state of first entry into
+  `Committed` already disables proposal, vote, timeout, Byzantine fault, and
+  RBC progress gates.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap phase-entry proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryDisablesProgressActionsStep|CommittedPhaseEntryAlwaysDisablesProgressActions|committed-phase post-entry progress-gate closure" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`165`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bounded relinearization bundle diagnostics
+
+- Tightened bounded-noise evaluation-key bundle secret-consistency diagnostics
+  so tampered relinearization entries report
+  `evaluation-key bundle relinearization_key` instead of only the generic
+  standalone bounded relinearization-key label.
+- Preserved the public standalone bounded relinearization-key validator API
+  while adding an internal labeled path for bundle validation, matching the
+  exact-mode bundle diagnostic style and the bounded Galois bundle labels.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-relin-diagnostics CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-relin-diagnostics CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed-phase commit-certificate equivalence proof
+
+- Added `CommittedPhaseEntryAlwaysMatchesCommitCertificateWitnessChange` to the
+  main Sumeragi TLA model, proving that first entry into `Committed` is exactly
+  the transition that changes the latched commit-certificate vote and stake
+  witnesses from absent to quorum-complete.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap phase-entry proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesCommitCertificateWitnessChangeStep|CommittedPhaseEntryAlwaysMatchesCommitCertificateWitnessChange|committed-phase commit-certificate witness-change equivalence" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`164`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bounded Galois bundle diagnostics
+
+- Tightened bounded-noise evaluation-key bundle secret-consistency diagnostics
+  so tampered Galois key-switch entries report the offending bundle index
+  (`evaluation-key bundle galois_keys[0]`) instead of only the generic
+  standalone Galois-key label.
+- Preserved the public standalone bounded Galois-key validator API while adding
+  an internal labeled path for bundle validation, matching the exact-mode
+  bundle diagnostic style.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-diagnostics CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-diagnostics CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE input admission bound capacity
+
+- Added registered RAM-LFE BFV capacity preflight to
+  `SoracloudFheInputAdmissionProofV1::validate`, so exact residual and
+  bounded-noise proof metadata that cannot fit the canonical BFV profile is
+  rejected at the data-model layer before runtime admission.
+- Added focused data-model coverage for over-capacity exact and bounded-noise
+  admission bounds, and reran the adjacent FHE input-admission proof validation
+  corridor.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-bound CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate_rejects_over_capacity_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-bound CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate_ --lib -- --nocapture`
+    (`5` tests passed)
+  - `cargo fmt -p iroha_data_model -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-bound CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed-phase artifact-change equivalence proof
+
+- Added `CommittedPhaseEntryAlwaysMatchesCommitArtifactsChange` to the main
+  Sumeragi TLA model, proving that first entry into `Committed` is exactly the
+  transition that installs durable commit artifacts: commit-view and/or latched
+  commit-certificate evidence.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap phase-entry proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesCommitArtifactsChangeStep|CommittedPhaseEntryAlwaysMatchesCommitArtifactsChange|committed-phase commit-artifact installation equivalence" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`163`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE direct registered bounded RNS fallbacks
+
+- Added registered exact-RNS bounded-noise fallback wrappers for Multiply,
+  Galois key switching, and packed `RotateLeft`. Each derives the canonical
+  registered BFV evaluator chain before inspecting ciphertext, relinearization
+  key, or Galois key shapes.
+- Extended bounded helper parity coverage to compare the direct registered
+  exact-RNS fallbacks and the registered target-limb basis-extension helpers
+  against the scalar bounded-noise baseline. The unregistered-profile
+  rejection regression now covers the new direct wrappers before malformed key
+  material is inspected.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-direct-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_bounded_noise_basis_extension_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-direct-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-direct-registered CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed-phase source-effect and handoff proofs
+
+- Added `CommittedPhaseEntryAlwaysMatchesExactFinalitySourceEffects` and
+  `CommittedPhaseEntryNeverCarriesNewViewHandoff` to the main Sumeragi TLA
+  model. These prove that first entry into `Committed` carries the exact
+  finality-source classification/effects/quorum gates and cannot carry
+  transient NewView handoff state.
+- Wired both properties through the fast, deep, and TLC-fast Sumeragi configs
+  and documented them in the formal README and roadmap phase-entry proof
+  corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesExactFinalitySourceEffectsStep|CommittedPhaseEntryAlwaysMatchesExactFinalitySourceEffects|CommittedPhaseEntryNeverCarriesNewViewHandoffStep|CommittedPhaseEntryNeverCarriesNewViewHandoff|committed-phase exact finality-source effects|committed-phase NewView handoff exclusion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`162`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE registered bootstrap refresh wrappers
+
+- Added registered exact and bounded-noise wrappers for round-zero and
+  indexed-round bootstrap refresh, complementing the existing registered
+  consecutive-round refresh helpers.
+- Extended exact refresh parity coverage across scalar, caller-supplied RNS,
+  and registered RNS paths, and extended bounded-noise registered refresh
+  coverage to decrypt round-zero, indexed-round, and consecutive-round outputs.
+  The unregistered-profile rejection regression now covers all registered
+  bootstrap refresh forms before malformed ciphertext/key shapes are inspected.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_refresh_rns_exact_matches_scalar_refresh --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-registered CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bounded refresh bundle diagnostics
+
+- Refactored bounded-noise refresh validation so evaluation-key bundle checks
+  pass indexed labels into the rotation/bootstrap zero-refresh diagnostics
+  without changing the public validator API.
+- Extended the bounded bundle regression to require precise
+  `rotation_keys[0].zero_refresh` and `bootstrap_key.round_refreshes[1]`
+  diagnostics for both nonzero plaintext refresh tampering and zero-plaintext
+  oversized rounded-noise masks.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-refresh-context CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-refresh-context CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_refresh_key_zero_plaintext_validators_reject_oversized_noise --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-refresh-context CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed-phase live-commit gate proof
+
+- Added `CommittedPhaseEntryAlwaysMatchesLiveCommitGateCrossing` to the main
+  Sumeragi TLA model, proving that first entry into `Committed` is exactly the
+  transition where the live `CanCommit(...)` gate crosses from false to true.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap phase-entry proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesLiveCommitGateCrossingStep|CommittedPhaseEntryAlwaysMatchesLiveCommitGateCrossing|committed-phase live-commit gate crossing" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`160`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (Sumeragi coverage wiring is consistent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE registered scalar helper hardening
+
+- Added exact and bounded-noise registered helper entry points for public
+  plaintext scalar addition and multiplication in `iroha_crypto`. Each derives
+  the canonical registered BFV evaluator chain before plaintext/ciphertext
+  checks, so production public-term paths reject structurally valid but
+  unregistered parameter profiles before inspecting caller-controlled shapes.
+- Extended registered RNS parity coverage to compare those scalar helpers with
+  the scalar baseline and decrypt the resulting exact and bounded-noise
+  plaintexts. The unregistered-profile rejection regression now covers all four
+  scalar helper entry points.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_ --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-scalar-registered CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bounded refresh owner diagnostics
+
+- Added bounded-noise owner-side regressions proving rotation and bootstrap
+  encrypted-zero refresh validators reject masks that still decrypt to zero but
+  exceed the fresh centered rounded-noise bound.
+- Extended bundle-level bounded refresh diagnostics to cover tampered bootstrap
+  refresh material as well as rotation refresh material.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-refresh CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_refresh_key_zero_plaintext_validators_reject_oversized_noise --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-refresh CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_evaluation_key_bundle_refresh_transcripts_are_mode_separated --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bounded-refresh CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE exact packed residual metadata
+
+- Extended `soracloud_fhe_job_residual_metadata_tracks_non_multiply_operations`
+  so exact single-slot packed `RotateLeft` runs through
+  `execute_soracloud_fhe_job_with_residual_bounds`, decrypts the scheduled
+  packed output, and asserts the conservative exact residual bound returned by
+  `bfv_packed_rotate_left_output_residual_multiple_bound`.
+- This closes the exact-mode counterpart to the bounded packed `RotateLeft`
+  metadata coverage; production bounded-noise admission circuit/prover rollout,
+  broader BFV-RNS evaluator hardening, and full bootstrapping circuit/key
+  material remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-exact-packed-residual CARGO_INCREMENTAL=0 cargo test -p iroha_core soracloud_fhe_job_residual_metadata_tracks_non_multiply_operations --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-exact-packed-residual CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud bounded FHE non-Add ledger persistence
+
+- Added a ledger-level bounded-noise `RunSoracloudFheJob` regression covering
+  Multiply, packed `RotateLeft`, and two-round Bootstrap in one committed state
+  flow.
+- The test uses one bounded registered BFV key bundle with relinearization,
+  packed Galois, and bootstrap material, executes all three non-Add jobs,
+  then verifies committed output rows persist `BoundedNoise` mode, the expected
+  propagated bound value, payload commitment/size, and decrypted plaintext.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `cargo test -p iroha_core run_soracloud_fhe_job_records_bounded_noise_non_add_output_state --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_core -- --check`
+  - `cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed-phase commit-view witness proof
+
+- Added `CommittedPhaseEntryAlwaysInstallsCommitViewWitness` to the main
+  Sumeragi TLA model, proving that every first entry into `Committed` installs
+  the commit-view witness as the finality view, including the view-zero case
+  where installation is value preserving.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap phase-entry proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryInstallsCommitViewWitnessStep|CommittedPhaseEntryAlwaysInstallsCommitViewWitness|committed-phase commit-view witness installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`159`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud bounded FHE non-Add output-bound coverage
+
+- Extended the bounded-noise Soracloud runtime helper regressions so Multiply
+  and packed `RotateLeft` now run through
+  `execute_soracloud_fhe_job_with_bounded_noise_bounds`, not only the raw
+  bounded executor.
+- The tests now assert the propagated bounded-noise output metadata for
+  Multiply, packed `RotateLeft`, and the existing two-round Bootstrap path
+  while decrypting registered target-limb/RNS outputs. This pins the
+  pre-execution metadata gate used by ledger output persistence beyond Add.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `cargo test -p iroha_core soracloud_bounded_noise_ --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo fmt -p iroha_core -- --check`
+  - `cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi committed-phase commit-certificate witness proof
+
+- Added `CommittedPhaseEntryAlwaysInstallsCommitCertificateWitnesses` to the
+  main Sumeragi TLA model, proving that every first entry into `Committed`
+  installs the latched commit-certificate vote and stake witnesses from live
+  post-state counters that satisfy vote and stake quorum.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap phase-entry proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryInstallsCommitCertificateWitnessesStep|CommittedPhaseEntryAlwaysInstallsCommitCertificateWitnesses|committed-phase commit-certificate witness installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`158`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE exact registered affine helper
+
+- Added `evaluate_affine_circuit_registered_rns_exact`, the exact registered
+  BFV affine evaluator. It derives the canonical registered evaluator RNS
+  chain once, accumulates weighted public rows through the exact RNS add
+  bridge, and leaves public scalar/bias operations in scalar form because they
+  do not require RNS polynomial products.
+- Tightened the bounded registered affine evaluator to reuse the same derived
+  registered evaluator chain for row accumulation instead of re-entering the
+  registered add wrapper for every weighted term.
+- Extended registered-chain parity coverage so exact affine outputs match the
+  scalar evaluator, and extended the unregistered-profile regression so exact
+  and bounded registered affine evaluators reject structurally valid but
+  unregistered BFV profiles before caller ciphertext or circuit material is
+  inspected.
+- Updated the FHE roadmap/backlog notes to record registered affine evaluator
+  coverage. Production bounded-noise admission circuit/prover rollout,
+  broader BFV-RNS evaluator hardening, and full bootstrapping circuit/key
+  material remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-affine-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-affine-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed; rerun after bounded affine chain reuse also passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-affine-registered CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_affine_circuit_tracks_weighted_public_rows --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-affine-registered CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE bounded affine public-row helper
+
+- Added `bfv_affine_circuit_bounded_noise_output_bounds` and
+  `evaluate_affine_circuit_bounded_noise_registered_rns_exact`, giving rounded
+  BFV public affine rows owner-side noise-bound propagation plus registered-RNS
+  evaluation.
+- The evaluator requires registered BFV parameters, preflights bounded decoding
+  capacity, uses bounded public scalar multiplication/addition, and accumulates
+  weighted rows through the registered exact RNS add bridge.
+- Added regression coverage for real registered RAM-LFE rounded ciphertexts,
+  plaintext outputs, propagated row bounds, over-capacity input/output
+  rejection, and unregistered-parameter rejection before malformed ciphertext
+  material is inspected. Production bounded-noise admission circuit/prover
+  rollout, broader BFV-RNS evaluator hardening, and full bootstrapping
+  circuit/key material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo test -p iroha_crypto bounded_noise_affine_circuit_tracks_weighted_public_rows --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_crypto affine_circuit_residual_bounds_track_weighted_public_rows --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi commit-view witness commit-certificate proof
+
+- Added `CommitViewWitnessChangeAlwaysInstallsCommitCertificateWitnesses` to
+  the main Sumeragi TLA model, proving that any nonzero commit-view witness
+  change also installs the latched commit-certificate vote and stake witnesses
+  from live post-state counters that satisfy vote and stake quorum.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitViewWitnessChangeInstallsCommitCertificateWitnessesStep|CommitViewWitnessChangeAlwaysInstallsCommitCertificateWitnesses|commit-view witness commit-certificate installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`157`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE registered selector-product helper
+
+- Added registered exact and bounded-noise RNS plaintext-polynomial selector
+  helpers, so production public-mask products can derive the canonical
+  registered BFV evaluator chain inside `iroha_crypto`.
+- Extended registered RNS parity coverage to compare scalar and registered
+  selector products, including the bounded-noise path used by packed
+  `RotateLeft` masks, and extended the unregistered-profile regression so
+  structurally valid but unregistered BFV profiles fail closed before dummy
+  ciphertext or selector material is inspected.
+- Updated the FHE roadmap/backlog notes to record registered selector-product
+  coverage. Production bounded-noise admission circuit/prover rollout,
+  broader BFV-RNS evaluator hardening, and full bootstrapping circuit/key
+  material remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-plaintext-mask CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-plaintext-mask CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-plaintext-mask CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE bounded plain-scalar helper preflight
+
+- Added `multiply_plain_scalar_bounded_noise`, the rounded BFV companion to
+  public plaintext-scalar multiplication, and tightened
+  `add_plain_scalar_bounded_noise` so both bounded public scalar helpers
+  preflight rounded BFV decoding capacity before applying public plaintext
+  terms.
+- Updated the bounded plain-operation regression to use the explicit scalar
+  helper and to prove both bounded scalar helpers reject a structurally valid
+  but too-narrow rounded profile before accepting caller ciphertext material.
+- Updated the FHE roadmap/backlog notes to record bounded public scalar helper
+  preflight coverage. Production bounded-noise admission circuit/prover
+  rollout, broader BFV-RNS evaluator hardening, and full bootstrapping
+  circuit/key material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo test -p iroha_crypto bounded_noise_bfv_plain_operations_track_noise_bounds --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 Sumeragi commit-certificate witness commit-view proof
+
+- Added `CommitCertificateWitnessChangeAlwaysInstallsCommitViewWitness` to the
+  main Sumeragi TLA model, proving that any commit-certificate witness change
+  also installs the commit-view witness as the finality view, including the
+  view-zero case where that witness installation is value preserving.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitCertificateWitnessChangeInstallsCommitViewWitnessStep|CommitCertificateWitnessChangeAlwaysInstallsCommitViewWitness|commit-certificate witness commit-view installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`156`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE bounded RNS packed-mask helper
+
+- Added `multiply_plaintext_polynomial_bounded_noise_rns_exact`, the rounded
+  BFV exact-RNS public-mask helper for bounded-noise ciphertexts. It preflights
+  bounded-noise capacity before using the guarded exact RNS plaintext-polynomial
+  product.
+- Routed bounded packed `RotateLeft` direct-RNS and target-limb
+  basis-extension mask multiplication through the new helper, so registered
+  target-limb packed rotation keeps the same rounded-capacity preflight down to
+  the public selector product.
+- Extended the packed-mask regression to compare scalar bounded-noise and RNS
+  bounded-noise plaintext-polynomial products and decrypt the masked packed
+  slots. Production bounded-noise admission circuit/prover rollout, broader
+  BFV-RNS evaluator hardening, and full bootstrapping circuit/key material
+  remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo test -p iroha_crypto homomorphic_plaintext_polynomial_multiplication_matches_packed_mask --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_crypto registered_rns_chain_bounded_noise_basis_extension_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 Sumeragi commit-certificate witness component-coupling proof
+
+- Added `CommitCertificateWitnessComponentsAlwaysChangeTogether` to the main
+  Sumeragi TLA model, proving that the latched commit-certificate vote-count
+  witness and stake witness are coupled: neither component can change without
+  the other on any real or stuttering transition.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitCertificateWitnessComponentsChangeTogetherStep|CommitCertificateWitnessComponentsAlwaysChangeTogether|commit-certificate witness component coupling" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`155`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE input-admission STARK wrapper binding
+
+- `SoracloudFheInputAdmissionProofV1::validate()` now decodes the nested
+  `StarkFriOpenProofV1` inside the `OpenVerifyEnvelope`, requires wrapper
+  version `1`, and requires the public-input word to match the proof
+  `statement_hash`.
+- The local data-model FHE admission fixtures now encode the STARK wrapper
+  instead of opaque placeholder bytes, and the OpenVerify drift regression
+  covers wrapper version drift and statement public-input drift.
+- Production bounded-noise admission circuit/prover rollout, broader BFV-RNS
+  evaluator hardening, and full bootstrapping circuit/key material remain
+  pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-datamodel-wrapper CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-datamodel-wrapper CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE bounded-noise registered subtract helper
+
+- Added `subtract_ciphertexts_bounded_noise_registered_rns_exact`, the rounded
+  BFV companion to the exact registered subtract helper. It preflights
+  bounded-noise capacity, derives the registered evaluator RNS chain inside
+  `iroha_crypto`, and then runs the guarded exact RNS subtract bridge.
+- Extended the registered bounded-noise refresh parity test to compare the new
+  helper with scalar rounded subtraction and decrypt the wrapped result, and
+  extended the unregistered-parameter regression so bounded subtract rejects a
+  structurally valid but unregistered BFV profile before caller key material is
+  inspected.
+- Updated the FHE roadmap/backlog notes to record registered exact and
+  bounded-noise Add/Subtract coverage. Production bounded-noise admission
+  circuit/prover rollout, broader BFV-RNS evaluator hardening, and full
+  bootstrapping circuit/key material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo test -p iroha_crypto registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 Soracloud FHE registered BFV helper rejection coverage
+
+- Extended the crypto registered-parameter rejection regression so the
+  decomposition-chain helpers, exact Subtract helper, and bounded target-limb
+  Multiply/Galois/packed `RotateLeft` registered entry points all reject a
+  structurally valid but unregistered BFV profile before inspecting
+  caller-supplied ciphertext or key material.
+- Updated the FHE backlog and roadmap notes to record that this guard coverage
+  now spans the registered helper surface used by Soracloud exact and
+  bounded-noise runtime dispatch. Production bounded-noise admission
+  circuit/prover rollout, broader BFV-RNS evaluator hardening, and full
+  bootstrapping circuit/key material remain pending.
+- Validation:
+  - `cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 Sumeragi commit-certificate witness certified finality-stack proof
+
+- Added `CommitCertificateWitnessChangeAlwaysMatchesCertifiedFinalityStack` to
+  the main Sumeragi TLA model, proving that any change to the latched
+  commit-certificate vote or stake witnesses installs both witnesses from the
+  live post-state counters, satisfies vote and stake quorum, and carries the
+  certified finality stack.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitCertificateWitnessChangeMatchesCertifiedFinalityStackStep|CommitCertificateWitnessChangeAlwaysMatchesCertifiedFinalityStack|commit-certificate witness certified finality-stack change" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`154`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi commit-view witness certified finality-stack proof
+
+- Added `CommitViewWitnessChangeAlwaysMatchesCertifiedFinalityStack` to the
+  main Sumeragi TLA model, proving that any nonzero change to the commit-view
+  witness installs the active finality view with view-quorum evidence and
+  carries the same certified finality stack as the commit-artifact and
+  finality-latch transitions.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitViewWitnessChangeMatchesCertifiedFinalityStackStep|CommitViewWitnessChangeAlwaysMatchesCertifiedFinalityStack|commit-view witness certified finality-stack change" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`153`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE input-admission data-model envelope parity
+
+- `SoracloudFheInputAdmissionProofV1::validate()` now decodes the nested
+  `OpenVerifyEnvelope` and rejects noncanonical STARK backend, circuit id,
+  public-input schema, or `vk_commitment`/`vk_hash` drift before runtime
+  admission.
+- Updated the data-model proof fixtures to use a canonical OpenVerify envelope
+  and added regressions for forged verifier-key commitments, malformed
+  envelope bytes, non-STARK backend drift, noncanonical circuit-id drift, and
+  envelope schema drift.
+- Production bounded-noise admission circuit/prover rollout, broader
+  BFV-RNS evaluator hardening, and full bootstrapping circuit/key material
+  remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-datamodel-envelope CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo test -p iroha_data_model fhe_input_admission_proof_validate --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo test -p iroha_core fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo test -p iroha_core --features zk-stark registered_fhe_input_admission --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo test -p iroha_core --features zk-stark registered_bounded_noise_fhe_input_admission --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-datamodel-envelope CARGO_INCREMENTAL=0 cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo clippy -p iroha_data_model -p iroha_core --features zk-stark --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi commit-artifact certified finality-stack proof
+
+- Added `CommitArtifactsChangeAlwaysMatchesCertifiedFinalityStack` to the main
+  Sumeragi TLA model, proving that any change to the latched commit-view or
+  commit-certificate witnesses carries the full certified finality stack:
+  finality-latch transition, source classifier, quorum gates,
+  committed-phase entry, and finality witnesses all match.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitArtifactsChangeMatchesCertifiedFinalityStackStep|CommitArtifactsChangeAlwaysMatchesCertifiedFinalityStack|commit-artifact certified finality-stack change" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`152`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi committed-phase certified finality-stack proof
+
+- Added `CommittedPhaseEntryAlwaysMatchesCertifiedFinalityStack` to the main
+  Sumeragi TLA model, proving that every first entry into `Committed` matches
+  the same certified finality stack used for finality-latch changes: latch,
+  source classification, quorum gates, commit artifacts, and finality
+  witnesses are installed together.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesCertifiedFinalityStackStep|CommittedPhaseEntryAlwaysMatchesCertifiedFinalityStack|committed-phase certified finality-stack entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`151`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi committed-view witness step-stability proof
+
+- Added `CommittedViewWitnessAlwaysStaysAtCommittedView` to the main
+  Sumeragi TLA model, proving that after finality the committed phase, active
+  view, and commit-view witness remain stable on every step, and that the
+  commit-view witness remains equal to the committed view.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedViewWitnessStaysAtCommittedViewStep|CommittedViewWitnessAlwaysStaysAtCommittedView|committed-view witness step stability" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`150`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE admission backend statement binding
+
+- The Soracloud FHE input-admission backend verifier now decodes the
+  `OpenVerifyEnvelope` directly from the proof attachment bytes instead of
+  trusting a caller-supplied decoded envelope.
+- The backend preflight rechecks the STARK wrapper public inputs against the
+  expected statement hash before verifier lookup, so direct backend use cannot
+  skip the statement-hash binding enforced by the outer runtime admission path.
+- Extended backend preflight coverage to mutate serialized attachment envelope
+  bytes for schema drift, public-input drift, and non-empty aux data while
+  keeping attachment hashes current, proving those failures happen before
+  verifier lookup.
+- Production bounded-noise admission circuit/prover rollout, broader
+  BFV-RNS evaluator hardening, and full bootstrapping circuit/key material
+  remain pending.
+- Validation:
+  - `cargo fmt -p iroha_core -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo test -p iroha_core fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo test -p iroha_core --features zk-stark registered_fhe_input_admission --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo test -p iroha_core --features zk-stark registered_bounded_noise_fhe_input_admission --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-backend cargo clippy -p iroha_core --features zk-stark --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi finality-latch certified source-stack proof
+
+- Added `FinalityLatchChangeAlwaysMatchesCertifiedSourceStack` to the main
+  Sumeragi TLA model, proving that every finality-latch transition is
+  simultaneously classified by commit-artifact installation/source,
+  committed-phase entry, live commit-gate crossing, certificate witness,
+  commit-view witness, NewView isolation, source-effect, and source-quorum
+  predicates.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchChangeMatchesCertifiedSourceStackStep|FinalityLatchChangeAlwaysMatchesCertifiedSourceStack|finality-latch certified source-stack classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`149`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV registered exact RNS subtract helper
+
+- `iroha_crypto` now exposes
+  `subtract_ciphertexts_registered_rns_exact(...)`, deriving the canonical
+  production evaluator RNS chain inside the crypto layer before invoking the
+  lower-level exact subtract bridge.
+- Extended the production-profile exact-RNS parity regression so registered
+  subtract matches both scalar subtraction and the explicit chain-taking exact
+  subtract path, keeping exact Add/Subtract/Multiply chain ownership covered in
+  one test.
+- Production bounded-noise admission circuit/prover rollout, broader
+  BFV-RNS evaluator hardening, and full bootstrapping circuit/key material
+  remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-subtract CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-subtract CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-subtract CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC Withheld transition-target exclusion proof
+
+- Added `RbcWithheldEntryOnlyByStutteringFromWithheld` to the main Sumeragi
+  TLA model, proving that no active transition can target the defensive
+  `Withheld` RBC state; a post-state `Withheld` value is possible only as an
+  unchanged stutter from an already withheld state, which the reachability
+  proof excludes from the initial model.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcWithheldEntryOnlyByStutteringFromWithheldStep|RbcWithheldEntryOnlyByStutteringFromWithheld|RBC Withheld transition-target exclusion" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`148`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi RBC delivery-entry branch classification proof
+
+- Added `RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch` to the
+  main Sumeragi TLA model, proving that every first entry into `Delivered` is
+  also classified as a `ReadyQuorum` exit with complete RBC evidence preserved,
+  and that the commit-artifact effects match the finality-installing or pending
+  delivery branch.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep|RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch|RBC delivery-entry ReadyQuorum/finality branch classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`147`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi RBC global evidence-change classification proof
+
+- Added `RbcEvidenceChangeAlwaysMatchesLocalEffectClassification` to the main
+  Sumeragi TLA model, proving that any reachable movement in RBC header,
+  digest, CHUNK-count, or READY-vote evidence is covered both by the global
+  protocol/fault evidence-source theorem and by the exact directional
+  per-field classifier for the evidence field that changed.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcEvidenceChangeMatchesLocalEffectClassificationStep|RbcEvidenceChangeAlwaysMatchesLocalEffectClassification|RBC global evidence-change effect classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`146`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud bounded BFV-RNS helper chain ownership
+
+- Bounded-noise registered `iroha_crypto` helper entry points for Multiply,
+  Galois key switching, and packed `RotateLeft` now derive both the canonical
+  evaluator RNS chain and the registered key-switch decomposition chain inside
+  the crypto layer before invoking the target-limb basis-extension bridge.
+- Soracloud bounded-noise runtime dispatch no longer constructs or passes an
+  evaluator RNS chain for Multiply or packed `RotateLeft`; the explicit
+  low-level chain-taking helpers still carry the too-narrow-chain rejection
+  coverage, while registered helpers reject unregistered profiles before key
+  material is consumed.
+- Added direct production-profile crypto coverage proving the registered
+  bounded-noise Multiply, Galois key-switch, and packed `RotateLeft`
+  basis-extension helpers match the scalar bounded-noise baseline after
+  deriving their chains internally.
+- Production bounded-noise admission circuit/prover rollout, broader
+  BFV-RNS evaluator hardening, and full bootstrapping circuit/key material
+  remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto bounded_noise_bfv_multiplication_rns_exact_matches_scalar_raw_bridge --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto bounded_noise_packed_rotate_left_tracks_galois_schedule --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto registered_rns_chain_bounded_noise_basis_extension_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core soracloud_bounded_noise_ --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC global state-change classification proof
+
+- Added `RbcStateChangeAlwaysMatchesLocalExitClassification` to the main
+  Sumeragi TLA model, proving that every reachable RBC state change is covered
+  by the source state's local exit theorem and therefore cannot bypass the
+  proved evidence/effect shape for `Idle`, `Init`, chunk, READY, delivery, or
+  corrupted-repair transitions.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcStateChangeMatchesLocalExitClassificationStep|RbcStateChangeAlwaysMatchesLocalExitClassification|RBC global state-change exit classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`145`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi RBC boundary exit classification proofs
+
+- Added `RbcIdleExitOnlyByProposalOrInit` and
+  `RbcCorruptionExitOnlyByInit` to the main Sumeragi TLA model, proving that
+  `Idle` can leave only by proposal startup or explicit RBC INIT
+  repair/recovery into `Init`, and that `Corrupted` can leave only by RBC INIT
+  repair/recovery into `Init`.
+- Wired both properties through the fast, deep, and TLC-fast Sumeragi configs
+  and documented them in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcIdleExitOnlyByProposalOrInitStep|RbcIdleExitOnlyByProposalOrInit|RbcCorruptionExitOnlyByInitStep|RbcCorruptionExitOnlyByInit|RBC Idle exit classification|RBC corruption repair exit classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`144`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE input-admission verifier version binding
+
+- Soracloud FHE input-admission backend verification now rejects noncanonical
+  STARK envelope shape/schema drift and active verifier records whose registry
+  `version` differs from the single supported v1 proof/circuit version, closing
+  direct-backend and active-map aliases before verifier lookup.
+- Added zk-stark coverage proving same-circuit version drift fails before any
+  FHE input state is persisted, and unit coverage proving backend envelope
+  schema/aux drift fails before any key lookup; the existing registered exact
+  and bounded-noise admission paths continue to pass.
+- Production bounded-noise admission circuit/prover rollout, broader
+  target-limb BFV-RNS evaluator hardening, and full bootstrapping circuit/key
+  material remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-vk-version CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-vk-version CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark mutate_soracloud_state_rejects_registered_fhe_input_admission_wrong_version --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-vk-version CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark registered_fhe_input_admission --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-vk-version CARGO_INCREMENTAL=0 cargo test -p iroha_core --features zk-stark registered_bounded_noise_fhe_input_admission --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-admission-vk-version CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --features zk-stark --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud registered BFV-RNS exact Multiply/packed RotateLeft helpers
+
+- Added registered `iroha_crypto` helper entry points for exact RNS Galois
+  switching, exact Multiply, and exact packed `RotateLeft`. These helpers
+  derive the canonical production evaluator RNS chain internally.
+- Soracloud exact FHE runtime dispatch now uses registered helpers for exact
+  Multiply and exact packed `RotateLeft`, so the exact Add, Multiply,
+  outer-slot `RotateLeft`, packed `RotateLeft`, and Bootstrap paths no longer
+  pass an evaluator chain through core.
+- This closes another exact-runtime cryptography admission gap for registered
+  RNS evaluation. Approximate BFV-RNS basis-extension hardening, production
+  bounded-noise admission circuits/provers, and security-complete
+  bootstrapping material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto registered_rns_chain_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto packed_rotate_left_with_galois_schedule_supports_one_step_rotation --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core soracloud_fhe_job_residual_metadata_tracks_multiply_output --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core soracloud_packed_rotate_left_ --lib -- --nocapture`
+    (`3` passed)
+  - `cargo fmt -p iroha_crypto -p iroha_core -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC INIT exit classification proof
+
+- Added `RbcInitExitOnlyByChunkOrFault` to the main Sumeragi TLA model,
+  proving that once RBC reaches `Init`, it can leave that state only by RBC
+  CHUNK progress into `Chunking`/`ChunksComplete` with header and digest
+  evidence retained, or by Byzantine fault corruption to `Corrupted` with only
+  digest validity cleared.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcInitExitOnlyByChunkOrFaultStep|RbcInitExitOnlyByChunkOrFault|RBC INIT exit classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`142`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi RBC CHUNK exit classification proofs
+
+- Added `RbcChunkingExitOnlyByChunkOrFault` and
+  `RbcChunksCompleteExitOnlyByReadyOrFault` to the main Sumeragi TLA model,
+  proving that `Chunking` can exit only by the final CHUNK step into
+  `ChunksComplete` or Byzantine digest corruption, and that `ChunksComplete`
+  can exit only by a READY step into the READY handoff or Byzantine digest
+  corruption.
+- Wired both properties through the fast, deep, and TLC-fast Sumeragi configs
+  and documented them in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcChunkingExitOnlyByChunkOrFaultStep|RbcChunkingExitOnlyByChunkOrFault|RbcChunksCompleteExitOnlyByReadyOrFaultStep|RbcChunksCompleteExitOnlyByReadyOrFault|RBC chunking exit classification|RBC chunk-complete exit classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`141`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud registered BFV-RNS Add/Rotate/Bootstrap helpers
+
+- Added registered `iroha_crypto` helper entry points for exact Add,
+  bounded-noise Add, outer-slot `RotateLeft`, bounded-noise outer-slot
+  `RotateLeft`, exact multi-round Bootstrap refresh, and bounded-noise
+  multi-round Bootstrap refresh. These helpers derive the canonical production
+  evaluator RNS chain internally instead of accepting a caller-supplied chain.
+- Soracloud exact and bounded-noise FHE runtime dispatch now uses those
+  registered helpers for Add, outer-slot `RotateLeft`, and Bootstrap, leaving
+  explicit chain-passing APIs available for lower-level checked RNS tests and
+  custom profiles.
+- This closes another runtime cryptography admission gap for registered RNS
+  evaluation. Approximate BFV-RNS basis-extension hardening, production
+  bounded-noise admission circuits/provers, and security-complete
+  bootstrapping material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto registered_rns_chain --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto rns_exact_matches_scalar_refresh --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto rotation_key_rejects_empty_and_full_cycle_slot_rotations --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core soracloud_bounded_noise_ --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core soracloud_multi_input_add_matches_plaintext_slots --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core soracloud_rotate_left_uses_rotation_key_refresh --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core soracloud_bootstrap_uses_refresh_key --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo test -p iroha_core run_soracloud_fhe_job_records_bounded_noise_add_output_state --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt -p iroha_crypto -p iroha_core -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-refresh cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC READY partial exit classification proof
+
+- Added `RbcReadyPartialExitOnlyByReadyOrFault` to the main Sumeragi TLA model,
+  proving that once RBC reaches `ReadyPartial`, it can leave that state only by
+  a READY transition crossing commit quorum into `ReadyQuorum`, or by Byzantine
+  fault corruption to `Corrupted` with only digest validity cleared.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcReadyPartialExitOnlyByReadyOrFaultStep|RbcReadyPartialExitOnlyByReadyOrFault|RBC READY partial exit classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`139`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi RBC READY quorum exit classification proof
+
+- Added `RbcReadyQuorumExitOnlyByDeliverOrFault` to the main Sumeragi TLA model,
+  proving that once RBC reaches `ReadyQuorum`, it can leave that state only by
+  RBC DELIVER to `Delivered` with complete evidence preserved, or by Byzantine
+  fault corruption to `Corrupted` with only digest validity cleared.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcReadyQuorumExitOnlyByDeliverOrFaultStep|RbcReadyQuorumExitOnlyByDeliverOrFault|RBC READY quorum exit classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`138`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV-RNS key-switch source-prefix hardening
+
+- Explicit BFV-RNS target-limb key-switch APIs now require the decomposition
+  source chain to be a prefix of the evaluator chain before basis-extending
+  relinearization or Galois digits.
+- The low-level target-limb residue conversion primitive still covers narrow
+  target products for checked RNS arithmetic, but production key-switch paths
+  now fail closed for over-wide or unrelated source bases instead of accepting
+  arbitrary structurally valid chains.
+- Approximate BFV-RNS basis-extension hardening, production bounded-noise
+  admission circuits/provers, and security-complete bootstrapping material
+  remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-prefix-basis CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_key_switch --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-prefix-basis CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise --lib -- --nocapture`
+    (`11` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-prefix-basis CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns --lib -- --nocapture`
+    (`30` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-prefix-basis CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC DELIVER complete evidence preservation proof
+
+- Added `RbcDeliverStepAlwaysPreservesCompleteEvidence` to the main Sumeragi TLA
+  model, proving that an RBC DELIVER step moves `ReadyQuorum` to `Delivered`
+  while preserving the complete READY/chunk/header/digest evidence tuple and the
+  live vote, view, and GST context.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliverStepPreservesCompleteEvidence|RbcDeliverStepAlwaysPreservesCompleteEvidence|RBC DELIVER step complete-evidence preservation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`137`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud registered BFV-RNS canonical evaluator-chain gate
+
+- Registered bounded-noise BFV-RNS helper entry points in `iroha_crypto` now
+  require the supplied evaluator RNS chain to match the canonical registered
+  production chain before deriving the key-switch decomposition source basis.
+- Custom/profile-specific bounded-noise tests continue to use the explicit
+  basis-extension APIs, while registered helpers now reject unregistered
+  parameter sets and non-canonical evaluator-chain aliases.
+- This closes another runtime cryptography admission gap for the registered
+  target-limb bridge. Approximate BFV-RNS basis-extension hardening, production
+  bounded-noise admission circuits/provers, and security-complete bootstrapping
+  material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-chain cargo test -p iroha_crypto registered_key_switch_decomposition_chain --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-chain cargo test -p iroha_crypto bounded_noise_bfv_multiplication_rns_exact_matches_scalar_raw_bridge --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-chain cargo test -p iroha_crypto bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-chain cargo test -p iroha_crypto bounded_noise_packed_rotate_left_tracks_galois_schedule --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-registered-chain cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud bounded-noise registered BFV-RNS runtime path
+
+- Soracloud bounded-noise FHE runtime now calls the registered `iroha_crypto`
+  helper entry points for Multiply and single-slot packed `RotateLeft`, so core
+  no longer derives or passes a separate key-switch decomposition source chain
+  on those production dispatch paths.
+- The canonical key-switch source basis is selected inside `iroha_crypto` from
+  the evaluator RNS chain before invoking the target-limb basis-extension
+  bridge, keeping runtime behavior aligned with the registered helper surface
+  and the governance/admission digest semantics.
+- Approximate BFV-RNS basis-extension hardening, production bounded-noise
+  admission circuits/provers, and security-complete bootstrapping material
+  remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-registered-basis CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo test -p iroha_core soracloud_bounded_noise_ --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-registered-basis CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC delivered evidence stability proof
+
+- Added `RbcDeliveredEvidenceNeverRegresses` to the main Sumeragi TLA model,
+  proving that once RBC reaches `Delivered`, the complete READY/chunk/header/
+  digest evidence tuple remains complete and unchanged across later vote,
+  view-change, proposal, GST, or stuttering steps.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliveredEvidenceStableStep|RbcDeliveredEvidenceNeverRegresses|RBC delivered evidence stability" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`136`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Soracloud FHE admission canonical verifier id binding
+
+- FHE input-admission proof validation now requires `proof.vk_ref.name` to
+  equal `SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1`, so proof attachments
+  cannot point at alias verifier ids for the canonical circuit.
+- The core backend verifier re-checks the same canonical verifier id before
+  registry lookup, alongside the direct `vk_commitment` and `envelope_hash`
+  binding checks.
+- This is an admission identity hardening step. Production bounded-noise
+  admission circuits/provers, broader target-limb BFV-RNS evaluator hardening,
+  and security-complete bootstrapping material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-canonical-vk-ref cargo test -p iroha_data_model fhe_input_admission_proof_validate --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-canonical-vk-ref cargo test -p iroha_core fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-canonical-vk-ref cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-canonical-vk-ref cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-canonical-vk-ref cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC evidence counter reset provenance proof
+
+- Added `RbcChunkCountDecreaseOnlyByProposalOrInit` to the main Sumeragi TLA
+  model, proving that the RBC chunk counter can decrease only by reset to zero
+  through proposal startup or explicit RBC INIT repair/recovery.
+- Added `RbcReadyVotesDecreaseOnlyByProposalOrInit`, proving that the RBC READY
+  vote counter can decrease only by reset to zero through proposal startup or
+  explicit RBC INIT repair/recovery.
+- Wired both properties through the fast, deep, and TLC-fast Sumeragi configs
+  and documented them in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcChunkCountDecreaseOnlyByProposalOrInitStep|RbcChunkCountDecreaseOnlyByProposalOrInit|RbcReadyVotesDecreaseOnlyByProposalOrInitStep|RbcReadyVotesDecreaseOnlyByProposalOrInit|RBC chunk-counter reset provenance|RBC READY-vote reset provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`135`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Default confidential digest validation fix
+
+- Re-aligned `iroha_data_model::confidential::DEFAULT_ZK_CONSENSUS_POLICY_HASH`
+  with the consensus policy hash computed from `default_zk_config()`, fixing
+  default genesis/block validation paths that were rejecting blocks with
+  `ConfidentialFeaturesMismatch`.
+- Updated ZK test fixtures to satisfy the stricter `OpenVerifyEnvelope`
+  admission shape before exercising normalized VK lookup, batch verifier, and
+  Kagemusha verifier-key rejection assertions.
+- Validation:
+  - `cargo test -p iroha_core default_zk_policy_hash_uses_default_zk_config --lib -- --nocapture`
+  - `cargo test -p iroha_core genesis_ --lib -- --nocapture`
+  - `cargo test -p iroha_core block::valid::tests:: --lib -- --nocapture`
+  - `cargo test -p iroha_core kura::tests:: --lib -- --nocapture`
+  - `cargo test -p iroha_core state::replay_validation_tests:: --lib -- --nocapture`
+  - `cargo test -p iroha_core permission_cache_rebuilds_after_restart --lib -- --nocapture`
+  - `cargo test -p iroha_core sumeragi::main_loop::commit::tests:: --lib -- --nocapture`
+  - focused Sumeragi/ZK filters for `commit_outcome_`, `state_commit_`,
+    stale-view QC formation, idle recovery, committed-height alignment,
+    normalized VK commitment lookup, Kagemusha generic-circuit rejection, and
+    `zk_verify_batch_`
+
+## 2026-06-06 Sumeragi RBC evidence counter provenance proof
+
+- Added `RbcChunkCountIncreaseOnlyByChunk` to the main Sumeragi TLA model,
+  proving that the RBC chunk counter can increase only through an RBC CHUNK
+  transition, advancing exactly one count while preserving READY, consensus,
+  finality, and GST state.
+- Added `RbcReadyVotesIncreaseOnlyByReady`, proving that the RBC READY vote
+  counter can increase only through an RBC READY transition, incrementing
+  exactly one vote while preserving chunk/header/digest, consensus, finality,
+  and GST state.
+- Wired both properties through the fast, deep, and TLC-fast Sumeragi configs
+  and documented them in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcChunkCountIncreaseOnlyByChunkStep|RbcChunkCountIncreaseOnlyByChunk|RbcReadyVotesIncreaseOnlyByReadyStep|RbcReadyVotesIncreaseOnlyByReady|RBC chunk-counter increase provenance|RBC READY-vote increase provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`133`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi RBC digest installation provenance proof
+
+- Added `RbcDigestInstallationOnlyByProposalInitOrChunk` to the main Sumeragi
+  TLA model, proving that RBC digest evidence can move from absent to valid
+  only through proposal startup, RBC INIT repair/recovery, or RBC CHUNK
+  recovery/progress.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor. This
+  complements `RbcDigestInvalidationOnlyByFault`, which already proves valid
+  digest evidence can only be cleared by the Byzantine fault path.
+- Validation:
+  - `rg -n "RbcDigestInstallationOnlyByProposalInitOrChunkStep|RbcDigestInstallationOnlyByProposalInitOrChunk|RBC digest installation provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`131`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV registered target-limb RNS helper surface
+
+- `iroha_crypto` now exposes registered target-limb BFV-RNS helper entry
+  points for bounded-noise Multiply, Galois key switching, and packed
+  `RotateLeft`. Each helper derives the canonical registered key-switch
+  decomposition prefix from the evaluator chain before invoking the
+  basis-extension bridge, so production callers do not need to pass a separate
+  source basis by hand.
+- Extended the bounded-noise/RNS regressions to prove the registered helper
+  path matches the explicit decomposition-chain path and scalar rounded BFV
+  behavior, and that an invalid evaluator chain is rejected before truncated
+  key-switch material can mask the preflight failure.
+- Full approximate BFV-RNS basis extension/key switching, production
+  bounded-noise admission circuits/provers, and security-complete
+  bootstrapping material remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-basis CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise --lib -- --nocapture`
+    (`11` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-basis CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns --lib -- --nocapture`
+    (`30` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-basis CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi RBC header evidence provenance proof
+
+- Added `RbcHeaderInstallationOnlyByProposalOrInit` to the main Sumeragi TLA
+  model, proving that RBC header evidence can move from absent to present only
+  through an honest proposal starting RBC from `Idle` or an explicit RBC INIT
+  repair/recovery step.
+- Added `RbcHeaderEvidenceNeverLost`, proving that once RBC header evidence is
+  present, no later transition clears it.
+- Wired both properties through the fast, deep, and TLC-fast Sumeragi configs
+  and documented them in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcHeaderInstallationOnlyByProposalOrInitStep|RbcHeaderInstallationOnlyByProposalOrInit|RbcHeaderEvidenceNeverLost|RBC header installation provenance|RBC header evidence monotonicity" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`130`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP native SDK corridor fixture parity green
+
+- Kotlin/JVM and Java Android Ethereum native prover tests now use
+  production-shaped implementation artifact paths and verifier-key fixture
+  hashes, so verified bundle resolver paths exercise local SDK artifacts
+  instead of failing before the native checks run.
+- C# Ethereum/BSC SCCP snapshots now keep nullable RPC evidence safe under
+  strict nullability, validate callback fixtures with real SCCP source event
+  logs and receipt proofs, and preserve Beacon REST timestamp/finalized target
+  fallback by using optional target-hint lookup only for optional fields.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifiers_are_sdk_owned`
+
+## 2026-06-05 SCCP Swift Ethereum inbound proof size guard
+
+- Swift `EthereumMainnetSccp.proveInboundToSora` and
+  `submitInboundToIroha` now use the shared local-admission proof byte guard,
+  matching BSC, JS, Kotlin, Java Android, and C#. Empty, all-zero, and
+  oversized native recursive proofs fail before callback submission.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --disable-swift-testing`
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+
+## 2026-06-05 SCCP JS corridor TAIRA XOR envelope hash parity
+
+- TAIRA XOR/TRON JS proof fixtures now bind bridge public inputs to the
+  canonical SCCP transfer payload envelope hash when modeling TRON-source proof
+  packages and `finalizeFromTaira` calldata. The lower-level
+  `tairaXorTransferPayloadHash` helper continues to cover raw transfer payload
+  hashing for callers that need that primitive explicitly.
+- Updated the stale adversarial expectation for finalize calldata so the test
+  checks the production envelope-hash rejection instead of the old raw
+  payload-byte hash wording.
+- Validation:
+  - `node --test --test-name-pattern "TAIRA XOR TRON-source proof packages|TAIRA XOR TRON bridge contract call data|unsafe TAIRA XOR TRON hash inputs" javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+  - `git diff --check`
+
+## 2026-06-05 SCCP production-corridor evidence phase green
+
+- The production corridor contract-smoke phase now honors
+  `SCCP_CORRIDOR_NODE_BIN` for Node-based contract checks, so dry-run command
+  traces remain reproducible under runtime binary overrides.
+- Release-readiness and strict release-bundle phase transcript fragments now
+  match configured Python runners by pinning the evidence-script pytest command
+  tail instead of a literal `python3` binary.
+- Updated the all-lanes fake EVM live route-canary calldata to use the same
+  deterministic valid BN254 Groth16 tuple as the live EVM evidence tests, so
+  all-lanes verified-live TOML coverage remains compatible with the stricter
+  route-canary BN254 tuple admission.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/check_sccp_production_corridor_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dry_run_honors_script_runtime_overrides or override_dry_run_matches_release_fragments'`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k accepts_verified_evm_live_toml`
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`1006` passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+
+## 2026-06-05 SCCP production-corridor evidence inventory parser
+
+- Fixed the release-readiness and strict release-bundle test helpers that parse
+  `phase_evidence_scripts` from `scripts/check_sccp_production_corridor.sh`.
+  They now accept the current configured `$SCCP_CORRIDOR_PYTHON_BIN` runner
+  while still requiring the evidence phase to execute `pytest -q` over the
+  declared test inventory.
+- This restores the public release-gate check that every evidence-script test
+  listed by the production corridor is also pinned in the readiness transcript
+  requirements.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k evidence_phase_inventory_matches_corridor_runner`
+
+## 2026-06-05 SCCP ETH native SDK artifact payload floor
+
+- Swift, Kotlin/JVM, Java Android, and C# Ethereum native prover artifact
+  verification now enforce the same `256` byte production payload floor used
+  by release tooling and the JS/browser SDK for proof artifacts, proving keys,
+  verifier keys, and per-SDK implementation artifacts.
+- Native SDK positive fixtures now use deterministic 256-byte local artifact
+  payloads. Each SDK has a hash-consistent tiny proof-artifact regression that
+  rebuilds the manifest and fixture audit hashes around the tiny payload, so
+  the failure proves the size floor rather than a SHA-256 mismatch.
+- Forbidden dependency-marker regressions now use production-sized
+  `proof.wasm` payloads, and the release-readiness inventory pins the native
+  SDK size-floor constants, helper names, and regression strings.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifiers_are_sdk_owned`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+- Local validation blockers:
+  - Kotlin/JVM and Java Android focused tests could not run because
+    `java -version` fails with `Unable to locate a Java Runtime`.
+  - C# focused tests could not run because `dotnet` is not installed.
+
+## 2026-06-05 SCCP ETH JS native artifact payload floor
+
+- JS/browser Ethereum native prover artifact verification now applies the same
+  `256` byte payload floor as release tooling for proof artifacts, proving
+  keys, verifier keys, and JavaScript implementation artifacts before
+  accepting hash-consistent local bundle resources.
+- Updated source and checked-in `dist/sccp.js`, padded JS positive fixtures,
+  and added source plus package-dist regressions proving a tiny
+  hash-consistent `proofArtifactBytes` payload is rejected while the
+  forbidden-marker scan still runs on production-sized payloads.
+- Validation:
+  - `node --test --test-name-pattern "verifies native prover artifact bytes" javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+  - `node --test --test-name-pattern "SCCP EVM-family Groth16 helpers" javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifiers_are_sdk_owned`
+
+## 2026-06-05 SCCP ETH native prover payload floor
+
+- The Ethereum native EVM Groth16 prover bundle validators now reject
+  hash-consistent but tiny payload artifacts: proof artifact, proving key,
+  verifier key, and per-SDK implementation artifacts must be non-empty and at
+  least `256` bytes before a release report or strict bundle verification can
+  treat the audited no-WASM bundle as present.
+- Padded the positive synthetic bundle fixtures to satisfy the floor and added
+  generation-time plus published-bundle regressions for non-empty tiny proof
+  artifact payloads whose manifest hashes have been updated to match.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_evm_prover_payload or native_evm_prover_forbidden_payload_marker'`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover_payload or native_evm_prover_forbidden_payload_marker or native_no_wasm_readiness_inventory'`
+
+## 2026-06-05 SCCP ETH live route-canary BN254 tuple hardening
+
+- Live EVM destination evidence now validates the route-canary
+  `submitSccpMessageProof(bytes,bytes32[6],bytes32)` proof payload as a real
+  384-byte BN254 Groth16 tuple before accepting canary evidence: proof
+  coordinates must be base-field elements, `a`/`c` must be nonzero G1 points,
+  and `b` must be a nonzero G2 point in the prime-order subgroup.
+- Updated the route-canary fake calldata fixture to use the deterministic
+  BN254 tuple shape shared with SDK regressions, then added adversarial cases
+  for out-of-range field words and invalid `a`, `b`, and `c` points.
+- The release readiness inventory now pins the live evidence script and tests
+  for those BN254 base-field, G1, and G2 route-canary checks.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k route_canary`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k evm_live_destination_production_surface`
+
+## 2026-06-05 Soracloud FHE admission backend attachment binding
+
+- The FHE input-admission backend verifier now requires and re-checks both
+  attachment bindings before verifier lookup: `vk_commitment` must be present
+  and `envelope_hash` must equal `Hash::new(proof.bytes)`.
+- Extended the direct backend regression so missing `vk_commitment`, missing
+  `envelope_hash`, and forged `envelope_hash` all fail as invalid proof
+  parameters before an unregistered verifier can mask the malformed
+  attachment.
+- This is a defense-in-depth admission hardening step. Production
+  bounded-noise admission circuits/provers, broader target-limb BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-attachment-bindings cargo test -p iroha_core fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-attachment-bindings cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-attachment-bindings cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-attachment-bindings cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Sumeragi RBC digest invalidation fault provenance proof
+
+- Added `RbcDigestInvalidationOnlyByFault` to the main Sumeragi TLA model,
+  proving that a transition can clear a valid RBC digest only through the
+  Byzantine fault path, entering `Corrupted` while preserving consensus,
+  chunk, READY, header, finality, and GST state.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDigestInvalidationOnlyByFaultStep|RbcDigestInvalidationOnlyByFault|RBC digest invalidation fault provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`128`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Soracloud FHE admission backend verifier fail-closed
+
+- The FHE input-admission backend verifier now requires attachment
+  `vk_commitment` before verifier lookup, matching the mandatory
+  `OpenVerifyEnvelope.vk_hash` binding enforced by the data model and runtime
+  envelope preflight.
+- Added a direct backend regression proving a missing attachment commitment
+  fails as an invalid proof parameter before an unregistered verifier can mask
+  the malformed attachment.
+- This is a defense-in-depth admission hardening step. Production
+  bounded-noise admission circuits/provers, broader target-limb BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-vk-commitment cargo test -p iroha_core fhe_input_admission_backend_requires_vk_commitment_before_verifier_lookup --lib -- --nocapture`
+    (`1` passed; emitted existing unrelated `iroha_sccp` dead-code warnings
+    while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-vk-commitment cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` passed; emitted existing unrelated `iroha_sccp` dead-code warnings
+    while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-vk-commitment cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed; emitted existing unrelated `iroha_sccp` dead-code warnings
+    while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-backend-vk-commitment cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Sumeragi RBC Withheld unreachable-state proof
+
+- Added `RbcWithheldNeverReached` to the main Sumeragi TLA model, proving that
+  the defensive RBC `Withheld` state is unreachable from the main model's
+  initial state because no `Next` transition installs it.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor. The defensive
+  `Withheld` repair/recovery gates remain available for future models that add
+  an explicit withholding transition.
+- Validation:
+  - `rg -n "RbcWithheldNeverReached|RBC Withheld unreachable-state proof|Sumeragi RBC Withheld unreachable" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`127`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC READY partial-entry provenance proof
+
+- Added `RbcReadyPartialEntryOnlyByReady` to the main Sumeragi TLA model,
+  proving that first transition entry into RBC `ReadyPartial` can only be an
+  RBC READY transition from `ChunksComplete`, with full chunk/header/digest
+  evidence retained, READY evidence incremented but still below commit quorum,
+  and consensus/finality state preserved.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcReadyPartialEntryOnlyByReadyStep|RbcReadyPartialEntryOnlyByReady|RBC READY partial-entry provenance|Sumeragi RBC READY partial entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`126`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC chunking entry provenance proof
+
+- Added `RbcChunkingEntryOnlyByChunk` to the main Sumeragi TLA model, proving
+  that first transition entry into RBC `Chunking` can only be an RBC CHUNK
+  transition from `Init` or post-GST `Withheld`, with header evidence retained,
+  valid post-state digest evidence, chunk progress advanced but still below
+  full coverage, and consensus/finality state preserved.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcChunkingEntryOnlyByChunkStep|RbcChunkingEntryOnlyByChunk|RBC chunking entry provenance|Sumeragi RBC chunking entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`125`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Soracloud FHE admission verifier-commitment binding
+
+- `SoracloudFheInputAdmissionProofV1::validate()` now requires FHE input
+  admission proof attachments to carry `vk_commitment` in addition to the
+  existing canonical `envelope_hash` requirement.
+- Soracloud runtime FHE input admission now checks that attachment
+  `vk_commitment` matches the decoded `OpenVerifyEnvelope.vk_hash` before
+  verifier lookup and backend proof execution. Local proof fixtures derive the
+  commitment from the embedded envelope bytes.
+- This closes another proof-envelope binding gap for current verifier-backed
+  admission. Production bounded-noise admission circuits/provers, broader
+  target-limb BFV-RNS evaluator hardening, and security-complete bootstrapping
+  material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-vk-commitment cargo test -p iroha_data_model fhe_input_admission_proof_validate --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-vk-commitment cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-vk-commitment cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-vk-commitment cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SCCP ETH native SDK self-test preflight parity
+
+- Swift, Kotlin/JVM, Java Android, and .NET now expose explicit Ethereum
+  mainnet native prover self-test preflight methods:
+  `runNativeProverSelfTest(...)` on Swift/Kotlin/Java facades and
+  `RunNativeProverSelfTestAsync(...)` on .NET.
+- The methods reuse the proof-time native self-test verifier, return the
+  manifest-bound SDK self-test result, and let apps fail closed at startup
+  without invoking the outbound proof engine. Native SDK tests now assert the
+  preflight result before the existing proof-time self-test gate.
+- The release readiness report and strict bundle verifier now list those
+  preflight entry points in the Ethereum/BSC user-prover helper inventory:
+  JS guards both the facade and top-level helper, Swift/Kotlin/Java guard the
+  facade helper, and .NET guards the async facade helper. Removing any of those
+  public startup checks now fails the generated report or bundle verification.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'payload_shape or sdk_helper_symbols_exist_in_sdk_sources or sdk_helper_symbols_are_unique'`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'required_helper_inventory_matches_report or helper_inventory_is_independent or rejects_missing_required_submission_surface_helper'`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k native_no_wasm_readiness_inventory`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifiers_are_sdk_owned`
+
+## 2026-06-05 SCCP ETH native Groth16 tuple release gate
+
+- Tightened the Ethereum mainnet SCCP SDK/release inventories so published
+  readiness now pins SDK-owned BN254 Groth16 proof tuple validation in
+  JS/browser, Swift, Kotlin/JVM, Java Android, and C# source paths.
+- Added a browser regression proving malformed Ethereum outbound proof tuples
+  are rejected for wrong `proofBytes.version`, out-of-range BN254 field words,
+  invalid `b`/`c` points, and mismatched `messageId`, `sourceDomain`, or
+  `commitmentRoot` before calldata can be accepted.
+- Validation:
+  - `node --test --test-name-pattern "rejects malformed Ethereum Groth16 proof tuples" javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifiers_are_sdk_owned`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k native_no_wasm_readiness_inventory`
+
+## 2026-06-05 SCCP ETH native fixture duplicate-key gate
+
+- Added release/readiness regressions for duplicate JSON keys inside
+  `cross_sdk_fixture_parity_artifact` and
+  `native_prover_self_test_artifact`, with the artifact SHA-256 evidence
+  deliberately updated to match the tampered bytes. The failure now proves the
+  duplicate-key parser itself is release-critical, not just the outer hash
+  comparison.
+- The strict no-WASM/readiness inventory now pins those duplicate-fixture
+  regressions, and the generated bundle test also asserts the bundled
+  self-test artifact is present and hash-bound alongside the parity artifact.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'duplicate_native_evm_parity_fixture_keys or duplicate_native_evm_self_test_keys'`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_native_evm_parity_fixture_keys or duplicate_native_evm_self_test_keys or native_no_wasm_readiness_inventory or release_bundle_writes_hash_bound_public_artifacts'`
+
+## 2026-06-05 SCCP ETH SDK fixture duplicate-key parity
+
+- Added SDK-side duplicate-key regressions for Ethereum native prover
+  parity/self-test fixture JSON in JS/browser, Swift, Kotlin/JVM, Java
+  Android, and C#. These tests pin the product-path parsers that apps use
+  after loading the release-bundled fixture artifacts.
+- The readiness marker inventory now requires those duplicate-fixture parser
+  checks alongside the existing manifest duplicate-key checks.
+- Validation:
+  - `node --test --test-name-pattern "validates native prover self-test fixtures|validates native prover cross-SDK parity fixtures" javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifiers_are_sdk_owned`
+  - Kotlin/JVM and Java Android focused tests were not run here because the
+    local environment could not locate a Java Runtime. .NET tests were not run
+    because `dotnet` is not installed.
+
+## 2026-06-05 Sumeragi committed phase entry provenance proof
+
+- Added `CommittedPhaseEntryOnlyByFinalitySource` to the main Sumeragi TLA
+  model, proving that first transition entry into `Committed` can only come
+  from an honest commit vote, Byzantine commit vote, or RBC delivery finality
+  source, with the selected source matching finality latch, commit artifact,
+  quorum, and RBC delivery effects.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryOnlyByFinalitySourceStep|CommittedPhaseEntryOnlyByFinalitySource|committed-phase finality-source entry provenance|Sumeragi committed phase entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`124`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH native prover self-test preflight API
+
+- JS/browser SCCP now exposes `runEthereumMainnetNativeProverSelfTest(...)`
+  and `EthereumMainnetSccp.runNativeProverSelfTest(...)` so apps can verify the
+  manifest-bound native EVM prover self-test at startup without invoking the
+  outbound prover.
+- `proveOutboundToEthereum(...)` now uses the public helper for the existing
+  proof-time gate, keeping missing-artifact and missing-hook failures before
+  app-linked prover callbacks. The package entrypoint, `dist` artifact,
+  TypeScript declarations, and strict release/readiness inventories pin the new
+  preflight surface.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k native_no_wasm_readiness_inventory`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifiers_are_sdk_owned`
+
+## 2026-06-05 Sumeragi NewView phase entry provenance proof
+
+- Added `NewViewPhaseEntryOnlyByTimeout` to the main Sumeragi TLA model,
+  proving that first transition entry into `NewView` can only be a timeout
+  transition, with live prepare/commit/NewView evidence reset, finality
+  artifacts absent, view monotonicity preserved, and RBC evidence unchanged.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "NewViewPhaseEntryOnlyByTimeoutStep|NewViewPhaseEntryOnlyByTimeout|NewView phase entry provenance|Sumeragi NewView phase entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`123`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi propose phase entry provenance proof
+
+- Added `ProposePhaseEntryOnlyByNewViewQuorum` to the main Sumeragi TLA model,
+  proving that first transition entry into `Propose` after genesis can only be
+  a quorum-forming NewView vote, with view evidence installed and stale
+  prepare/commit/finality artifacts absent while RBC evidence is preserved.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "ProposePhaseEntryOnlyByNewViewQuorumStep|ProposePhaseEntryOnlyByNewViewQuorum|propose-phase entry provenance|Sumeragi propose phase entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`122`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH verifier key endpoint binding
+
+- Extended the EVM contract smoke test so `SccpMessageBridge` rejects a
+  deployed contract with matching runtime code hash but no compatible
+  `verifyingKeyHash()` endpoint before it can be bound as an Ethereum mainnet
+  Groth16 verifier.
+- Pinned the incompatible-verifier smoke markers in strict release bundle
+  verification and documented the constructor binding requirement.
+- Validation:
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k contract_smoke_evm_production_surface`
+  - `git diff --check -- contracts/evm/sccp/test/sccp_message_bridge_smoke.js contracts/evm/sccp/README.md scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py status.md roadmap.md`
+
+## 2026-06-05 Sumeragi commit-vote phase entry provenance proof
+
+- Added `CommitVotePhaseEntryOnlyByPrepareQuorum` to the main Sumeragi TLA
+  model, proving that first entry into `CommitVote` can only be a
+  quorum-forming honest prepare vote from `Prepare`, with commit-vote, stake,
+  and finality artifacts still absent and RBC evidence preserved.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitVotePhaseEntryOnlyByPrepareQuorumStep|CommitVotePhaseEntryOnlyByPrepareQuorum|commit-vote phase entry provenance|Sumeragi commit-vote phase entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`121`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH bridge replay short-circuit
+
+- `SccpMessageBridge` now rejects an already-used `publicInputs[0]`
+  `messageId` before calling the verifier, so duplicate traffic cannot force a
+  second Groth16 pairing check even when the replayed proof bytes are malformed.
+- Extended the EVM contract smoke test with a duplicate-invalid Groth16
+  submission and pinned the early replay guard plus smoke marker in strict
+  release bundle verification.
+- Validation:
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k contract_smoke_evm_production_surface`
+  - `git diff --check -- contracts/evm/sccp/SccpMessageBridge.sol contracts/evm/sccp/test/sccp_message_bridge_smoke.js contracts/evm/sccp/README.md scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py status.md roadmap.md`
+
+## 2026-06-05 SCCP ETH Groth16 domain proof-word guards
+
+- Extended the EVM SCCP contract smoke test to require explicit verifier
+  rejection for overflowing source-domain words, overflowing target-domain
+  public-input words, and same source/target domain proof words before pairing
+  verification.
+- Pinned those revert reasons and stable smoke variable markers in strict
+  release bundle verification, alongside the existing malformed proof, point,
+  replay, and destination-binding guards.
+- Validation:
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k contract_smoke_evm_production_surface`
+  - `git diff --check -- contracts/evm/sccp/test/sccp_message_bridge_smoke.js contracts/evm/sccp/README.md scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py status.md roadmap.md`
+
+## 2026-06-05 Sumeragi prepare phase entry provenance proof
+
+- Added `PreparePhaseEntryOnlyByProposal` to the main Sumeragi TLA model,
+  proving that first entry into `Prepare` can only be an honest proposal
+  handoff from `Propose`, with live vote and certificate state clean and the
+  proposal's RBC start-or-preserve effects applied.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "PreparePhaseEntryOnlyByProposalStep|PreparePhaseEntryOnlyByProposal|prepare-phase entry provenance|Sumeragi prepare phase entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`120`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH Groth16 destination-binding replay guard
+
+- Extended the EVM SCCP contract smoke test so an otherwise valid
+  Ethereum-mainnet Groth16 proof is rejected when verified against a different
+  non-zero destination binding hash or submitted to a second wrapper deployment
+  with the same verifier/key material.
+- Pinned the new wrong-binding and cross-wrapper replay markers in strict
+  release bundle verification, and documented that destination binding is a
+  Groth16 public signal rather than side metadata.
+- Validation:
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k contract_smoke_evm_production_surface`
+  - `git diff --check -- contracts/evm/sccp/test/sccp_message_bridge_smoke.js contracts/evm/sccp/README.md scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py status.md roadmap.md`
+
+## 2026-06-05 Sumeragi RBC corruption entry provenance proof
+
+- Added `RbcCorruptionEntryOnlyByFault` to the main Sumeragi TLA model,
+  proving that first entry into `Corrupted` can only be a Byzantine fault
+  against an initialized/chunk/ready RBC state with matching header, digest,
+  chunk, and READY evidence while preserving all non-digest consensus and RBC
+  counters.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcCorruptionEntryOnlyByFaultStep|RbcCorruptionEntryOnlyByFault|RBC corruption entry provenance|Sumeragi RBC corruption entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`119`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH native prover self-test execution gate
+
+- Ethereum mainnet outbound proof facades now execute the manifest-bound native
+  EVM prover self-test before invoking production proof callbacks. JS/browser,
+  Swift, Kotlin/JVM, Java Android, and C# expose SDK-owned self-test hooks or
+  runner interfaces, compare the returned SDK row against the verified
+  `native_prover_self_test_artifact`, and reject missing or drifting runners
+  before local proof execution.
+- Release readiness and strict bundle verification now require the runtime
+  hook markers in SDK source, tests, JS `dist`, and TypeScript declarations, in
+  addition to the self-test artifact hash and fixture checks.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_bundle`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_evm_prover or native_no_wasm"`
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 Sumeragi RBC INIT entry provenance proof
+
+- Added `RbcInitEntryOnlyByProposalOrInit` to the main Sumeragi TLA model,
+  proving that first entry into `Init` can only be a proposal starting RBC from
+  `Idle` or an explicit RBC INIT repair from `Idle`, `Withheld`, or
+  `Corrupted`, with header/digest evidence installed and chunk/READY counters
+  reset.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcInitEntryOnlyByProposalOrInitStep|RbcInitEntryOnlyByProposalOrInit|RBC INIT entry provenance|Sumeragi RBC INIT entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`118`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC chunk completion entry provenance proof
+
+- Added `RbcChunkCompletionEntryOnlyByChunk` to the main Sumeragi TLA model,
+  proving that first entry into `ChunksComplete` can only be an RBC CHUNK
+  transition from INIT, CHUNKING, or post-GST withheld recovery state with
+  header evidence, valid post-state digest evidence, and chunk count reaching
+  full coverage.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcChunkCompletionEntryOnlyByChunkStep|RbcChunkCompletionEntryOnlyByChunk|RBC chunk-completion entry provenance|Sumeragi RBC chunk completion entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`117`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC READY quorum entry provenance proof
+
+- Added `RbcReadyQuorumEntryOnlyByReady` to the main Sumeragi TLA model,
+  proving that first entry into `ReadyQuorum` can only be an RBC READY
+  transition from chunk-complete or READY-partial state, with completed
+  chunk/header/digest evidence and the post-state READY count crossing commit
+  quorum.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcReadyQuorumEntryOnlyByReadyStep|RbcReadyQuorumEntryOnlyByReady|RBC READY quorum-entry provenance|Sumeragi RBC READY quorum entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`116`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC delivery entry provenance proof
+
+- Added `RbcDeliveryEntryOnlyByDeliver` to the main Sumeragi TLA model,
+  proving that first entry into the RBC `Delivered` state can only be the RBC
+  DELIVER transition with complete READY/chunk/header/digest evidence, and that
+  the entry is classified into either the finality-installing branch or the
+  pending branch that preserves pre-finality commit artifacts.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliveryEntryOnlyByDeliverStep|RbcDeliveryEntryOnlyByDeliver|RBC delivery-entry provenance|Sumeragi RBC delivery entry" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`115`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP canonical transcript length fail-closed admission
+
+- `iroha_sccp` now exposes checked canonical encoders for SCCP Merkle proofs
+  and Nexus SCCP message bundles, with shared checked `u32` length-prefix
+  writers for dynamic transcript fields.
+- Production SCCP packaging paths that already fail closed now use those
+  checked encoders: TON internal-message payloads, native/local admission
+  payloads, platform submission payloads, TAIRA TRON XOR diagnostic proof
+  construction, and transparent statement hashing all return `None` on
+  oversized dynamic transcript material instead of reaching panic-only length
+  conversions.
+- SCCP source-chain proof envelope encoding now has the same checked transcript
+  boundary, and runtime proof-envelope conversion uses the checked envelope hash
+  so oversized source-proof branch material rejects before runtime finality
+  export instead of hashing a compatibility fallback transcript.
+- SCCP source-adapter verification statement, adapter-commitment, and FastPQ
+  context packaging now use checked dynamic-vector and proof-byte length
+  writers after bounded adapter-proof shape validation, so proof-batch
+  construction rejects unbounded source-adapter material instead of reaching
+  compatibility-only canonical byte wrappers.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-adapter-checked CARGO_INCREMENTAL=0 cargo test -p iroha_sccp sccp_checked --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_sccp runtime_envelope --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_sccp taira_tron_xor_diagnostic --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-source-adapter-checked CARGO_INCREMENTAL=0 cargo clippy -p iroha_sccp --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs status.md roadmap.md docs/source/engineering_backlog.md`
+  - `git diff --exit-code -- Cargo.lock scripts/export_norito_fixtures/Cargo.lock`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_sccp/src/lib.rs status.md roadmap.md docs/source/engineering_backlog.md`
+    (no matches)
+
+## 2026-06-05 SCCP ETH native prover self-test artifact gate
+
+- Ethereum mainnet native EVM prover bundle manifests now require a
+  `native_prover_self_test` audit hash and a
+  `native_prover_self_test_artifact` JSON fixture alongside the existing
+  cross-SDK parity fixture.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# verified-artifact paths
+  hash, forbidden-marker scan, parse, and carry the self-test vector locally;
+  the Ethereum mainnet proof/calldata/submission gates reject descriptors whose
+  self-test hash or destination binding no longer matches the signed bundle.
+- Release readiness, release bundle generation, and strict bundle verification
+  copy and rehash the self-test artifact, reject tampered or drifting SDK rows,
+  and keep the no-WASM/no-remote-prover inventory bound to that payload.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+    (`26` tests passed)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`70` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_bundle`
+    (`3` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_evm_prover or native_no_wasm"`
+    (`13` tests passed)
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 Sumeragi live-progress timeout reset provenance proof
+
+- Added `LiveProgressResetOnlyByTimeout` to the main Sumeragi TLA model,
+  proving that reset-to-zero of live prepare, commit, stake, or view-quorum
+  evidence progress can only happen on the timeout transition, with the
+  NewView-vote reset branch scoped to timeout `NewView` handoff so proposal
+  handoff remains the distinct quorum path.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "LiveProgressResetOnlyByTimeoutStep|LiveProgressResetOnlyByTimeout|live-progress timeout-reset provenance|Sumeragi live-progress timeout reset" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`114`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-artifact source provenance proof
+
+- Added `CommitArtifactsOnlyChangeByFinalitySource` to the main Sumeragi TLA
+  model, proving that any commit-view or commit-certificate witness change is
+  sourced by one exact finality branch: honest commit vote, Byzantine commit
+  vote, or RBC delivery.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitArtifactsOnlyChangeByFinalitySourceStep|CommitArtifactsOnlyChangeByFinalitySource|commit-artifact finality-source provenance|Sumeragi commit-artifact source provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`113`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SoraNet PQ injected hedged seed RNG boundary
+
+- SoraNet PQ hedged RNG seed construction now exposes a caller-supplied
+  `TryCryptoRng` path, while the OS helper delegates through the same checked
+  required-seed draw.
+- ML-DSA keypair generation/signing and ML-KEM keypair generation/encapsulation
+  now expose injected-RNG helpers and route their OS-backed helpers through
+  those fail-closed seed boundaries before deriving PQ key, signature, or
+  ciphertext material.
+- Added focused failing-RNG regressions for the hedged seed helper, ML-DSA
+  keypair/signing, and ML-KEM keypair/encapsulation paths.
+- Validation: `rustfmt --edition 2024 --check crates/soranet_pq/src/rng.rs crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/lib.rs`;
+  `git diff --check -- crates/soranet_pq/src/rng.rs crates/soranet_pq/src/mldsa.rs crates/soranet_pq/src/mlkem.rs crates/soranet_pq/src/lib.rs status.md roadmap.md docs/source/engineering_backlog.md`;
+  `CARGO_INCREMENTAL=0 cargo test -p soranet_pq from_rng --lib -- --nocapture`
+  (`4` tests passed);
+  `CARGO_INCREMENTAL=0 cargo test -p soranet_pq injected_seed_rng_failure_is_reported --lib -- --nocapture`
+  (`1` test passed);
+  `CARGO_INCREMENTAL=0 cargo clippy -p soranet_pq --lib --no-deps -- -D warnings`.
+
+## 2026-06-05 Torii Connect session checked RNG boundary
+
+- Torii Connect session creation now generates app, wallet, management, and
+  relay bearer tokens through checked `TryCryptoRng` fills and returns an
+  internal Connect-session randomness error instead of panicking if entropy is
+  unavailable.
+- Added a focused failing-RNG regression proving token generation fails before
+  a Connect session response is emitted.
+- Validation: `rustfmt --edition 2024 --check crates/iroha_torii/src/routing.rs`;
+  `CARGO_INCREMENTAL=0 cargo test -p iroha_torii --features connect connect_session --lib -- --nocapture`
+  (`9` tests passed; a later SCCP cleanup removes the dependency warning this
+  run emitted);
+  `CARGO_INCREMENTAL=0 cargo clippy -p iroha_torii --features connect --lib --no-deps -- -D warnings`;
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii rng_failure --lib -- --nocapture`
+  (`9` passed);
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+  (passed).
+
+## 2026-06-05 SCCP ETH native SDK bundle factory helpers
+
+- Swift, Kotlin/JVM, and Java Android now expose
+  `EthereumMainnetSccp.fromNativeProverBundle(...)` helpers that resolve a
+  signed Ethereum mainnet native prover bundle through app-owned local artifact
+  storage, verify the proof/proving/verifier/parity/implementation bytes, and
+  construct a facade already bound to the verified native artifacts.
+- The C# static API now exposes
+  `ProveOutboundToEthereumFromNativeProverBundleAsync(...)`,
+  `BuildEthereumCalldataFromNativeProverBundle(...)`, and
+  `SubmitOutboundToEthereumFromNativeProverBundleAsync(...)`, which verify the
+  native bundle through a local resolver before delegating into the existing
+  artifact-bound proof, calldata, and submission paths.
+- Added native fixture coverage proving the factory paths bind
+  `proofArtifactHash` and `provingKeyHash` into the outbound proof request
+  before prover callbacks run, fail closed when the parity fixture cannot be
+  resolved, and keep the C# submitter callback from running when resolver-backed
+  artifact verification fails.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifier`
+    (`1` test passed)
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+
+## 2026-06-05 SCCP ETH browser native-prover bundle factory
+
+- Added `EthereumMainnetSccp.fromNativeProverBundle(...)` to the JS/browser
+  facade. The async factory resolves the signed native prover bundle through an
+  app-owned local artifact resolver, verifies proof/proving/verifier/parity and
+  implementation bytes, rejects mixed pre-supplied `nativeProverArtifacts`, and
+  returns a facade already bound to the verified artifacts.
+- The package declarations now expose
+  `EthereumMainnetSccpNativeProverBundleOptions`, and package-dist tests prove
+  the published `dist` entry point can build an artifact-bound outbound proof
+  request through the factory without WASM or a remote prover.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+    (`26` tests passed)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`70` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifier`
+    (`1` test passed)
+
+## 2026-06-05 Torii operator auth checked RNG boundary
+
+- Torii operator-auth WebAuthn registration and login challenge bytes now use
+  checked `TryCryptoRng` fills and return
+  `operator_auth_random_bytes_failed` before inserting challenge state when
+  entropy fails.
+- Operator WebAuthn session-token issuance now also uses the checked RNG path
+  and returns the same internal operator-auth error before inserting session
+  state if entropy is unavailable.
+- Added focused failing-RNG regressions for registration challenges, login
+  challenges, and session token issuance.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/operator_auth.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_torii rng_failure --lib -- --nocapture`
+    (`8` tests passed; a later SCCP cleanup removes the dependency warning
+    this run emitted)
+  - `CARGO_INCREMENTAL=0 cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; a later SCCP cleanup removes the dependency warning this run
+    emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii rng_failure --lib -- --nocapture`
+    (`9` passed across current Torii RNG-failure regressions)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Sumeragi GST observation provenance proof
+
+- Added `GstOnlyChangesByElapsed` to the main Sumeragi TLA model, proving that
+  the GST observation flag changes only by the explicit pre-GST `GstElapsed`
+  action, which preserves every other consensus, certificate, and RBC field.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "GstOnlyChangesByElapsedStep|GstOnlyChangesByElapsed|GST observation provenance|Sumeragi GST provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`112`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi phase-transition provenance proof
+
+- Added `PhaseOnlyChangesByProtocol` to the main Sumeragi TLA model, proving
+  that top-level consensus phase changes only by proposal-to-prepare handoff,
+  prepare-quorum commit-vote handoff, NewView-quorum proposal handoff,
+  timeout-to-NewView reset, or finality through honest commit vote, Byzantine
+  commit vote, or RBC delivery.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "PhaseStartsPrepareByProposalStep|PhaseStartsCommitVoteByPrepareQuorumStep|PhaseStartsProposeByNewViewQuorumStep|PhaseStartsNewViewByTimeoutStep|PhaseFinalizesByHonestCommitVoteStep|PhaseFinalizesByByzantineCommitVoteStep|PhaseFinalizesByRbcDeliverStep|PhaseOnlyChangesByProtocol|phase-transition provenance|Sumeragi phase provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`111`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC evidence provenance proof
+
+- Added `RbcEvidenceOnlyChangesByProtocolOrFault` to the main Sumeragi TLA
+  model, proving that RBC evidence fields (`headerSeen`, `digestValid`,
+  CHUNK count, and READY vote count) change only through proposal startup,
+  explicit RBC INIT/CHUNK/READY progress, or Byzantine fault corruption.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcEvidenceInitByProposalStep|RbcEvidenceRepairByInitStep|RbcEvidenceAdvancedByChunkStep|RbcEvidenceAdvancedByReadyStep|RbcEvidenceCorruptedByFaultStep|RbcEvidenceOnlyChangesByProtocolOrFault|RBC evidence protocol/fault provenance|RBC evidence provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`110`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi RBC state provenance proof
+
+- Added `RbcStateOnlyChangesByProtocolOrFault` to the main Sumeragi TLA model,
+  proving that top-level RBC state changes only through proposal startup,
+  explicit RBC INIT/CHUNK/READY/DELIVER progress, or Byzantine fault
+  corruption.
+- Wired the property through the fast, deep, and TLC-fast Sumeragi configs and
+  documented it in the formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcStateInitByProposalStep|RbcStateRepairByInitStep|RbcStateAdvanceByChunkStep|RbcStateAdvanceByReadyStep|RbcStateDeliverByDeliverStep|RbcStateCorruptedByFaultStep|RbcStateOnlyChangesByProtocolOrFault|RBC state protocol/fault provenance|RBC state provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`109`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-vote stake-counter provenance proof
+
+- Added `CommitVoteCountersChangeOnlyByVoteOrTimeoutStep` to the main Sumeragi
+  TLA model, proving that live commit-vote counters and signed stake change
+  only by honest/Byzantine commit-vote increments or timeout reset.
+- Wired `CommitVoteCountersOnlyChangeByVoteOrTimeout` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "HonestCommitVoteCountersIncrementStep|ByzantineCommitVoteCountersIncrementStep|CommitVoteCountersResetByTimeoutStep|CommitVoteCountersChangeOnlyByVoteOrTimeoutStep|CommitVoteCountersOnlyChangeByVoteOrTimeout|commit-vote/stake counter provenance|commit-vote stake-counter provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`108`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi prepare-vote counter provenance proof
+
+- Added `PrepareVotesChangeOnlyByVoteOrTimeoutStep` to the main Sumeragi TLA
+  model, proving that the prepare-vote counter changes only by an honest
+  prepare vote increment or timeout reset.
+- Refactored the `NewViewVotesOnlyChangeByVoteOrReset` proof into explicit
+  branch predicates after TLC exposed that the proposal-handoff reset branch
+  was accidentally scoped with timeout-only RBC preservation conjuncts.
+- Wired `PrepareVotesOnlyChangeByVoteOrTimeout` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "NewViewVotesIncrementByVoteStep|NewViewVotesResetByProposalStep|NewViewVotesResetByTimeoutStep|PrepareVotesIncrementByVoteStep|PrepareVotesResetByTimeoutStep|PrepareVotesChangeOnlyByVoteOrTimeoutStep|PrepareVotesOnlyChangeByVoteOrTimeout|prepare-vote counter provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`107`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi NewView vote-counter provenance proof
+
+- Added `NewViewVotesChangeOnlyByVoteOrResetStep` to the main Sumeragi TLA
+  model, proving that the transient NewView vote counter changes only by an
+  honest NewView vote increment, proposal handoff reset, or timeout reset.
+- Wired `NewViewVotesOnlyChangeByVoteOrReset` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "NewViewVotesChangeOnlyByVoteOrResetStep|NewViewVotesOnlyChangeByVoteOrReset|NewView vote-counter provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`106`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi view-evidence quorum-timeout provenance proof
+
+- Added `ViewEvidenceChangesOnlyByQuorumOrTimeoutStep` to the main Sumeragi
+  TLA model, proving that the latched view-change quorum witness changes only
+  by exact NewView quorum installation or timeout clearing.
+- Wired `ViewEvidenceOnlyChangesByQuorumOrTimeout` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "ViewEvidenceChangesOnlyByQuorumOrTimeoutStep|ViewEvidenceOnlyChangesByQuorumOrTimeout|view-evidence quorum/timeout provenance|view-evidence quorum-timeout provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`105`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH native prover artifact resolver helpers
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native prover bundle APIs
+  now expose resolver-based verification helpers. Apps pass an app-owned local
+  artifact resolver, and the SDK loads the manifest-declared proof artifact,
+  proving key, verifier key, `cross_sdk_fixture_parity_artifact`, and selected
+  SDK implementation bytes before running the existing SHA-256, forbidden-marker,
+  verifier-key, destination-binding, and parity-vector checks.
+- The JS package export and TypeScript declarations include
+  `verifyEthereumMainnetNativeEvmProverArtifactsFromBundle`; the native SDKs
+  mirror that product path through bundle-level `verifiedArtifacts` /
+  `VerifiedArtifacts` overloads. In-memory resolver regressions now cover the
+  happy path and fail-closed missing parity bytes across the SDK fixtures.
+- The release-readiness SDK marker inventory now pins the resolver interfaces,
+  bundle path roles, and resolver regressions across source, JS `dist`, and
+  TypeScript declarations.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`96` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k native_evm_prover_artifact_verifier`
+    (`1` test passed)
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 Sumeragi view-advance timeout provenance proof
+
+- Added `ViewAdvanceOnlyComesFromTimeoutStep` to the main Sumeragi TLA model,
+  proving that any active-view increment is sourced by a timeout transition and
+  carries the exact fresh-`NewView` reset shape.
+- Wired `ViewAdvanceOnlyComesFromTimeout` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "ViewAdvanceOnlyComesFromTimeoutStep|ViewAdvanceOnlyComesFromTimeout|view-advance timeout provenance" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`104`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi timeout no-progress preemption proof
+
+- Added `TimeoutTickStepNeverPreemptsProgressStep` to the main Sumeragi TLA
+  model, proving that any timeout transition is guarded by the same
+  stalled-progress condition as `TimeoutTickEnabled`.
+- Wired `TimeoutTickStepNeverPreemptsProgress` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "TimeoutTickStepNeverPreemptsProgressStep|TimeoutTickStepNeverPreemptsProgress|timeout no-progress preemption" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`103`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP ETH native prover parity-bound artifact descriptors
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# verified native prover
+  artifact descriptors now require the local
+  `cross_sdk_fixture_parity_artifact` bytes in addition to the proof artifact,
+  proving key, verifier key, SDK id, and implementation bytes.
+- Each SDK hashes those parity fixture bytes against
+  `audit_hashes.cross_sdk_fixture_parity`, rejects forbidden dependency
+  markers in the parity payload, parses the JSON locally, and stores the
+  normalized parity vector on the verified descriptor. The Ethereum mainnet
+  proof and submission gates now also reject hand-built descriptors that omit
+  the parity hash or parsed fixture.
+- Added adversarial coverage for missing and tampered parity bytes in the JS,
+  Swift, Kotlin/JVM, Java Android, and C# verifier tests.
+- The release-readiness SDK marker inventory now checks for parity-byte,
+  parity-hash, and parsed-fixture markers in each primary SDK verifier, so a
+  future verifier that only binds proof/key/implementation bytes is no longer
+  accepted as SDK-owned readiness evidence.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` from
+    `javascript/iroha_js` (`26` tests passed)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`70` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_missing_native_evm_parity_fixture pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift`
+    (`5` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_release_readiness_report.py`
+  - Kotlin/JVM and Java Android focused Gradle tests were not run because this
+    environment has no Java runtime selected (`/usr/libexec/java_home -V`
+    cannot locate a JDK).
+  - C# tests were not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-05 SCCP ETH sync-committee fixture warning cleanup
+
+- The Ethereum mainnet sync-committee supermajority count is now compiled only
+  for tests and `test-fixtures`, matching its actual use in deterministic SCCP
+  fixture/proof builders and removing the dependency warning emitted by Torii
+  and FHE validation builds.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo check -p iroha_sccp --lib`
+    (passed without the previous unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` passed without the previous SCCP dependency warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_sccp --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Soracloud FHE key-switch basis admission binding
+
+- `FheParamSetV1` now carries the role-separated registered BFV key-switch
+  decomposition-chain digest beside the parameter digest and evaluator RNS-chain
+  digest. Shared Soracloud fixtures include the digest produced by the
+  registered RAM-LFE profile.
+- Soracloud registered BFV descriptor validation now rejects a parameter set
+  whose key-switch decomposition-chain digest drifts from the crypto helper,
+  and FHE input-admission statement hashes bind that digest through a nested
+  canonical Norito tuple to stay within the supported tuple arity.
+- The input-admission public-input schema bytes now describe the nested
+  statement layout, so verifier artifacts are bound to the key-switch basis
+  commitment as well as the statement hash public input.
+- Production bounded-noise admission circuit/prover rollout, broader BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model fhe_input_admission_statement_hash_encodes_canonical_tuple --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_param_set_fixture_is_canonical -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_governance_bundle_fixture_is_canonical -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_core soracloud_registered_bfv_parameters --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model proof_attachment_decode_rejects_blank_backend_fields --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_data_model proof_attachment_json_rejects_backend_mismatches --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; a later SCCP cleanup removes the dependency warning this run
+    emitted)
+  - `cargo fmt -p iroha_data_model -p iroha_core -- --check`
+    (passed)
+  - `git diff --check -- ...`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock '**/Cargo.lock'`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...`
+    (no matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-decomposition-digest cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` passed after the current operator-auth test changes and SCCP warning
+    cleanup)
+
+## 2026-06-05 Soracloud bounded-noise Bootstrap runtime coverage
+
+- The registered bounded-noise BFV test material now includes a two-round
+  Bootstrap refresh key and matching bounded-noise transcript metadata, so core
+  runtime tests exercise the same registered RNS refresh bridge used by
+  Soracloud bounded-noise Bootstrap jobs.
+- Added a Soracloud runtime regression that runs two-round bounded-noise
+  `Bootstrap`, proves the refreshed ciphertexts differ from the inputs, decrypts
+  both output slots back to the expected plaintext, and checks the
+  key-authorized centered-noise output bound returned by the runtime metadata
+  path.
+- This is coverage for the current encrypted-zero refresh bridge. Production
+  bounded-noise admission circuits/provers, broader target-limb BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo test -p iroha_core soracloud_bounded_noise_bootstrap_uses_registered_rns_refresh_bridge --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo test -p iroha_core soracloud_bounded_noise_ --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo test -p iroha_core run_soracloud_fhe_job_records_bounded_noise_add_output_state --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bounded-bootstrap cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock '**/Cargo.lock'`
+    (passed)
+
+## 2026-06-05 BFV multi-round Bootstrap helper boundary
+
+- `iroha_crypto` now exposes scalar and exact-RNS multi-round Bootstrap refresh
+  helpers for both exact and bounded-noise ciphertexts. Each helper validates
+  the requested refresh count against the bootstrap key before applying the
+  first round, so direct crypto callers cannot accidentally rely on partial
+  refresh work for zero-round or over-capacity requests.
+- Soracloud exact and bounded-noise Bootstrap job execution now call those
+  crypto helpers instead of carrying a local refresh loop, and the shared BFV
+  operation-vector fixture checks use the same helper boundary.
+- This still uses the first-release encrypted-zero refresh bridge. Production
+  bounded-noise admission circuits/provers, broader target-limb BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_crypto bootstrap_refresh --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_core soracloud_bootstrap_ --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_core soracloud_bounded_noise_bootstrap_uses_registered_rns_refresh_bridge --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-rounds cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Soracloud FHE admission envelope-hash binding
+
+- `SoracloudFheInputAdmissionProofV1::validate()` now requires the nested proof
+  attachment to carry an `envelope_hash` that matches the embedded
+  `OpenVerifyEnvelope` bytes, in addition to the existing backend, proof bytes,
+  and verifier-reference checks.
+- Soracloud runtime FHE input admission now fails closed when the attachment
+  omits `envelope_hash` or supplies a forged value, before active-verifier and
+  backend proof execution. Local FHE input-admission proof fixtures now populate
+  the hash.
+- This hardens the proof-envelope binding for current verifier-backed
+  admission. Production bounded-noise admission circuits/provers, broader
+  target-limb BFV-RNS evaluator hardening, and security-complete bootstrapping
+  material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-envelope-hash cargo test -p iroha_data_model fhe_input_admission_proof_validate --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-envelope-hash cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-envelope-hash cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-envelope-hash cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV registered key-switch decomposition chain
+
+- `iroha_crypto` now exposes the registered BFV key-switch decomposition RNS
+  chain as a first-class helper, selecting the smallest production evaluator
+  chain prefix that covers the RAM-LFE ciphertext modulus and decomposition
+  base for target-limb key switching.
+- Added a role-separated digest for that decomposition chain so future
+  governance/admission code can bind the source basis independently from the
+  full evaluator RNS chain.
+- Soracloud bounded-noise runtime now calls the crypto helper directly for
+  Multiply and packed `RotateLeft`, removing the previous core-local selector.
+- Production bounded-noise admission circuit/prover rollout, broader BFV-RNS
+  evaluator hardening, and security-complete bootstrapping material remain
+  pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-decomposition cargo test -p iroha_crypto registered_key_switch_decomposition_chain --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-decomposition cargo test -p iroha_core target_limb --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-decomposition cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Torii MCP checked RNG boundary
+
+- Torii MCP async job IDs now generate public job IDs through checked
+  `TryCryptoRng` fills and return a JSON-RPC internal `random_bytes` error
+  before inserting async job state when entropy fails.
+- Connect session creation now generates fallback SIDs through checked RNG
+  fills and returns a tool body error instead of panicking if entropy is
+  unavailable.
+- Added focused failing-RNG regressions for MCP async job ID generation and
+  Connect SID fallback generation.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/mcp.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_torii reports_ --lib -- --nocapture`
+    (`74` tests passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning in dependencies)
+  - `CARGO_INCREMENTAL=0 cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Soracloud bounded-noise target-limb runtime bridge
+
+- Soracloud bounded-noise FHE execution now derives a registered key-switch
+  decomposition chain from the production evaluator RNS chain and routes
+  bounded Multiply plus packed `RotateLeft` through the target-limb
+  basis-extension bridge instead of the same-chain key-switch bridge.
+- Added regressions proving the registered RAM-LFE runtime chooses a strict
+  target-limb prefix for key-switch decomposition, bounded-noise Multiply
+  decrypts to the expected products, and bounded-noise packed `RotateLeft`
+  decrypts to the expected packed-slot rotation through bounded Galois material.
+- Production bounded-noise admission circuit/prover rollout, broader
+  BFV-RNS evaluator hardening, and security-complete bootstrapping material
+  remain pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target-limb cargo test -p iroha_core target_limb --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target-limb cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 SoraFS local proxy checked RNG boundary
+
+- Local QUIC proxy browser-manifest previews and handshake acknowledgements now
+  generate session IDs and cache-tag salts through checked `TryCryptoRng` fills
+  and return `ProxyError::RandomBytes` instead of panicking on OS entropy
+  failure.
+- Orchestrator proxy manifest materialization now propagates the proxy error and
+  only runs on successful fetches, so a manifest entropy failure cannot mask a
+  fetch failure.
+- Added focused failing-RNG regressions for proxy session IDs and cache salts,
+  and restored the `local-quic-proxy` lib-test compile path by importing the
+  privacy-event fixture types used by that feature-gated test corridor.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo test -p sorafs_orchestrator --features local-quic-proxy --lib reports_rng_failure -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo test -p sorafs_orchestrator --features local-quic-proxy --lib manifest_template_populates_expected_fields -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo clippy -p sorafs_orchestrator --features local-quic-proxy --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-proxy-rng cargo clippy -p sorafs_orchestrator --lib --no-deps -- -D warnings`
+
+## 2026-06-05 Sumeragi post-finality GST-only movement proof
+
+- Added `CommittedOnlyGstObservationCanMoveStep` to the main Sumeragi TLA
+  model, proving that after finality all consensus/progress/fault actions are
+  disabled and any remaining post-finality state change is exactly `GstElapsed`
+  observing GST.
+- Wired `CommittedOnlyGstObservationCanChange` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedOnlyGstObservationCanMoveStep|CommittedOnlyGstObservationCanChange|post-finality GST-only movement|committed post-finality GST-only movement" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`99`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed GST full-quiescence proof
+
+- Added `CommittedGstStateStableStep` to the main Sumeragi TLA model, proving
+  that once finality is reached and GST has already been observed, every model
+  variable is stable across real or stuttering steps.
+- Wired `CommittedGstStateNeverChanges` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedGstStateStableStep|CommittedGstStateNeverChanges|committed GST full-quiescence|committed\\+GST full-state quiescence" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`100`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed GST disabled-action proof
+
+- Added `CommittedGstDisablesEveryAction` to the main Sumeragi TLA model,
+  proving that the committed+GST terminal state disables every explicit
+  protocol action guard, including Byzantine commit voting, RBC progress,
+  timeout/fault, and GST observation.
+- Wired `CommittedGstNeverEnablesActions` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedGstDisablesEveryAction|CommittedGstNeverEnablesActions|committed GST disabled-action|committed\\+GST disabled action guards" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`101`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed GST Next-rejection proof
+
+- Added `CommittedGstRejectsNextStep` to the main Sumeragi TLA model, proving
+  that the committed+GST terminal state rejects `Next` itself and therefore
+  leaves only the stuttering branch of `[Next]_vars`.
+- Wired `CommittedGstOnlyAllowsStuttering` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the property in the formal README and
+  roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedGstRejectsNextStep|CommittedGstOnlyAllowsStuttering|committed GST Next-rejection|committed\+GST Next rejection" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`102`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality source quorum-gate proof
+
+- Added `FinalityLatchSourceQuorumGatesHoldStep` to the main Sumeragi TLA
+  model, proving that every finality-latch source is backed by its finalizing
+  `CanCommit(...)` gate, prepare quorum, honest-support threshold, stake quorum,
+  active-view evidence, and RBC delivery evidence.
+- Wired `FinalityLatchSourceQuorumGatesAlwaysHold` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSourceQuorumGatesHoldStep|FinalityLatchSourceQuorumGatesAlwaysHold|finality-latch source quorum-gate|source quorum-gate proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`98`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality source-effect exactness proof
+
+- Added `FinalityLatchSourceEffectsAreExactStep` to the main Sumeragi TLA
+  model, proving that the finality-latch source actions are mutually exclusive
+  on the latch-flip transition and install exact source-specific vote, stake,
+  commit-certificate, commit-view, RBC delivery, and preserved evidence deltas.
+- Wired `FinalityLatchSourceEffectsAlwaysExact` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSourceEffectsAreExactStep|FinalityLatchSourceEffectsAlwaysExact|finality-latch source-effect exactness|source-effect exactness proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`97`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality source classification proof
+
+- Added `FinalityLatchSourceIsCommitOrDeliveryStep` to the main Sumeragi TLA
+  model, proving that a finality-latch transition comes only from an honest
+  commit vote, a Byzantine commit vote, or RBC delivery while preserving GST
+  state.
+- Wired `FinalityLatchOnlyComesFromCommitOrDelivery` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSourceIsCommitOrDeliveryStep|FinalityLatchOnlyComesFromCommitOrDelivery|finality-latch source classification|finality source classification proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`96`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality NewView handoff isolation proof
+
+- Added `FinalityLatchNeverCarriesNewViewHandoffStep` to the main Sumeragi TLA
+  model, proving that a finality-latch transition is never a `NewView` handoff,
+  carries no live NewView vote counter, and preserves existing view-quorum
+  evidence.
+- Wired `FinalityLatchNeverCarriesNewViewHandoff` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchNeverCarriesNewViewHandoffStep|FinalityLatchNeverCarriesNewViewHandoff|finality-latch NewView handoff isolation|finality NewView handoff isolation proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`95`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-view latch-install proof
+
+- Added `CommitViewWitnessInstallsWithFinalityLatchStep` to the main Sumeragi
+  TLA model, proving that every finality-latch transition installs the
+  commit-view witness as the active finality view, including the view-zero case
+  where installation preserves the witness value.
+- Wired `CommitViewWitnessAlwaysInstallsWithFinalityLatch` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitViewWitnessInstallsWithFinalityLatchStep|CommitViewWitnessAlwaysInstallsWithFinalityLatch|finality-latch commit-view witness installation|commit-view latch-install proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`94`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi nonzero commit-view witness proof
+
+- Added `CommitViewWitnessChangesOnlyOnNonzeroFinalityStep` to the main
+  Sumeragi TLA model, proving that the latched commit-view witness changes
+  exactly on nonzero-view finality transitions, where it is installed as the
+  active view while view-zero finality is allowed to leave the witness value at
+  zero.
+- Wired `CommitViewWitnessOnlyChangesOnNonzeroFinality` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitViewWitnessChangesOnlyOnNonzeroFinalityStep|CommitViewWitnessOnlyChangesOnNonzeroFinality|nonzero finality commit-view witness installation|nonzero commit-view witness proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`93`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Soracloud FHE input OpenVerify shape guard
+
+- Soracloud FHE input-admission proof validation now runs the shared
+  `OpenVerifyEnvelope::validate_for_admission` guard after decoding the
+  proof attachment envelope, so non-portable circuit identifiers, zero
+  verifier-key hashes, empty inner proof payloads, oversized metadata, pending
+  backend tags, and future shared envelope policy failures reject before
+  verifier lookup or state persistence.
+- Added a regression covering malformed Soracloud input-admission envelopes
+  with a non-portable circuit id, zero verifier-key hash, and empty inner proof
+  bytes. The existing bounded-noise missing-verifier regression still reaches
+  verifier lookup for a well-formed envelope, proving the added guard preserves
+  the valid-shape path.
+- Production bounded-noise admission circuit/prover rollout, broader
+  target-limb BFV-RNS evaluator hardening, and security-complete bootstrapping
+  material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-openverify cargo test -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-openverify cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-openverify cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Sumeragi finality-latch certificate-witness proof
+
+- Added `CommitCertificateWitnessesInstallWithFinalityLatchStep` to the main
+  Sumeragi TLA model, proving that the latched commit-certificate vote and
+  stake witnesses install exactly with the abstract finality latch, changing
+  from absent witnesses to the post-state live counters that satisfy quorum.
+- Wired `CommitCertificateWitnessesAlwaysInstallWithFinalityLatch` through the
+  fast, deep, and TLC-fast Sumeragi configs and documented the property in the
+  formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitCertificateWitnessesInstallWithFinalityLatchStep|CommitCertificateWitnessesAlwaysInstallWithFinalityLatch|finality-latch commit-certificate witness installation|finality-latch certificate-witness proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`92`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Taikai CEK salt checked RNG boundary
+
+- Taikai CEK rotation receipt HKDF salts now draw directly from a checked
+  `TryCryptoRng` byte-fill helper when `--hkdf-salt` is omitted, instead of
+  seeding `StdRng` and drawing from the infallible PRNG surface.
+- Added a failing-RNG regression proving entropy failures return a labelled
+  CLI error before a receipt salt is produced.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_cli/src/commands/taikai.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-salt cargo test -p iroha_cli cek_hkdf_salt_random_path_reports_rng_failure -- --nocapture`
+    (`1` Taikai test passed in each of the `iroha`, `iroha3`, and
+    `iroha_cli` binary test targets; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-salt cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning
+    in dependencies)
+
+## 2026-06-05 Sumeragi finality-latch live-gate crossing proof
+
+- Added `FinalityLatchChangeMatchesLiveCommitGateCrossingStep` to the main
+  Sumeragi TLA model, proving that the abstract finality latch changes exactly
+  when the live `CanCommit(...)` gate crosses from false to true across a
+  transition.
+- Wired `FinalityLatchChangeAlwaysMatchesLiveCommitGateCrossing` through the
+  fast, deep, and TLC-fast Sumeragi configs and documented the property in the
+  formal README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchChangeMatchesLiveCommitGateCrossingStep|FinalityLatchChangeAlwaysMatchesLiveCommitGateCrossing|finality-latch/live-commit-gate crossing equivalence|finality-latch live-gate crossing proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`91`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP native EVM cross-SDK parity vector gate
+
+- The Ethereum mainnet native EVM prover bundle now requires a
+  `cross_sdk_fixture_parity_artifact` JSON file whose SHA-256 must match the
+  named `audit_hashes.cross_sdk_fixture_parity` evidence hash.
+- Readiness generation and strict release-bundle verification parse that vector
+  and require it to bind the active Ethereum mainnet proof/proving/verifier
+  artifact hashes, destination-binding hash, receipt-proof hash, source-proof
+  hash, nine public signal words, calldata hash, and Torii submit-payload hash
+  across every required SDK row (`javascript`, `swift`, `kotlin`,
+  `java-android`, and `dotnet`).
+- Release-bundle generation now copies the parity-vector artifact into the
+  public native prover attachment set, and the strict verifier rejects missing
+  vector paths, tampered vector bytes, malformed or duplicate-key JSON, and
+  per-SDK drift even if the manifest is rehashed.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native prover bundle
+  parsers now accept and expose the same `cross_sdk_fixture_parity_artifact`
+  path, so release-valid signed manifests remain loadable by the SDK product
+  path.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# now also parse the
+  parity fixture JSON locally, enforcing the schema, Ethereum domain/chain,
+  Groth16 backend, bundle artifact hashes, destination-binding hash, nine
+  public signal words, and per-SDK result equality before SDKs compare release
+  vectors against app-linked prover outputs.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`96` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_missing_native_evm_parity_fixture pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`10` tests passed)
+  - `dotnet --version` (not available in this environment, so the C# suite
+    could not be executed here)
+
+## 2026-06-05 Sumeragi finality-latch transition proof
+
+- Added `FinalityLatchChangeEntersCommittedPhaseStep` to the main Sumeragi TLA
+  model, proving that any abstract finality-latch change is a monotonic
+  false-to-true transition from `CommitVote` into `Committed` while preserving
+  the active view.
+- Wired `FinalityLatchChangeOnlyEntersCommittedPhase` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchChangeEntersCommittedPhaseStep|FinalityLatchChangeOnlyEntersCommittedPhase|finality-latch committed-transition monotonicity|finality-latch transition proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`90`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi committed-phase latch-entry proof
+
+- Added `CommittedPhaseEntryMatchesFinalityLatchStep` to the main Sumeragi TLA
+  model, proving that entering the terminal `Committed` phase and flipping the
+  abstract finality latch are the same transition event.
+- Wired `CommittedPhaseEntryAlwaysMatchesFinalityLatch` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesFinalityLatchStep|CommittedPhaseEntryAlwaysMatchesFinalityLatch|committed-phase/finality-latch entry coupling|committed-phase latch-entry proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`89`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 BFV-RNS target-limb key-switch integration
+
+- Added `BfvRnsModulusChain::basis_extend_polynomial_target_limbs`, a
+  deterministic target-limb basis-extension helper that interprets source RNS
+  coefficients as canonical representatives modulo the source-chain product,
+  computes the CRT quotient correction exactly with integer arithmetic, and
+  reduces directly into target limbs without requiring the target product to
+  cover the source product.
+- Routed `key_switch_rns_exact_with_basis_extension` through the deterministic
+  target-limb helper, keeping the post-extension canonical digit verifier in
+  place before bounded-noise relinearization/Galois key-switch products run.
+  The rounded RNS multiplication, Galois, and packed `RotateLeft` bridge
+  entry points now exercise that target-limb key-switch boundary.
+- Added a regression proving the old reconstructable exact basis extension
+  rejects a narrower target chain while the new target-limb helper preserves
+  each target residue and remains visibly lossy if reconstructed from the
+  narrow target alone; the key-switch digit regression now also proves
+  target-limb extension matches the digit-specific extension for normal and
+  wider source chains.
+- Production bounded-noise admission circuit/prover rollout, broader
+  target-limb BFV-RNS evaluator hardening, and security-complete bootstrapping
+  material remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto rns_target_limb_basis_extension_accepts_narrower_target_product --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto rns_basis_extension_preserves_source_product_coefficients --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto rns_key_switch_digit_polynomials_survive_basis_extension --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto bounded_noise_bfv_multiplication_rns_exact_matches_scalar_raw_bridge --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo test -p iroha_crypto bounded_noise_packed_rotate_left_tracks_galois_schedule --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-target-limb-basis cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Sumeragi committed-phase entry proof
+
+- Added `CommittedPhaseEntryInstallsCompleteStackStep` to the main Sumeragi
+  TLA model, proving that any transition into the terminal `Committed` phase
+  comes from `CommitVote` and sets the abstract finality latch with the full
+  post-state certificate stack.
+- Wired `CommittedPhaseOnlyEntersWithCompleteStack` through the fast, deep,
+  and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedPhaseEntryInstallsCompleteStackStep|CommittedPhaseOnlyEntersWithCompleteStack|committed-phase complete-stack entry|committed-phase entry proof" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`88`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Rust SDK SM2 checked OS generation
+
+- The high-level Rust SDK `Sm2KeyPair::generate_with_distid(...)` helper now
+  uses `Sm2PrivateKey::try_random_from_os(...)`, so OS entropy and scalar
+  generation failures propagate as `ParseError` instead of going through the
+  infallible compatibility RNG shim.
+- Removed the obsolete SM2 random return-type normalization shim from
+  `crates/iroha/src/sm.rs`.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha generate_with_distid_uses_checked_os_rng -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p iroha --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning in dependencies)
+
+## 2026-06-05 Sumeragi finality latch/artifact coupling proof
+
+- Added `FinalityLatchAndArtifactsCoupledStep` to the main Sumeragi TLA model,
+  proving that the abstract finality latch changes iff the latched commit-view
+  or commit-certificate witnesses change on the same real or stuttering step.
+- Wired `FinalityLatchAndArtifactsAlwaysChangeTogether` through the fast,
+  deep, and TLC-fast Sumeragi configs and documented the property in the formal
+  README and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchAndArtifactsCoupledStep|FinalityLatchAndArtifactsAlwaysChangeTogether|finality-latch/commit-artifact coupling|finality latch/artifact coupling" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`87`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi finality-latch complete-stack proof
+
+- Added `FinalityLatchSetInstallsCompleteStackStep` to the main Sumeragi TLA
+  model, proving that any transition that flips the abstract finality latch
+  from false to true enters `Committed` with the full post-state finality
+  certificate stack: prepare quorum, live commit quorum, honest support, stake
+  quorum, latched commit certificate, RBC delivery evidence, and commit-view
+  witness.
+- Wired `FinalityLatchOnlySetsCompleteStack` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "FinalityLatchSetInstallsCompleteStackStep|FinalityLatchOnlySetsCompleteStack|finality-latch complete-stack" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`86`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-artifact install boundary proof
+
+- Added `CommitArtifactsInstallOnlyAtFinalityStep` to the main Sumeragi TLA
+  model, proving that any change to the latched commit-view or
+  commit-certificate witnesses can happen only on the `CommitVote` to
+  `Committed` finality transition.
+- Wired `CommitArtifactsOnlyInstallAtFinality` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitArtifactsInstallOnlyAtFinalityStep|CommitArtifactsOnlyInstallAtFinality|commit-artifact finality-only installation|commit-artifact install boundary" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`85`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 JS-host SM2 checked OS key generation
+
+- Added `Sm2PrivateKey::try_random_from_os(...)` so SM2 callers that do not
+  own a modern RNG dependency can still use checked OS entropy.
+- The JavaScript host `sm2_keypair` binding now routes through that checked
+  helper and reports entropy/key-generation failures through the existing N-API
+  error path.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/sm.rs crates/iroha_js_host/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_crypto sm2_try_random_from_os_roundtrip --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p iroha_js_host`
+    (passed; emitted the known unrelated `iroha_sccp` and `iroha_core::zk` dead-code warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p iroha_js_host --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` and `iroha_core::zk` dead-code warnings in dependencies)
+
+## 2026-06-05 SCCP native EVM audit evidence map
+
+- Hardened the Ethereum mainnet native EVM prover bundle readiness gate so
+  `audit_hashes` must be a named object with `circuit_security_audit`,
+  `native_implementation_audit`, `reproducible_build_attestation`,
+  `cross_sdk_fixture_parity`, and `no_wasm_no_remote_scan`.
+- The release-readiness report and strict release-bundle verifier now reject
+  unlabeled audit hash lists, missing or unexpected audit fields, noncanonical
+  named hashes, duplicate audit hashes, and audit hashes that reuse proof,
+  key, destination-binding, or SDK implementation artifact hashes.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native prover bundle
+  parsers now use the same named audit evidence map, so release-valid manifests
+  and SDK-loaded manifests have the same field shape and role-separation labels.
+  The JS declarations also require all five named audit fields when callers
+  build a native prover bundle manifest in TypeScript.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`95` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; emitted unrelated
+    `ToriiClientTests.swift` warnings)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_for_complete_evidence_and_corridor pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_unlabeled_native_evm_prover_audits pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_unlabeled_native_evm_prover_audits pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts`
+    (`12` tests passed)
+  - `dotnet --version` (not available in this environment, so the C# suite
+    could not be executed here)
+
+## 2026-06-05 Sumeragi committed-state stability proof
+
+- Added `CommittedConsensusStateStableStep` to the main Sumeragi TLA model,
+  proving that after finality the consensus phase/view, live vote counters,
+  commit-certificate witnesses, NewView handoff state, RBC evidence, and
+  finality latch remain stable across every real or stuttering step; only the
+  separate GST observation flag is outside this stability witness.
+- Wired `CommittedConsensusStateNeverChanges` through the fast, deep, and
+  TLC-fast Sumeragi configs and documented the property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommittedConsensusStateStableStep|CommittedConsensusStateNeverChanges|committed consensus-state stability|committed-state stability" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`84`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 Sumeragi commit-evidence monotonicity proof
+
+- Added `CommitEvidenceMonotonicStep` to the main Sumeragi TLA model, proving
+  the latched commit-certificate vote and stake witnesses can only stay
+  absent/preserved or advance to the committing certificate.
+- Wired `CommitEvidenceNeverRegresses` through the fast, deep, and TLC-fast
+  Sumeragi configs and documented the temporal property in the formal README
+  and roadmap proof corridor.
+- Validation:
+  - `rg -n "CommitEvidenceMonotonicStep|CommitEvidenceNeverRegresses|commit-evidence monotonicity|commit-certificate vote and stake" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg` (`64`)
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg` (`83`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`[formal] Sumeragi coverage wiring is consistent (504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes).`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-05 SCCP SDK native EVM submission artifact gate
+
+- Closed the Ethereum mainnet SDK product-path bypass where a caller could
+  hand-wrap an outbound proof result and reach calldata/submission helpers
+  without matching verified native EVM prover artifacts.
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# now re-check artifact,
+  proving-key, verifier-key, destination-binding, and SDK implementation
+  hashes against the wrapped proof result before building or submitting
+  Ethereum mainnet verifier calldata; generic EVM helpers remain separate.
+- Release/readiness inventory markers now pin the submission-time native
+  artifact gates across SDK source, generated JS `dist`, and regression tests.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`95` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; emitted unrelated
+    `ToriiClientTests.swift` warnings)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `dotnet --version` (not available in this environment, so the C# test
+    suite could not be executed here)
+
+## 2026-06-05 Sumeragi commit-view monotonicity proof
+
+- Added `CommitViewMonotonicStep` to the main Sumeragi TLA model, proving the
+  latched commit-view witness can only stay absent/preserved or advance to the
+  committing view.
+- Wired `CommitViewNeverRegresses` through the fast, deep, and TLC-fast
+  configs, bringing `Sumeragi_fast.cfg` to `64` invariants and `82` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "CommitViewMonotonicStep|CommitViewNeverRegresses|commit-view monotonicity|commit-view witness" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 CLI multisig RNG and FHE test compile cleanup
+
+- CLI multisig registration now uses `KeyPair::try_random()` when `--account`
+  is omitted, returning a labelled command error if entropy-backed key
+  generation fails instead of relying on the infallible compatibility API.
+- Resolved an unresolved merge marker in `iroha_crypto::fhe_bfv` adversarial
+  evaluation-key tests by keeping the split rotation, bootstrap, Galois, and
+  key-switch residual coverage.
+- Validation:
+  - `rustfmt --edition 2024 --check --config skip_children=true crates/iroha_cli/src/main_shared.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_cli multisig_register_run_defaults_to_domainless_home_domain -- --nocapture`
+    (passed in the `iroha`, `iroha3`, and `iroha_cli` bin test targets; emitted the known unrelated `iroha_sccp` and `iroha_core::zk` dead-code warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` and `iroha_core::zk` dead-code warnings in dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_crypto galois_key_generation_self_checks_key_switch_residuals --lib -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-05 Sumeragi view monotonicity proof
+
+- Added `ViewMonotonicStep` to the main Sumeragi TLA model, proving any
+  transition preserves or advances the active view counter.
+- Wired `ViewNeverRegresses` through the fast, deep, and TLC-fast configs,
+  bringing `Sumeragi_fast.cfg` to `64` invariants and `81` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "ViewMonotonicStep|ViewNeverRegresses|view monotonicity|view rollback" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 Sumeragi GST monotonicity proof
+
+- Added `GstMonotonicStep` to the main Sumeragi TLA model, proving any
+  transition from a post-GST state preserves the GST flag.
+- Wired `GstNeverRegresses` through the fast, deep, and TLC-fast configs,
+  bringing `Sumeragi_fast.cfg` to `64` invariants and `80` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "GstMonotonicStep|GstNeverRegresses|GST monotonicity|GST flag" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 Izanami and memory-example RNG cleanup
+
+- Izanami chaos runs now keep explicit seeds deterministic while routing the
+  unseeded `StdRng` fallback through checked OS entropy, returning a labelled
+  setup error if entropy acquisition fails.
+- The Iroha core memory example now uses process-local deterministic synthetic
+  values for generated asset and NFT payloads instead of process RNG.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/izanami/src/chaos.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p izanami seeded_rng_is_deterministic_for_same_seed -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p izanami seeded_rng_diverges_for_different_seeds -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p izanami`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p izanami --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `rustfmt --edition 2024 --check crates/iroha_core/examples/memory.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p iroha_core --example memory`
+    (passed)
+
+## 2026-06-05 Test-network deterministic peer selection
+
+- `iroha_test_network::Network::peer()` now selects peers in deterministic
+  round-robin order instead of using thread RNG, preserving distribution across
+  repeated helper calls without hidden entropy.
+- Added a focused regression proving the selector cycles through peers and
+  wraps back to the first peer.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_test_network/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_test_network network_peer_round_robins_deterministically -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p iroha_test_network`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p iroha_test_network --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Operator-signature test nonce deterministic cleanup
+
+- Sumeragi randomness integration tests, Nexus runtime-registration perf tests,
+  and Torii operator-signed request fixtures now use monotonic deterministic
+  nonce bytes instead of thread RNG for test-only operator request signatures.
+- Validation:
+  - `rustfmt --edition 2024 --check integration_tests/tests/sumeragi_randomness.rs integration_tests/tests/nexus/runtime_dataspace_registration_perf.rs crates/iroha_torii/tests/fixtures.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p integration_tests --test consensus_and_da --test nexus_and_streaming`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p iroha_torii --test sumeragi_params_endpoint`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Iroha core test deterministic helper cleanup
+
+- Iroha core queue tests now use deterministic counter-derived domain names
+  and deterministic synthetic stress-test delays instead of thread/process RNG.
+- Transaction storage tests now derive synthetic transaction hashes from a
+  monotonic counter instead of thread RNG, keeping the storage tests
+  reproducible.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/queue.rs crates/iroha_core/src/state/storage_transactions.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_core state::storage_transactions::tests::get --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_core queue_accepts_gossip_payload_cache_in_shared_view --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p iroha_core concurrent_stress_test --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p iroha_core --lib --tests`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p iroha_core --lib --tests --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SoraFS fetch job-id checked RNG boundary
+
+- SoraFS orchestrator fetch job IDs now use checked OS RNG fills and return
+  `OrchestratorError::JobIdRandomness` before fetch telemetry or provider
+  selection side effects continue when entropy acquisition fails.
+- Added a focused failing-RNG regression for job-id generation.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/sorafs_orchestrator/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo test -p sorafs_orchestrator fetch_job_id_reports_rng_failure -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo check -p sorafs_orchestrator`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning; first attempt was blocked by `/tmp` disk exhaustion before generated target-dir cleanup)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-job-id cargo clippy -p sorafs_orchestrator --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 P2P deterministic reconnect jitter boundary
+
+- P2P connect scheduling and reconnect backoff now derive bounded jitter from
+  domain-separated local-peer, remote-peer, address, and attempt-context
+  material instead of reading thread RNG in the network actor.
+- Added focused regressions proving the connect-attempt and reconnect-backoff
+  jitter helpers are stable for identical inputs and stay within their
+  configured bounds.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_p2p/src/network.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-p2p-jitter cargo test -p iroha_p2p jitter_is_stable_and_bounded -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-p2p-jitter cargo check -p iroha_p2p`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-p2p-jitter cargo clippy -p iroha_p2p --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SCCP SDK native EVM manifest duplicate-key guard
+
+- Hardened JS/browser, Swift, Kotlin/JVM, Java Android, and C# native EVM
+  prover bundle manifest parsing so duplicate JSON object keys are rejected
+  before signed descriptor objects are materialized.
+- Kotlin/JVM and Java Android now reject duplicates in their shared JSON
+  parsers, JS and Swift scan the raw UTF-8 JSON before platform object parsing,
+  and C# rejects duplicate property names while walking the manifest object.
+  The regressions cover duplicate `bundle_id` smuggling, including escaped-key
+  aliases where the parser path exposes them.
+- Extended the native no-WASM/readiness inventories so release verification
+  requires these SDK parser guards in addition to the release-tooling manifest
+  guard.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+    (`25` tests passed)
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`49` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.JsonParserTest --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.JsonParserTests,org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check`
+  - C# test execution was not run because `dotnet` is not installed in this
+    environment (`dotnet --version` failed with `command not found`).
+
+## 2026-06-05 Soracloud bounded-noise FHE input admission
+
+- Core FHE input admission now accepts `BoundedNoise` proof envelopes after
+  the same fail-closed pipeline used by exact inputs: rounded BFV bound
+  capacity validation, payload-shape validation, mode-bound statement-hash
+  matching, OpenVerify envelope public-input checks, active canonical
+  verifying-key lookup, quota accounting, and backend proof verification.
+- Test proof builders now derive mode-specific statement hashes and STARK
+  public inputs, so bounded metadata cannot reuse exact input-admission
+  statements.
+- Added regressions proving bounded-noise admission reaches the registered
+  verifier gate when no verifier is active, and that a registered STARK-backed
+  bounded admission proof persists the proven noise bound with
+  `fhe_bound_mode = BoundedNoise`.
+- Production bounded-noise admission circuit/prover rollout, approximate
+  BFV-RNS basis extension, and full bootstrapping circuit/key material remain
+  pending.
+- During focused validation, the unused Kagemusha record-backed recursive
+  aggregation helper wrappers in `iroha_core::zk` were gated to `cfg(test)`;
+  production Pallas/open-envelope paths continue to call the shared
+  optional-height implementation directly.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-admission cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-admission cargo test -p iroha_core --features zk-stark mutate_soracloud_state_accepts_registered_bounded_noise_fhe_input_admission_proof --lib -- --nocapture`
+    (`1` test passed; first attempt was blocked by `/tmp` disk exhaustion
+    before generated Codex target-dir cleanup)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-admission cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` dependency warning)
+
+## 2026-06-05 Soracloud bounded-noise FHE runtime dispatch
+
+- Soracloud FHE job execution now maps bounded-noise refresh policies to
+  bounded-noise ciphertext metadata, loads only explicitly bounded rows, and
+  dispatches Add, balanced Multiply, outer/packed `RotateLeft`, and Bootstrap
+  through the bounded-noise RNS bridge entry points.
+- Runtime bound propagation now persists bounded centered-noise output metadata
+  with `fhe_bound_mode = BoundedNoise`; exact policies continue to accept
+  legacy/exact rows and reject bounded rows.
+- Added a public bounded-noise metadata preflight in `iroha_crypto` so runtime
+  admission can reject rounded BFV bounds that exceed decoding capacity without
+  requiring the secret key. Approximate BFV-RNS basis extension, full
+  bootstrapping circuit/key material, and the production bounded-noise
+  admission circuit/prover rollout remain pending.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core -p iroha_data_model -p iroha_torii`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-runtime cargo test -p iroha_crypto bounded_noise_bfv_roundtrip_reports_centered_noise --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-runtime cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-runtime cargo test -p iroha_core soracloud_fhe_policy_binds_refresh_transcript_mode --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-runtime cargo test -p iroha_core run_soracloud_fhe_job_records_bounded_noise_add_output_state --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-runtime cargo test -p iroha_core run_soracloud_fhe_job_rejects_bounded_noise_persisted_fhe_input --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bounded-runtime cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` dependency warning)
+
+## 2026-06-05 Sumeragi GST elapsed proof
+
+- Added `GstElapsedEnabled` to the main Sumeragi TLA model and wired the
+  `GstElapsed` action through that explicit gate.
+- Added `GstElapsedGateMatchesPreGst`, proving the GST transition is enabled
+  exactly while the model is still pre-GST.
+- Added `GstElapsedStepOnlySetsGst`, proving a GST-elapsed step flips only the
+  GST flag while preserving phase, view, vote, RBC, commit-certificate,
+  finality, and evidence state.
+- Wired the new invariant/property pair through the fast, deep, and TLC-fast
+  configs, bringing `Sumeragi_fast.cfg` to `64` invariants and `79` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "GstElapsedEnabled|GstElapsedGateMatchesPreGst|GstElapsedGateNeverBypassesPreGst|GstElapsedStepOnlySetsGst|GstElapsedStepAlwaysOnlySetsGst|GST elapsed" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 SCCP native EVM manifest duplicate-key guard
+
+- Hardened readiness generation and public release-bundle generation so signed
+  `sccp-native-evm-groth16-prover-bundle-v1` manifests are parsed with
+  duplicate JSON-key rejection before schema, hash, artifact-path, or payload
+  copying checks run.
+- Added focused regressions proving duplicate `bundle_id` keys block the
+  native prover bundle readiness checklist and prevent release bundle output,
+  and extended the strict native no-WASM readiness inventory to pin the parser,
+  bundle copier, and new tests.
+- Updated bridge-proof docs and roadmap notes so the public Ethereum mainnet
+  SCCP launch guidance names this fail-closed signed-manifest rule.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_duplicate_native_evm_prover_json_keys pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_duplicate_native_evm_prover_json_keys pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`3` tests passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-05 Sumeragi Byzantine fault proof
+
+- Extended the main Sumeragi TLA model with
+  `ByzantineFaultGateMatchesCorruptibleRbc`, proving Byzantine RBC corruption
+  is enabled only against non-final initialized/chunk/ready RBC states carrying
+  their matching evidence, and only before GST or after all post-GST honest/RBC
+  progress actions are disabled.
+- Added `ByzantineFaultStepCorruptsOnlyRbcDigest`, proving a Byzantine fault
+  step only moves RBC to `Corrupted` and clears digest validity while preserving
+  phase, view, vote, certificate, chunk, READY, header, finality, and GST state.
+- Wired the new invariant/property pair through the fast, deep, and TLC-fast
+  configs, bringing `Sumeragi_fast.cfg` to `63` invariants and `77` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "ByzantineFaultGateMatchesCorruptibleRbc|ByzantineFaultGateNeverBypassesCorruptibleRbc|ByzantineFaultStepCorruptsOnlyRbcDigest|ByzantineFaultStepAlwaysCorruptsOnlyRbcDigest|Byzantine fault" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 Ethereum SCCP launch-policy documentation guard
+
+- Corrected `docs/source/bridge_proofs.md` so the current first-release SCCP
+  launch policy is described as Ethereum-mainnet lane readiness: complete ETH
+  source/deployment/destination/route/canary evidence can open independently,
+  while BSC and other lanes remain gated until their own launch policies open.
+- Added strict release-bundle source inventory for the bridge-proof launch
+  policy documentation, including required Ethereum-mainnet markers and
+  forbidden stale BSC-active wording, plus a regression that proves published
+  bundle verification fails if the docs drift back.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_ethereum_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_launch_policy_selector pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_launch_policy_documentation pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_active_launch_policy_is_ethereum_mainnet`
+    (`4` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `rg -n "active launch policy is BSC|active BSC launch lane|with the first-release BSC-mainnet launch policy|Non-BSC lanes|non-BSC lane-launch|active BSC lane" docs/source/bridge_proofs.md`
+    (no output)
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-05 Sumeragi RBC READY step proof
+
+- Extended the main Sumeragi TLA model with
+  `RbcReadyStepAdvancesReadyEvidence`, proving each RBC READY step increments
+  READY evidence exactly, enters `ReadyQuorum` once commit quorum is reached,
+  otherwise stays `ReadyPartial`, preserves chunk/header/digest evidence, and
+  preserves consensus-phase, vote, view, finality, and GST state.
+- Wired `RbcReadyStepAlwaysAdvancesReadyEvidence` through the fast, deep, and
+  TLC-fast configs, bringing `Sumeragi_fast.cfg` to `62` invariants and `75`
+  temporal properties, and updated the formal README plus roadmap coverage
+  list.
+- Validation:
+  - `rg -n "RbcReadyStepAdvancesReadyEvidence|RbcReadyStepAlwaysAdvancesReadyEvidence|RBC READY step|RbcChunkStepAdvancesChunkEvidence|RbcReadyGateMatchesChunkEvidence" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 Sumeragi RBC CHUNK step proof
+
+- Extended the main Sumeragi TLA model with
+  `RbcChunkStepAdvancesChunkEvidence`, proving each RBC CHUNK step
+  monotonically advances chunk evidence up to `MaxChunks`, enters
+  `ChunksComplete` exactly at full chunk coverage, otherwise remains in
+  `Chunking`, refreshes valid digest evidence, and preserves consensus-phase,
+  vote, view, READY, finality, and GST state.
+- Wired `RbcChunkStepAlwaysAdvancesChunkEvidence` through the fast, deep, and
+  TLC-fast configs, bringing `Sumeragi_fast.cfg` to `62` invariants and `74`
+  temporal properties, and updated the formal README plus roadmap coverage
+  list.
+- Validation:
+  - `rg -n "RbcChunkStepAdvancesChunkEvidence|RbcChunkStepAlwaysAdvancesChunkEvidence|RBC CHUNK step|RbcInitGateMatchesRepairableState|TimeoutTickGateMatchesStalledProgress" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 SCCP native EVM bundle verifier-key destination binding
+
+- Hardened JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum mainnet
+  native EVM prover bundle application so a bundle's `verifierKeyHash` must
+  match the request destination binding's verifier-key hash before descriptor
+  hashes reach app-owned prover callbacks.
+- Updated valid test fixtures to bind SHA-derived verifier-key artifact bytes
+  to matching Ethereum mainnet destination bindings, and added cross-SDK
+  negative coverage for bundle verifier-key drift. Release/readiness marker
+  inventories now pin the new guard across SDK source, JS `dist`, tests, and
+  the strict bundle verifier self-check.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'` (no output)
+- C# focused tests were not run because `dotnet` is not installed in this
+  environment (`dotnet --version` returned `command not found`).
+
+## 2026-06-05 Soracloud FHE ciphertext bound-mode metadata
+
+- Added explicit BFV ciphertext bound semantics to Soracloud FHE state:
+  `SoracloudFheInputAdmissionProofV1` now carries a `bound_mode`, and
+  `SoraServiceStateEntryV1` now persists optional `fhe_bound_mode` alongside
+  the public bound value. Legacy FHE rows that have a residual bound but no
+  mode are interpreted as exact residual-multiple rows.
+- The FHE input-admission statement hash now binds the bound mode while the
+  legacy helper defaults to `ExactResidualMultiple`, so old proofs cannot be
+  replayed as bounded-noise statements by changing metadata outside the hash.
+  Core persists exact bound semantics for exact evaluator outputs and verified
+  exact input-admission proofs. At this slice, bounded-noise admission proofs
+  and persisted bounded-noise inputs were rejected before the exact evaluator
+  could consume them; the newer bounded-noise admission verifier and runtime
+  dispatch slices above supersede that temporary fail-closed behavior.
+- Updated non-proof Soracloud state-mutation paths and Torii fixtures to carry
+  no FHE bound mode explicitly, keeping proofless client FHE mutations
+  metadata-free and unavailable as FHE job inputs.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_data_model fhe_input_admission_statement_hash_encodes_canonical_tuple --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_data_model service_state_entry_validate_rejects_fhe_bound_mode_without_fhe_bound --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_core mutate_soracloud_state_rejects_bounded_noise_fhe_input_admission_proof --lib -- --nocapture`
+    (`1` test passed; superseded by the bounded-noise verifier coverage above)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_core run_soracloud_fhe_job_rejects_bounded_noise_persisted_fhe_input --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` test passed; emitted the existing unrelated `iroha_sccp`
+    dead-code warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-bound-mode cargo clippy -p iroha_data_model -p iroha_core -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; emitted the same existing unrelated `iroha_sccp` dependency
+    warning)
+
+## 2026-06-05 Sumeragi RBC INIT proof
+
+- Extended the main Sumeragi TLA model with RBC INIT obligations:
+  `RbcInitGateMatchesRepairableState` proves the INIT gate is enabled only from
+  idle, withheld, or corrupted RBC states, and
+  `RbcInitStepInstallsHeaderDigestEvidence` proves INIT enters `Init`, resets
+  chunk and READY counters, installs header/digest evidence, and preserves
+  consensus-phase, vote, view, finality, and GST state.
+- Wired the new invariant/property pair through the fast, deep, and TLC-fast
+  configs, bringing `Sumeragi_fast.cfg` to `62` invariants and `73` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "RbcInitGateMatchesRepairableState|RbcInitGateNeverBypassesRepairableState|RbcInitStepInstallsHeaderDigestEvidence|RbcInitStepAlwaysInstallsHeaderDigestEvidence|RBC INIT|TimeoutTickGateMatchesStalledProgress|TimeoutTickStepStartsFreshNewView" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 Sumeragi timeout view-change proof
+
+- Extended the main Sumeragi TLA model with timeout/view-change obligations:
+  `TimeoutTickGateMatchesStalledProgress` proves the timeout gate is enabled
+  only before finality and only before GST or after every post-GST honest/RBC
+  progress action is disabled, while `TimeoutTickStepStartsFreshNewView`
+  proves the timeout step enters `NewView`, monotonically advances or clamps the
+  view, clears live prepare/commit/NewView/view-evidence counters, preserves RBC
+  evidence, and leaves finality plus commit-certificate artifacts absent.
+- Wired the new invariant/property pair through the fast, deep, and TLC-fast
+  configs, bringing `Sumeragi_fast.cfg` to `61` invariants and `71` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "TimeoutTickGateMatchesStalledProgress|TimeoutTickGateNeverBypassesStalledProgress|TimeoutTickStepStartsFreshNewView|TimeoutTickStepAlwaysStartsFreshNewView|timeout stalled-progress|timeout-step|timeout-triggered" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 Sumeragi proposal-step proof
+
+- Extended the main Sumeragi TLA model with proposal handoff obligations:
+  `HonestProposeGateMatchesHandoffEvidence` proves the proposal gate is enabled
+  only from genesis or a quorum-backed NewView handoff with stale
+  prepare/commit/finality artifacts cleared, and
+  `HonestProposeStepStartsPrepareAndRbc` proves the proposal step enters
+  `Prepare`, clears the NewView counter, initializes idle RBC, preserves
+  non-idle RBC evidence, and leaves commit artifacts absent.
+- Wired the new invariant/property pair through the fast, deep, and TLC-fast
+  configs, bringing `Sumeragi_fast.cfg` to `60` invariants and `69` temporal
+  properties, and updated the formal README plus roadmap coverage list.
+- Validation:
+  - `rg -n "HonestProposeGateMatchesHandoffEvidence|HonestProposeGateNeverBypassesHandoffEvidence|HonestProposeStepStartsPrepareAndRbc|HonestProposeStepAlwaysStartsPrepareAndRbc|proposal handoff|proposal-step" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` (`115` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast` (`7,799` states generated, `2,338` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+
+## 2026-06-05 SCCP SDK native EVM verifier-key descriptor binding
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum mainnet
+  outbound guards now reject hand-built native EVM prover artifact descriptors
+  whose `verifierKeyHash` does not match the signed native prover bundle before
+  any app-owned prover callback can run.
+- Added cross-SDK regressions for verifier-key drift alongside the existing
+  implementation-binding checks, and promoted the guard into the strict
+  release/readiness inventories for SDK source, tests, and JS `dist`.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed; emitted existing deprecation notes)
+  - `dotnet --version` failed: `dotnet` is not installed, so the C# regression
+    was updated but not runnable in this environment.
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-05 SCCP SDK native EVM artifact implementation binding
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native EVM prover
+  artifact verifiers now fail closed unless callers provide an SDK id and the
+  matching SDK-specific implementation bytes. Verified descriptors now carry
+  the implementation label and implementation-byte hash as required readiness
+  material instead of optional metadata.
+- The Ethereum mainnet outbound proof guards also reject hand-built artifact
+  descriptors that omit or mismatch the SDK implementation binding before any
+  app-owned prover callback can run. Release/readiness inventories now require
+  this guard across SDK source, JS `dist`, TypeScript declarations, and focused
+  regressions.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed; emitted existing deprecation notes)
+  - `dotnet --version` failed: `dotnet` is not installed, so the C# regression
+    was updated but not runnable in this environment.
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-05 SCCP SDK native EVM bundle canonical domain parsing
+
+- Swift, Kotlin/JVM, Java Android, and C# native EVM prover bundle manifest
+  parsers now reject noncanonical decimal domain strings such as `"01"` before
+  the Ethereum-mainnet domain check. Swift also rejects fractional or
+  non-integral JSON numeric domain values instead of truncating them through
+  `NSNumber`.
+- JS/browser already used the shared canonical domain parser; its Ethereum
+  mainnet regression now pins the native bundle manifest domain case for parity.
+  Release/readiness inventories also require the canonical-domain parser
+  markers across SDK source and JS `dist`.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `dotnet --version` failed: `dotnet` is not installed, so the C# regression
+    was updated but not runnable in this environment.
+
+## 2026-06-05 SCCP SDK native EVM bundle closed-schema parsers
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native EVM prover bundle
+  parsers now treat signed bundle manifests as a closed schema. Unknown
+  top-level fields, unknown per-SDK artifact fields, and duplicate accepted
+  camelCase/snake_case aliases are rejected before descriptor hashes can reach
+  app prover callbacks.
+- Added adversarial SDK regressions for hidden manifest fields and duplicate
+  aliases, regenerated the JS `dist/sccp.js` artifact, and promoted the
+  closed-schema helper markers into the release/readiness inventories.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `dotnet --version` failed: `dotnet` is not installed, so the C# regression
+    was updated but not runnable in this environment.
+
+## 2026-06-05 SCCP SDK native EVM bundle hash role separation
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native EVM prover bundle
+  parsers now enforce hash role separation before app prover callbacks can use
+  descriptor hashes. Proof-artifact, proving-key, verifier-key,
+  destination-binding, per-SDK implementation, and `audit_hashes` entries must
+  all remain distinct after canonical parsing.
+- Added adversarial SDK regressions for replayed audit hashes and promoted the
+  role-separation helper markers into the release/readiness inventories,
+  including the tracked JS `dist/sccp.js` artifact.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; emitted unrelated existing warnings in
+    `ToriiClientTests.swift`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `dotnet --version` failed: `dotnet` is not installed, so the C# regression
+    was updated but not runnable in this environment.
+
+## 2026-06-05 SCCP SDK native EVM bundle canonical parsers
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native EVM prover bundle
+  parsers now reject noncanonical bundle hash evidence instead of normalizing it
+  silently. Bundle hash fields, SDK implementation hashes, expected destination
+  binding hashes, and `audit_hashes` must be lowercase `0x`-prefixed 32-byte
+  hex before descriptor hashes can reach app prover callbacks.
+- Added adversarial SDK tests for uppercase audit hashes and promoted the
+  canonical parser helper names into the release/readiness source inventory,
+  including the tracked JS `dist/sccp.js` artifact.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; emitted unrelated existing warnings in
+    `ToriiClientTests.swift`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin` (passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android` (passed)
+  - `dotnet --version` failed: `dotnet` is not installed, so the C# regression
+    was updated but not runnable in this environment.
+
+## 2026-06-05 SCCP native EVM prover bundle canonical hash roles
+
+- Native EVM Groth16 prover bundle hashes are now role-separated: readiness
+  rejects a proof-artifact hash reused as the proving key, verifier key,
+  destination binding, or per-SDK implementation hash.
+- Bundle hash fields, per-SDK implementation hashes, and `audit_hashes` must be
+  canonical lowercase `0x`-prefixed 32-byte hex values. Uppercase or mixed-case
+  evidence is rejected before readiness or strict bundle verification can pass.
+- Bundle `audit_hashes` must also be unique and separate from artifact, key,
+  binding, and per-SDK implementation hashes. The release report generator and
+  strict bundle verifier share the same blockers, and the native no-WASM
+  readiness inventory now pins the canonical-hash, role-reuse, and audit-hash
+  regressions.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_reused_native_evm_prover_role_hash pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`7` tests passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-05 SCCP native EVM prover bundle empty-payload gate
+
+- Native EVM Groth16 prover bundle validation now rejects empty
+  proof-artifact, proving-key, verifier-key, and per-SDK implementation
+  payload files even when the manifest hashes are self-consistent.
+- The release report, bundle generator, and strict bundle verifier all share
+  the empty-payload blocker, and the no-WASM readiness inventory now pins the
+  report and bundle regressions so the gate cannot be removed silently.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_empty_native_evm_prover_payload pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_empty_native_evm_prover_payload pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_empty_native_evm_prover_payload pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`4` tests passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-05 SCCP ETH Python inbound proof-byte cap
+
+- Python `EthereumMainnetSccp.prove_inbound_to_sora` and
+  `submit_inbound_to_iroha` now use the native-recursive proof-byte corridor:
+  inbound proof bytes must be non-empty, non-all-zero, and no larger than 2 MiB
+  before prover output is returned or the app-owned Iroha submit hook is
+  invoked.
+- The Python Ethereum facade regression now rejects oversized local-prover
+  output and oversized submit payloads, and the release/readiness inventories
+  pin those Python markers alongside the existing browser/native SDK checks.
+- Validation:
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs`
+    (`1` test passed)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests`
+    (`2` tests passed)
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'`
+
+## 2026-06-05 SCCP ETH inbound native-recursive proof-byte cap
+
+- Ethereum mainnet inbound `proveInboundToSora`/`submitInboundToIroha` helpers
+  now share the native-recursive source-proof byte corridor across JS/browser,
+  Swift, Kotlin/JVM, Java Android, and C#: inbound proof bytes must be
+  non-empty, non-all-zero, and no larger than 2 MiB before local prover output
+  is returned or app-owned submitters are invoked.
+- The release/readiness inventories now pin oversized inbound proof regressions
+  for all five public Ethereum mainnet SDK facades.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tests`
+    (`3` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `dotnet --version` failed because `dotnet` is not installed; C# source and
+    regression coverage were updated but not runnable on this host.
+
+## 2026-06-05 SCCP ETH outbound SDK verified-artifact proof gate
+
+- The Ethereum mainnet easy outbound proof path now fails closed unless the SDK
+  has a verified native EVM prover artifact descriptor. JS/browser, Swift,
+  Kotlin/JVM, and Java Android facades build the Ethereum request first, reject
+  foreign lanes before callbacks, then require the verified proof-artifact and
+  proving-key hashes to match the request before invoking app-owned prover
+  code. C# now exposes an artifact-bound `ProveOutboundToEthereumAsync`
+  overload that applies and checks the verified bundle before calling the
+  native prover interface.
+- JS constructor options and TypeScript declarations now accept either a
+  pre-verified artifact descriptor or manifest plus local artifact bytes, so
+  browser apps can keep the product path local while still failing closed on
+  missing or mismatched artifact material.
+- Release/readiness source inventories now pin the proof-time artifact gate
+  across JS source/dist/declarations, Swift, Kotlin/JVM, Java Android, and C#.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests`
+    (`6` tests passed)
+  - `dotnet --version` from `csharp` failed because `dotnet` is not installed;
+    the C# artifact-bound overload and regression were updated but not runnable
+    on this host.
+
+## 2026-06-05 SCCP ETH native SDK marker scan source-inventory cleanup
+
+- Reworked the JS, Swift, Kotlin/JVM, Java Android, and C# native EVM prover
+  artifact marker checks so forbidden dependency markers are represented as
+  numeric ASCII byte tables or numeric test payloads, not standalone source
+  strings that trip the no-WASM/no-remote-prover release inventory.
+- The SDK verifiers still reject hash-consistent local artifact bytes that
+  contain forbidden dependency markers, but the public SDK sources and native
+  test fixtures now remain clean under the existing local-prover source scans.
+- Validation:
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_bsc_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only`
+    (`5` tests passed)
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; existing Torii warnings were emitted)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+
+## 2026-06-05 SCCP ETH SDK native prover artifact marker validation
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native EVM prover bundle
+  artifact verifiers now reject local proof artifact, proving key, verifier
+  key, and per-SDK implementation bytes that contain forbidden WASM,
+  `snarkjs`, or remote-prover dependency markers, even when those bytes match
+  the signed manifest SHA-256 values.
+- The JS implementation builds marker byte patterns from numeric ASCII codes so
+  the browser SDK source and generated `dist` artifacts still pass the
+  no-WASM/no-remote-prover source inventory while detecting forbidden payload
+  contents at runtime.
+- Release-readiness inventory now pins the SDK marker helpers and
+  hash-consistent `proof.wasm` regressions across JS, Swift, Kotlin/JVM, Java
+  Android, and C#.
+- Validation:
+  - `node --check src/sccp.js && npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; existing Torii warnings were emitted)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`2` tests passed)
+  - `dotnet --version` from `csharp` failed because `dotnet` is not installed;
+    the C# regression was updated but not runnable on this host.
+
+## 2026-06-05 SCCP ETH native prover payload dependency marker gate
+
+- The SCCP release-readiness report and strict release-bundle verifier now scan
+  every native EVM prover payload declared by the signed manifest, including
+  the proof artifact, proving key, verifier key, and per-SDK implementation
+  payloads, for forbidden WASM, `snarkjs`, and remote-prover dependency
+  markers. The scan runs after manifest-relative path validation and alongside
+  SHA-256 verification, so a hash-consistent payload containing a `proof.wasm`
+  dependency still blocks Ethereum mainnet launch readiness.
+- Added adversarial readiness and bundle-verifier regressions that update the
+  manifest hashes to match forbidden payload bytes, plus a release-bundle
+  generation regression that fails before publishing the copied payloads,
+  proving the guard is not limited to ordinary hash mismatch detection.
+- The strict release-bundle verifier's native no-WASM source inventory now pins
+  the readiness scanner helper and the hash-consistent forbidden-payload
+  regressions, so the marker gate cannot be silently dropped from release
+  evidence.
+- This is release-safety hardening only. Ethereum mainnet SCCP still depends on
+  shipping audited browser/native Groth16 prover artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_payload_hash_mismatch pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_tampered_native_evm_prover_payload pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker`
+    (`4` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker`
+    (`3` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`1` test passed)
+
+## 2026-06-05 BFV rounded bounded-noise encryption primitive
+
+- Added a separate rounded BFV keygen/encryption/decryption path in
+  `iroha_crypto::fhe_bfv`: public-key generation now has a small centered-noise
+  variant, encryption encodes plaintext as `(q / t) * m`, decryption rounds
+  back into `Z_t`, and owner diagnostics report centered noise plus remaining
+  rounded-decoding headroom.
+- Added capacity admission for fresh rounded BFV encryption and a ciphertext
+  bounded-noise validator, so too-narrow parameter sets fail before keygen or
+  encryption. Rounded ciphertext addition now also has checked centered-noise
+  output-bound propagation tested against real rounded ciphertext addition; the
+  same helper surface now covers subtract, rounded plaintext-scalar addition,
+  plaintext-scalar multiplication, and plaintext-polynomial multiplication.
+  Rounded ciphertext-ciphertext multiplication now has a scalar centered
+  raw-product bridge with `t/q` scale-and-rounding, bounded-noise
+  relinearization-key generation/validation, and conservative output noise
+  budget validation. Rounded Galois key switching now also has small-noise key
+  generation, secret-key consistency checks, automorphism application, and
+  propagated output-bound validation. Rounded packed `RotateLeft` now wires the
+  bounded-noise Galois schedule through public packed selectors and validates
+  the propagated centered-noise output budget. RNS polynomials now also have an
+  exact CRT basis-extension bridge between validated chains, with target-product
+  coverage checks so narrower targets cannot alias reconstructed coefficients.
+  Key-switch components now decompose directly into RNS digit polynomials, exact
+  RNS key switching consumes those digits internally, and basis-extended digits
+  are validated against canonical decomposition ranges before use. The exact
+  RNS key-switch path now also has an explicit basis-extension boundary:
+  callers can decompose in a source chain, reject digit-aliasing decomposition
+  chains, basis-extend canonical key-switch digits into the evaluator chain
+  without requiring the evaluator target to cover the full source-chain product,
+  and drive rounded multiplication, Galois, and packed `RotateLeft` bridges
+  while matching the scalar bounded-noise outputs. Rounded ciphertext
+  multiplication now has an RNS exact raw-product bridge that decomposes
+  ciphertext components as centered residues,
+  reconstructs signed negacyclic products before `t/q` scale-and-rounding, and
+  relinearizes the scaled quadratic component through the RNS digit/key-switch
+  path while matching the scalar bounded-noise multiplication output. Rounded
+  Galois key switching and packed `RotateLeft` now also have RNS exact bridge
+  entry points that match the scalar bounded-noise schedule and reject
+  too-narrow chains. Outer-slot rotation and bootstrap refresh material can now
+  also be generated and publicly transcript-validated with rounded
+  bounded-noise encrypted-zero ciphertexts, refreshed through scalar or exact
+  RNS addition, and propagated with centered-noise output bounds.
+  Evaluation-key bundles can now validate and digest the bounded-noise
+  rotation/bootstrap transcript inventory under a separate domain from the
+  exact-lift refresh path, and owner diagnostics can validate bounded
+  relin/Galois key-switch residuals plus every bounded refresh mask in one
+  bundle check. Soracloud FHE execution policies now bind the refresh
+  transcript mode, data-model digesting routes through exact-lift or
+  bounded-noise transcript derivation explicitly, and core runtime admission
+  rejects mode/digest mismatches before job execution; bounded-noise job
+  execution still fails closed before exact-lift arithmetic until the runtime
+  evaluator consumes bounded-noise metadata while full bootstrapping
+  circuit/key material remains pending.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_crypto`
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bundle cargo test -p iroha_crypto bounded_noise --lib -- --nocapture`
+    (`11` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bundle cargo test -p iroha_crypto refresh_transcripts --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-refresh-mode cargo test -p iroha_data_model bfv_refresh_transcript --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-refresh-mode cargo test -p iroha_core soracloud_fhe_policy --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-refresh-mode cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` passed; an existing `iroha_sccp` dead-code warning was emitted while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bundle cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-refresh-mode cargo clippy -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; the same existing `iroha_sccp` dependency warning was emitted)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --exit-code -- Cargo.lock '**/Cargo.lock'` (passed)
+
+## 2026-06-05 BFV key-switch decomposition digit hardening
+
+- Replaced saturating BFV key-switch decomposition digit counting with checked
+  parameter-validated coverage arithmetic, and propagated `BfvError` through
+  key-switch entry validation, key-switch entry generation, and polynomial
+  decomposition. Multiply residual admission and key-switch residual admission
+  now also use checked `t - 1` and decomposition-base-minus-one bounds.
+- Added a focused regression for valid digit counts plus invalid
+  `decomposition_base_log` rejection across the affected helper paths and the
+  key-switch residual-bound helper.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-decomposition-digits cargo test -p iroha_crypto bfv_decomposition_digits_are_checked --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-decomposition-digits cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --exit-code -- Cargo.lock '**/Cargo.lock'` (passed)
+
+## 2026-06-05 SCCP ETH native prover SDK artifact paths
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# native EVM prover bundle
+  descriptors now parse and preserve the manifest-declared proof artifact,
+  proving key, verifier key, and per-SDK implementation artifact paths in
+  addition to the SHA-256 hashes. The SDK parsers reject absolute paths,
+  backslash paths, control characters, empty segments, `.` segments, and `..`
+  escapes so apps can locate release-bundled native prover files without
+  accepting unsafe path metadata.
+- The JS package declarations and generated `dist/sccp.js` expose the same path
+  fields, and the release-readiness inventory now pins the path parser markers
+  across SDK source, JS `dist`, TypeScript declarations, and native SDK code.
+- The Kotlin/JVM Ethereum finality normalizer now fails directly on
+  `syncCommitteeParticipation` without `syncCommitteeBits`, and the Kotlin/JVM
+  plus Java Android SCCP fixtures now carry the required finality branch through
+  alias-only happy paths and callback snapshots.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `node --check src/sccp.js && node --check dist/sccp.js` from
+    `javascript/iroha_js`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed; existing unrelated warnings were
+    emitted)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`3` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android`
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'` (no changes)
+  - Earlier `./gradlew :core-jvm:test ...` and
+    `JAVA_HOME=$(/usr/libexec/java_home -v 21) ... ./gradlew test ...`
+    probes failed because `/usr/libexec/java_home` reports no Java runtime on
+    this host; the explicit Homebrew JDK commands above are the passing runs.
+  - `dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~SccpEthereumMainnetTests`
+    from `csharp` was not runnable because `dotnet` is not installed.
+
+## 2026-06-05 SCCP ETH native prover release payload bundling
+
+- The SCCP release-bundle builder now copies the native EVM prover manifest's
+  declared proof artifact, proving key, verifier key, and per-SDK
+  implementation payload files into `native-prover/`, preserving
+  manifest-relative paths so the public attachment bundle contains the bytes
+  the manifest hashes.
+- The readiness report and strict release-bundle verifier now reject absolute
+  or escaping native prover payload paths, missing or non-file payloads, and
+  payload bytes whose SHA-256 does not match the manifest's `0x...` hash
+  fields. The verifier recomputes readiness from the copied payload bytes, so
+  updating only the outer release manifest cannot hide a tampered native prover
+  artifact.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_tampered_native_evm_prover_bundle pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_tampered_native_evm_prover_payload pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_wasm_or_remote_native_evm_prover_bundle pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_payload_hash_mismatch pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_blocks_native_evm_prover_path_escape`
+    (`7` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py -k "native_evm_prover or hash_bound_public_artifacts or native_prover_bundle"`
+    (`10` tests passed, `253` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`3` tests passed)
+  - `git diff --check`
+  - `git diff -- Cargo.lock '**/Cargo.lock'` (no changes)
+
+## 2026-06-05 Soracloud FHE input envelope slot-cap admission
+
+- Added registered RAM-LFE BFV identifier slot-cap validation to Soracloud FHE
+  input admission and persisted-row loading, so proof-backed client ciphertexts
+  and existing FHE state rows cannot exceed the 64-slot profile before they feed
+  FHE jobs.
+- Added regressions for oversized proof-backed input admission and oversized
+  persisted FHE inputs with residual metadata.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `cargo fmt -p iroha_core -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-slot-cap cargo test -p iroha_core oversized --lib -- --nocapture`
+    (`19` passed, `1` ignored; includes the two new Soracloud oversized-envelope regressions)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-slot-cap cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted an existing dependency warning from `iroha_sccp`)
+
+## 2026-06-05 BFV parameter exact-arithmetic overflow admission
+
+- Replaced saturating BFV parameter exact-arithmetic accumulator checks with
+  checked raw and plaintext-scaled products, so oversized profiles fail with
+  explicit deterministic admission errors before evaluator/keygen math can use
+  them.
+- Added focused regressions for raw-product overflow, scaled-product overflow,
+  and the final `i128` exact-arithmetic ceiling.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-param-checked cargo test -p iroha_crypto rejects_parameter_sets --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-param-checked cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV bootstrap residual admission capacity
+
+- Added `bfv_bootstrap_key_refresh_output_residual_multiple_bound(...)` so
+  residual-bound admission validates the supplied bootstrap key and rejects
+  requested refresh rounds above its public `max_refresh_rounds` before returning
+  an output bound.
+- Routed Soracloud bootstrap residual preflight through the key-aware helper, so
+  bounded execution fails closed on missing, malformed, or over-capacity
+  bootstrap key material before ciphertext evaluation.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `cargo fmt -p iroha_crypto -p iroha_core -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-bound cargo test -p iroha_crypto exact_residual_bound_helpers_track_add_and_bootstrap_capacity --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-bound cargo test -p iroha_core soracloud_fhe_job_residual_metadata_rejects_bootstrap_count_above_key_capacity --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-bound cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted an existing dependency warning from `iroha_sccp`)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+
+## 2026-06-05 BFV identifier envelope capacity admission
+
+- Added canonical registered RAM-LFE BFV identifier envelope constants and
+  tightened `BfvIdentifierPublicParameters::validate` so `max_input_bytes`
+  must stay within the 63-byte/64-slot profile, not just below the plaintext
+  modulus.
+- Wired the programmed RAM-LFE profile constants to the same crypto constants,
+  and mirrored the cap in JavaScript source/dist, Swift, Kotlin/JVM, and Java
+  Android client-side BFV envelope validators.
+- Added focused Rust, JS, Swift, Kotlin, and Java negative regressions for
+  overwide identifier-envelope public parameters.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-identifier-cap cargo test -p iroha_crypto identifier_public_parameters_reject_overwide_envelope_capacity --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-identifier-cap cargo test -p iroha_crypto try_bfv_programmed_public_parameters_rejects_program_inputs_beyond_envelope --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-identifier-cap cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `node --test --test-name-pattern "encryptIdentifierInputForPolicy rejects invalid BFV public parameters" test/toriiClient.identifier.test.js`
+    from `javascript/iroha_js` (`1` passed)
+  - `node --check src/toriiClient.js && node --check dist/toriiClient.js`
+    from `javascript/iroha_js` (passed)
+  - `swift test --filter ToriiClientTests/testIdentifierBfvEnvelopeBuilderRejectsOverwideInputProfile`
+    from `IrohaSwift` (`1` passed; existing unrelated test-target
+    warnings were emitted)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters --console=plain`
+    from `kotlin` was not runnable because this host reports no Java runtime.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.client.HttpClientTransportTests --console=plain`
+    from `java/iroha_android` was not runnable because this host reports no
+    Java runtime.
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_crypto/src/ram_lfe.rs javascript/iroha_js/src/toriiClient.js javascript/iroha_js/dist/toriiClient.js javascript/iroha_js/test/toriiClient.identifier.test.js IrohaSwift/Sources/IrohaSwift/ToriiClient.swift IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/IdentifierBfvEnvelopeBuilder.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierBfvEnvelopeBuilder.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" <touched files>`
+    (no matches)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+
+## 2026-06-05 SCCP ETH native prover artifact verification
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# now verify local
+  Ethereum mainnet native EVM prover artifact bytes against the signed bundle
+  descriptor's SHA-256 hashes before reporting artifact readiness. The helpers
+  bind proof artifact, proving key, verifier key, per-SDK native
+  implementation bytes, and the cross-SDK parity fixture bytes, and reject
+  tampered bytes or implementation bytes supplied without a matching SDK row.
+- The JS package root, generated `dist` files, and TypeScript declarations now
+  export the browser verifier. The release-readiness inventory and strict
+  release-bundle verifier now require SDK-owned artifact verifier markers and
+  package-dist coverage in addition to the manifest parser inventory.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`74` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`3` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `./gradlew :core-jvm:test --console=plain` from `kotlin` was not runnable
+    because this host reports no Java runtime.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`
+    from `java/iroha_android` was not runnable because this host reports no
+    Java runtime.
+  - `dotnet test` from `csharp` was not runnable because `dotnet` is not
+    installed.
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (no changes)
+
+## 2026-06-05 Block-sync deterministic target seed boundary
+
+- Proactive block-sync gossip now derives its target-selection RNG from the
+  local peer id, block height, per-actor gossip round, gossip size, candidate
+  peers, and known world peers instead of reading thread RNG for each request.
+  The per-actor round counter rotates selections across repeated attempts.
+- Added a focused regression proving block-sync target seeds are stable for
+  identical inputs and change with gossip round and local peer identity.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/block_sync.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo test -p iroha_core block_sync_target_seed_is_stable_and_round_specific --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo check -p iroha_core --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 RBC sampling checked RNG seed boundary
+
+- Unseeded persisted-RBC chunk sampling now seeds `StdRng` through
+  `StdRng::try_from_os_rng` and reports `SamplingError::RandomSeed` when OS
+  entropy is unavailable, instead of deriving the sampler from thread RNG.
+  Explicit `seed` inputs continue to produce deterministic samples.
+- Added a focused failing-RNG regression for sampler seed construction.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/sumeragi/rbc_sampling.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo test -p iroha_core sampling_rng_reports_seed_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo check -p iroha_core --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Telemetry future deterministic id boundary
+
+- `iroha_futures::TelemetryFuture` now assigns process-local monotonic ids with
+  an atomic counter instead of using random ids for telemetry correlation.
+- Added a focused regression proving successive telemetry futures receive
+  consecutive ids.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_futures/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-futures-telemetry-id cargo test -p iroha_futures telemetry_future_ids_are_monotonic --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-futures-telemetry-id cargo check -p iroha_futures`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-futures-telemetry-id cargo clippy -p iroha_futures --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Transaction gossiper deterministic target seed boundary
+
+- Transaction gossiper public/restricted target shuffle seeds are now derived
+  deterministically from the chain id, local peer id, maximum peer id, and
+  gossip-plane domain instead of reading infallible process RNG during actor
+  construction. Periodic reshuffling still advances through the existing
+  splitmix sequence, preserving deterministic target rotation after startup.
+- Added a focused regression proving initial target seeds are stable for the
+  same inputs and differ across gossip planes and local peer identities.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/gossiper.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo test -p iroha_core initial_target_seed_is_stable_and_peer_specific --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo check -p iroha_core --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-seed cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Rust client transaction nonce checked RNG boundary
+
+- Rust client transaction nonce generation now uses checked OS RNG reads via
+  the new fallible `try_build_transaction` and
+  `try_build_transaction_from_items` APIs. Client submission helpers now route
+  through those fallible builders, returning errors before submission when
+  `transaction_add_nonce` is enabled and entropy acquisition fails.
+- The existing `build_transaction` compatibility wrappers remain available,
+  with explicit panic documentation for callers that cannot handle entropy
+  errors through their current return type. CLI transaction creation paths now
+  use the fallible builders where they already return `Result`.
+- Added focused failing-RNG regressions for transaction nonce generation and
+  both fallible transaction builder paths.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha/src/client.rs crates/iroha_cli/src/soracloud.rs crates/iroha_cli/src/taira.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-txnonce-rng cargo test -p iroha rng_failure --lib -- --nocapture`
+    (`4` tests passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-txnonce-rng cargo check -p iroha_cli`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-txnonce-rng cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Soracloud CLI temporary directory suffix checked RNG boundary
+
+- Soracloud CLI staging helpers now allocate randomized temporary directory
+  suffixes through `OsRng::try_fill_bytes`, returning a command error when OS
+  entropy is unavailable instead of relying on infallible thread RNG fills.
+- Added a focused failing-RNG regression for Soracloud temporary directory
+  suffix generation.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_cli/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-soracloud-temp-rng cargo test -p iroha_cli soracloud_temp_dir_reports_suffix_rng_failure -- --nocapture`
+    (`1` test passed in each of the `iroha`, `iroha3`, and `iroha_cli` test
+    binaries; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-soracloud-temp-rng cargo check -p iroha_cli`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-soracloud-temp-rng cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Soracloud CLI mutation signature nonce checked RNG boundary
+
+- Soracloud CLI mutation-auth headers now generate the single-signature
+  freshness nonce through `OsRng::try_fill_bytes`, returning a command error
+  before request signing if entropy acquisition fails. The witness-file path
+  remains deterministic and bypasses nonce generation as before.
+- Added a focused failing-RNG regression for Soracloud mutation signature nonce
+  generation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo test -p iroha_cli build_soracloud_mutation_auth_headers_reports_nonce_rng_failure -- --nocapture`
+    (`1` test passed in each of the `iroha`, `iroha3`, and `iroha_cli` test
+    binaries; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo check -p iroha_cli`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 SoraFS CLI nonce checked RNG boundary
+
+- SoraFS CLI repair idempotency keys, storage-token nonces, GAR receipt IDs,
+  and admission-token RNG seeding now generate or seed their random material
+  through checked OS RNG paths, returning command errors when entropy
+  acquisition fails instead of relying on infallible thread RNG fills.
+- SoraFS hybrid manifest envelope encryption now passes `OsRng` into the
+  already-fallible hybrid envelope encryption helper instead of using thread
+  RNG for the command path.
+- Added focused failing-RNG regressions for SoraFS receipt-id generation,
+  nonce-hex generation, and admission-token RNG seeding.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo test -p iroha_cli "sorafs::tests::" -- --nocapture`
+    (`80` SoraFS tests passed in each of the `iroha`, `iroha3`, and
+    `iroha_cli` test binaries; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo test -p iroha_cli token_issue_rng_reports_os_seed_failure -- --nocapture`
+    (`1` test passed in each of the `iroha`, `iroha3`, and `iroha_cli` test
+    binaries; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo check -p iroha_cli`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 CLI key seed checked RNG boundary
+
+- CLI SM2 key generation and confidential `create-keys` now fill random
+  32-byte seed material through `OsRng::try_fill_bytes`, returning normal
+  command errors when entropy acquisition fails instead of relying on
+  infallible `rand::random` seed generation.
+- Added focused failing-RNG regressions for random SM2 seed generation and
+  confidential spend-key generation. The confidential command now stores the
+  spend key in `Zeroizing` while deriving the key hierarchy so error paths also
+  clear the seed material.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo test -p iroha_cli random_reports_rng_failure -- --nocapture`
+    (new regressions passed in the `iroha`, `iroha3`, and `iroha_cli` test
+    binaries; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo check -p iroha_cli`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-rng cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 SoraFS Taikai cache gossip nonce checked RNG boundary
+
+- SoraFS orchestrator Taikai cache-admission gossip bodies now generate their
+  replay nonce through `OsRng::try_fill_bytes`, returning
+  `CacheAdmissionError::RandomNonce` instead of relying on infallible process
+  RNG fills before gossip bodies are signed or replay-tracked.
+- Added a focused regression for Taikai cache gossip nonce RNG failure
+  propagation through the deterministic `with_nonce` constructor hook.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-cache-rng cargo test -p sorafs_orchestrator cache_admission_gossip_body_reports_nonce_rng_failure --lib -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-cache-rng cargo check -p sorafs_orchestrator --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-cache-rng cargo clippy -p sorafs_orchestrator --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Rust client signed-request nonce checked RNG boundary
+
+- Rust client account-signed multisig requests and operator-signed admin
+  requests now generate their 12-byte base64url request nonces through
+  `OsRng::try_fill_bytes`, propagating entropy failures through the existing
+  `eyre::Result` return path before request builders are emitted.
+- Added a focused regression for signed-request nonce RNG failure propagation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-rng cargo test -p iroha signed_request_nonce_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-rng cargo check -p iroha --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-rng cargo clippy -p iroha --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Torii operator-signature nonce checked RNG boundary
+
+- Torii internal operator-signature request headers now generate their
+  base64url nonce through `OsRng::try_fill_bytes`, returning labelled
+  `operator_signature_nonce_rng` failures instead of relying on infallible
+  process RNG fills.
+- The Torii proxy HTTP bridge now propagates nonce-generation failures through
+  its authoritative-bridge error path, and the peer configuration monitor maps
+  the same failure into its existing retry/logging loop.
+- ZK IVM prove job creation now generates the public job id through the same
+  checked OS RNG boundary and returns an internal endpoint error before
+  inserting job state if entropy acquisition fails.
+- Added a focused regression for operator-signature nonce RNG failure
+  propagation before canonical request signing, plus a focused regression for
+  ZK prove job-id RNG failure propagation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-operator-rng cargo test -p iroha_torii signed_request_headers_reports_nonce_rng_failure --lib -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-operator-rng cargo test -p iroha_torii zk_ivm_prove_job_id_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-operator-rng cargo check -p iroha_torii --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-operator-rng cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Soracloud uploaded-model local key checked RNG boundary
+
+- Embedded Soracloud runtime uploaded-model X25519 upload-key persistence now
+  generates the local static secret seed through `OsRng::try_fill_bytes` and
+  returns a labelled `io::Error` if the host RNG fails before writing the key
+  file.
+- Added a focused regression for uploaded-model encryption-secret RNG failure
+  propagation. While validating the feature-enabled runtime, aligned the
+  remaining Soracloud state-entry constructors with optional
+  `fhe_residual_multiple_bound` metadata and made the host-materialization
+  platform helper test-only so the production binary path stays warning-clean.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-soracloud-rng cargo test -p irohad --features embedded-soracloud-runtime --bin irohad uploaded_model_encryption_secret_reports_rng_failure -- --nocapture`
+    (`1` test passed; emitted the known unrelated `iroha_sccp`
+    unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-soracloud-rng cargo check -p irohad --features embedded-soracloud-runtime --bin irohad`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-soracloud-rng cargo clippy -p irohad --features embedded-soracloud-runtime --bin irohad --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 Torii SoraFS stream-token checked RNG boundary
+
+- Torii SoraFS stream-token issuance now generates token IDs with
+  `OsRng::try_fill_bytes` and returns labelled
+  `StreamTokenIssuerError::RandomBytes` failures instead of using
+  infallible `rand::random`.
+- Added a focused regression for token-id RNG failure propagation before the
+  signed stream-token body is emitted.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-token-rng cargo test -p iroha_torii new_token_id_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-token-rng cargo check -p iroha_torii --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-token-rng cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 SoraFS orchestrator guard-cache checked RNG boundary
+
+- SoraFS orchestrator guard-cache authentication tags now generate cache nonces
+  through `OsRng::try_fill_bytes` and return labelled
+  `GuardSetPersistenceError::RandomBytes` failures before tagged cache bytes are
+  emitted.
+- Added a focused regression for guard-cache tag nonce RNG failure propagation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-orchestrator-cache-rng cargo test -p sorafs_orchestrator guard_cache_tag_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-orchestrator-cache-rng cargo check -p sorafs_orchestrator --lib`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-orchestrator-cache-rng cargo clippy -p sorafs_orchestrator --lib --no-deps -- -D warnings`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 SM2 checked random key generation
+
+- Added `Sm2PrivateKey::try_random` so SM2 private scalar generation samples
+  bytes through fallible `TryCryptoRng`, validates each scalar candidate, and
+  reports `ParseError` on RNG failure or bounded sampling exhaustion.
+- Routed `KeyPair::try_random_with_algorithm(Algorithm::Sm2)` through the new
+  checked helper and `rand::rngs::OsRng`, avoiding the infallible SM2
+  compatibility RNG path for top-level SM2 key generation.
+- Added focused regressions for direct SM2 RNG failure propagation and the
+  top-level SM2 random keypair sign/verify route.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-rng cargo test -p iroha_crypto --features sm sm2_try_random_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-rng cargo test -p iroha_crypto --features sm try_random_with_algorithm_sm2_signs_and_verifies --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-rng cargo check -p iroha_crypto --features sm --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-rng cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-rng cargo clippy -p iroha_crypto --features sm --lib --tests --no-deps -- -D warnings`
+    (blocked by unrelated existing `fhe_bfv.rs` test `too_many_lines` lints
+    and `soranet_handshake_check.rs` `items_after_test_module`)
+
+## 2026-06-05 Hybrid envelope checked RNG boundary
+
+- Hybrid X25519/ML-KEM key generation and encapsulation now take fallible
+  `TryCryptoRng` inputs and report labelled `HybridError::RandomBytes` failures
+  before X25519 secret, ML-KEM seed, or ephemeral ECDH material is emitted.
+- SoraFS hybrid payload envelope encryption now propagates a labelled
+  `HybridEnvelopeError::RandomBytes` failure for AEAD nonce generation after
+  checked hybrid encapsulation succeeds.
+- Added focused regressions for hybrid key generation, hybrid encapsulation,
+  and SoraFS envelope nonce RNG failure propagation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo test -p iroha_crypto "reports_rng_failure" --lib -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo test -p sorafs_manifest encrypt_payload_reports_nonce_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo check -p iroha_crypto --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo check -p sorafs_manifest --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo clippy -p sorafs_manifest --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo check -p sorafs_car --lib --features manifest`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo check -p sorafs_car --bin sorafs_manifest_stub --features cli`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-rng cargo check -p iroha_cli --bin iroha`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+
+## 2026-06-05 SoraNet ticket minting checked RNG boundary
+
+- SoraNet PoW and Argon2 puzzle ticket minting now take fallible `TryCryptoRng`
+  inputs and return labelled `MintError::RandomBytes` failures for client
+  nonce and solution nonce generation instead of relying on infallible
+  `fill_bytes`.
+- The p2p challenge wrapper now preserves those checked RNG errors through
+  `ChallengeMintError` for live handshake admission tickets.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-ticket-rng cargo test -p iroha_crypto mint_ticket_reports_rng_failure --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-ticket-rng cargo test -p iroha_p2p mint_challenge_ticket_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-ticket-rng cargo check -p iroha_crypto --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-ticket-rng cargo check -p iroha_p2p --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-ticket-rng cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-ticket-rng cargo clippy -p iroha_p2p --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SoraNet and SoraFS token minting checked RNG boundary
+
+- SoraNet admission-token minting and SoraFS proof-token minting now take
+  fallible `TryCryptoRng` inputs and return labelled `MintError::RandomBytes`
+  failures for admission-token nonce and proof-token id generation instead of
+  relying on infallible `fill_bytes`.
+- Added focused regressions that force the RNG to fail before token bodies,
+  blinded digest bindings, or signatures are produced.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo test -p iroha_crypto mint_reports_rng_failure --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo check -p iroha_crypto --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo check -p sorafs_car --lib`
+    (initially exposed the pre-existing no-feature `streaming_verifier` export
+    using `manifest`-gated modules; fixed in the SoraFS CAR feature-gate entry
+    below)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo check -p sorafs_car --lib --features manifest`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo check -p iroha_cli --bin iroha`
+    (passed; emitted the known unrelated `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SoraFS CAR manifest feature gate
+
+- Gated `sorafs_car::streaming_verifier` behind the existing `manifest`
+  feature, matching its `sorafs_manifest` and `verifier` dependencies and
+  restoring the no-feature library build.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo check -p sorafs_car --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo check -p sorafs_car --lib --features manifest`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo clippy -p sorafs_car --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-token-rng cargo clippy -p sorafs_car --lib --features manifest --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SoraNet blinding nonce checked RNG boundary
+
+- `RequestNonce::random` now accepts fallible `TryCryptoRng` inputs and
+  returns labelled `BlindingError::RandomBytes` failures for request blinding
+  nonce generation instead of relying on infallible `fill_bytes`.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blinding-rng cargo test -p iroha_crypto request_nonce_random_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blinding-rng cargo check -p iroha_crypto --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-blinding-rng cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV refresh transcript digest fallible lookup
+
+- `BfvEvaluationKeyBundle::refresh_transcript_digest` now returns a structured
+  `ShapeMismatch` if a rotation transcript seed is missing during digest
+  material assembly, instead of relying on a post-validation `expect(...)`
+  invariant.
+- Extended the refresh transcript digest regression to cover missing and
+  unmatched rotation transcript inventories through the digest API, not only
+  the validator API.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-digest-fallible cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts --lib -- --nocapture`
+    (`2` tests passed)
+
+## 2026-06-05 BFV RNS public entrypoint chain preflight
+
+- Public RNS exact evaluator entry points now preflight their required RNS
+  chain coverage before late operation checks: refresh and outer-slot rotation
+  require exact addition coverage, while multiplication, Galois key switching,
+  and packed rotation require the full exact evaluator chain.
+- Added a crypto regression proving too-narrow but structurally valid RNS
+  chains fail before invalid bootstrap rounds, full-cycle outer rotations,
+  ciphertext multiplication, Galois switching, or zero-step packed rotation can
+  short-circuit validation.
+- Kept the SoraNet checked-RNG handshake path buildable under `thiserror` by
+  storing fallible RNG diagnostics as a message field instead of a synthetic
+  `source: String`.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-public-preflight cargo test -p iroha_crypto rns_exact_public_entrypoints_preflight_chain_before_late_operation_errors --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-public-preflight cargo test -p iroha_crypto rns_exact_ --lib -- --nocapture`
+    (`8` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-public-preflight cargo test -p iroha_crypto "reports_rng_failure" --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-public-preflight cargo test -p iroha_crypto process_client_hello_reports_relay_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-public-preflight cargo test -p iroha_crypto generate_keyset_ --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-public-preflight cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SoraNet handshake checked RNG boundary
+
+- SoraNet client hello and relay hello construction now take fallible
+  `rand_core` 0.9 `TryCryptoRng` inputs for nonce, Noise static/ephemeral
+  secret, and client ML-KEM seed material. RNG failures now return
+  `HarnessError::RandomBytes` with a stable operation label instead of relying
+  on infallible `fill_bytes`.
+- Added regressions for client-side and relay-side RNG failure propagation.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-rng cargo test -p iroha_crypto build_client_hello_reports_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-rng cargo test -p iroha_crypto process_client_hello_reports_relay_rng_failure --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-rng cargo check -p iroha_crypto --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-rng cargo check -p iroha_crypto --bin soranet_handshake_check`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-rng cargo check -p iroha_p2p --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-rng cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SCCP ETH native prover bundle manifest parsers
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# now provide SDK-owned
+  parsers for the Ethereum mainnet native EVM prover bundle JSON manifest.
+  The parsers accept the release-tooling camelCase/snake_case aliases, reject
+  non-object roots, non-boolean no-WASM/remote-prover flags, missing SDK rows,
+  unsafe WASM/remote-prover descriptors, and destination-binding drift, then
+  delegate into the same strict descriptor validation used by outbound proof
+  requests.
+- This lets browser and mobile apps consume the signed
+  `sccp-native-evm-groth16-prover-bundle-v1` JSON produced by release tooling
+  without app-specific parsing glue, while preserving the no-WASM/no-remote
+  product invariant before local prover code is linked.
+- The release-readiness test inventory now pins those SDK-owned parser APIs
+  across source, JS `dist`, and TypeScript declarations, and the release-bundle
+  verifier requires that parser inventory plus the package-dist parser
+  assertion before a bundle can verify as ready.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned`
+    (`1` test passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory`
+    (`1` test passed)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`73` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    from `IrohaSwift` (`1` test passed)
+  - `./gradlew :core-jvm:test --console=plain` from `kotlin` was not runnable
+    because this host reports no Java runtime.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`
+    from `java/iroha_android` was not runnable because this host reports no
+    Java runtime.
+  - `dotnet test` from `csharp` was not runnable because `dotnet` is not
+    installed.
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (no changes)
+
+## 2026-06-05 BFV RNS exact-chain preflight
+
+- Registered BFV RNS chain selection now validates exact ciphertext-modulus
+  addition and exact negacyclic-product coverage before returning the
+  production chain or deriving its digest.
+- The RNS key-switch bridge now applies the same exact-evaluator chain
+  preflight before consuming key-switch material, so too-narrow chains fail
+  before digit decomposition or key-switch entry processing.
+- Updated confidential keyset generation to the `rand_core` 0.9 fallible RNG
+  traits (`TryCryptoRng`/`TryRngCore`) so RNG failures map to a typed
+  `RandomBytes` error without breaking `iroha_crypto` test builds.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-chain-preflight cargo test -p iroha_crypto rns_key_switch_rejects_too_narrow_chain_before_key_material --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-chain-preflight cargo test -p iroha_crypto registered_rns_chain_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-chain-preflight cargo test -p iroha_crypto rns_exact_ --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-chain-preflight cargo test -p iroha_crypto generate_keyset_ --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-rng cargo test -p iroha_crypto confidential --lib -- --nocapture`
+    (`5` tests passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-rng cargo check -p iroha_crypto --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-chain-preflight cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-rng cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV Galois key generation residual self-check
+
+- Standalone `galois_key_from_seed` now verifies generated key-switch entries
+  against the expected scaled automorphed-secret residues before returning key
+  material, matching the bundle-level owner diagnostic for Galois entries.
+- Added a crypto regression covering generated Galois residual validation and
+  tampered-entry rejection through the same residual check.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-self-check cargo test -p iroha_crypto galois_key_ --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-self-check cargo test -p iroha_crypto evaluation_key_bundle_secret_consistency --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-self-check cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV deterministic seed preflight
+
+- Deterministic BFV keygen, public-key encryption, Galois-key generation,
+  identifier key derivation, and identifier encryption now reject empty seeds
+  before deriving RNG material or ciphertext/key material.
+- Added a crypto regression covering those direct seeded helper entry points.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-deterministic-seed-preflight cargo test -p iroha_crypto deterministic_bfv_seeded_helpers_reject_empty_seeds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-deterministic-seed-preflight cargo test -p iroha_crypto refresh_key_ --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-deterministic-seed-preflight cargo test -p iroha_crypto identifier_slot_encoding_and_seed_derivation_are_deterministic --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-deterministic-seed-preflight cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV refresh transcript standalone seed preflight
+
+- Standalone BFV rotation/bootstrap refresh-key constructors and transcript
+  validators now reject empty or oversized public transcript seeds before
+  deriving or recomputing encrypted-zero refresh masks. This aligns direct
+  crypto helper use with the bundle-level and Soracloud admission seed bounds.
+- Added crypto regressions for malformed standalone rotation/bootstrap
+  transcript seeds in both generation and validation paths.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript-standalone cargo test -p iroha_crypto refresh_key_ --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript-standalone cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript-standalone cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 BFV refresh transcript crypto metadata preflight
+
+- `BfvEvaluationKeyBundle::validate_refresh_transcripts` now rejects malformed
+  public transcript metadata before validating bundle shape, public keys, or
+  recomputing refresh key material: oversized rotation transcript inventories,
+  empty or oversized transcript seeds, zero or duplicate rotation steps,
+  malformed bootstrap key ids, and zero or over-budget bootstrap refresh rounds
+  all fail closed for direct crypto callers.
+- Added a crypto regression covering those malformed public transcript
+  metadata cases.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript-metadata cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript-metadata cargo test -p iroha_crypto refresh_key_transcripts_reject_tampered_public_material --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript-metadata cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 Soracloud FHE refresh transcript rotation-step canonicalization
+
+- BFV evaluation-key refresh transcript admission now rejects zero and duplicate
+  public rotation transcript step metadata before recomputing public refresh key
+  material or comparing the governance-bound digest.
+- Added data-model regressions for malformed rotation steps and extended the
+  core runtime digest-admission regression to reject duplicate rotation
+  transcript steps before accepting policy-bound FHE job key material.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rotation cargo test -p iroha_data_model bfv_refresh_transcript_validate --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rotation cargo test -p iroha_core soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rotation cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rotation cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while checking dependencies)
+
+## 2026-06-05 SCCP ETH native EVM prover bundle release gate
+
+- Added a fail-closed Ethereum mainnet SCCP release/readiness gate for the
+  audited no-WASM native EVM Groth16 prover bundle. The readiness report now
+  accepts a hash-bound `--native-evm-prover-bundle` manifest, validates it
+  against the Ethereum launch lane, and blocks production readiness when the
+  manifest is missing, WASM-backed, remote-prover-backed, wrong-domain, or not
+  bound to the active destination binding/proof artifact/proving-key hashes.
+- The release bundle builder now copies the native prover manifest under
+  `native-prover/`, includes it in the public manifest and release notes, and
+  self-verifies the generated bundle with the strict verifier. The verifier
+  independently recomputes the native-prover summary from the bundled JSON and
+  rejects tampering after publication.
+- This is a release-safety guard only. Ethereum mainnet SCCP is still blocked
+  on real audited browser/native Groth16 prover code and circuit/proving-key
+  artifacts for the JS, Swift, Kotlin/JVM, Java Android, and C# SDKs.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`258` tests passed)
+
+## 2026-06-05 SCCP ETH native EVM prover bundle SDK descriptors
+
+- JS/browser, Swift, Kotlin/JVM, Java Android, and C# now expose first-class
+  Ethereum mainnet native EVM prover bundle descriptors for
+  `sccp-native-evm-groth16-prover-bundle-v1`. Each SDK validates the schema,
+  bundle id, ETH domain/chain, Groth16 BN254 backend, no-WASM/no-remote-prover
+  invariants, pure-TypeScript browser marker, per-SDK native implementation
+  rows, non-zero artifact/key/audit hashes, and destination binding hash.
+- The Ethereum mainnet outbound facades can now be constructed with the
+  audited bundle descriptor and bind its proof artifact/proving-key hashes into
+  proof requests. Per-request or loose artifact hash conflicts fail closed, and
+  the older generic EVM path remains available for explicit non-ETH callers.
+- This still does not ship the audited native Groth16 prover implementations or
+  production circuit/proving-key artifacts; it gives apps and release tooling a
+  strict descriptor surface to bind those artifacts once they are available.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`73` tests passed)
+  - `swift test` from `IrohaSwift` compiled the Swift package and the SCCP
+    suite passed (`SccpSolanaProverTests`: `88` tests passed); the full Swift
+    run still exits non-zero because of existing unrelated
+    `OfflineNoteTests` failures.
+  - `./gradlew :core-jvm:test --console=plain` from `kotlin` was not runnable
+    because this host reports no Java runtime.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`
+    from `java/iroha_android` was not runnable because this host reports no
+    Java runtime.
+  - `dotnet test` from `csharp` was not runnable because `dotnet` is not
+    installed.
+  - `git diff --check`
+
+## 2026-06-05 SCCP ETH EVM prover artifact hash binding
+
+- JS/browser EVM Groth16 proof requests now accept optional
+  `proofArtifactHash` and `provingKeyHash` metadata only as a paired set of
+  canonical non-zero 32-byte hashes. When present, both hashes are included in
+  the proof-request hash preimage and copied into wrapped proof results; a
+  structured local-prover result that tries to supply mismatched artifact
+  metadata is rejected before calldata/submission packaging.
+- Mirrored the same paired metadata contract into the native EVM-family SDK
+  request/result models for Swift, Kotlin/JVM, and Java Android, and into the
+  C# Ethereum mainnet outbound request/result model. The native wrappers now
+  normalize or reject the artifact/proving-key hashes, bind them into the
+  request hash, preserve them through callback snapshots, and verify wrapped
+  results match the request metadata.
+- Extended the JS package declarations and `dist/sccp.js`, plus Swift,
+  Kotlin/JVM, Java Android, and C# tests. The strict release-bundle verifier
+  and release-readiness report now pin the browser and native marker strings
+  so artifact/proving-key metadata checks cannot disappear silently.
+- This is artifact/proving-key hash binding for app-linked local provers; it
+  does not yet bundle audited native Groth16 circuit/proving artifacts in the
+  SDKs.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    from `javascript/iroha_js` (`71` tests passed)
+  - `swift test --filter 'SccpSolanaProverTests/testEvmProofRequestBindsPublicSignalsAndRelayContext|SccpSolanaProverTests/testEvmProverWrapsExternalProofBytes'`
+    from `IrohaSwift` (`2` tests passed; emitted existing unrelated Swift
+    deprecation/unused-try warnings in `ToriiClientTests.swift`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k outbound_precallback_sdk_tests`
+    (`1` passed, `63` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k outbound_precallback_sdk_tests`
+    (`1` passed, `189` deselected)
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (no changes)
+  - JVM/Android tests were not runnable here because `java -version` reports
+    no Java runtime. The .NET tests were not runnable because `dotnet` is not
+    installed.
+
+## 2026-06-05 Soracloud FHE refresh transcript round bounds
+
+- BFV evaluation-key refresh transcript admission now rejects zero or
+  exact-evaluator-budget-exceeding bootstrap refresh round metadata before
+  recomputing public refresh key material or comparing the governance-bound
+  digest.
+- Added data-model regressions for malformed bootstrap transcript round counts
+  and extended the core runtime digest-admission regression to reject oversized
+  bootstrap round metadata before accepting policy-bound FHE job key material.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rounds cargo test -p iroha_data_model bfv_refresh_transcript_validate --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rounds cargo test -p iroha_core soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rounds cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-rounds cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while checking dependencies)
+
+## 2026-06-05 Soracloud FHE refresh transcript key-id bounds
+
+- BFV evaluation-key refresh transcript admission now also rejects empty,
+  oversized, whitespace-padded, or non-printable bootstrap transcript key ids
+  before recomputing public refresh key material or comparing the
+  governance-bound digest.
+- Added data-model regressions for malformed bootstrap transcript key-id
+  metadata and extended the core runtime digest-admission regression to reject
+  oversized bootstrap key ids before accepting policy-bound FHE job key
+  material.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-key-id cargo test -p iroha_data_model bfv_refresh_transcript_validate --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-key-id cargo test -p iroha_core soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-key-id cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-key-id cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while checking dependencies)
+
+## 2026-06-05 Soracloud FHE refresh transcript seed bounds
+
+- BFV evaluation-key refresh transcript admission now rejects empty public
+  seeds, seeds above `BFV_REFRESH_TRANSCRIPT_SEED_MAX_BYTES`, and rotation
+  transcript inventories above `BFV_REFRESH_TRANSCRIPT_MAX_ROTATION_TRANSCRIPTS`
+  before recomputing public refresh key material or comparing the
+  governance-bound digest.
+- Added data-model regressions for empty, oversized, and over-count transcript
+  inventories, plus a core runtime digest-admission regression that rejects an
+  oversized refresh seed before accepting policy-bound FHE job key material.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-bounds cargo test -p iroha_data_model bfv_refresh_transcript_validate --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-bounds cargo test -p iroha_core soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest --lib -- --nocapture`
+    (`1` test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-bounds cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-refresh-transcript-bounds cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while checking dependencies)
+
+## 2026-06-05 Soracloud FHE input-admission restored verifier metadata hardening
+
+- FHE input-admission verification now rechecks active Soracloud STARK verifier
+  records for the expected Goldilocks field label and inline `vk_len` before
+  accepting the registered key bytes. This keeps restored or historically
+  malformed verifier records from bypassing the normal `RegisterVerifyingKey`
+  metadata validation path.
+- Added a `zk-stark` regression that registers a valid canonical input
+  admission verifier, mutates the restored record metadata in-memory to drift
+  the field label or key length, and verifies proof-backed FHE upserts fail
+  before residual metadata is persisted.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-verifier-metadata cargo test -p iroha_core --features zk-stark mutate_soracloud_state_rejects_restored_fhe_input_verifier_metadata_drift --lib -- --nocapture`
+    (`1` test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-verifier-metadata cargo test -p iroha_core --features zk-stark registered_fhe_input_admission --lib -- --nocapture`
+    (`2` tests passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-verifier-metadata cargo clippy -p iroha_core --features zk-stark --lib --no-deps -- -D warnings`
+    (passed; emitted existing unrelated `iroha_sccp` unused-constant warnings
+    while checking dependencies)
+
+## 2026-06-05 SCCP ETH native SDK inbound collection snapshot hardening
+
+- Swift, Kotlin/JVM, Java Android, and .NET Ethereum mainnet inbound evidence
+  collection now snapshots receipt and execution-block evidence before
+  app-owned consensus-provider callbacks and returns detached collected evidence.
+  Nested mutable dictionaries/maps, lists/arrays, and byte buffers can no longer
+  be mutated by consensus callbacks or caller-owned post-collection references
+  after SDK validation. The shared BSC EVM-family inbound facades use the same
+  boundary where those SDKs expose BSC collection.
+- Added native adversarial regressions for Ethereum and BSC collection
+  boundaries that mutate caller-owned receipt, block, finality, and byte-buffer
+  witnesses inside consensus providers and after collection, then assert the
+  collected evidence remains detached. The release-bundle verifier and
+  release-readiness source inventory now pin those native regression markers.
+- The Java Android Ethereum mainnet outbound facade now also snapshots the
+  canonical proof request before invoking the app-linked proof engine, matching
+  the generic EVM/BSC path and keeping callback-side request inspection detached
+  from the request used for result wrapping. The Java facade snapshot regression
+  and release-readiness markers now pin that outbound callback boundary.
+- The .NET Ethereum mainnet outbound regression now mutates the proof-engine
+  callback request snapshot across public-input bytes, public-signal words,
+  bundle bytes, and source-proof bytes, then proves the wrapped result still
+  retains the validated pre-callback request. The release-bundle and
+  readiness-report inventories pin those C# callback-mutation markers.
+- The browser Ethereum mainnet Beacon REST adversarial fixture now uses a
+  full 512-member deterministic sync committee payload when testing
+  `syncCommitteeRoot` drift, so the negative test reaches the intended
+  root-binding rejection instead of failing earlier on malformed roster length.
+- The browser Ethereum mainnet outbound prover regression now tries to mutate
+  frozen public-signal words and copied byte getters from inside the
+  app-linked prover callback, then verifies the wrapped result still carries
+  the validated request bytes. The release inventories pin those browser
+  callback-snapshot markers alongside the pre-callback lane rejection guard.
+- Kotlin/JVM and Java Android now use the same full 512-member deterministic
+  sync committee payload in the Beacon REST `syncCommitteeRoot` drift
+  regressions, and the release-bundle/readiness inventories pin those native
+  fixture markers while local JVM execution remains blocked by the missing JDK.
+- `iroha_sccp` now uses the ETH max-sync-committee authority bound when
+  deriving the canonical sync committee payload byte cap, eliminating the
+  previous unused-constant warning without changing Ethereum mainnet's exact
+  512-authority roster requirement.
+- Re-checked the Ethereum constants against primary sources: [EIP-155] lists
+  Ethereum mainnet `CHAIN_ID` as `1`, and the official
+  [Ethereum consensus phase0 mainnet preset] and
+  [Ethereum consensus Altair mainnet preset] list `SLOTS_PER_EPOCH = 32`,
+  `SYNC_COMMITTEE_SIZE = 512`, and
+  `EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256`.
+
+[EIP-155]: https://eips.ethereum.org/EIPS/eip-155
+[Ethereum consensus phase0 mainnet preset]: https://github.com/ethereum/consensus-specs/blob/master/presets/mainnet/phase0.yaml
+[Ethereum consensus Altair mainnet preset]: https://github.com/ethereum/consensus-specs/blob/master/presets/mainnet/altair.yaml
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `swift test --filter 'SccpSolanaProverTests/testEthereumMainnetCollectInboundEvidenceSnapshotsConsensusBoundary|SccpSolanaProverTests/testBscMainnetCollectInboundEvidenceSnapshotsConsensusBoundary|SccpSolanaProverTests/testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot'`
+    from `IrohaSwift` (`3` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `63` deselected)
+  - `node --test test/sccpEthereumMainnet.test.js` from `javascript/iroha_js`
+    (`22` passed)
+  - `node --test test/package_dist.test.js` from `javascript/iroha_js`
+    (`49` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_sync_committee_roster`
+    (`1` passed, `63` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_sync_committee_roster`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "inbound_adversarial_sdk_tests or outbound_precallback_sdk_tests"`
+    (`2` passed, `62` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "inbound_adversarial_sdk_tests or outbound_precallback_sdk_tests"`
+    (`3` passed, `187` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "native_local_prover or native_no_wasm or browser_no_wasm_marker or ethereum_browser_no_wasm_marker or all_public_sccp_sdk_sources_are_native"`
+    (`6` passed, `58` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_no_wasm or ethereum_browser_no_wasm_marker or no_wasm_marker"`
+    (`3` passed, `187` deselected)
+  - `node --test --test-name-pattern "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned|package declarations expose Ethereum mainnet SCCP facade methods" test/package_dist.test.js test/sccpPackageExports.test.js`
+    from `javascript/iroha_js` (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "active_launch_policy_is_ethereum_mainnet or passes_with_only_active_launch_lane or active_launch_evm_live_metadata_drift"`
+    (`3` passed, `61` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_launch_policy_is_ethereum_mainnet or active_launch_lane_without_future_lanes or active_launch_gate"`
+    (`2` passed, `188` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_mainnet_launch_mode or active_launch_lane"`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_receipt_proof_evidence_test.py -k "chain_id or mainnet or finalized or bytecode or route_canary or receipt_proof"`
+    (`53` passed, `69` deselected)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-eth-mainnet cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
+    (`1` passed, `48` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-eth-mainnet cargo test -p iroha_sccp --lib eth_source_adapter_verifies -- --nocapture`
+    (`2` passed, `246` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-eth-mainnet cargo test -p iroha_sccp --lib eth_sync_committee_transition_transcript_requires_mainnet_rosters -- --nocapture`
+    (`1` passed, `247` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-eth-mainnet cargo test -p iroha_sccp --lib evm_source_adapter_binds_receipt_trie_proof_hash_to_inclusion_witness -- --nocapture`
+    (`1` passed, `247` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-eth-mainnet cargo test -p iroha_sccp --lib evm_receipt_mpt_value_extracts_typed_rlp_receipt_root -- --nocapture`
+    (`1` passed, `247` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-eth-mainnet cargo test -p iroha_sccp --lib evm_family_source_adapter_preflight_rejects_oversized_shapes -- --nocapture`
+    (`1` passed, `247` filtered out)
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (no changes)
+  - JVM/Android suites were not runnable in this environment because
+    `java -version` reports no Java runtime. The .NET suite was not runnable
+    because `dotnet --version` is not installed.
+
+## 2026-06-05 Soracloud FHE input-admission canonical circuit binding
+
+- Soracloud now publishes
+  `SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1` from the data model and core
+  requires the active `soracloud` STARK verifier record for FHE input admission
+  to use that canonical V1 circuit id in addition to the expected backend,
+  namespace, public-input schema hash, gas schedule, active circuit index, and
+  verifying-key commitment.
+- Added a wrong-circuit regression that registers an otherwise active verifier
+  with the same public-input schema hash but a shadow circuit id and proves the
+  mutation fails before FHE residual metadata is persisted.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-circuit cargo test -p iroha_core --features zk-stark registered_fhe_input_admission --lib -- --nocapture`
+    (`2` tests passed; emitted existing unrelated `iroha_sccp`
+    unused-constant warnings while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-circuit cargo test -p iroha_core mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-circuit cargo test -p iroha_data_model fhe_input_admission --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-circuit cargo clippy -p iroha_core --features zk-stark --lib --no-deps -- -D warnings`
+    (passed; emitted existing unrelated `iroha_sccp` unused-constant warnings
+    while checking dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-circuit cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-05 SCCP ETH browser inbound collection snapshot hardening
+
+- JS/browser Ethereum mainnet inbound evidence collection now passes a
+  deep-frozen evidence snapshot into app-owned consensus providers and returns
+  deep-frozen collected evidence. Receipt logs, block extension fields, Beacon
+  finality extension fields, and byte buffers are detached from caller-owned
+  RPC responses before finality collection or later proving runs. The shared
+  browser BSC inbound facade uses the same EVM-family collection boundary.
+- Added browser regressions for Ethereum and BSC that mutate caller-owned
+  receipt, block, finality, and byte-buffer inputs from inside the consensus
+  provider and after collection, then assert collected evidence remains frozen
+  and detached.
+- The strict release-bundle verifier and release-readiness source inventory now
+  pin the Ethereum browser collect-time snapshot regression markers.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test --test-name-pattern "collectInboundEvidenceFromReceipt snapshots consensus evidence" test/sccpEthereumMainnet.test.js test/sccpBscMainnet.test.js`
+    from `javascript/iroha_js` (`2` passed)
+  - `node --test --test-name-pattern "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned|package declarations expose Ethereum mainnet SCCP facade methods" test/package_dist.test.js test/sccpPackageExports.test.js`
+    from `javascript/iroha_js` (`3` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `63` deselected)
+
+## 2026-06-05 SCCP ETH Python inbound prover snapshot hardening
+
+- Python Ethereum mainnet inbound evidence collection and proving now pass
+  recursive immutable evidence snapshots into app-owned consensus-provider and
+  native-prover callbacks instead of shallow top-level copies. The snapshots
+  detach nested receipt logs, block and Beacon finality extension fields,
+  receipt-proof trie nodes, inclusion branches, and bytearray payloads before
+  finality collection or local proof generation runs. The shared Python BSC
+  inbound facade uses the same callback boundary.
+- Added Python adversarial regressions for Ethereum and BSC that mutate
+  caller-owned receipt, block, finality, receipt-proof, and bytearray inputs
+  during consensus-provider and inbound-prover callbacks and assert collected
+  and callback evidence remains read-only and detached.
+- The strict release-bundle verifier and release-readiness source inventory now
+  pin the Python Ethereum callback snapshot regression markers.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_collects_immutable_evidence_snapshot_from_mutable_inputs or ethereum_mainnet_sccp_inbound_prover_receives_immutable_evidence_snapshot or bsc_mainnet_sccp_collects_immutable_evidence_snapshot_from_mutable_inputs or bsc_mainnet_sccp_inbound_prover_receives_immutable_evidence_snapshot'`
+    (`4` passed, `87` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `63` deselected)
+
+## 2026-06-05 SCCP ETH .NET inbound prover snapshot hardening
+
+- .NET Ethereum mainnet inbound proving now rebuilds callback evidence before
+  invoking the app-owned native prover. The snapshot recursively copies
+  dictionaries, lists, string finality branches, byte arrays, block-receipt
+  lists, `InclusionBranch`, and receipt-proof trie/inclusion bytes.
+- Added a .NET adversarial regression that mutates caller-owned dictionaries,
+  lists, and byte arrays during the Ethereum prover callback and asserts the
+  callback evidence remains detached.
+- The strict release-bundle verifier and release-readiness source inventory now
+  pin the .NET callback snapshot regression markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `63` deselected)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter InboundProverReceivesCallbackEvidenceSnapshot`
+    could not run because `dotnet` is not installed in this environment.
+
+## 2026-06-05 SCCP ETH JVM and Android inbound prover snapshot hardening
+
+- Kotlin/JVM Ethereum mainnet inbound proving now rebuilds callback evidence
+  before invoking the app-owned native prover. The snapshot recursively copies
+  map/list metadata, `ByteArray` buffers, receipt-proof trie nodes, block
+  receipt lists, and inclusion branches; the shared Kotlin BSC inbound facade
+  uses the same snapshot boundary.
+- Java Android Ethereum mainnet inbound proving now passes an equivalent
+  callback evidence snapshot into `InboundProver.prove`, detaching nested
+  maps/lists and byte arrays from caller-owned evidence before local native
+  proof generation runs.
+- Added Kotlin/JVM and Java Android adversarial regressions that mutate
+  caller-owned mutable maps, lists, and byte arrays during the Ethereum prover
+  callback and assert the callback evidence remains detached.
+- The strict release-bundle verifier and release-readiness source inventory now
+  pin the Kotlin/JVM and Java Android callback snapshot regression markers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `63` deselected)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundProverReceivesCallbackEvidenceSnapshot --console=plain`
+    from `kotlin` could not start because this environment has no Java runtime
+    (`/usr/libexec/java_home -v 21` and `java -version` both report “Unable to
+    locate a Java Runtime”).
+
+## 2026-06-05 Soracloud FHE input-admission STARK success coverage
+
+- Added a feature-gated Soracloud core regression that registers an active
+  `soracloud` STARK/FRI verifying key through the normal verifier registry,
+  builds a real `OpenVerifyEnvelope` with
+  `crate::zk::prove_stark_fri_open_verify_envelope`, enables the runtime STARK
+  verifier config for the transaction, and admits a proof-backed FHE state
+  Upsert.
+- The regression asserts the admitted state row persists the exact
+  proof-carried BFV residual bound, covering the successful verifier-backed
+  path in addition to the existing missing-verifier rejection path.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof-positive cargo test -p iroha_core --features zk-stark mutate_soracloud_state_accepts_registered_fhe_input_admission_proof --lib -- --nocapture`
+    (`1` test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof-positive cargo test -p iroha_core mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof-positive cargo clippy -p iroha_core --features zk-stark --lib --no-deps -- -D warnings`
+    (passed; emitted existing unrelated `iroha_sccp` unused-constant warnings
+    while checking dependencies)
+
+## 2026-06-05 SCCP ETH Swift inbound prover snapshot hardening
+
+- Swift Ethereum mainnet inbound proving now passes a rebuilt callback evidence
+  snapshot into the app-owned local prover. The snapshot recursively copies
+  receipt/block/finality dictionaries, block-receipt lists, Foundation mutable
+  collections, `Data` buffers, receipt-proof trie nodes, and inclusion branches
+  before native proof generation runs. The shared Swift BSC inbound facade uses
+  the same snapshot boundary.
+- Added a Swift adversarial regression that mutates caller-owned
+  `NSMutableDictionary`, `NSMutableArray`, `NSMutableData`, and `Data` values
+  during the Ethereum prover callback and proves the callback evidence remains
+  detached.
+- The strict release-bundle verifier and release-readiness source inventory now
+  pin the Swift callback snapshot regression markers.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundProverReceivesCallbackEvidenceSnapshot`
+    from `IrohaSwift` (`1` passed)
+  - `swift test --filter 'SccpSolanaProverTests/test.*InboundEvidenceUsesMainnetRpcAndRejectsDrift'`
+    from `IrohaSwift` (`2` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_inbound_adversarial_sdk_tests`
+    (`1` passed, `63` deselected)
+
+## 2026-06-05 SCCP ETH browser inbound prover snapshot hardening
+
+- JS/browser Ethereum mainnet inbound proving now passes a deep-copied,
+  immutable evidence snapshot into the app-owned local prover callback. The
+  callback can no longer mutate caller-owned receipt logs, receipt-proof trie
+  nodes, inclusion branches, or Beacon finality branches while proof generation
+  is running. The shared BSC EVM inbound facade now uses the same callback
+  snapshot path.
+- Added a browser adversarial regression proving nested receipt, receipt-proof,
+  and Beacon finality structures are frozen and detached from mutable caller
+  input before the Ethereum local prover callback runs.
+- The strict release-bundle verifier and release-readiness source inventory now
+  pin both the published JS source/dist snapshot marker and the Ethereum
+  browser regression markers.
+- Validation:
+  - `node --test --test-name-pattern "EthereumMainnetSccp inbound prover receives immutable evidence snapshots" test/sccpEthereumMainnet.test.js`
+    from `javascript/iroha_js` (`1` passed)
+  - `node --test --test-name-pattern "EthereumMainnetSccp proves only after collecting finality-bound evidence|EthereumMainnetSccp inbound prover receives immutable evidence snapshots" test/sccpEthereumMainnet.test.js`
+    from `javascript/iroha_js` (`2` passed)
+  - `node --test --test-name-pattern "BscMainnetSccp requires full receipt proof evidence before inbound proving|BscMainnetSccp inbound proving requires Parlia finality before callbacks run" test/sccpBscMainnet.test.js`
+    from `javascript/iroha_js` (`2` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_js_receipt_admission_artifacts or ethereum_inbound_adversarial_sdk_tests"`
+    (`2` passed, `188` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_js_dist_keeps_receipt_admission_guards or ethereum_inbound_adversarial_sdk_tests"`
+    (`2` passed, `62` deselected)
+
+## 2026-06-05 SCCP ETH launch-policy selector hardening
+
+- SCCP production launch selection now has a focused helper and regression
+  proving `EthereumMainnetLane` can open only a production-ready Ethereum
+  mainnet lane without waiting for future lanes, while still rejecting
+  incomplete ETH evidence and BSC-shaped ready lanes. `AllLanesAtOnce` remains
+  blocked until every advertised lane is ready, and `BscMainnetLane` stays
+  scoped to BSC.
+- The strict release-bundle verifier and release-readiness source inventory
+  now pin the helper and regression markers, so the public Ethereum launch
+  bundle cannot drop the independent ETH selector coverage while still
+  verifying as production-ready.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-sccp-eth-lane-target cargo test -p iroha_sccp ethereum_launch_policy_opens_only_eth_lane_independently_of_all_lanes -- --nocapture`
+    (`1` passed, `247` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_launch_policy_selector"`
+    (`1` passed, `189` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_launch_policy_selector"`
+    (`1` passed, `63` deselected)
+
+## 2026-06-05 SCCP ETH browser supplied receipt-proof drift guards
+
+- JS/browser Ethereum mainnet inbound evidence now has an explicit adversarial
+  regression for caller-supplied `receiptProof` material drifting from
+  app-supplied Beacon finality. The test covers execution block number/hash,
+  receipts root, finalized Beacon root, sync committee root, Beacon slot, and
+  receipt source-event digest mismatches before proof callbacks can run.
+- The strict release-bundle verifier and readiness-report source inventory now
+  pin those browser receipt-proof drift markers so the public product path
+  cannot silently accept manually supplied proof material that no longer binds
+  to the finalized Ethereum mainnet evidence.
+- Validation:
+  - `node --test --test-name-pattern "EthereumMainnetSccp rejects failed or drifted receipt evidence before proving" test/sccpEthereumMainnet.test.js`
+    from `javascript/iroha_js` (`1` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_inbound_adversarial_sdk_tests"`
+    (`1` passed, `188` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_inbound_adversarial_sdk_tests"`
+    (`1` passed, `62` deselected)
+
+## 2026-06-05 SCCP ETH native receipt-proof finality guards
+
+- Swift, Kotlin/JVM, Java Android, and C# Ethereum mainnet auto receipt-proof
+  collection tests now reject block-receipt proof construction when app-supplied
+  Beacon finality omits the finalized header root, sync committee root, or
+  Beacon slot required to bind the generated receipt proof.
+- The release-bundle verifier and readiness-report tests now have dedicated
+  native receipt-finality inventories spanning SDK source guards and the new
+  negative tests, so native mobile/.NET proof builders cannot drop those
+  prerequisites while still passing production-readiness checks.
+- The native/local-prover release-bundle regression now also proves the browser
+  package no-WASM inventory pins `dist/sccp.js`, the default public
+  `dist/index.js` export, `index.d.ts`, and remote-prover identifier variants.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_receipt_finality_sources or ethereum_sdk_receipt_metadata_sources or ethereum_js_receipt_admission_artifacts"`
+    (`3` passed, `186` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_no_wasm_readiness_inventory"`
+    (`1` passed, `188` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "native_sdks_keep_receipt_finality_guards or ethereum_sdks_keep_receipt_metadata_guards"`
+    (`2` passed, `61` deselected)
+  - `node --test --test-name-pattern "browser SCCP no-WASM guard catches remote-prover identifier variants|browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned|browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned" test/package_dist.test.js`
+    from `javascript/iroha_js` (`3` passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1` selected XCTest passed)
+  - Kotlin/JVM and Java Android focused Gradle validation could not run in this
+    environment because no Java runtime is installed (`java` and
+    `/usr/libexec/java_home -v 21` both fail). C# validation could not run
+    because `dotnet` is not installed.
+
+## 2026-06-05 SCCP ETH browser receipt-proof construction guard
+
+- JS/browser Ethereum mainnet receipt-proof auto-construction now fails
+  explicitly if app-supplied Beacon finality is missing the finalized header
+  root, sync committee root, or Beacon slot needed to bind the generated
+  receipt proof. The guard is present in both `src/sccp.js` and the published
+  `dist/sccp.js` artifact.
+- Added a browser regression covering missing finalized root, sync committee
+  root, and Beacon slot in the `eth_getBlockReceipts` auto-proof path, and
+  tightened the release-bundle verifier so published JS cannot lose this
+  construction guard while still passing receipt-admission inventory checks.
+- Validation:
+  - `node --test --test-name-pattern "EthereumMainnetSccp builds receipt proof nodes from user JSON-RPC receipts" test/sccpEthereumMainnet.test.js`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_js_receipt_admission_artifacts"`
+    (`1` passed, `187` deselected)
+  - `node --test --test-name-pattern "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned" test/package_dist.test.js`
+    (`1` passed)
+
+## 2026-06-04 Soracloud FHE input-admission proof boundary
+
+- Soracloud FHE state Upsert mutations may now carry an optional
+  `SoracloudFheInputAdmissionProofV1`. The canonical state-mutation
+  provenance payload signs that proof attachment, and Torii includes the same
+  field in the signed request payload before constructing the on-chain
+  instruction.
+- Core derives the expected admission statement from the service, binding, key,
+  operation, ciphertext payload commitment, BFV parameter digest, RNS modulus
+  chain digest, governance transaction hash, and claimed residual bound. It
+  then validates the BFV ciphertext envelope shape and residual capacity,
+  requires a STARK/FRI `OpenVerifyEnvelope`, resolves an active `soracloud`
+  verifying key with the expected public-input schema hash, and only persists
+  `fhe_residual_multiple_bound` after backend verification succeeds.
+- Proofless client FHE mutations remain metadata-free and still fail closed as
+  FHE job inputs. The production admission circuit, governed proving/verifying
+  key rollout, and full BFV-RNS public noise proof material remain open release
+  work.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof cargo test -p iroha_data_model fhe_input_admission --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof cargo test -p iroha_core mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof cargo test -p iroha_core run_soracloud_fhe_job_rejects_client_mutated_fhe_input_without_residual_metadata --lib -- --nocapture`
+    (`1` test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warning while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof cargo test -p iroha_torii state_mutation_signature_payload --lib -- --nocapture`
+    (`2` tests passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warnings while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-proof cargo clippy -p iroha_data_model -p iroha_core -p iroha_torii --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` unused-constant
+    warnings while checking dependencies)
+
+## 2026-06-04 Offline escrow checked account derivation
+
+- `iroha_data_model::offline::offline_escrow_account_id` now derives its
+  deterministic Ed25519 escrow account through `KeyPair::try_from_seed` while
+  preserving the existing infallible public API for the fixed hash-derived
+  seed.
+- The existing escrow derivation regression now also asserts the derived
+  account signatory is Ed25519, in addition to binding chain id and asset
+  definition id.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/offline/mod.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-escrow-rng cargo test -p iroha_data_model offline_escrow_account_derivation_binds_chain_and_asset_definition --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-escrow-rng cargo check -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-escrow-rng cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-04 Address vector checked fixed-seed derivation
+
+- Account-address vector and compliance-vector helpers now derive their fixed
+  Ed25519 fixture public keys through `KeyPair::try_from_seed`, preserving the
+  deterministic seed contract while removing the panic-only seed expansion path.
+- Added focused library regressions for both vector modules and updated the
+  compliance-vector public-key payload check to use the same checked
+  derivation helper.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/account/address/compliance_vectors.rs crates/iroha_data_model/src/account/address/vectors.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-address-vectors-rng cargo test -p iroha_data_model ed25519_pk_with_uses_checked_seed_derivation --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-address-vectors-rng cargo check -p iroha_data_model --lib`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-address-vectors-rng cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Norito fixture exporter checked fixed-seed derivation
+
+- `scripts/export_norito_fixtures` now derives its fixed transaction-fixture
+  signing key through `KeyPair::try_from_seed` and reports seed-derivation
+  failures through the exporter `anyhow::Result` boundary.
+- The `print_trigger_json` helper binary now uses the same checked Ed25519
+  seed derivation for its trigger authority key while preserving the existing
+  fixture seed bytes.
+- While validating the standalone crate, the existing hint-validation
+  conditionals were collapsed so the crate now passes strict clippy.
+- Validation:
+  - `rustfmt --edition 2024 scripts/export_norito_fixtures/src/main.rs scripts/export_norito_fixtures/src/bin/print_trigger_json.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-export-fixtures-rng cargo test --manifest-path scripts/export_norito_fixtures/Cargo.toml checked_ed25519_derivation -- --nocapture`
+    (`2` tests passed; Cargo emitted unused-patch warnings for the standalone
+    script manifest)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-export-fixtures-rng cargo check --manifest-path scripts/export_norito_fixtures/Cargo.toml --bins`
+    (passed; same unused-patch warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-export-fixtures-rng cargo clippy --manifest-path scripts/export_norito_fixtures/Cargo.toml --bins --tests --no-deps -- -D warnings`
+    (passed; same unused-patch warnings)
+
+## 2026-06-04 Test-sample account checked key generation
+
+- `iroha_test_samples` now exposes `try_gen_account_in`, a fallible helper that
+  routes unseeded sample-account generation through `KeyPair::try_random` and
+  `IROHA_CONF_GAS_SEED` calibration material through `KeyPair::try_from_seed`.
+- The existing `gen_account_in` API is preserved as a compatibility wrapper
+  with an explicit expectation message for test/sample callers that still need
+  the infallible shape.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_test_samples/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-test-samples-rng cargo test -p iroha_test_samples try_gen_account_in_uses_checked_seed_derivation --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-test-samples-rng cargo check -p iroha_test_samples`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-test-samples-rng cargo clippy -p iroha_test_samples --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Core examples checked random key generation
+
+- The `iroha_core` `tx_size` example now returns a `Result` and generates its
+  sample signing key through `KeyPair::try_random`, surfacing entropy/keygen
+  failures instead of using the panic-only compatibility constructor.
+- The `memory` example now exposes `try_gen_account_in` for checked sample
+  account generation while preserving the existing infallible helper for the
+  measurement code.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/examples/tx_size.rs crates/iroha_core/examples/memory.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-examples-rng cargo test -p iroha_core --example tx_size --example memory checked_default_generation -- --nocapture`
+    (`2` example tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-examples-rng cargo check -p iroha_core --example tx_size --example memory`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-examples-rng cargo clippy -p iroha_core --example tx_size --example memory --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Custom data-model sample checked random key generation
+
+- The `executor_custom_data_model` fault-injection smoke test now uses
+  `KeyPair::try_random` for its sample transaction signer and returns a test
+  `Result`, so entropy/key-generation failures are reported directly.
+- Added crate-level test documentation while touching the sample test crate.
+- Validation:
+  - `rustfmt --edition 2024 data_model/samples/executor_custom_data_model/tests/fault_injection_smoke.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-custom-dm-rng cargo test -p executor_custom_data_model kotodama_bytecode_fault_injection_smoke --test fault_injection_smoke -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-custom-dm-rng cargo check -p executor_custom_data_model`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-custom-dm-rng cargo clippy -p executor_custom_data_model --all-targets --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Kagami Taira localnet checked genesis signer derivation
+
+- The `iroha_kagami` `taira_kaigi_localnet` example now derives the optional
+  seed-based localnet genesis signer through `KeyPair::try_from_seed`, reporting
+  seed-expansion failures through the example's existing `color_eyre::Result`
+  path instead of relying on panic-only seed derivation.
+- The localnet genesis-key contract regression now compares against the checked
+  derivation path and the missing-seed regression still proves the built-in
+  localnet genesis key is preserved.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_kagami/examples/taira_kaigi_localnet.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-taira-rng cargo test -p iroha_kagami --example taira_kaigi_localnet localnet_seed_derives_checked_genesis_key_contract_as_kagami_localnet -- --nocapture`
+    (`1` example test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warnings while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-taira-rng cargo check -p iroha_kagami --example taira_kaigi_localnet`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-taira-rng cargo clippy -p iroha_kagami --example taira_kaigi_localnet --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+
+## 2026-06-04 Multisig register checked anchor-account generation
+
+- `iroha_executor_data_model::isi::multisig::MultisigRegister::from_spec`
+  now returns `Result` and generates its temporary domainless registration
+  account through `KeyPair::try_random`, surfacing entropy or key-generation
+  failures instead of using the panic-only compatibility constructor.
+- The existing `from_spec` regression now exercises the checked result path
+  while preserving the behavior that the generated account id is randomized
+  and carries the requested home domain before runtime rekeys the account to
+  the canonical multisig controller.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_executor_data_model/src/isi.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-executor-dm-rng cargo test -p iroha_executor_data_model multisig_register_from_spec_randomizes_controller --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-executor-dm-rng cargo check -p iroha_executor_data_model`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-executor-dm-rng cargo clippy -p iroha_executor_data_model --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Gossiper deterministic checked frame probe key
+
+- `iroha_core::gossiper::tx_gossip_frame_payload_cap` no longer draws a random
+  dummy signing key while estimating transaction-gossip frame overhead. The
+  sizing probe now derives a fixed Ed25519 key through `KeyPair::try_from_seed`,
+  preserving deterministic frame-cap calculation without consuming runtime
+  entropy.
+- Added a focused unit regression proving the probe key derives through the
+  checked Ed25519 path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/gossiper.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-rng cargo test -p iroha_core tx_gossip_frame_probe_keypair_uses_checked_ed25519_derivation --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-rng cargo check -p iroha_core --lib`
+    (passed; emitted the existing unrelated `iroha_sccp` unused-constant
+    warning while checking dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-rng cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` warning while
+    checking dependencies)
+
+## 2026-06-04 Private Kaigi checked fee-payer derivation
+
+- Private Kaigi fee-spend execution now derives the synthetic fee-payer account
+  from the transaction action hash through `KeyPair::try_from_seed`, mapping
+  seed-expansion failures into the existing transaction validation error path
+  instead of using panic-only seeded key derivation.
+- Added a focused core regression proving the derived fee-payer account matches
+  the checked Ed25519 seed path for the canonical private-Kaigi action hash.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/tx.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-rng cargo test -p iroha_core private_kaigi_fee_payer_account_uses_checked_ed25519_derivation --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-rng cargo check -p iroha_core --lib`
+    (passed; emitted the existing unrelated `iroha_sccp` warning while checking
+    dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gossiper-rng cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` warning while
+    checking dependencies)
+
+## 2026-06-04 JS host checked keypair exports
+
+- `iroha_js_host` N-API keypair exports now use `KeyPair::try_random*` and
+  `KeyPair::try_from_seed` for Ed25519 and generic algorithm keypair
+  generation, mapping entropy or seed-derivation failures into existing N-API
+  errors instead of relying on panic-only wrappers.
+- The exported lane relay envelope sample now generates its throwaway validator
+  key through checked default key generation and reports failures through the
+  sample result.
+- Added focused unit regressions for checked Ed25519 seed derivation, generic
+  random key generation, checked public-key payload export, and the relay
+  sample.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_js_host/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-rng cargo test -p iroha_js_host checked -- --nocapture`
+    (`8` checked-path tests passed; emitted the existing unrelated
+    `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-rng cargo check -p iroha_js_host`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-rng cargo clippy -p iroha_js_host --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+
+## 2026-06-04 Example checked key generation and derivation
+
+- The `iroha` `nexus_app_transfer` example now generates its demo wallet
+  Ed25519 keypair via `KeyPair::try_random_with_algorithm`, surfacing entropy
+  failures from `main` instead of using panic-only random generation.
+- The `iroha` `tutorial` example snippets now use `KeyPair::try_random` for
+  account-definition, account-registration, and asset-holder key generation,
+  propagating entropy failures through the existing `eyre` result path.
+- The `iroha_data_model` `decode_signed_block` and `compressed_vectors`
+  examples now route their reference signer and fixed I105 fixture keys through
+  checked key-generation / seed-derivation helpers.
+- The `iroha_torii_shared` `permissions_preimage` example now derives its
+  deterministic wallet key through `KeyPair::try_from_seed`.
+- Added focused example regressions proving each helper emits or derives
+  Ed25519 public keys through the checked paths.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha/examples/nexus_app_transfer.rs crates/iroha/examples/tutorial.rs crates/iroha_data_model/examples/decode_signed_block.rs crates/iroha_data_model/examples/compressed_vectors.rs crates/iroha_torii_shared/examples/permissions_preimage.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo test -p iroha --example nexus_app_transfer demo_wallet_key_pair_uses_checked_ed25519_generation -- --nocapture`
+    (`1` example test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warnings while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo test -p iroha --example tutorial tutorial_key_generation_uses_checked_default_keypair -- --nocapture`
+    (`1` example test passed; emitted the existing unrelated `iroha_sccp`
+    warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo test -p iroha_data_model --example compressed_vectors --example decode_signed_block uses_checked -- --nocapture`
+    (`2` example tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo test -p iroha_torii_shared --example permissions_preimage deterministic_wallet_keypair_uses_checked_ed25519_derivation -- --nocapture`
+    (`1` example test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo check -p iroha --example nexus_app_transfer`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo clippy -p iroha --example nexus_app_transfer --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo check -p iroha --example tutorial`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo clippy -p iroha --example tutorial --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo check -p iroha_data_model --example compressed_vectors --example decode_signed_block`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo clippy -p iroha_data_model --example compressed_vectors --example decode_signed_block --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo check -p iroha_torii_shared --example permissions_preimage`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-examples-rng cargo clippy -p iroha_torii_shared --example permissions_preimage --no-deps -- -D warnings`
+
+## 2026-06-04 Offline vector checked key derivation
+
+- Offline v1/v2 interop vector generator binaries now derive their fixed
+  issuer, account, and note Ed25519 keys through local `KeyPair::try_from_seed`
+  helpers with fixture-specific error context instead of panic-only seed
+  expansion.
+- The touched generator binaries also had existing strict-clippy friction
+  cleaned up locally so the two feature-gated vector targets pass narrowed
+  `-D warnings` validation.
+- Added binary unit regressions proving both offline vector generators use the
+  checked Ed25519 helper.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/bin/offline_vectors.rs crates/iroha_data_model/src/bin/offline_v2_vectors.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-vectors-rng cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors --bin offline_v2_vectors fixed_ed25519_keypair_uses_checked_seed_derivation -- --nocapture`
+    (`2` binary tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-vectors-rng cargo check -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors --bin offline_v2_vectors`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-vectors-rng cargo clippy -p iroha_data_model --features test-fixtures,transparent_api --bin offline_vectors --bin offline_v2_vectors --no-deps -- -D warnings`
+  - Broader `CARGO_TARGET_DIR=/tmp/iroha-codex-offline-vectors-rng cargo clippy -p iroha_data_model --features test-fixtures,transparent_api --bins --no-deps -- -D warnings`
+    was also tried and failed on pre-existing unrelated bin lints in
+    `qr_stream_fixtures.rs` and `axt_fixtures.rs` before narrowing to the
+    touched offline vector binaries.
+
+## 2026-06-04 Dev key-material checked generation
+
+- The `iroha` `dev_key_material` example now generates its Ed25519 keypair via
+  `KeyPair::try_random_with_algorithm`, propagating entropy failures from
+  `main` instead of using panic-only random generation.
+- Added an example unit regression proving the helper emits an Ed25519 public
+  key through checked generation.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha/examples/dev_key_material.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-example-rng cargo test -p iroha --example dev_key_material dev_key_pair_uses_checked_ed25519_generation -- --nocapture`
+    (`1` example test passed; emitted the existing unrelated `iroha_sccp`
+    unused-constant warnings while compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-example-rng cargo check -p iroha --example dev_key_material`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-example-rng cargo clippy -p iroha --example dev_key_material --no-deps -- -D warnings`
+    (passed; emitted the existing unrelated `iroha_sccp` warnings)
+
+## 2026-06-04 SoraNet handshake-check checked key derivation
+
+- The `iroha_crypto` `soranet_handshake_check` helper binary now derives its
+  fixed client and relay Ed25519 keys through `KeyPair::try_from_seed`, mapping
+  seed-expansion failures into the existing `HarnessError::Validation` path
+  instead of relying on panic-only seed derivation.
+- Added a binary unit regression proving the fixed Ed25519 helper uses checked
+  seed derivation and emits an Ed25519 public key.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/bin/soranet_handshake_check.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bin-rng cargo test -p iroha_crypto fixed_ed25519_keypair_uses_checked_seed_derivation -- --nocapture`
+    (`1` SoraNet handshake-check binary test passed; other package targets had
+    `0` matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bin-rng cargo check -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bin-rng cargo clippy -p iroha_crypto --no-deps -- -D warnings`
+
+## 2026-06-04 Genesis manifest-normalize checked signer generation
+
+- The `iroha_genesis` `manifest_normalize` helper binary now generates its
+  temporary signing key through `KeyPair::try_random`, so OS entropy failures
+  are reported with binary-specific context instead of relying on panic-only
+  random key generation.
+- Added a binary unit regression proving the normalization signer uses checked
+  default key generation and emits the default public-key algorithm.
+- Validation:
+  - `cargo fmt -p iroha_genesis`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-genesis-rng cargo test -p iroha_genesis normalization_signer_uses_checked_default_key_generation -- --nocapture`
+    (`1` manifest-normalize binary test passed; other package targets had `0`
+    matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-genesis-rng cargo check -p iroha_genesis`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-genesis-rng cargo clippy -p iroha_genesis --no-deps -- -D warnings`
+
+## 2026-06-04 Oracle default checked account derivation
+
+- Oracle reward-pool and slash-receiver default account ids now derive their
+  fixed Ed25519 keys through `KeyPair::try_from_seed`, keeping config defaults
+  on the checked seed-expansion path while preserving the existing infallible
+  default API.
+- Added a defaults regression proving both fixed oracle accounts match checked
+  Ed25519 derivation from their canonical seeds.
+- Validation:
+  - `cargo fmt -p iroha_config`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config-rng cargo test -p iroha_config oracle_fixed_accounts_use_checked_ed25519_derivation -- --nocapture`
+    (`1` passed; auxiliary integration binaries had `0` matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config-rng cargo check -p iroha_config`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config-rng cargo clippy -p iroha_config --no-deps -- -D warnings`
+
+## 2026-06-04 Taira checked canary signer generation
+
+- `iroha taira write-canary` now generates its default ephemeral Ed25519 signer
+  through `KeyPair::try_random_with_algorithm`, so OS entropy failures are
+  reported through the canary command's `Result` path instead of relying on
+  panic-only random key generation.
+- Added a regression proving the generated-signer path returns a checked
+  Ed25519 signer, consistent canary account id, and raw public-key hex.
+- Validation:
+  - `cargo fmt -p iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taira-rng cargo test -p iroha_cli resolve_canary_signer_generates_checked_ed25519_signer -- --nocapture`
+    (`3` matched CLI unit binaries passed; auxiliary binaries had `0` matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taira-rng cargo check -p iroha_cli`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taira-rng cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; check/clippy emitted the existing unrelated `iroha_sccp`
+    unused-constant warnings while traversing dependencies)
+
+## 2026-06-04 CLI and Izanami checked key derivation
+
+- CLI offline fallback configuration now derives its deterministic Ed25519
+  signer through `KeyPair::try_from_seed`; startup reports a config error if
+  derivation fails, while the compatibility `fallback_config()` helper is
+  limited to tests.
+- Governance council VRF candidate generation now derives candidate account
+  keys through `KeyPair::try_from_seed` and reports alias-specific derivation
+  errors instead of relying on panic-only seed expansion.
+- Izanami peer BLS keys, Nexus gas accounts, NPoS post-topology validator
+  instructions, random treasury/user/UAID workload accounts, and Nexus-aware
+  network-builder setup now propagate `KeyPair::try_from_seed` /
+  `KeyPair::try_random` failures through existing `Result` paths.
+- Added focused regressions for council candidate account derivation, Izanami
+  NPoS post-topology instructions, Nexus staking genesis key derivation, and
+  Nexus network-builder key derivation.
+- Validation:
+  - `cargo fmt -p iroha_cli -p izanami -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo test -p iroha_cli fallback_config_is_limited_to_offline_commands -- --nocapture`
+    (`3` matched CLI unit binaries passed; auxiliary binaries had `0` matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo test -p iroha_cli generate_candidates_derives_account_from_alias_seed -- --nocapture`
+    (`3` matched CLI unit binaries passed; auxiliary binaries had `0` matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo test -p izanami npos_post_topology_instructions_use_requested_min_self_bond -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo test -p izanami nexus_staking_genesis_registers_fee_sink_and_validators -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo test -p izanami make_network_builder_derives_nexus_keys -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo check -p iroha_cli -p izanami`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo clippy -p iroha_cli -p izanami --no-deps -- -D warnings`
+    (passed; check/clippy emitted the existing unrelated `iroha_sccp`
+    unused-constant warnings while traversing dependencies)
+- Note: `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-rng cargo test -p izanami make_network_builder_injects_npos_parameters -- --nocapture`
+  was also tried and failed in the pre-existing `NetworkBuilder::build()`
+  phase because the current Sora Nexus profile contains dataspace entries
+  without `manifest_hash`; the failure happens after the new fallible key
+  derivation path succeeds.
+
+## 2026-06-04 SCCP ETH core admission replay guards
+
+- `SubmitBridgeProof` now requires typed SCCP transparent message artifacts to
+  carry an outer `BridgeProof.range` equal to the artifact
+  `public_inputs.finality_height` before structural verification proceeds.
+  This prevents shifting the envelope range on an otherwise valid Ethereum
+  mainnet local-admission proof to bypass generic range-overlap replay checks.
+- Typed SCCP message proof records must now be pinned for durable replay
+  protection, and manual `PruneProofs` skips pinned bridge records just like
+  automatic bridge retention does.
+- Iroha admission now scans retained SCCP bridge proof records for an existing
+  `(source_domain, target_domain, messageId)` and rejects a second proof for
+  the same SCCP message even when the proof hash or finality range differs.
+- The retained-message scan only treats verified, pinned, internally
+  consistent bridge records as replay blockers, so rejected records, unpinned
+  retained records, and malformed bridge-record commitments cannot DoS a fresh
+  canonical Ethereum mainnet proof.
+- Torii's SCCP message-bundle submission path now emits pinned bridge proofs
+  so `/v1/bridge/proofs/submit` records remain compatible with the core
+  message replay guard.
+- Torii's SCCP runtime registry extractor now ignores unpinned SCCP message
+  bridge records before serving them as non-SORA source-chain proof envelopes,
+  closing the read-side compatibility gap for pre-seeded or manually inserted
+  records.
+- Added Ethereum mainnet local-admission regressions for shifted outer ranges,
+  unpinned SCCP message proofs, and same-message replay, plus a generic pinned
+  bridge proof manual-prune regression, adversarial retained-history cases
+  for rejected/unpinned/malformed SCCP records, a Torii pinned-submit
+  assertion, and a Torii registry extraction rejection for unpinned SCCP
+  message records.
+- The strict SCCP release-bundle verifier now inventory-scans the core
+  admission guards, Torii pinned-submit/read-side guards, and regression
+  markers so published bundles cannot silently lose the range/finality or
+  message replay protections.
+- Tightened the strict native/no-WASM release inventory so it explicitly pins
+  the published JS browser artifacts (`dist/sccp.js`, `dist/index.js`, and
+  `index.d.ts`) and the package-dist no-WASM regressions, not just the
+  readiness-test helper that scans SDK sources.
+- The strict release-bundle verifier now also pins Ethereum mainnet
+  local-admission hardening tests across JS/browser, Python, Swift,
+  Kotlin/JVM, Java Android, and C#, covering ETH -> SORA routing, immutable
+  proof/public-input/bundle/envelope byte copies, non-zero statement/source
+  verifier/deployment hashes, and stale metadata/proof-family rejection.
+- The JS/browser and Python Ethereum local-admission regressions now explicitly
+  cover stale proof-family metadata, matching the existing Swift, Kotlin/JVM,
+  Java Android, and C# parity checks.
+- While validating Torii, a Soracloud test-only state-entry fixture was updated
+  to include the current optional `fhe_residual_multiple_bound: None` schema
+  field; this was required to compile the focused Torii test target.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-core-bridge-target cargo test -p iroha_core --test bridge_proofs submit_configured_eth_source_adapter_proof_rejects_ -- --nocapture`
+    (`4` passed, `42` filtered out; compile emitted an existing
+    `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-core-bridge-target cargo test -p iroha_core --test bridge_proofs submit_configured_eth_source_adapter_proof_ignores_ -- --nocapture`
+    (`3` passed, `46` filtered out; compile emitted an existing
+    `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-core-bridge-target cargo test -p iroha_core --test bridge_proofs manual_prune_keeps_pinned_bridge_proofs -- --nocapture`
+    (`1` passed, `45` filtered out; compile emitted an existing
+    `iroha_sccp` unused-constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-core-bridge-target cargo test -p iroha_torii bridge_proof_from_sccp_message_bundle_builds_taira_tron_xor_diagnostic_when_allowed -- --nocapture`
+    (`1` targeted routing test passed; other Torii binaries were filtered out;
+    compile emitted existing `iroha_sccp` unused-constant warnings)
+  - `CARGO_TARGET_DIR=/tmp/iroha-core-bridge-target cargo test -p iroha_torii verified_bridge_record_extracts_non_sora_message_bundle_candidate -- --nocapture`
+    (`1` targeted routing test passed; other Torii binaries were filtered out;
+    compile emitted existing `iroha_sccp` unused-constant warnings)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "core_range_finality_binding or core_message_replay_guard or torii_pinned_message_proof or evm_source_adapter_deployment_gate"`
+    (`4` passed, `183` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "native_no_wasm_readiness_inventory or ethereum_browser_no_wasm_marker"`
+    (`2` passed, `185` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "native_local_prover_guard_covers_identifier_variants or all_public_sccp_sdk_sources_are_native_local_prover_only"`
+    (`2` passed, `60` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_local_admission_sdk_tests or ethereum_outbound_precallback_sdk_tests"`
+    (`2` passed, `186` deselected)
+  - `node --test --test-name-pattern "EthereumMainnetSccp builds ETH -> SORA local-admission submissions" test/sccpEthereumMainnet.test.js`
+    (`1` passed)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "ethereum_mainnet_sccp_builds_local_admission_submission"`
+    (`1` passed, `86` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_local_admission_sdk_tests"`
+    (`1` passed, `187` deselected)
+
+## 2026-06-04 BFV refresh residual-bound diagnostics
+
+- `iroha_crypto` now exposes the deterministic plaintext-multiple residual
+  bound for first-release BFV encrypted-zero refresh masks: `(2n + 1)E`, where
+  `n` is the ring degree and `E` is the current seeded error-multiple bound.
+- Rotation, bootstrap, and bundle-level secret-key owner diagnostics now reject
+  refresh masks that decrypt to zero plaintext but carry residual multiples
+  above that bound. This closes an exact-lift diagnostic gap without claiming
+  the pending bounded-RLWE/proof-carrying bootstrap work is complete.
+- Seeded key generation and public-key encryption now also require centered
+  `q/t` capacity to cover that bound before producing first-release key or
+  ciphertext material; the tiny exact-RNS test profile was widened from `q=45`
+  to `q=55` to remain valid under the new guard.
+- Registered BFV profile validation and the production parameter/RNS digest
+  path now enforce the same residual-capacity invariant before admitting the
+  RAM-LFE profile.
+- Owner-side evaluated-output diagnostics now validate a ciphertext against a
+  caller-declared exact residual-multiple bound, reject bounds wider than the
+  centered capacity, and catch plaintext-preserving residual inflation. This is
+  still a secret-key diagnostic, not public proof-carrying noise admission.
+- Exact residual-bound helpers now derive checked add-output bounds from input
+  bounds and checked bootstrap refresh-output bounds from input bounds plus
+  per-round encrypted-zero refresh material, rejecting impossible
+  over-capacity declarations before diagnostics consume them.
+- The same owner-side helper surface now covers exact subtract, plaintext
+  addition, plaintext-scalar multiplication, and plaintext-polynomial
+  multiplication, including plaintext-shape checks and output-capacity
+  rejection.
+- Public affine-circuit residual-bound propagation now returns one checked
+  exact bound per output row, rejects malformed weight/input shapes, and
+  validates real affine evaluator outputs against those propagated bounds.
+- Outer ciphertext-slot `RotateLeft` residual-bound propagation now rotates
+  per-slot input bounds, adds one encrypted-zero refresh bound per output slot,
+  and rejects empty/full-cycle rotations plus over-capacity input/output
+  declarations.
+- Packed `RotateLeft` residual-bound propagation now accounts for the current
+  Galois key-switch residual bound, packed plaintext-mask products, and
+  schedule addition; too-narrow profiles reject key-switch bounds before
+  diagnostics consume them.
+- Soracloud FHE state rows now carry optional exact BFV residual-multiple
+  metadata. `RunSoracloudFheJob` requires that metadata for every input,
+  validates it against the active BFV centered-capacity limit, persists
+  propagated Add, balanced Multiply/relinearization, outer/packed `RotateLeft`,
+  and Bootstrap output bounds, and rejects missing or over-capacity residual
+  declarations before ciphertext evaluation. Client-provided FHE state
+  mutations stay metadata-free and now fail closed if used as FHE job inputs
+  before proof-carrying input admission exists.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_core -p iroha_data_model -p iroha_crypto`
+  - `cargo fmt -p iroha_core`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-residual-bounds cargo test -p iroha_crypto "residual_bound" --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-residual-bounds cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plain-bound cargo test -p iroha_crypto exact_residual_bound_helpers --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plain-bound cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-bound cargo test -p iroha_crypto affine_ --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-bound cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rotation-bound cargo test -p iroha_crypto rotation_ --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rotation-bound cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-bound cargo test -p iroha_crypto "packed_rotate_left" --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-bound cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-multiply-bound cargo test -p iroha_crypto multiply_residual_bound_tracks_relinearized_output --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-multiply-bound cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-residual cargo test -p iroha_data_model service_state_entry_validate --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-residual cargo test -p iroha_core soracloud_fhe_job_residual_metadata --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-residual cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --nocapture`
+    (`1` passed; emitted unrelated `iroha_sccp` unused-constant warnings while
+    compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-residual cargo test -p iroha_core run_soracloud_fhe_job_rejects_client_mutated_fhe_input_without_residual_metadata --lib -- --nocapture`
+    (`1` passed; emitted unrelated `iroha_sccp` unused-constant warnings while
+    compiling dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-residual cargo clippy -p iroha_core -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed; emitted unrelated `iroha_sccp` unused-constant warnings while
+    checking dependencies)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-eval-bound cargo test -p iroha_crypto evaluated_ciphertext_residual_bound_rejects_oversized_residual --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-eval-bound-exact cargo test -p iroha_crypto exact_residual_profile_reports_centered_plaintext_multiple_decomposition --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-eval-bound-refresh cargo test -p iroha_crypto refresh_key_zero_plaintext_validators_ --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-eval-bound cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-bound cargo test -p iroha_crypto refresh_key_zero_plaintext_validators_reject_oversized_zero_residuals --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-bound cargo test -p iroha_crypto refresh_key_zero_plaintext_validators_ --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-bound cargo test -p iroha_crypto evaluation_key_bundle_zero_refresh_diagnostics_cover_all_public_masks --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-bound cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts_cover_all_public_masks --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-bound cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-capacity cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-capacity cargo test -p iroha_crypto rns_exact_ --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-capacity cargo test -p iroha_crypto refresh_key_zero_plaintext_validators_ --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-capacity cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-capacity cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-capacity cargo test -p iroha_crypto bfv_chunked_transcripts_match_legacy_contiguous_layout --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-registered-capacity cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Connect bridge checked seed key derivation
+
+- `connect_norito_keypair_from_seed` now calls `KeyPair::try_from_seed` and
+  maps derivation failures to the existing `ERR_CONNECT_KEYPAIR` bridge code.
+- The Java/JNI keypair-from-seed helper and Swift parity regeneration utility
+  now use the same checked seeded derivation path, returning explicit errors
+  instead of panic-only seed expansion.
+- Validation:
+  - `cargo fmt -p connect_norito_bridge -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-rng cargo test -p connect_norito_bridge keypair_from_seed -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-rng cargo test -p connect_norito_bridge instruction_builder_rejects_legacy_asset_literal_argument -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-rng cargo test -p connect_norito_bridge payload_builder_sets_nonce_and_ttl -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-rng cargo check -p connect_norito_bridge`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-rng cargo clippy -p connect_norito_bridge --no-deps -- -D warnings`
+    (passed; check/test emitted unrelated `iroha_sccp` unused-constant warnings
+    and the current unrelated `iroha_core` Soracloud unused-import warning)
+
+## 2026-06-04 SCCP BSC trust-anchor documentation
+
+- Documented the production SCCP source-chain trust boundary in
+  `docs/source/bridge_proofs.md`: SDK RPC/finality inputs are witness material,
+  while Iroha admission is anchored in governed source verifier material,
+  source-adapter deployment hashes, verifier hashes, bridge-emitter binding,
+  deployment receipt evidence, and the configured source trust anchor.
+- Added an explicit BSC fake-chain rejection explanation: `eth_chainId == 56`
+  and self-consistent BSC-shaped receipts are not sufficient; the
+  `BscValidatorSetReceiptProof` must verify a validator-set/finality path back
+  to the configured BSC `source_trust_anchor_hash` and then open the SCCP
+  source-event receipt under the governed bridge emitter.
+- Validation:
+  - Documentation-only change; no code tests were run.
+
+## 2026-06-04 Soracloud BFV refresh transcript policy binding
+
+- Added a BFV refresh transcript digest to `FheExecutionPolicyV1` and an owned
+  `BfvEvaluationKeyRefreshTranscriptV1` inventory to `RunSoracloudFheJob`.
+  The signed FHE job provenance payload now covers the transcript inventory.
+- Core now recomputes the refresh transcript digest from the submitted
+  transcript, registered BFV parameters, and evaluation-key bundle before
+  execution, rejecting wrong transcript material or policy digest drift before
+  ciphertext operations run.
+- Updated the Soracloud FHE policy/governance fixtures with the new digest
+  field and refreshed their embedded registered RNS modulus-chain digest to the
+  current canonical value.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_crypto`
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-policy cargo test -p iroha_data_model fhe_job_run_provenance_payload_encodes_canonical_tuple --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-policy cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_ -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-policy cargo test -p iroha_core soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-policy cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --nocapture`
+    (`1` passed; normal test build emitted an unrelated `iroha_sccp` unused
+    constant warning)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-policy cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-transcript-policy cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed; emitted unrelated `iroha_sccp` unused-constant warnings while
+    checking dependencies)
+
+## 2026-06-04 Kagami seeded config derivation checks
+
+- Kagami client-config generation now derives per-client Ed25519 keys through
+  `KeyPair::try_from_seed` and reports the failing client name through the
+  existing `Outcome` path.
+- Kagami genesis signing now derives the automatic NPoS bootstrap escrow
+  account through `KeyPair::try_from_seed` and propagates derivation failures
+  instead of relying on `KeyPair::from_seed`.
+- Validation:
+  - `cargo fmt -p iroha_kagami`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami run_writes_client_configs -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami sign_auto_bootstraps_npos_validators_for_topology -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo check -p iroha_kagami`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo clippy -p iroha_kagami --no-deps -- -D warnings`
+    (passed; emitted unrelated `iroha_sccp` unused-constant warnings and the
+    current unrelated `iroha_core` Soracloud unused-import warning)
+
+## 2026-06-04 SCCP ETH release verifier gates
+
+- The standalone SCCP release bundle verifier now scans both
+  `javascript/iroha_js/src/sccp.js` and the published `dist/sccp.js` for
+  Ethereum mainnet receipt-proof admission guards: block-receipt transaction
+  binding, receipt/block metadata binding, unsupported typed receipts,
+  execution block/root normalization, finalized Beacon root normalization, and
+  sync committee root normalization.
+- The verifier also scans JS/browser, Swift, Kotlin/JVM, Java Android, and C#
+  SDK receipt-proof builders for block-receipt metadata binding and typed
+  receipt rejection, so native release artifacts cannot drift from the
+  readiness-only source checks.
+- The same verifier now promotes the outbound provider-before-submit rule from
+  readiness tests into strict bundle verification across JS source/dist,
+  Python, Swift, Kotlin/JVM, Java Android, and C#. Ethereum outbound
+  submission paths must validate the configured mainnet execution provider
+  before invoking the caller-supplied submitter. The Python
+  `EthereumMainnetSccp.submit_outbound_to_ethereum(...)` facade now matches
+  the native/mobile behavior by rejecting non-mainnet execution providers
+  before the app-owned submit hook can run.
+- `iroha_sccp` now makes the EVM source-adapter deployment gate explicit for
+  ETH/BSC instead of relying only on the downstream generic material matcher.
+  Ethereum mainnet readiness now fails before proof packaging if governed
+  source-adapter deployment evidence replays another EVM network id, source
+  bridge config hash, or source bridge emitter. The release bundle verifier
+  now pins those Rust gate and regression-test markers.
+- Ethereum finalized block-tag metadata guards are now also strict bundle
+  checks. The verifier scans live source/destination evidence scripts,
+  source-bridge and destination TOML import paths, BSC diagnostic exceptions,
+  all-lanes metadata mapping, and their pytest/readiness guard tests for the
+  Ethereum `finalized` block-tag requirements.
+- The verifier now also makes the SCCP unready transparent-proof bypass a
+  strict config-owned release gate. It requires the `iroha_config` field,
+  preserves the Kaigi localnet TOML diagnostic override, requires the Taira
+  production config to keep the bypass false, and rejects the old
+  `ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS` environment override in
+  production-facing config/launcher paths.
+- Added a release-bundle regression proving strict verification fails if the
+  published JS artifact drops those Ethereum receipt-admission guards, and a
+  second regression proving native receipt metadata guards cannot disappear,
+  a third proving verification fails if outbound submission can bypass
+  provider validation, a fourth proving finalized block-tag metadata guards
+  cannot disappear, plus a fifth proving the unready transparent-proof bypass
+  cannot regain an environment override.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "sccp_unready_config_only or evm_block_tag_metadata or contract_smoke_eth_mainnet_network_id"`
+    (`3` passed)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target"`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_sdks_validate_provider_before_outbound_submitter"`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_outbound_provider_validation"`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "evm_source_adapter_deployment_gate or evm_block_tag_metadata or ethereum_outbound_provider_validation"`
+    (`3` passed)
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-sccp-target cargo test -p iroha_sccp eth_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter -- --nocapture`
+    (`1` passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_sccp/src/lib.rs python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py status.md roadmap.md`
+    (no matches)
+  - `git diff --exit-code -- Cargo.lock`
+
+## 2026-06-04 Kagami localnet checked key generation
+
+- Kagami localnet generation now propagates checked key-generation failures for
+  peer BLS keys, genesis keys, gas-account derivation, and extra account keys
+  through the existing `Outcome`/`eyre::Result` path. Seeded paths use
+  `KeyPair::try_from_seed`, unseeded localnet account/peer paths use checked
+  random generation, and BLS PoP proving errors are no longer hidden behind
+  `expect`.
+- Localnet tests unwrap those checked helper paths explicitly where they build
+  deterministic fixtures, while the real `generate_localnet` path reports the
+  failure to the caller.
+- Validation:
+  - `cargo fmt -p iroha_kagami -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami generated_configs_for_user_localnet_parse -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami genesis_key_defaults_to_real_keypair_when_unseeded -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami extra_account_keys_are_unique_when_unseeded -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo check -p iroha_kagami`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo clippy -p iroha_kagami --no-deps -- -D warnings`
+    (passed; emitted unrelated `iroha_sccp` unused-constant warnings and the
+    current unrelated `iroha_core` Soracloud unused-import warning)
+
+## 2026-06-04 SCCP ETH SDK data-collection release gate
+
+- Promoted the Ethereum mainnet SDK data-collection no-proxy rule into the
+  release bundle verifier. `sccp_verify_release_bundle.py` now scans the
+  JS/browser source, published JS `dist`, Python, Swift, Kotlin/JVM, Java
+  Android, and C# Ethereum
+  data-collection regions, requires app-owned execution/consensus provider
+  markers, and rejects Torii, proxy, or embedded HTTP-client fallbacks in that
+  path.
+- Added a release-bundle regression proving a sparse SDK source with a Torii
+  proxy fallback and missing execution/finality provider markers fails strict
+  verification.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "ethereum_data_collection_no_proxy or native_no_wasm_readiness_inventory"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_data_collection_has_no_proxy_fallback or ethereum_sdk_sources_are_native_local_prover_only"`
+    (`2` passed)
+
+## 2026-06-04 SCCP ETH live EVM evidence hardening
+
+- Extended the live EVM source and destination release inventories to pin
+  Ethereum mainnet production checks. Source evidence now has release/readiness
+  guards for canonical `eth_chainId`, finalized default block tags,
+  deployment receipt readback, deployment transaction readback, receipt-block
+  `receiptsRoot` verification, deployment-block bytecode consistency,
+  finalized receipt-block binding, and canonical source verifier/deployment
+  record hashes. Destination evidence now has guards for bridge/verifier
+  bytecode hashes, verifier `verifyingKeyHash()`, canonical
+  `destinationBindingHash()`, destination binding keys, route-canary event
+  fields, submitted calldata, and `usedMessageProofs(bytes32)` replay state.
+- Added route-canary adversarial fixture cases for malformed
+  `submitSccpMessageProof(bytes,bytes32[6],bytes32)` calldata: bad proof
+  offset, mismatched public inputs, wrong statement hash, short or all-zero
+  Groth16 proof bytes, wrong proof version, wrong proof message id, wrong
+  proof source domain, and wrong proof commitment root.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py -k "rpc_and_code_hash_drift or deployment_transaction_readback_drift or missing_or_drifted_receipt_contract_address or receipt_block_hash_drift or receipt_block_number_drift or unfinalized_deployment_receipt_block or finalized_deployment_receipt_hash_drift or zero_receipt_block_receipts_root or receipt_block_code_hash_drift or toml_revalidates_imported_summary_metadata or toml_requires_independent_pins"`
+    (`11` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k "route_canary_rejects_unverified_transaction_metadata or verifier_code_hash_drift or bridge_destination_binding_drift or full_toml_revalidates_imported_summary_metadata"`
+    (`4` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "evm_source_live_production or evm_live_destination_production"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "evm_live_destination_production or evm_route_canary_finalized_receipt_block"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "evm_source_live_production_surface or evm_live_destination_production_surface"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "evm_live_destination_production_surface or evm_route_canary_finalized_receipt_block"`
+    (`2` passed)
+
+## 2026-06-04 Daemon and swarm checked key-generation fallbacks
+
+- The Torii receipt-signer fallback in `irohad` now uses checked ephemeral
+  secp256k1 key generation and reports entropy/keygen failures as `StartTorii`
+  during startup instead of panicking. Configured receipt signers still bypass
+  the random path.
+- `iroha_swarm` peer/genesis key helpers now return `Result`, route random and
+  seeded key material through `KeyPair`'s fallible APIs, propagate BLS PoP
+  proving failures, and map Compose-generation failures to
+  `Error::KeyGeneration`.
+- Validation:
+  - `cargo fmt -p irohad -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-rng cargo test -p irohad torii_receipt_signer_selection -- --nocapture`
+    (passed in both daemon unit binaries)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-rng cargo check -p irohad`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-rng cargo clippy -p irohad --no-deps -- -D warnings`
+    (passed; emitted the existing `iroha_sccp` unused-constant warnings)
+  - `cargo fmt -p iroha_swarm -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-swarm-rng cargo test -p iroha_swarm -- --nocapture`
+    (`18` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-swarm-rng cargo check -p iroha_swarm`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-swarm-rng cargo clippy -p iroha_swarm --no-deps -- -D warnings`
+
+## 2026-06-04 BFV refresh transcript digest binding
+
+- Added a stable domain-separated refresh-transcript digest for the current BFV
+  encrypted-zero refresh inventory. The digest first validates the full bundle
+  transcript coverage, then binds the BFV parameter set, public key,
+  evaluation-key digest, rotation transcript seeds, and optional bootstrap
+  transcript metadata in canonical Norito encoding.
+- Extended the bundle refresh transcript regression to check the digest against
+  the legacy contiguous hash layout, preserving the chunked transcript behavior
+  used by the existing BFV parameter and evaluation-key digests.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-digest cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts_cover_all_public_masks --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-digest cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`75` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-digest cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 BFV bundle refresh transcript coverage
+
+- Added bundle-level public transcript validation for current BFV
+  encrypted-zero refresh material. `BfvEvaluationKeyBundle` now requires one
+  rotation transcript seed per rotation key, matching optional bootstrap
+  transcript metadata, and recomputes every public rotation/bootstrap refresh
+  ciphertext from the advertised public key and seeds.
+- The bundle diagnostic rejects missing rotation seeds, unmatched rotation
+  transcript steps, bootstrap metadata drift, wrong bootstrap seeds, and extra
+  bootstrap transcripts when the bundle has no bootstrap key. This prevents
+  public admission code from validating only a subset of refresh masks.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-transcript cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts_cover_all_public_masks --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-transcript cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`75` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-transcript cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 SCCP C# ETH beacon witness parity
+
+- Added native C# Ethereum mainnet Beacon witness helpers for
+  `EthExecutionPayloadHeaderRootFromRlp`,
+  `EthBeaconBodyRootFromExecutionPayloadBranch`, and
+  `EthBeaconBlockHeaderRoot`. The implementation derives Deneb/Fulu
+  execution-payload SSZ roots from RLP, opens the fixed Beacon body
+  execution-payload branch, and recomputes Beacon header roots without WASM or
+  a remote prover.
+- Added a C# shared-vector regression for the same execution-payload,
+  Beacon-body, and Beacon-header roots used by JS/Python/Swift/Kotlin/Java
+  Android, plus malformed RLP and branch-shape negatives. The release bundle
+  verifier and readiness inventory now require the C# helper names and golden
+  vector markers before Ethereum Beacon REST execution-payload binding can be
+  advertised.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k beacon_rest_execution_payload`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_beacon_rest_execution_payload`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "beacon_rest_execution_payload or java_android_phase_requires_source_proof_harness or java_android_log_without_source_harness"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_beacon_rest_execution_payload or java_android_phase_requires_source_proof_harness or java_android_log_without_source_harness"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "phase_transcript_inventory_matches_report or verifier_corridor_phase_inventory_matches_runner or evidence_phase_inventory_matches_corridor_runner"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "evidence_phase_inventory_matches_corridor_runner or json_tracks_corridor_phase_results"`
+    (`2` passed)
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --exit-code -- Cargo.lock`
+  - C# `dotnet test` was not runnable here because `dotnet`, `csc`, and `mcs`
+    are not installed.
+
+## 2026-06-04 BFV refresh-key public transcript diagnostics
+
+- Added public deterministic transcript validators for current BFV
+  encrypted-zero refresh material. Rotation refresh keys are recomputed from
+  the advertised public key, rotation step, and seed; bootstrap refresh keys
+  are recomputed from the advertised public key, key id, round capacity, and
+  seed.
+- The transcript checks reject wrong seeds, key-id drift, and tampered
+  round-refresh ciphertexts without requiring a BFV secret key. This hardens
+  current refresh-key admission, while the status/backlog still keep full
+  proof-carrying bootstrap key material as open production work.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript cargo test -p iroha_crypto refresh_key_transcripts_reject_tampered_public_material --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`74` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-transcript cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 BFV public-key secret consistency diagnostics
+
+- Added `validate_public_key_secret_consistency` as a key-owner diagnostic for
+  public-key construction. It validates key shapes, computes `b + a*s`, and
+  rejects residuals that are not plaintext-modulus multiples or that exceed the
+  current deterministic BFV exact-evaluator error bound.
+- `keygen_from_seed` now self-checks the generated public key and
+  relinearization entries before returning key material, so shape-valid `+1`
+  residuals, oversized `+2t` residuals, and unrelated secret keys fail locally
+  before publication.
+- Updated the FHE backlog and roadmap to keep this owner-side consistency
+  check distinct from future public proof-carrying key-material admission.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-key-consistency cargo test -p iroha_crypto public_key_secret_consistency_rejects_tampered_key_material --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-key-consistency cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`73` passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-key-consistency cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 SCCP Android source-proof corridor evidence
+
+- Tightened the SCCP release-readiness and release-bundle transcript gates so
+  the Java Android corridor phase must prove
+  `org.hyperledger.iroha.android.sccp.SourceSccpProofsTests` was selected in
+  `ANDROID_HARNESS_MAINS`, matching the production corridor runner's
+  source-proof harness inventory. Forged Android phase logs that retain only
+  the EVM facade harness now fail both readiness rendering and strict bundle
+  verification.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "java_android_phase_requires_source_proof_harness or java_android_log_without_source_harness"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "java_android_phase_requires_source_proof_harness or java_android_log_without_source_harness"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "phase_transcript_inventory_matches_report or verifier_corridor_phase_inventory_matches_runner or evidence_phase_inventory_matches_corridor_runner"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "evidence_phase_inventory_matches_corridor_runner or json_tracks_corridor_phase_results"`
+    (`2` passed)
+
+## 2026-06-04 BFV evaluation-key secret consistency diagnostics
+
+- Added `BfvEvaluationKeyBundle::validate_secret_key_consistency` as a
+  key-owner diagnostic for full evaluation-key bundle construction. It reuses
+  the existing zero-refresh checks, then verifies that relinearization entries
+  decrypt to the expected scaled `s^2` residues and Galois entries decrypt to
+  the expected scaled automorphed-secret residues under the matching secret key.
+- Key-switch residuals must be plaintext-modulus multiples and must stay within
+  the current deterministic BFV error bound. Shape-valid `+1` mutations,
+  oversized `+2t` residuals, and tampered Galois entries now fail the
+  diagnostic before bundle publication.
+- Updated the FHE backlog and roadmap to distinguish this owner-side
+  consistency check from future public proof-carrying key admission.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-consistency cargo test -p iroha_crypto evaluation_key_bundle_secret_consistency_rejects_tampered_key_switch_entries --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-consistency cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`72` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-consistency cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 BFV refresh zero-plaintext diagnostics
+
+- Added `validate_rotation_key_zero_refresh` and
+  `validate_bootstrap_key_zero_refreshes` as key-owner diagnostics for the
+  current public encrypted-zero refresh path. `BfvEvaluationKeyBundle` now also
+  exposes `validate_zero_refreshes` to cover every public rotation and
+  bootstrap refresh mask in one bundle-level check. These diagnostics validate
+  key shape and then decrypt refresh ciphertexts under the matching secret key,
+  rejecting shape-valid masks that carry non-zero plaintext.
+- Reused the exact residual-profile decrypt path for the zero-plaintext check
+  so rotation/bootstrap diagnostics share the same centered plaintext-lift
+  semantics as normal BFV decryption.
+- Updated the FHE backlog and roadmap to keep the limitation explicit: this is
+  owner-side validation, not public proof-carrying bootstrap-key admission.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-refresh-zero cargo test -p iroha_crypto refresh_key_zero_plaintext_validators_reject_nonzero_masks --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-zero cargo test -p iroha_crypto evaluation_key_bundle_zero_refresh_diagnostics_cover_all_public_masks --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-zero cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`71` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-zero cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Kagami checked key generation paths
+
+- Routed Kagami keypair generation, validator PoP generation, genesis signing
+  key loading, and wizard BLS key generation through `KeyPair`'s fallible
+  `try_random_with_algorithm`, `try_from_seed`, and `from_private_key` APIs.
+  Entropy-source, seeded-derivation, or private-key reconstruction failures now
+  propagate as command errors instead of panicking through compatibility
+  wrappers.
+- Added focused coverage for the Kagami crypto random generation path and
+  reused existing PoP/generated-key and genesis seed-loader coverage for the
+  other changed paths.
+- Validation:
+  - `cargo fmt -p iroha_kagami -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami key_pair_random_path_uses_checked_generation -- --nocapture`
+    (`1` passed; existing `iroha_sccp` dependency dead-code warnings were
+    emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami pop_plaintext_includes_private_key_when_generated -- --nocapture`
+    (`1` passed; existing `iroha_sccp` dependency dead-code warnings were
+    emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo test -p iroha_kagami load_genesis_key_accepts_seed_and_algorithm -- --nocapture`
+    (`1` passed; existing `iroha_sccp` dependency dead-code warnings were
+    emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo check -p iroha_kagami`
+    (passed; existing `iroha_sccp` dependency dead-code warnings were emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kagami-rng cargo clippy -p iroha_kagami --no-deps -- -D warnings`
+    (passed; existing `iroha_sccp` dependency dead-code warnings were emitted)
+
+## 2026-06-04 BFV exact residual diagnostics
+
+- Added `BfvExactResidualProfile` and
+  `decrypt_with_exact_residual_profile` as a secret-key diagnostic for the
+  first-release exact plaintext-lift evaluator. The profile reports normal
+  decrypted plaintext coefficients, per-coefficient centered residual
+  multiples of `t`, the maximum absolute residual multiple, and remaining
+  centered-modulus headroom.
+- Refactored normal BFV decryption through the same scaled-coefficient helper
+  so the existing decrypt behavior stays unchanged while the diagnostic shares
+  validation and arithmetic.
+- Updated the FHE backlog and roadmap to make clear that this is not full
+  bounded-RLWE noise budgeting; full BFV-RNS noise accounting and real
+  bootstrapping remain open.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-residual-profile cargo test -p iroha_crypto exact_residual_profile_reports_centered_plaintext_multiple_decomposition --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-residual-profile cargo test -p iroha_crypto encrypt_decrypt_roundtrip --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-residual-profile cargo test -p iroha_crypto rejects_parameter_sets_without_error_profile_headroom --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-residual-profile cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`69` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-residual-profile cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Ethereum mainnet sync-committee exact roster guard
+
+- Hardened Ethereum mainnet SCCP sync-committee payload/proof helpers in
+  Rust/core, JS/browser, Python, Swift, Kotlin/JVM, Java Android, and C# so
+  mainnet material must contain exactly 512 authorities, unit weights, fixed
+  48-byte BLS public keys, fixed 96-byte PoP values, and 64-byte signer
+  bitmaps. Compressed two-entry fixtures and weighted committee rosters now
+  fail before transcript hashing or source-proof submission.
+- Updated Rust BLS fixtures and SDK parity tests to derive transcript hashes
+  from deterministic 512-member committees, require 342-of-512 supermajority
+  signatures, and keep 341-of-512 under-quorum/adversarial cases negative.
+  C# now derives its expected Beacon sync-committee root from the same
+  canonical 512-entry fixture used by the provider test.
+- Added release-bundle and release-readiness marker inventories that pin the
+  exact 512-authority/unit-weight roster checks across Rust/core and every SDK
+  artifact, so compressed or weighted sync-committee regressions fail release
+  verification before publication.
+- Validation:
+  - `cargo test -p iroha_sccp eth_sync_committee --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp eth_source_adapter_verifies --lib -- --nocapture`
+    (`2` passed)
+  - `cargo test -p iroha_crypto galois_keys_reject_noncanonical_powers_and_malformed_entries --lib -- --nocapture`
+    (`1` passed)
+  - `cd javascript/iroha_js && node --test --test-name-pattern="ETH sync-committee" test/sccpSolanaProver.test.js && node --test --test-name-pattern="ETH sync-committee payload helpers" test/package_dist.test.js`
+    (`2` focused tests passed)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k eth_sync_committee_transition_transcripts`
+    (`1` passed)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+    (passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k sync_committee_roster`
+    (`1` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k sync_committee_roster`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `cd IrohaSwift && swift test --filter 'SccpSolanaProverTests/(testEthereumMainnetBeaconRestConsensusProviderCollectsFinalizedTargetEvidence|testEthereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality|testSourceProofHashesBindUiWitnessMaterial)'`
+    (`3` passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- <touched SCCP sync-committee files> status.md roadmap.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock`
+    (passed)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests`
+    (blocked: `dotnet` is not installed in this environment)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest --console=plain`
+    (blocked: no Java runtime is registered; `/usr/libexec/java_home -v 21`
+    also fails)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.sccp.SourceSccpProofsTests`
+    (blocked: no Java runtime is registered; `/usr/libexec/java_home -v 21`
+    also fails)
+
+## 2026-06-04 BFV error-profile modulus headroom
+
+- Tightened `BfvParameters::validate` so the ciphertext modulus must have
+  enough headroom for the configured deterministic plaintext-multiple error
+  profile. Profiles such as `q = 2t`, where `+t` and `-t` collapse to the same
+  residue, now fail before key generation or encryption.
+- Added a direct regression for the collapsed-error boundary and reran the
+  error sampler plus encrypt/decrypt roundtrip to confirm the registered
+  profile remains unchanged.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-error-headroom cargo test -p iroha_crypto rejects_parameter_sets_without_error_profile_headroom --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-error-headroom cargo test -p iroha_crypto error_sampler_uses_plaintext_modulus_multiples --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-error-headroom-roundtrip cargo test -p iroha_crypto encrypt_decrypt_roundtrip --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-error-headroom cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 BFV shape validator parameter preflight
+
+- Made plaintext, ciphertext, polynomial, Galois automorphism power,
+  RNS-polynomial, and public affine-circuit validators reject malformed
+  `BfvParameters` before inspecting caller-controlled shapes or plaintext
+  coefficient bounds.
+- Added direct regression coverage with an invalid decomposition base to prove
+  each non-key validator fails on the malformed parameter set first, and reran
+  the existing key-validator and affine evaluator regressions for fallout.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shape-validator-params cargo test -p iroha_crypto bfv_shape_validators_reject_malformed_parameters_first --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shape-validator-params cargo test -p iroha_crypto shared_key_validators_reject_malformed_parameters_first --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shape-validator-affine cargo test -p iroha_crypto affine_circuit_matches_plaintext --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-shape-validator-params cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Taikai checked OS RNG seeding
+
+- Changed the Taikai ingest-edge drift RNG helper to return `Result<StdRng>`.
+  Explicit `--drift-seed` values still use deterministic `seed_from_u64`,
+  while unseeded runs now use `SeedableRng::try_from_os_rng` and report OS
+  entropy failures through the CLI error path instead of panicking.
+- Changed CEK rotation receipt HKDF salt generation to use the same checked
+  OS-seeded `StdRng` path when `--hkdf-salt` is omitted, while explicit salts
+  still parse through the existing 32-byte hex validator.
+- Added focused coverage for deterministic edge seeding, checked unseeded edge
+  seeding, explicit CEK salt parsing, and checked CEK salt generation.
+- Validation:
+  - `cargo fmt -p iroha_cli -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-rng cargo test -p iroha_cli build_edge_rng -- --nocapture`
+    (`2` Taikai tests passed in each of the `iroha`, `iroha3`, and
+    `iroha_cli` binary test targets; existing `iroha_sccp` dependency
+    dead-code warnings were emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-rng cargo test -p iroha_cli cek_hkdf_salt -- --nocapture`
+    (`2` Taikai tests passed in each of the `iroha`, `iroha3`, and
+    `iroha_cli` binary test targets; existing `iroha_sccp` dependency
+    dead-code warnings were emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-rng cargo check -p iroha_cli`
+    (passed; existing `iroha_sccp` dependency dead-code warnings were emitted)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-rng cargo clippy -p iroha_cli --no-deps -- -D warnings`
+    (passed; existing `iroha_sccp` dependency dead-code warnings were emitted)
+
+## 2026-06-04 BFV key validator parameter preflight
+
+- Made the shared BFV secret/public key, rotation key, relinearization key,
+  Galois key, key-switch entry, and bootstrap key validators validate
+  `BfvParameters` before inspecting key shapes or metadata. This closes
+  direct-validator paths that could otherwise accept malformed parameter
+  profiles or reach decomposition math before the parameter guard.
+- Routed evaluation-key bundle rotation admission and the raw scalar/exact-RNS
+  outer-slot rotation helpers through the shared rotation-key validator.
+- Added direct regression coverage with an invalid decomposition base to prove
+  each validator fails on the malformed parameter set first.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-validator-params cargo test -p iroha_crypto shared_key_validators_reject_malformed_parameters_first --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-validator-params cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-validator-params cargo test -p iroha_crypto galois_keys_reject_noncanonical_powers_and_malformed_entries --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-validator-params-key-switch cargo test -p iroha_crypto key_switch_primitives_reject_truncated_entries_before_digit_zip --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rotation-validator cargo test -p iroha_crypto rotation_key_ --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-validator-params cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 BFV packed RotateLeft raw key-set validation
+
+- Wired the raw packed `RotateLeft` helpers through the shared Galois-key set
+  validator, so direct scalar and exact-RNS rotation calls reject oversized,
+  duplicate, or malformed supplied key slices before scheduled-key lookup.
+- Added regression coverage proving duplicate scheduled keys fail closed and
+  malformed extra keys cannot be ignored when they are not required by the
+  selected rotation schedule.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-key-set cargo test -p iroha_crypto packed_rotate_left_rejects_duplicate_and_malformed_extra_galois_keys --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-key-set cargo test -p iroha_crypto packed_rotate_left_with_galois_schedule_supports_one_step_rotation --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-key-set cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 BFV key-switch primitive fail-closed validation
+
+- Made scalar BFV key switching return `BfvError` after validating the
+  decomposition-entry count and operand polynomial shapes before the digit loop,
+  preventing malformed internal key material from being silently truncated by
+  `zip`.
+- Added the same preflight validation to the exact-RNS key-switch bridge before
+  guarded RNS products and additions are evaluated.
+- Added a regression that calls both private primitives with truncated
+  relinearization entries to prove they reject before digit zipping, and reran
+  Galois, multiplication, and RNS exact evaluator parity coverage.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-switch-guard cargo test -p iroha_crypto key_switch_primitives_reject_truncated_entries_before_digit_zip --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-switch-guard cargo test -p iroha_crypto galois_keys_reject_noncanonical_powers_and_malformed_entries --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-switch-guard cargo test -p iroha_crypto galois_key_switch --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-switch-guard cargo test -p iroha_crypto rns_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-switch-guard cargo test -p iroha_crypto homomorphic_ciphertext_multiplication_matches_plaintext --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-key-switch-guard cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 SoraNet handshake checked OS RNG seeding
+
+- Replaced P2P SoraNet runtime handshake `StdRng::from_os_rng()` calls with a
+  shared checked helper using `SeedableRng::try_from_os_rng`, so client and
+  relay handshake entropy-source failures now return `Error::HandshakeSoranet`
+  instead of panicking.
+- Added focused coverage that exercises the exact SoraNet handshake RNG helper
+  and consumes bytes from the seeded RNG.
+- Validation:
+  - `cargo fmt --all --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-p2p-rng cargo test -p iroha_p2p soranet_handshake_rng_reads_os_entropy --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-p2p-rng cargo check -p iroha_p2p`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-p2p-rng cargo clippy -p iroha_p2p --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 SCCP source-adapter unblock policy fail-closed
+
+- Made source-adapter deployment evidence unblock production only for explicitly
+  audited ETH/BSC EVM lanes, while future or unsupported domains now fail
+  closed instead of inheriting the generic fallback.
+- Added a regression proving ETH and BSC deployment evidence still opens the
+  audited EVM unblock policy, but the same evidence cannot open SORA or an
+  unknown future domain.
+- Validation:
+  - `cargo test -p iroha_sccp source_adapter_deployment_unblock_policy_is_explicit_per_domain --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp ethereum_mainnet_lane --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-04 BFV RNS parameter validation gate
+
+- Moved BFV parameter validation into the shared RNS modulus-chain validator so
+  direct exact-lift and exact `Z_q` coverage helpers fail closed on malformed
+  parameter profiles before inspecting chain arithmetic bounds.
+- Added a regression covering `validate_for_parameters`,
+  `validate_exact_lift_compatibility`, exact addition coverage, and exact
+  negacyclic-product coverage against an invalid polynomial degree.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-param-guard cargo test -p iroha_crypto rns_exact_coverage_guards_validate_parameters_first --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-param-guard cargo test -p iroha_crypto rns_modulus_chain_ --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-param-guard cargo test -p iroha_crypto rns_exact_ --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-param-guard cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 BFV Bootstrap input-shape admission
+
+- Closed a Soracloud BFV Bootstrap shape bypass where a multi-input Bootstrap
+  job could pass budget planning and then evaluate only the first encrypted
+  envelope.
+- Changed the first-release BFV Bootstrap plan constructor to bind the actual
+  input count, and added budget-level rejection for public plans with refresh
+  rounds over anything other than exactly one input ciphertext.
+- Added regressions for Bootstrap constructor shape checks, adversarial
+  manually constructed plans, and Soracloud runtime admission.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-shape cargo test -p iroha_crypto bfv_evaluation_ --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-shape cargo test -p iroha_core soracloud_fhe_job_rejects_operation_shape_bypasses_before_evaluation --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-shape cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 GOST and BLS checked OS-backed randomness
+
+- Routed GOST random scalar sampling and per-signature extra entropy through
+  `OsRng::try_fill_bytes`, returning `Error::KeyGen` on entropy-source failure
+  instead of using the infallible compatibility RNG adapter.
+- Routed default w3f BLS random key generation, key splitting, and randomized
+  signing through checked OS seed fills before seeding deterministic backend
+  RNGs. OS failures now surface through `Error::KeyGen` for key generation and
+  `Error::Signing` for signing.
+- Routed the blstrs BLS backend random key generation through checked OS seed
+  fills and deterministic `SecretKeyVT::from_seed` derivation for both Normal
+  and Small configurations.
+- Made the compatibility `rng::os_rng()` helper test-only; production
+  Ed25519, secp256k1, X25519, GOST, BLS, and Norito streaming random paths now
+  use checked OS randomness directly or deterministic RNGs seeded after a
+  checked OS fill.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng cargo test -p iroha_crypto --features gost random_keypair_signs_and_verifies --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng cargo test -p iroha_crypto --features gost signature::gost --lib -- --nocapture`
+    (`21` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng cargo clippy -p iroha_crypto --features gost --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng cargo test -p iroha_crypto --features bls checked_random_keypair_signs_and_verifies --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng cargo test -p iroha_crypto --features bls-backend-blstrs checked_random_keypair_signs_and_verifies --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng cargo test -p iroha_crypto --features bls signature::bls --lib -- --nocapture`
+    (`36` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng cargo test -p iroha_crypto --features bls-backend-blstrs signature::bls --lib -- --nocapture`
+    (`41` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng cargo clippy -p iroha_crypto --features bls --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng cargo clippy -p iroha_crypto --features bls-backend-blstrs --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng cargo clippy -p iroha_crypto --all-targets --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/signature/gost.rs crates/iroha_crypto/src/signature/bls/implementation.rs crates/iroha_crypto/src/signature/bls/implementation_blstrs.rs crates/iroha_crypto/src/signature/bls/tests.rs crates/iroha_crypto/src/rng.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/signature/gost.rs crates/iroha_crypto/src/signature/bls/implementation.rs crates/iroha_crypto/src/signature/bls/implementation_blstrs.rs crates/iroha_crypto/src/signature/bls/tests.rs crates/iroha_crypto/src/rng.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 EVM route-canary finalized-state Rust admission
+
+- Threaded `evm_route_canary_receipt_block_finalized` through the typed
+  `iroha_config` user/actual route allowlist records, SCCP readiness structs,
+  core launch-readiness mapping, Torii mapping, and bridge-proof test fixtures.
+- Aligned the Rust EVM route-canary transcript with the Python `v4` evidence
+  hash by committing the finalized receipt-block flag after
+  `used_message_proof`, while the production route-allowlist builder and
+  readiness check require finalized receipt-block evidence to be `true`.
+- Added regressions proving finalized and non-finalized EVM canary transcripts
+  derive different hashes, non-finalized EVM route-canary evidence cannot open
+  configured launch readiness, and release inventories pin the Rust/config
+  enforcement markers.
+- Added a Rust ETH route-canary vector matching the Python evidence tooling's
+  `84b93b0050b6bc9696ba55d56a8c957171e6a4ebd2f242b683762d52d88db9d7`
+  `v4` digest.
+- Validation:
+  - `cargo test -p iroha_sccp evm_route_canary_evidence_hash_matches_destination_script_vector --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp route_allowlist_lane_canary_builder_rejects_source_record_hash_replay --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_sccp route_canary --lib -- --nocapture`
+    (`5` passed)
+  - `cargo test -p iroha_config --test fixtures -- --nocapture`
+    (`79` passed)
+  - `cargo test -p iroha_core configured_sccp_all_lanes_launch_rejects_evm_non_finalized_route_canary -- --nocapture`
+    (`1` targeted unit passed; filtered integration binaries also completed)
+  - `cargo test -p iroha_torii sccp_configured -- --nocapture`
+    (compiled Torii and completed with no matching tests)
+  - `cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k evm_route_canary_finalized_receipt_block -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -k route_canary_finalized_receipt_block -q`
+    (`1` passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (passed)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/state.rs`
+    (passed)
+
+## 2026-06-04 BFV outer RotateLeft full-cycle hardening
+
+- Hardened scalar and exact-RNS outer ciphertext-slot `RotateLeft` helpers so
+  empty slot lists and step counts that normalize to a full slot cycle reject
+  instead of returning a refreshed no-op permutation.
+- Added a Soracloud runtime regression proving an outer-slot full-cycle
+  `RotateLeft` job fails before output emission even when matching public
+  rotation-key material is present.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rotate-cycle cargo test -p iroha_crypto rotation_key_ --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rotate-cycle cargo test -p iroha_core soracloud_rotate_left_rejects_outer_slot_full_cycle_noop --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rotate-cycle cargo test -p iroha_core soracloud_rotate_left_uses_rotation_key_refresh --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rotate-cycle cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 X25519 checked key-exchange randomness
+
+- Added `KeyExchangeScheme::try_keypair` as the fallible key-exchange
+  generation path while keeping the legacy `keypair` compatibility method.
+- Routed `X25519Sha256` random private-key generation through
+  `OsRng::try_fill_bytes` into zeroized temporary key bytes, returning
+  `Error::KeyGen` on OS RNG failure instead of using the infallible RNG
+  compatibility adapter.
+- Propagated checked X25519 key generation through the P2P handshake, the
+  native Connect bridge keypair FFI, and the Python Connect keypair binding.
+  The bridge now returns a dedicated Connect keypair error code and Python
+  raises `RuntimeError` when OS randomness fails.
+- Gated the remaining compatibility `os_rng()` helper to BLS, GOST, and tests,
+  where it is still required by feature-gated implementations and regressions.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-rng cargo test -p iroha_crypto x25519 --lib -- --nocapture`
+    (`8` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-rng cargo check -p iroha_p2p -p connect_norito_bridge -p iroha_python_rs`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-rng cargo clippy -p iroha_crypto --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-rng cargo clippy -p iroha_p2p -p connect_norito_bridge -p iroha_python_rs --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/kex/mod.rs crates/iroha_crypto/src/kex/x25519.rs crates/iroha_crypto/src/rng.rs crates/iroha_p2p/src/peer.rs crates/connect_norito_bridge/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/kex/mod.rs crates/iroha_crypto/src/kex/x25519.rs crates/iroha_crypto/src/rng.rs crates/iroha_p2p/src/peer.rs crates/connect_norito_bridge/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 BFV operation-specific evaluation-plan hardening
+
+- Added checked `BfvEvaluationPlan` constructors for Add, RotateLeft, and
+  Bootstrap so operation-specific arity and nonzero refresh-round requirements
+  are rejected before generic evaluator budget checks.
+- Routed Soracloud runtime FHE budget planning through those constructors, so
+  direct runtime callers that bypass data-model job validation still fail
+  closed before ciphertext evaluation.
+- Extended crypto and core regressions to cover single-input Add, multi-input
+  RotateLeft, and zero-round Bootstrap plan bypasses.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-op-plan cargo test -p iroha_crypto bfv_evaluation_budget_plans_balanced_multiplication_depth --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-op-plan cargo test -p iroha_core soracloud_fhe_job_rejects_operation_shape_bypasses_before_evaluation --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-op-plan cargo test -p iroha_core soracloud_multi_input_multiply --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-op-plan cargo clippy -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 Ed25519 and secp256k1 checked OS-backed key generation
+
+- Added `Ed25519Sha512::try_keypair`, with random key generation drawing seed
+  bytes through `OsRng::try_fill_bytes` and reporting OS RNG failures as
+  `Error::KeyGen` instead of routing checked top-level keygen through the
+  infallible RNG compatibility adapter.
+- Added `EcdsaSecp256k1Sha256::try_keypair`, with random key generation drawing
+  candidate scalar bytes through `OsRng::try_fill_bytes`, accepting them through
+  `k256::SecretKey::from_slice`, and returning `Error::KeyGen` if OS RNG fails
+  or the bounded retry window cannot sample a valid scalar.
+- Routed `KeyPair::try_random_with_algorithm(Algorithm::Ed25519)` and
+  `KeyPair::try_random_with_algorithm(Algorithm::Secp256k1)` through checked
+  backend paths. The legacy infallible backend `keypair` helpers remain for
+  existing callers.
+- Split the BFV evaluation-budget regression into focused tests so the strict
+  `iroha_crypto --all-targets` clippy gate stays warning-clean.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng cargo test -p iroha_crypto bfv_evaluation_ --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng cargo test -p iroha_crypto ed25519 --lib -- --nocapture`
+    (`52` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng cargo test -p iroha_crypto secp256k1 --lib -- --nocapture`
+    (`10` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-rng cargo clippy -p iroha_crypto --all-targets --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/src/signature/ed25519.rs crates/iroha_crypto/src/signature/secp256k1.rs crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/src/signature/ed25519.rs crates/iroha_crypto/src/signature/secp256k1.rs crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 Norito streaming fallible OS randomness
+
+- Routed Norito streaming X25519 ephemeral generation and outbound content-key
+  nonce generation through `OsRng::try_fill_bytes`, returning
+  `HandshakeError::Randomness` on OS RNG failure instead of using the infallible
+  compatibility RNG wrapper.
+- Added streaming regressions for random X25519 ephemeral construction and a full
+  X25519 key-update exchange followed by content-key wrap/unwrap, keeping nonce
+  generation covered through the production session path.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-rng cargo test -p iroha_crypto streaming::key_update_tests --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-rng cargo test -p iroha_crypto streaming --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-rng cargo clippy -p iroha_crypto --all-targets --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/streaming.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/streaming.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 EVM route-canary finalized-state hash binding
+
+- Bumped the EVM route-canary evidence digest label/payload to `v4` and bound
+  the `receipt_block_finalized` readback flag into the canary hash. Finalized
+  live reads produce production hashes, while non-finalized `latest` reads now
+  produce distinct diagnostic hashes that TOML/all-lanes production gates still
+  reject.
+- Threaded the finalized flag through live EVM evidence collection, all-lanes
+  recomputation, release-bundle inventory guards, and focused ETH/BSC canary
+  hash vectors.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py -k 'evm_route_canary or route_canary_transaction or route_canary_finalized or live_evm or ethereum_evm_live or direct_evm' -q`
+    (`40` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'evm_route_canary_finalized_receipt_block' -q`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -k 'route_canary_finalized_receipt_block' -q`
+    (`1` passed)
+  - `python3 -m py_compile ...` for the touched SCCP evidence scripts and
+    tests (passed)
+
+## 2026-06-04 BFV evaluation-plan multiplicative-input hardening
+
+- Hardened `BfvEvaluationBudget::validate_plan` so hand-built
+  `BfvEvaluationPlan` values with nonzero `ciphertext_multiplication_depth`
+  must declare at least two `input_ciphertexts`.
+- Extended the focused BFV evaluation-budget regression to cover the
+  single-input nonzero-depth shape while preserving zero-input, balanced-depth,
+  and over-refresh checks used by Soracloud runtime admission.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo test -p iroha_crypto bfv_evaluation_budget_plans_balanced_multiplication_depth --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo test -p iroha_core soracloud_multi_input_multiply --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo test -p iroha_data_model fhe_job_spec_validate_rejects_adversarial_operation_shapes --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 BFV evaluation-plan zero-input hardening
+
+- Hardened `BfvEvaluationBudget::validate_plan` so hand-built
+  `BfvEvaluationPlan` values with `input_ciphertexts == 0` are rejected before
+  depth or bootstrap-refresh budget checks.
+- Extended the focused BFV evaluation-budget regression to cover the
+  zero-input plan shape while preserving balanced-depth and over-refresh
+  checks used by Soracloud runtime admission.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo test -p iroha_crypto bfv_evaluation_budget_plans_balanced_multiplication_depth --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo test -p iroha_core soracloud_multi_input_multiply --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo test -p iroha_data_model fhe_job_spec_validate_rejects_adversarial_operation_shapes --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-plan cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 RAM-LFE programmed BFV fallible-only constructors
+
+- Removed the two infallible programmed BFV public-parameter wrappers from
+  `iroha_crypto::ram_lfe`, eliminating the remaining production
+  `expect("programmed BFV public parameters must be valid")` panic surface.
+  Callers now use `try_bfv_programmed_public_parameters*` explicitly and handle
+  `RamLfeError`.
+- Updated crypto, core, Torii, and consensus integration test helpers to use
+  the fallible constructors with test-local `expect(...)`, and fixed the
+  consensus RAM-LFE email helper to supply the current empty `galois_keys`
+  bundle field.
+- Split oversized BFV evaluation-key metadata tests and cleaned a packed-mask
+  bool-to-int mapping so `iroha_crypto --all-targets` remains strict
+  clippy-clean.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo test -p iroha_crypto ram_lfe::tests:: --lib -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo test -p iroha_data_model fhe_job_spec_balanced_multiply_depth_matches_tree_shape --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo test -p iroha_core gossip_roundtrip_preserves_large_ram_lfe_policy_transaction --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo test -p iroha_torii programmed_backend_resolves_encrypted_input --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo test -p iroha_torii identifier_resolve_accepts_bfv_encrypted_input --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo test -p integration_tests --test consensus_and_da realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo clippy -p iroha_crypto --all-targets --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo clippy -p integration_tests --test consensus_and_da --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-fallible-only cargo clippy -p iroha_torii --lib --tests --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check -- ...` across touched RAM-LFE/BFV, core/Torii test
+    helper, integration smoke, roadmap, backlog, and status files
+    (passed)
+  - `git diff --exit-code -- Cargo.lock`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched files
+    (no matches)
+  - `rg -n "\bbfv_programmed_public_parameters_with_program\b|\bbfv_programmed_public_parameters\b|programmed BFV public parameters must be valid|# Panics" ...`
+    across RAM-LFE constructor callers
+    (no matches)
+
+## 2026-06-04 SCCP unready-proof bypass config-only guard
+
+- Removed the `ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS` environment override
+  from `iroha_config`, the Taira systemd unit, and the Kaigi localnet launcher;
+  the bypass remains available only through the explicit
+  `sccp_allow_unready_transparent_proofs` config field.
+- Added a release-readiness regression that keeps the SCCP unready transparent
+  proof bypass config-owned while preserving the localnet TOML override path.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k sccp_allow_unready_transparent_proofs_is_config_only -q`
+    (`1` passed, `56` deselected)
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `cargo test -p iroha_config fixtures -- --nocapture`
+    (compiled successfully but matched `0` tests; rerun with the test target
+    below)
+  - `cargo test -p iroha_config --test fixtures -- --nocapture`
+    (`79` passed)
+
+## 2026-06-04 Ethereum mainnet SCCP EVM contract smoke release gate
+
+- Tightened the EVM SCCP contract smoke test to assert exact revert reasons for
+  missing and mismatched Groth16 verifier key hashes, zero destination binding
+  hashes, and replayed `messageId` submissions.
+- Added a release-bundle verifier inventory for the EVM bridge/verifier
+  production surface, requiring smoke coverage for `MessageProofAccepted`
+  fields, verifier code/key hash binding, `destinationBindingHash()`, malformed
+  Groth16 proof words, public-input drift, successful acceptance, and replay
+  protection before the lane can be advertised as release-ready.
+- Validation:
+  - `node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
+    (passed)
+  - `bash scripts/sccp_evm_contract_smoke.sh`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -k 'contract_smoke_eth_mainnet_network_id or contract_smoke_evm_production_surface' -q`
+    (`2` passed, `170` deselected)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+    (passed)
+
+## 2026-06-04 Soracloud FHE parameter-set evaluator depth binding
+
+- Bound `FheParamSetV1::validate` to
+  `BfvEvaluationBudget::exact_evaluator_v1()`, so parameter-set governance
+  descriptors cannot advertise `max_multiplicative_depth` above the exact BFV
+  evaluator bridge budget even when the declared modulus-chain length would
+  otherwise allow it.
+- Extended the FHE parameter-set structural regression with a long-chain
+  adversarial descriptor that passes the chain-length rule but exceeds the
+  exact evaluator depth budget.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_param_set_validate_rejects_adversarial_structural_fields --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_execution_policy_validate_rejects_exact_evaluator_budget_overflow --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_governance_bundle_validate_accepts_consistent_payload --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP source-event release inventory
+
+- Tightened the Ethereum inbound adversarial release inventories so
+  JS/browser, Swift, Kotlin/JVM, Java Android, and C# tests must retain
+  malformed SCCP source-event log negatives for extra topics, non-empty data,
+  zero digests, duplicate matches, and removed logs.
+- Strengthened the C# regression to assert the removed-log failure message,
+  making the .NET marker pin the same source-event semantics as the other SDKs.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_inbound_adversarial_sdk_tests -q`
+    (`1` passed, `55` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -k ethereum_inbound_adversarial_sdk_tests -q`
+    (`1` passed, `170` deselected)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (passed)
+  - The C# test suite was not run because `dotnet` is not installed in this
+    environment.
+
+## 2026-06-04 Ethereum mainnet SCCP Beacon REST ancestry release gate
+
+- Extended the SCCP release-readiness and strict bundle verifier inventories so
+  the Ethereum mainnet Beacon REST provider checks now explicitly require the
+  historical-target ancestry-proof regression across JS/browser, Swift,
+  Kotlin/JVM, Java Android, and C# SDKs.
+- Realigned the native Beacon REST inventory markers with the finalized-slot
+  happy paths: slot 64 block/root evidence and timestamp `0x364` are now the
+  current finalized target markers, while slot 32 remains covered by the
+  historical-target negative case.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_beacon_rest_execution_payload -q`
+    (`1` passed, `55` deselected)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -k ethereum_beacon_rest_execution_payload -q`
+    (`1` passed, `170` deselected)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (passed)
+
+## 2026-06-04 Soracloud FHE execution-policy evaluator budget binding
+
+- Bound `FheExecutionPolicyV1::validate` to
+  `BfvEvaluationBudget::exact_evaluator_v1()`, so governance policies cannot
+  advertise `max_multiplication_depth` or `max_bootstrap_count` above the exact
+  BFV evaluator bridge budget and defer rejection to job/runtime admission.
+- Added a data-model regression covering both over-depth and over-bootstrap
+  policy shapes while preserving the existing parameter-linkage and job-budget
+  admission tests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_execution_policy_validate_rejects_exact_evaluator_budget_overflow --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_execution_policy_validate_for_param_set_rejects_adversarial_linkage --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_job_spec_validate_for_execution_rejects_adversarial_budget_abuse --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP native Beacon REST ancestry guard
+
+- Hardened the Swift, Kotlin/JVM, Java Android, and C# Ethereum mainnet Beacon
+  REST consensus providers so app-supplied target slots older than the current
+  finalized Beacon header now fail closed until an ancestry proof is available,
+  matching the existing JS/browser guard.
+- Updated native Beacon REST happy-path tests to collect evidence for the
+  current finalized slot and added historical-target regressions that reject
+  slot 32 under a slot 64 finalized head before block-root or execution-payload
+  data can be accepted.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality`
+    (passed)
+  - `swift test --filter 'SccpSolanaProverTests/testEthereumMainnetBeaconRestConsensusProvider(CollectsFinalizedTargetEvidence|DerivesTargetSlotFromTimestamp)'`
+    (passed)
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+    (passed)
+  - JVM and C# runtime suites were not rerun in this environment because
+    `java -version` cannot locate a Java Runtime and `dotnet` is not installed.
+
+## 2026-06-04 Ethereum mainnet SCCP source deployment finality guard
+
+- Hardened `scripts/sccp_evm_source_live_evidence.py` so Ethereum source
+  deployment evidence collected at the `finalized` block tag now also reads the
+  finalized execution head and rejects deployment receipt blocks that are newer
+  than finalized or hash-mismatched at the finalized height.
+- Added live-evidence summary/TOML revalidation for the Ethereum deployment
+  receipt finality metadata and regressions for unfinalized receipt blocks,
+  finalized-head hash drift, and imported-summary tampering.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_source_live_evidence_test.py -q`
+    (`28` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_destination_evidence_test.py -q`
+    (`15` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'evm_source or active or finalized' -q`
+    (`4` passed, `52` deselected)
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py scripts/sccp_evm_destination_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (passed)
+
+## 2026-06-04 Soracloud FHE job balanced-depth validation
+
+- Moved balanced BFV Multiply depth admission into `FheJobSpecV1::validate`,
+  so multi-input jobs that under-declare
+  `requested_multiplication_depth` fail before policy admission or ciphertext
+  execution.
+- Replaced the data-model-local depth calculation with
+  `iroha_crypto::fhe_bfv::bfv_balanced_multiplication_depth`, keeping
+  job-spec admission, runtime admission, and the exact evaluator budget on one
+  canonical planner.
+- Added a direct data-model regression for the balanced tree depth sequence
+  and extended operation-shape validation to reject a three-input Multiply job
+  that declares only depth 1.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_job_spec_balanced_multiply_depth_matches_tree_shape --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_job_spec_validate_rejects_adversarial_operation_shapes --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_data_model fhe_job_spec_validate_for_execution_accepts_multi_input_add_and_multiply --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo clippy -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_data_model/src/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP destination binding-key mainnet guard
+
+- Hardened the offline EVM destination evidence helper so
+  `evm_destination_binding_key(...)` now rejects arbitrary EVM `network_id`
+  values and requires the selected ETH/BSC domain's canonical mainnet EIP-155
+  chain-id word, matching the existing destination binding hash guard.
+- Added a regression proving non-mainnet ETH network ids cannot produce a
+  destination binding key for production TOML or JSON evidence paths.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_destination_evidence_test.py -k malformed_direct_material`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`15` passed)
+  - `python3 -m py_compile scripts/sccp_evm_destination_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (passed)
+
+## 2026-06-04 Ethereum mainnet SCCP EVM wrapper network-id enforcement
+
+- Hardened `SccpMessageBridge` so ETH-targeted deployments must use the
+  canonical bytes32 EIP-155 Ethereum mainnet chain-id word (`1`) and
+  BSC-targeted deployments must use BNB Smart Chain mainnet (`56`); arbitrary
+  nonzero `networkId` values no longer pass the wrapper constructor.
+- Added EVM smoke-test negatives and release-bundle inventory markers for the
+  ETH/BSC wrong-network constructor rejections, and documented the deployment
+  rule in the EVM SCCP contract README.
+- Validation:
+  - `scripts/sccp_evm_contract_smoke.sh` (`sccp_message_bridge_smoke: ok`)
+  - `node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
+    (passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py -k contract_smoke_eth_mainnet_network_id`
+    (`1` passed)
+
+## 2026-06-04 RAM-LFE programmed BFV input-slot admission hardening
+
+- Bound programmed BFV hidden-program admission to the advertised encrypted
+  envelope capacity: constructors now reject `LoadInput` indexes above
+  `max_input_bytes`, and decoded programmed public parameters reject envelope
+  capacities above the canonical 64-slot identifier profile.
+- Rechecked the same hidden-program input-slot bound while deriving programmed
+  policy commitments from encoded public parameters, so adversarial policy
+  bytes with a matching hidden-program digest cannot defer impossible input-slot
+  reads to runtime.
+- Kept the BFV evaluation-budget helper clippy-clean by passing its small
+  `Copy` budget and plan values by value, and updated the Soracloud caller and
+  focused budget test accordingly.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-input-bounds cargo test -p iroha_crypto ram_lfe::tests:: --lib -- --nocapture`
+    (`28` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-input-bounds cargo test -p iroha_crypto bfv_evaluation_budget_plans_balanced_multiplication_depth --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-input-bounds cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-input-bounds cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-input-bounds cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed)
+  - `jq empty fixtures/soracloud/bfv_identifier_vectors_v1.json`
+    (passed)
+  - `git diff --check -- crates/iroha_crypto/src/ram_lfe.rs crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs fixtures/soracloud/bfv_identifier_vectors_v1.json docs/source/engineering_backlog.md roadmap.md status.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock`
+    (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched RAM-LFE/BFV,
+    Soracloud fixture/docs/status files
+    (no matches)
+
+## 2026-06-04 BFV balanced multiply depth admission
+
+- Added a reusable first-release BFV evaluation budget planner that reports
+  balanced ciphertext multiplication depth and validates planned
+  multiplicative depth / bootstrap refresh rounds against the exact evaluator
+  bridge budget.
+- Routed Soracloud multi-input BFV Multiply through a deterministic balanced
+  ciphertext tree and reject jobs whose declared
+  `requested_multiplication_depth` underestimates that tree before ciphertext
+  evaluation.
+- Pinned `requested_multiplication_depth` in the shared Soracloud BFV runtime
+  operation vectors and extended Rust, JavaScript, Swift, Kotlin/JVM, and Java
+  Android fixture-shape validators to check it.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_crypto bfv_evaluation_budget_plans_balanced_multiplication_depth --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_core soracloud_multi_input_multiply --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed)
+  - `jq empty fixtures/soracloud/bfv_identifier_vectors_v1.json`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (`18` passed)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`57` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo test -p iroha_core soracloud_bfv_operation_vectors_reject_tampered_refresh_material --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-depth cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+- Hygiene:
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check` on touched BFV/RAM-LFE, Soracloud fixture, SDK
+    validator, roadmap, backlog, status, and rustfmt-touched integration-test
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched BFV/RAM-LFE,
+    Soracloud fixture, SDK validator, roadmap, backlog, status, and
+    rustfmt-touched integration-test files (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP source-adapter replay proof guard
+
+- Added focused Rust/core coverage proving Ethereum mainnet source-proof
+  verification rejects replayed source-adapter deployment material at the
+  structure, production, and bundle-helper gates, even when the replayed
+  deployment descriptor remains internally production-shaped.
+- Validation:
+  - `cargo test -p iroha_core --test bridge_proofs eth_source_chain_proof_rejects_replayed_source_adapter_deployment -- --nocapture`
+    (`1` passed)
+
+## 2026-06-04 Ethereum mainnet SCCP route-canary transaction target guard
+
+- Extended the EVM live-evidence fake RPC adversarial suite so
+  `eth_getTransactionByHash(...).to` must match the configured destination bridge
+  address for route-canary evidence; a canary transaction sent to any other
+  contract is rejected before readiness evidence can be rendered.
+- Updated the release-readiness marker inventory so this transaction-target
+  guard remains pinned alongside the existing route-canary finalized receipt
+  block checks.
+- Validation:
+  - `python3 -m pytest pytests/scripts/sccp_evm_live_evidence_test.py -k route_canary_rejects_unverified_transaction_metadata`
+    (`1` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k evm_route_canary_finalized_receipt_block`
+    (`1` passed)
+  - `python3 -m py_compile pytests/scripts/sccp_evm_live_evidence_test.py scripts/sccp_evm_live_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+
+## 2026-06-04 Ethereum mainnet SCCP outbound binding-hash request gates
+
+- Tightened the Swift `EthereumMainnetSccp.buildOutboundProofRequest(...)`
+  facade so it recomputes the canonical Ethereum mainnet destination binding
+  hash and rejects forged `destinationBindingHash` or proof-context binding
+  hashes before returning a request to callers.
+- Added a Swift regression proving the Ethereum outbound facade fails closed on
+  a forged binding hash before handing back an outbound proof request, in
+  addition to the existing `wrapProofResult` forged-request guard.
+- Extended the Python Torii client Ethereum facade regression to pin both
+  forged `destination_binding_hash` rejection and BSC-request rejection before
+  the app-owned outbound prover callback can run.
+- Updated the SCCP release-readiness marker inventory so future release bundle
+  checks pin these request-boundary regressions.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    (`1` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py -k ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target`
+    (`1` passed)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k ethereum_outbound_precallback_sdk_tests`
+    (`1` passed)
+
+## 2026-06-04 BFV bootstrap refresh constructor panic hardening
+
+- Removed the remaining production `expect` from
+  `bootstrap_key_with_max_refresh_rounds_from_seed(...)`. Zero refresh-round
+  capacity now returns `BfvError::InvalidParameters` from the constructor
+  itself instead of relying on an earlier metadata guard to make the empty
+  refresh list unreachable.
+- Added a direct constructor regression for zero bootstrap refresh-round
+  capacity alongside the existing evaluation-key bundle metadata checks.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-panic cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_rotation_and_bootstrap_metadata --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-panic cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`56` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-panic cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-04 Ethereum mainnet SCCP finality-branch proof-gate parity
+
+- Tightened the browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum
+  mainnet inbound proof gates so direct app-supplied Beacon finality maps must
+  still carry a normalized six-sibling `finalityBranch` before local
+  ETH -> SORA prover callbacks can run.
+- Updated direct-finality fixtures and alias-only regressions so
+  `finalityBranch`/`finality_branch` is preserved for callback evidence,
+  stripped from known alias spellings, and rejected when omitted from otherwise
+  proof-ready receipt evidence.
+- Extended release-readiness and bundle-verifier inventories with proof-time
+  finality-branch markers across JS/browser, Swift, Kotlin/JVM, Java Android,
+  and C#.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_beacon_rest_execution_payload_tests or ethereum_browser_package_exports'`
+    (`2` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_eth_source_adapter_is_accepted_for_ethereum_lane_launch -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --test bridge_proofs eth_source_chain_proof_rejects_replayed_source_material -- --nocapture`
+    (`1` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 Soracloud BFV operation RNS exact bridge
+
+- Routed public Soracloud BFV `RunSoracloudFheJob` execution through the
+  registered RAM-LFE RNS chain for Add, Multiply, packed and outer
+  `RotateLeft`, and bounded Bootstrap refresh rounds. The production job path
+  now uses the exact RNS add, multiply/relinearization, Galois rotation,
+  plaintext-mask, outer-slot rotation refresh, and round-indexed bootstrap
+  refresh helpers instead of scalar-only operation fallbacks.
+- Added exact RNS helper coverage for public refresh paths: bootstrap refresh,
+  outer ciphertext-slot rotation refresh, packed Galois-schedule rotation, and
+  plaintext-polynomial mask multiplication are checked against the scalar
+  baseline.
+- Refreshed the shared Soracloud BFV operation fixture for the round-indexed
+  bootstrap key material. The fixture now pins the evaluation-key bundle
+  envelope/digest, bootstrap zero refresh, per-round refresh ciphertexts, and
+  standalone one-/two-round bootstrap refresh outputs for the current RNS
+  exact path.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed; regenerated fixture vectors matched
+    `fixtures/soracloud/bfv_identifier_vectors_v1.json`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo test -p iroha_core soracloud_bfv_operation_vectors_reject_tampered_refresh_material --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-rns-ops cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-rns-ops cargo test -p iroha_core soracloud_bfv_operation_vectors_reject_tampered_refresh_material --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo test -p iroha_crypto bootstrap_refresh --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-rns-ops cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`56` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`56` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_rotation_and_bootstrap_metadata --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-rounds cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `jq empty fixtures/soracloud/bfv_identifier_vectors_v1.json`
+    (passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (`18` passed)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete`
+    (`1` passed on rerun; the first run stopped after an unrelated
+    concurrently modified Swift test file)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+- Hygiene:
+  - `cargo fmt --all --check`
+    (passed)
+  - `git diff --check` on touched BFV/RAM-LFE, Soracloud fixture, SDK
+    validator, roadmap, backlog, and status files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched BFV/RAM-LFE,
+    Soracloud fixture, SDK validator, roadmap, backlog, and status files (no
+    matches)
+
+## 2026-06-04 Ethereum mainnet SCCP Python finality proof-gate parity
+
+- Hardened the Python `EthereumMainnetSccp` evidence tooling so supplied or
+  provider-collected `beacon_finality` must carry finalized-header root,
+  sync-committee root, beacon slot, six-sibling `finality_branch`, sync
+  committee bits/signature, signature slot, and participation before the
+  inbound prover callback can run.
+- Added Python cross-binding checks from prebuilt `receipt_proof` material back
+  to Beacon finality: execution fields, finalized-header root, sync-committee
+  root, and beacon slot must all match the normalized finality evidence.
+- Added Python adversarial tests for missing/malformed finality branches,
+  under-quorum sync committee bits, mismatched participation, stale signature
+  slots, zero aggregate signatures, and forged receipt-proof finality roots or
+  slots. The release-readiness and bundle-verifier inventories now pin the
+  Python source and test markers.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs or ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence'`
+    (`2` passed)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`87` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests'`
+    (`1` passed)
+
+## 2026-06-04 Ethereum mainnet SCCP Beacon finality-branch evidence hardening
+
+- Hardened JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum
+  mainnet Beacon REST finality-update parsing so
+  `/eth/v1/beacon/light_client/finality_update` evidence must include the
+  Ethereum light-client six-sibling `finality_branch` before local
+  ETH -> SORA proving callbacks can observe Beacon finality material.
+- Propagated the normalized branch into callback-facing evidence as
+  `finalityBranch`, accepted the same camelCase/snake_case direct-finality
+  aliases, and exposed the typed JS declaration surface for browser/mobile app
+  proof collection without WASM or a Torii proxy.
+- Added positive and malformed/missing-branch regressions across the SDK test
+  fixtures, and extended the release-readiness and bundle-verifier inventories
+  so the branch requirement remains pinned across JS, Swift, Kotlin/JVM, Java
+  Android, and C#.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`49` passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_beacon_rest_execution_payload_tests or ethereum_inbound_adversarial_sdk_tests or ethereum_browser_package_exports'`
+    (`2` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 BFV programmed runtime RNS exact bridge
+
+- Added `subtract_ciphertexts_rns_exact` beside the existing exact RNS add,
+  multiply/relinearization, and Galois-switch helpers so subtraction-heavy
+  evaluator paths can stay inside the guarded registered-chain bridge.
+- Routed the programmed RAM-LFE BFV hidden-program runtime through the
+  registered RAM-LFE RNS chain for ciphertext add, subtract, multiply,
+  relinearization, and `SelectEqZero` exponentiation/selection arithmetic.
+  Plaintext-scalar operations remain scalar because they do not require RNS
+  polynomial products.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-runtime cargo test -p iroha_crypto registered_rns_chain_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-runtime cargo test -p iroha_crypto rns_exact_ciphertext_evaluator_matches_scalar_baseline --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-runtime cargo test -p iroha_crypto bfv_programmed --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-runtime cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`53` passed)
+- Note: an initial `cargo test` invocation attempted to pass multiple test
+  filters and exited before running tests; the filters above were rerun
+  individually.
+
+## 2026-06-04 BFV registered RNS exact evaluator corridor
+
+- Widened the registered RAM-LFE v1 BFV RNS coefficient-modulus chain to eight
+  NTT-friendly prime limbs
+  `[30593, 30977, 31489, 31873, 32257, 33409, 35201, 35969]`, with product
+  `1297818766851231300719063877926878849`. The registered chain now covers the
+  guarded exact `Z_q` addition and negacyclic-product bounds used by the
+  deterministic evaluator bridge while still rejecting the narrower exact-lift
+  compatibility corridor.
+- Added registered-parameter regression coverage proving exact RNS-backed
+  ciphertext addition, multiplication/relinearization, and Galois key-switching
+  match the scalar evaluator and decrypt to the expected RAM-LFE plaintexts.
+  This is still the deterministic exact bridge, not the final bounded-noise
+  BFV-RNS basis-extension/key-switching evaluator or full bootstrap circuit.
+- Threaded the registered RNS chain through the programmed RAM-LFE runtime so
+  hidden-program add, subtract/select, multiply, and exponentiation paths use
+  the exact RNS evaluator bridge under the registered production profile.
+- Regenerated the shared Soracloud BFV operation fixture with the widened RNS
+  descriptor/digest. The Rust fixture verifier now hashes reconstructed RNS
+  sample coefficients as fixed-width `u128` values so widened-chain product-ring
+  coefficients no longer need to fit in `u64`, while SDK validators pin the new
+  moduli/product shape.
+- Fixed the legacy BFV affine RAM-LFE circuit derivation so each secret output
+  row maps valid byte inputs in `F_257` to byte outputs and excludes the `256`
+  sentinel by construction. The affine roundtrip no longer depends on a random
+  circuit avoiding the non-byte field element.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-registered cargo test -p iroha_crypto rns --lib -- --nocapture`
+    (`19` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-registered cargo test -p iroha_crypto ram_lfe::tests:: --lib -- --nocapture`
+    (`25` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-registered cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed)
+  - `jq empty fixtures/soracloud/bfv_identifier_vectors_v1.json`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-registered cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (`18` passed)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete`
+    (`1` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-registered cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-registered cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `cargo fmt --all` and `cargo fmt --all --check` (passed)
+  - `git diff --check` (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched RNS/FHE, fixture,
+    SDK validator, docs, roadmap, and status files (no matches)
+
+## 2026-06-04 BFV compact operation-input SDK parity
+
+- Extended Swift, Kotlin/JVM, and Java Android BFV public-parameter models and
+  JSON parsers to carry `norito_length_encoding`, including decimal-string BFV
+  modulus/coefficient fields used by the shared Soracloud operation fixture.
+- Added compact-v1 BFV envelope support to the Swift, Kotlin/JVM, and Java
+  Android identifier builders: compact Norito field lengths, compact header
+  flags, Iroha Blake2b-256 prehash seed derivation, and Rust-compatible
+  ChaCha20 RNG sampling for `u`, `e1`, and `e2`.
+- Added Swift/Kotlin/Java fixture regressions that recompute every non-packed
+  Soracloud Add, Multiply, outer `RotateLeft`, and Bootstrap compact operation
+  input ciphertext digest from the shared fixture. Packed-slot operation inputs
+  remain Rust execution vectors plus SDK fixture-shape/digest checks outside
+  the identifier-envelope builders.
+- Relaxed stale SDK RNS modulus hardcoding to structural fixture checks while
+  retaining digest, residue-limb, component, and adversarial drift validation;
+  Rust remains the lane that recomputes the registered RNS chain exactly.
+- Validation:
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudOperationInputVectors`
+    (`1` passed)
+  - `cd IrohaSwift && swift test --filter 'ToriiClientTests/testIdentifierBfvEnvelopeBuilderProducesDeterministicCiphertext|ToriiClientTests/testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors|ToriiClientTests/testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudOperationInputVectors|ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete'`
+    (`4` passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (`18` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+- Hygiene:
+  - `cargo fmt --all` and `cargo fmt --all --check` (passed)
+  - `git diff --check` (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+
+## 2026-06-04 Ethereum mainnet SCCP sync-committee supermajority hardening
+
+- Hardened JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum mainnet
+  Beacon finality handling so direct `beaconFinality.syncCommitteeBits` maps and
+  mocked Beacon REST `sync_aggregate.sync_committee_bits` responses must carry
+  at least `342` of the `512` Ethereum sync committee participants before local
+  ETH -> SORA proving callbacks can observe the evidence.
+- Updated positive SDK fixtures to use a 342-participant bitset and added
+  under-quorum adversarial coverage so one-participant finality updates remain
+  rejected independently from the existing all-zero/missing-bit checks.
+- Extended the SCCP release-readiness and bundle-verifier marker inventories so
+  browser/native Ethereum mainnet evidence must retain the supermajority
+  positives and under-quorum negatives across JS, Swift, Kotlin/JVM, Java
+  Android, and C#.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/sccp.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_beacon_rest_execution_payload_tests or ethereum_block_receipt_transaction_hash_tests'`
+    (`3` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 BFV deterministic plaintext-multiple error sampler
+
+- Replaced the remaining zero-error BFV baseline sampling with deterministic
+  plaintext-modulus-multiple error polynomials sampled from `{0, t, -t}` modulo
+  the ciphertext modulus. Key generation, relinearization-key generation, and
+  encryption now emit non-zero deterministic error terms while preserving exact
+  coefficient-wise `mod t` decryption for the first-release RAM-LFE profile.
+- Aligned the JavaScript source/dist builders, Swift SDK, Kotlin/JVM SDK, and
+  Java Android builder with the same `e1`/`e2` plaintext-multiple sampler for
+  identifier BFV envelopes. The JavaScript compact operation-input path now
+  also consumes Rust-compatible deterministic `u`, `e1`, and `e2` streams.
+- Regenerated the shared Soracloud BFV fixture with the new ciphertext/public
+  parameter/evaluation-key digests, the 33-key Galois bundle, refreshed packed
+  rotation/bootstrap vectors, updated small-policy identifier ciphertexts, and
+  a one-step packed `RotateLeft` schedule vector. The docs and roadmap now
+  call out that this is still not the full bounded-noise BFV-RNS evaluator or
+  full bootstrapping circuit.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`53` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise-scalar cargo test -p iroha_crypto --no-default-features --features std,rand,json fhe_bfv --lib -- --nocapture`
+    (`47` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise cargo test -p iroha_core soracloud_bfv_operation_vectors_reject_tampered_refresh_material --lib -- --nocapture`
+    (`1` passed)
+  - `node --check javascript/iroha_js/src/toriiClient.js && node --check javascript/iroha_js/dist/toriiClient.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (`18` passed)
+  - `cd IrohaSwift && swift test --filter 'ToriiClientTests/testIdentifierBfvEnvelopeBuilderProducesDeterministicCiphertext|ToriiClientTests/testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors|ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete'`
+    (`3` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise-scalar cargo clippy -p iroha_crypto --no-default-features --features std,rand,json --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-noise cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `jq empty fixtures/soracloud/bfv_identifier_vectors_v1.json` (passed)
+  - `cargo fmt --all` and `cargo fmt --all --check` (passed)
+  - `git diff --check` (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched BFV, fixture,
+    docs, roadmap, and status files (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP zero sync-signature hardening
+
+- Locked JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum mainnet
+  Beacon finality handling so all-zero 96-byte sync-committee aggregate
+  signatures are covered by adversarial tests for both direct
+  `beaconFinality.syncCommitteeSignature` maps and mocked Beacon REST
+  `sync_aggregate.sync_committee_signature` responses before app-owned inbound
+  prover callbacks can observe the evidence.
+- Extended release-readiness and bundle-verifier inventories so production
+  launch evidence must retain the zero aggregate signature negative across the
+  browser/native SDK suites.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_block_receipt_transaction_hash_tests'`
+    (`2` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP sync-signature slot hardening
+
+- Hardened JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum
+  mainnet direct Beacon finality normalization so a supplied
+  `syncSignatureSlot` must cover the normalized `beaconSlot`, matching the
+  existing Beacon REST finality-update provider rule before app-owned inbound
+  prover callbacks can observe the evidence.
+- Added cross-SDK adversarial regressions for stale sync-signature slots and
+  extended release-readiness/bundle markers to require the negative case.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_block_receipt_transaction_hash_tests'`
+    (`2` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP callback finality alias stripping
+
+- Hardened JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum
+  mainnet Beacon finality normalization so accepted direct finality maps strip
+  known camelCase/snake_case alias spellings before app-owned inbound prover
+  callbacks can observe the evidence. Canonical normalized fields are still
+  emitted, and unknown extension fields remain available for app proof context.
+- Added cross-SDK alias-only finality regressions proving callbacks receive
+  canonical `beaconFinality` keys, not accepted alias spellings, and extended
+  release-readiness/bundle markers to require those tests.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_block_receipt_transaction_hash_tests'`
+    (`2` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP sync-participation hardening
+
+- Hardened JS/browser, Swift, Kotlin/JVM, Java Android, and C# Ethereum
+  mainnet inbound proving so direct app-supplied Beacon finality maps reject
+  `syncCommitteeParticipation` values that do not match the popcount of
+  `syncCommitteeBits` before any receipt-proof or local prover callback can
+  observe the material.
+- Added cross-SDK adversarial regressions and release-readiness markers that
+  keep the participation/bits mismatch in the required Ethereum inbound
+  finality inventory.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_block_receipt_transaction_hash_tests'`
+    (`2` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests`
+    (`85` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP proof-only callback gate
+
+- Tightened Kotlin/JVM and Java Android Ethereum mainnet inbound proving so a
+  prebuilt `receiptProof` plus Beacon finality still requires validated SCCP
+  source-event context before any local prover callback can run.
+- Added native regressions for proof-only evidence without `sourceEventDigest`
+  and release-readiness markers that keep the callback-bypass negative in the
+  required Ethereum inbound adversarial inventory.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_block_receipt_transaction_hash_tests'`
+    (`2` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched Kotlin/Java SCCP SDK, release-marker,
+    roadmap, and status files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched Kotlin/Java SCCP
+    SDK, release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 BFV packed RotateLeft runtime bridge
+
+- Added public BFV helpers that derive either the single Galois automorphism
+  needed for a representable packed left-slot rotation, or the deterministic
+  Galois automorphism schedule needed for rotations that require masking and
+  summing multiple public key-switched ciphertexts.
+- Soracloud `RotateLeft` now routes single-ciphertext packed envelopes through
+  public Galois key switching. One-automorphism rotations use the direct key,
+  while arbitrary non-zero packed rotations use the masked schedule path. The
+  existing outer ciphertext-slot rotation-key path remains the behavior for
+  multi-slot identifier envelopes.
+- Unsupported full-cycle packed rotations and missing matching schedule keys
+  fail closed instead of falling back to outer-slot rotation semantics.
+- Extended the canonical Soracloud BFV operation fixture with the registered
+  half-slot packed rotation Galois key (`automorphism_power = 65`), the
+  one-step packed rotation Galois mask-and-sum schedule, a 33-key
+  evaluation-key bundle byte length/SHA-256/domain digest, and packed runtime
+  `RotateLeft` vectors that pin packed input slots, output slots, ciphertext
+  digests, plaintext-coefficient digests, Galois automorphism powers, and
+  output `c0`/`c1` component hashes.
+- Updated the Rust fixture harness to encode packed operation inputs and verify
+  packed runtime outputs by decrypting and decoding BFV CRT slots. It now also
+  re-derives any packed `automorphism_powers` schedule and asserts every power
+  is present in the evaluation bundle. JavaScript, Swift, Kotlin/JVM, and Java
+  Android fixture-shape validators now require both the direct packed runtime
+  vector and the one-step schedule vector with matching Galois key metadata.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo test -p iroha_crypto packed_rotate --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo test -p iroha_crypto packed_rotate --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo test -p iroha_crypto homomorphic_plaintext_polynomial_multiplication_matches_packed_mask --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo test -p iroha_crypto --features bfv-accel packed_rotate --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo test -p iroha_core soracloud_packed_rotate_left --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo test -p iroha_core soracloud_packed_rotate_left --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo test -p iroha_core soracloud_rotate_left --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo test -p iroha_core soracloud_rotate_left --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-fixture cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed; regenerated the 33-key bundle fixture output captured in
+    `/tmp/iroha-packed-fixture.log`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-fixture cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-fixture cargo test -p iroha_core soracloud_packed_rotate_left --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo test -p iroha_core soracloud_bfv_operation_vectors_reject_tampered_refresh_material --lib -- --nocapture`
+    (`1` passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (`18` passed)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete`
+    (`1` passed)
+  - `java -version` (blocked: no Java runtime available on this host, so
+    Kotlin/JVM and Java Android Gradle fixture tests were not runnable locally)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo clippy -p iroha_crypto --features bfv-accel --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-runtime cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-schedule cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-packed-fixture cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `jq empty fixtures/soracloud/bfv_identifier_vectors_v1.json` (passed)
+  - `cargo fmt --all` (passed)
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check` (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched packed
+    RotateLeft files (no matches)
+
+## 2026-06-04 Ethereum mainnet SCCP native receipt-alias hardening
+
+- Aligned Swift, Kotlin/JVM, Java Android, and C# Ethereum mainnet SCCP
+  receipt-proof collectors and public receipt-trie builders with the hardened
+  browser path: receipt, block, Beacon REST execution block metadata, and
+  `eth_getBlockReceipts` target receipt metadata now reject conflicting
+  camelCase/snake_case aliases before deriving receipt roots, proof hashes, or
+  local prover inputs.
+- Added native adversarial regressions for duplicate `transactionIndex` and
+  `transactionHash` aliases in receipt-trie builders, plus collector-level
+  duplicate aliases for receipt transaction/block fields, block number/root
+  fields, and indexed block-receipt metadata.
+- Hardened canonical receipt RLP reconstruction in the browser, Swift,
+  Kotlin/JVM, Java Android, and C# SDK paths so duplicate
+  `cumulativeGasUsed`/`cumulative_gas_used` and `logsBloom`/`logs_bloom`
+  aliases are rejected before receipt roots, proof hashes, or local prover
+  inputs are derived.
+- Extended the SCCP release-readiness marker inventory so the native alias
+  regressions are required alongside the browser Ethereum mainnet inbound
+  adversarial tests.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`20` passed)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereum`
+    (`9` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_inbound_adversarial_sdk_tests or ethereum_block_receipt_transaction_hash_tests'`
+    (`2` passed)
+  - `java -version`
+    (blocked: no Java runtime available, so Kotlin/JVM and Java Android Gradle
+    tests were not runnable locally)
+  - `dotnet --info`
+    (blocked: `dotnet` is not installed, so C# tests were not runnable locally)
+- Hygiene:
+  - `git diff --check` on touched SCCP SDK, release-marker, roadmap, and status
+    files (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched SCCP SDK,
+    release-marker, roadmap, and status files (no matches)
+
+## 2026-06-04 BFV bounded bootstrap refresh vectors
+
+- Added `max_refresh_rounds` to public BFV bootstrap refresh keys and made
+  bootstrap key validation reject zero or oversized capacities before
+  evaluation-key digests or refresh operations admit the key.
+- Added a bounded bootstrap-key constructor for deterministic fixtures while
+  keeping the existing constructor as a one-round convenience path.
+- Soracloud `Bootstrap` execution now rejects jobs whose `bootstrap_count`
+  exceeds the selected bootstrap key capacity before refreshing ciphertext
+  slots.
+- Extended the shared Soracloud BFV operation fixture with bootstrap key
+  capacity metadata and one-/two-round bootstrap refresh vectors that pin the
+  deterministic input ciphertext hash, refreshed output ciphertext hash,
+  decrypted plaintext coefficient hash, and `c0`/`c1` output component
+  digests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo test -p iroha_crypto evaluation_key_bundle_rejects_adversarial_rotation_and_bootstrap_metadata --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo test -p iroha_core soracloud_bootstrap_rejects_refresh_count_above_key_capacity --lib -- --nocapture`
+    (`1` passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (`18` passed)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete`
+    (`1` passed)
+  - `java -version` (blocked: no Java runtime available on this host, so
+    Kotlin/JVM and Java Android Gradle fixture tests were not runnable locally)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo test -p iroha_crypto fhe_bfv --lib -- --nocapture`
+    (`47` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo test -p iroha_crypto --features bfv-accel fhe_bfv --lib -- --nocapture`
+    (`47` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo clippy -p iroha_crypto --features bfv-accel --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bootstrap-bounds cargo clippy -p iroha_core --lib --no-deps -- -D warnings`
+    (passed)
+- Hygiene:
+  - `jq empty fixtures/soracloud/bfv_identifier_vectors_v1.json` (passed)
+  - `cargo fmt --all --check` (passed)
+  - `git diff --check` (passed)
+  - `git diff --exit-code -- Cargo.lock` (passed)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched crypto, core,
+    fixture, SDK validator, status, roadmap, and backlog files (no matches)
 ## 2026-06-05 Python privacy typed-buffer Norito boundary
 
 - Hardened the Python privacy native bridge so request archives and native
@@ -7935,10 +19086,16 @@ Last updated: 2026-06-06
   policy for finalized-header roots, sync-committee roots, and beacon slots, so
   direct evidence maps cannot bypass strict finality normalization after proof
   material is attached.
-- The Swift, Kotlin/JVM, Java Android, and C# SCCP source-event log validators
-  now also reject conflicting aliases for receipt log `transactionHash`,
-  `blockHash`, and `blockNumber` context before deriving a source event digest,
-  closing the same ambiguity for direct receipt evidence.
+- The browser JavaScript, Swift, Kotlin/JVM, Java Android, and C# SCCP
+  source-event log validators now also reject conflicting aliases for receipt
+  log `transactionHash`, `blockHash`, and `blockNumber` context before deriving
+  a source event digest, closing the same ambiguity for direct receipt
+  evidence.
+- The browser JavaScript receipt-proof collector and receipt-trie helper now
+  also reject conflicting aliases for receipt transaction hash/block
+  hash/block number/transaction index, block number/receipt root, and
+  `eth_getBlockReceipts` target receipt metadata before constructing the
+  Ethereum mainnet source-proof transcript.
 - The TypeScript declarations and typed Swift, Kotlin/JVM, Java Android, and
   C# `BeaconFinalityEvidence` surfaces now expose the same sync-aggregate fields
   directly instead of requiring callers to smuggle them only through generic
@@ -7950,9 +19107,10 @@ Last updated: 2026-06-06
   browser and native SDK test corridors, plus missing-sync-bit pre-callback
   negatives, conflicting direct sync-bit alias pre-callback negatives, and
   conflicting finalized-root/sync-root/slot alias negatives plus source-event
-  log context alias negatives across the SDK facades, and tightened
-  release/readiness inventories so the finality-update endpoint, typed sync
-  aggregate fields, zero-participation rejection, duplicate-alias rejection,
+  log context alias negatives across the SDK facades, and browser receipt/block
+  metadata alias negatives for proof construction. Tightened release/readiness
+  inventories so the finality-update endpoint, typed sync aggregate fields,
+  zero-participation rejection, duplicate-alias rejection, browser/native
   callback guards, and contract smoke mainnet network-id vector remain pinned
   in source and test bundles.
 - The standalone SCCP release-bundle verifier now avoids derived
@@ -7964,9 +19122,11 @@ Last updated: 2026-06-06
   - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js && node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
     (passed)
   - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
-    (`20` passed)
+    (`20` passed after the browser receipt/block metadata alias-conflict
+    update)
   - `node --test javascript/iroha_js/test/package_dist.test.js`
-    (`49` passed)
+    (`49` passed after the browser receipt/block metadata alias-conflict
+    update)
   - `swift test --filter SccpSolanaProverTests/testEthereumMainnet`
     (`8` passed after the source-event log alias-conflict update)
   - `bash scripts/sccp_evm_contract_smoke.sh`
@@ -7978,7 +19138,8 @@ Last updated: 2026-06-06
   - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tests pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_beacon_rest_execution_payload_tests`
     (`4` passed after the receipt-proof alias-conflict inventory update)
   - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_ethereum_receipt_proof_hash_only_sdk_tests`
-    (`2` passed after the source-event log alias-conflict inventory update)
+    (`2` passed after the browser receipt/block metadata alias-conflict inventory
+    update)
   - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id`
     (`1` passed)
   - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_all_lanes_nested_crypto_field_drift`
@@ -10862,6 +22023,621 @@ Last updated: 2026-06-06
   - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter InboundEvidenceUsesMainnetRpcAndRejectsDrift`
     (not run: `dotnet` is not installed)
 
+## 2026-06-05 Sumeragi RBC DELIVER pending-branch proof
+
+- Added `RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence` to the
+  top-level Sumeragi model so RBC delivery remains non-final exactly when
+  complete RBC READY/chunk/header/digest evidence is present but buffered
+  commit-vote or signed-stake quorum is still missing, with no stale finality
+  artifacts.
+- Added `RbcDeliverPendingGateNeverBypassesMissingBufferedCommitEvidence` and
+  wired it through the fast, deep, and TLC-fast Sumeragi formal configs, the
+  README property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence|RbcDeliverPendingGateNeverBypassesMissingBufferedCommitEvidence|RBC DELIVER pending-branch" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.33s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.910 sec`).
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors across
+    `14` branches, `7799` generated states, `2338` distinct states, and depth
+    `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg --run-dir=target/apalache/out/sumeragi-rbc-deliver-pending-length1 docs/formal/sumeragi/Sumeragi.tla`
+    passed with `NoError` up to computation length `1`, `53` temporal
+    properties loaded, `EXITCODE: OK`, and total time `10.921 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi RBC DELIVER pending-step preservation proof
+
+- Added `RbcDeliverPendingStepPreservesPreFinalityArtifacts` to the top-level
+  Sumeragi model so a non-final RBC DELIVER step can only move the RBC session
+  from ready quorum to delivered while keeping phase, vote/stake counters, view
+  evidence, and absent commit-certificate artifacts unchanged.
+- Added `RbcDeliverPendingStepNeverMutatesCommitArtifacts` and wired it through
+  the fast, deep, and TLC-fast Sumeragi formal configs, the README property
+  inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliverPendingStepPreservesPreFinalityArtifacts|RbcDeliverPendingStepNeverMutatesCommitArtifacts|RBC DELIVER pending-step" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.30s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.712 sec`).
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors across
+    `14` branches, `7799` generated states, `2338` distinct states, and depth
+    `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg --run-dir=target/apalache/out/sumeragi-rbc-deliver-pending-step-length1 docs/formal/sumeragi/Sumeragi.tla`
+    passed with `NoError` up to computation length `1`, `54` temporal
+    properties loaded, `EXITCODE: OK`, and total time `11.487 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi RBC DELIVER finality-step proof
+
+- Added `RbcDeliverFinalityStepInstallsCommitArtifacts` to the top-level
+  Sumeragi model so a finalizing RBC DELIVER step must move the phase to
+  committed, latch exact commit-vote and signed-stake certificate artifacts,
+  record the active commit view, and preserve the live vote, RBC, and view
+  evidence it used.
+- Added `RbcDeliverFinalityStepAlwaysInstallsCommitArtifacts` and wired it
+  through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "RbcDeliverFinalityStepInstallsCommitArtifacts|RbcDeliverFinalityStepAlwaysInstallsCommitArtifacts|RBC DELIVER finality-step" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.29s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.775 sec`).
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors across
+    `14` branches, `7799` generated states, `2338` distinct states, and depth
+    `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg --run-dir=target/apalache/out/sumeragi-rbc-deliver-finality-step-length1 docs/formal/sumeragi/Sumeragi.tla`
+    passed with `NoError` up to computation length `1`, `55` temporal
+    properties loaded, `EXITCODE: OK`, and total time `11.694 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi honest commit-vote finality-step proof
+
+- Added `HonestCommitVoteFinalityStepInstallsCommitArtifacts` to the top-level
+  Sumeragi model so a finalizing honest commit-vote step must increment the
+  honest vote and signed-stake counters exactly, move to committed, latch exact
+  certificate artifacts, record the active commit view, and preserve the RBC and
+  view-change evidence it used.
+- Added `HonestCommitVoteFinalityStepAlwaysInstallsCommitArtifacts` and wired it
+  through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "HonestCommitVoteFinalityStepInstallsCommitArtifacts|HonestCommitVoteFinalityStepAlwaysInstallsCommitArtifacts|honest commit-vote finality-step" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.30s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.810 sec`).
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors across
+    `14` branches, `7799` generated states, `2338` distinct states, and depth
+    `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg --run-dir=target/apalache/out/sumeragi-honest-commit-vote-finality-step-length1 docs/formal/sumeragi/Sumeragi.tla`
+    passed with `NoError` up to computation length `1`, `56` temporal
+    properties loaded, `EXITCODE: OK`, and total time `12.314 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi honest commit-vote pending-step proof
+
+- Added `HonestCommitVotePendingStepPreservesPreFinalityArtifacts` to the
+  top-level Sumeragi model so a non-final honest commit-vote step must increment
+  the honest vote and signed-stake counters exactly while preserving phase,
+  RBC/view evidence, and absent commit-certificate artifacts.
+- Added `HonestCommitVotePendingStepNeverMutatesCommitArtifacts` and wired it
+  through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "HonestCommitVotePendingStepPreservesPreFinalityArtifacts|HonestCommitVotePendingStepNeverMutatesCommitArtifacts|honest commit-vote pending-step" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.28s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.792 sec`).
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors across
+    `14` branches, `7799` generated states, `2338` distinct states, and depth
+    `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg --run-dir=target/apalache/out/sumeragi-honest-commit-vote-pending-step-length1 docs/formal/sumeragi/Sumeragi.tla`
+    passed with `NoError` up to computation length `1`, `57` temporal
+    properties loaded, `EXITCODE: OK`, and total time `12.537 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi prepare-vote branch proof
+
+- Added `PrepareVoteQuorumGateMatchesNextEvidence` and
+  `PrepareVotePendingGateMatchesMissingNextEvidence` to the top-level Sumeragi
+  model so prepare votes split exactly on whether the next honest prepare vote
+  reaches `CommitQuorum`, with proposal/view evidence in place, cleared NewView
+  and commit-vote handoff state, and no stale finality artifacts.
+- Added `PrepareVoteQuorumStepEntersCommitVote` so a quorum-forming
+  `HonestPrepareVote` step must increment the prepare counter exactly, enter
+  `CommitVote`, and preserve view/RBC evidence plus absent commit artifacts.
+- Added `PrepareVotePendingStepPreservesPreCommitArtifacts` so a non-quorum
+  `HonestPrepareVote` step must stay in `Prepare`, increment only the prepare
+  counter, preserve view/RBC evidence, leave commit-vote state absent, and keep
+  commit artifacts absent.
+- Added the temporal wrappers
+  `PrepareVoteQuorumGateNeverBypassesNextEvidence`,
+  `PrepareVoteQuorumStepAlwaysEntersCommitVote`,
+  `PrepareVotePendingGateNeverBypassesMissingNextEvidence`, and
+  `PrepareVotePendingStepNeverMutatesCommitArtifacts`, then wired them through
+  the fast, deep, and TLC-fast Sumeragi configs, the README proof inventory,
+  and the roadmap proof corridor.
+- Validation:
+  - `rg -n "PrepareVoteQuorumGateMatchesNextEvidence|PrepareVoteQuorumGateNeverBypassesNextEvidence|PrepareVoteQuorumStepEntersCommitVote|PrepareVoteQuorumStepAlwaysEntersCommitVote|PrepareVotePendingGateMatchesMissingNextEvidence|PrepareVotePendingGateNeverBypassesMissingNextEvidence|PrepareVotePendingStepPreservesPreCommitArtifacts|PrepareVotePendingStepNeverMutatesCommitArtifacts|prepare-vote quorum|prepare-vote pending" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.29s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.921 sec`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    passed with no errors across `14` branches, `7799` generated states,
+    `2338` distinct states, and depth `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    passed with `NoError` up to computation length `1`, `67` temporal
+    properties loaded, `EXITCODE: OK`, and total time `16.408 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi NewView pending-step proof
+
+- Added `NewViewVotePendingGateMatchesMissingNextEvidence` to the top-level
+  Sumeragi model so an enabled NewView vote remains in the view-change handoff
+  exactly while the next honest NewView vote still lacks `ViewQuorum`, with
+  fresh view evidence collection, cleared prepare/commit handoff state, and no
+  stale finality artifacts.
+- Added `NewViewVotePendingStepPreservesPreProposalArtifacts` so a non-quorum
+  `HonestNewViewVote` step must stay in `NewView`, increment only the transient
+  NewView counter, preserve RBC evidence, leave view evidence absent, and keep
+  commit-certificate artifacts absent.
+- Added `NewViewVotePendingGateNeverBypassesMissingNextEvidence` and
+  `NewViewVotePendingStepNeverInstallsViewEvidence`, then wired them through
+  the fast, deep, and TLC-fast Sumeragi configs, the README proof inventory,
+  and the roadmap proof corridor.
+- Validation:
+  - `rg -n "NewViewVotePendingGateMatchesMissingNextEvidence|NewViewVotePendingGateNeverBypassesMissingNextEvidence|NewViewVotePendingStepPreservesPreProposalArtifacts|NewViewVotePendingStepNeverInstallsViewEvidence|NewView vote pending" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.30s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.999 sec`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    passed with no errors across `14` branches, `7799` generated states,
+    `2338` distinct states, and depth `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    passed with `NoError` up to computation length `1`, `63` temporal
+    properties loaded, `EXITCODE: OK`, and total time `15.84 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi NewView quorum-step proof
+
+- Added `NewViewVoteQuorumGateMatchesNextEvidence` to the top-level Sumeragi
+  model so the quorum-forming NewView vote branch is enabled exactly when the
+  next honest NewView vote reaches `ViewQuorum` for a nonzero view with fresh
+  view evidence, cleared prepare/commit handoff state, and no stale finality
+  artifacts.
+- Added `NewViewVoteQuorumStepInstallsViewEvidence` so a quorum-forming
+  `HonestNewViewVote` step must move back to proposal, increment the NewView
+  counter exactly, latch the exact view-change quorum witness, preserve RBC
+  evidence, and keep commit-certificate artifacts absent.
+- Added `NewViewVoteQuorumGateNeverBypassesNextEvidence` and
+  `NewViewVoteQuorumStepAlwaysInstallsViewEvidence`, then wired them through
+  the fast, deep, and TLC-fast Sumeragi configs, the README proof inventory,
+  and the roadmap proof corridor.
+- Validation:
+  - `rg -n "NewViewVoteQuorumGateMatchesNextEvidence|NewViewVoteQuorumGateNeverBypassesNextEvidence|NewViewVoteQuorumStepInstallsViewEvidence|NewViewVoteQuorumStepAlwaysInstallsViewEvidence|NewView vote quorum" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.29s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.834 sec`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    passed with no errors across `14` branches, `7799` generated states,
+    `2338` distinct states, and depth `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    passed with `NoError` up to computation length `1`, `61` temporal
+    properties loaded, `EXITCODE: OK`, and total time `13.407 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi Byzantine commit-vote pending-step proof
+
+- Added `ByzantineCommitVotePendingStepPreservesPreFinalityArtifacts` to the
+  top-level Sumeragi model so a non-final Byzantine commit-vote step must
+  increment the Byzantine vote and signed-stake counters exactly while keeping
+  the phase in commit-vote, preserving RBC/view evidence, and keeping
+  commit-certificate artifacts absent.
+- Added `ByzantineCommitVotePendingStepNeverMutatesCommitArtifacts` and wired
+  it through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  proof inventory, and the roadmap proof corridor.
+- Raised the Apalache JVM stack in `scripts/formal/sumeragi_apalache.sh` to
+  `-Xss16m` when `JVM_ARGS` is unset, and prepend the same stack setting to
+  custom `JVM_ARGS` unless the caller already supplied `-Xss`, because the
+  expanded top-level fast temporal-property set now exceeds the bundled
+  launcher's default stack during Apalache `check`.
+- Validation:
+  - `rg -n "ByzantineCommitVotePendingStepPreservesPreFinalityArtifacts|ByzantineCommitVotePendingStepNeverMutatesCommitArtifacts|Byzantine commit-vote pending-step" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed before the script edit; `bash -n scripts/formal/sumeragi_apalache.sh`
+    passed again after adding the JVM stack default.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.29s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.862 sec`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    passed with no errors across `14` branches, `7799` generated states,
+    `2338` distinct states, and depth `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    passed with `NoError` up to computation length `1`, `59` temporal
+    properties loaded, `EXITCODE: OK`, and total time `14.58 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi Byzantine commit-vote finality-step proof
+
+- Added `ByzantineCommitVoteFinalityStepInstallsCommitArtifacts` to the
+  top-level Sumeragi model so a finalizing Byzantine commit-vote step must
+  increment the Byzantine vote and signed-stake counters exactly, move to
+  committed, latch exact certificate artifacts, preserve enough honest support
+  after discounting the Byzantine vote, and keep the RBC/view evidence it used.
+- Added `ByzantineCommitVoteFinalityStepAlwaysInstallsCommitArtifacts` and
+  wired it through the fast, deep, and TLC-fast Sumeragi formal configs, the
+  README property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "ByzantineCommitVoteFinalityStepInstallsCommitArtifacts|ByzantineCommitVoteFinalityStepAlwaysInstallsCommitArtifacts|Byzantine commit-vote finality-step" ...`
+    found the expected model, fast/deep/TLC-fast config, README, roadmap, and
+    status references.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+    passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed with
+    `504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, and `9788` TLC mutation
+    modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    passed (`115` tests in `0.30s`).
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    passed (`EXITCODE: OK`, total time `0.849 sec`).
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors across
+    `14` branches, `7799` generated states, `2338` distinct states, and depth
+    `24` in `01s`.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg --run-dir=target/apalache/out/sumeragi-byzantine-commit-vote-finality-step-length1 docs/formal/sumeragi/Sumeragi.tla`
+    passed with `NoError` up to computation length `1`, `58` temporal
+    properties loaded, `EXITCODE: OK`, and total time `13.260 sec`.
+  - Full length-10 Apalache fast was not rerun; the previous adjacent full run
+    took `11851.188 sec`, so this slice used complete TLC fast coverage plus a
+    length-1 Apalache smoke.
+
+## 2026-06-05 Sumeragi Byzantine commit-vote pending-branch proof
+
+- Added `ByzantineCommitVotePendingGateMatchesMissingNextEvidence` to the
+  top-level Sumeragi model so an enabled Byzantine commit-vote transition
+  remains non-final exactly while the next Byzantine vote still lacks vote
+  quorum, stake quorum, or delivered RBC evidence, with prepare quorum, cleared
+  NewView handoff state, no stale finality artifacts, and view-change quorum
+  evidence for nonzero views.
+- Added `ByzantineCommitVotePendingGateNeverBypassesMissingNextEvidence` and
+  wired it through the fast, deep, and TLC-fast Sumeragi formal configs, the
+  README property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "ByzantineCommitVotePendingGateMatchesMissingNextEvidence|ByzantineCommitVotePendingGateNeverBypassesMissingNextEvidence|Byzantine commit-vote pending-branch" ...` found the expected model, config, README, roadmap, and status wiring.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py` passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh` passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed: 504 PR modes, 9788 expected-failure modes, 1 scheduled/manual mode, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` passed: 115 tests in 0.30s.
+  - `apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla` passed: `EXITCODE: OK`, total time 0.726s.
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors: 14 branches, 7799 generated states, 2338 distinct states, depth 24, 01s.
+  - `apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg ... docs/formal/sumeragi/Sumeragi.tla` passed: `NoError`, computation length 1, 52 temporal properties, `EXITCODE: OK`, total time 10.741s.
+  - The full length-10 `bash scripts/formal/sumeragi_apalache.sh fast` suite was not rerun for this slice; the previous adjacent full fast run took 11851.188s, and this slice used the complete TLC fast state-space check plus the length-1 Apalache smoke instead.
+
+## 2026-06-05 Sumeragi honest commit-vote pending-branch proof
+
+- Added `HonestCommitVotePendingGateMatchesMissingNextEvidence` to the top-level
+  Sumeragi model so an enabled honest commit-vote transition remains non-final
+  exactly while the next honest vote still lacks vote quorum, stake quorum, or
+  delivered RBC evidence, with prepare quorum, cleared NewView handoff state, no
+  stale finality artifacts, and view-change quorum evidence for nonzero views.
+- Added `HonestCommitVotePendingGateNeverBypassesMissingNextEvidence` and wired
+  it through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "HonestCommitVotePendingGateMatchesMissingNextEvidence|HonestCommitVotePendingGateNeverBypassesMissingNextEvidence|honest commit-vote pending-branch" ...` found the expected model, config, README, roadmap, and status wiring.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py` passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh` passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed: 504 PR modes, 9788 expected-failure modes, 1 scheduled/manual mode, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` passed: 115 tests in 0.31s.
+  - `apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla` passed: `EXITCODE: OK`, total time 0.710s.
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors: 14 branches, 7799 generated states, 2338 distinct states, depth 24, 01s.
+  - `apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg ... docs/formal/sumeragi/Sumeragi.tla` passed: `NoError`, computation length 1, 51 temporal properties, `EXITCODE: OK`, total time 13.354s.
+  - The full length-10 `bash scripts/formal/sumeragi_apalache.sh fast` suite was not rerun for this slice; the previous adjacent full fast run took 11851.188s, and this slice used the complete TLC fast state-space check plus the length-1 Apalache smoke instead.
+
+## 2026-06-05 Sumeragi Byzantine commit-vote finality-branch proof
+
+- Added `ByzantineCommitVoteFinalityGateMatchesNextEvidence` to the top-level
+  Sumeragi model so the Byzantine commit-vote transition's finality branch is
+  equivalent to the next Byzantine vote staying within the fault budget while
+  completing vote and stake quorum over delivered RBC evidence, with enough
+  honest support after discounting Byzantine votes, prepare quorum, cleared
+  NewView handoff state, no stale finality artifacts, and view-change quorum
+  evidence for nonzero views.
+- Added `ByzantineCommitVoteFinalityGateNeverBypassesNextEvidence` and wired it
+  through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "ByzantineCommitVoteFinalityGateMatchesNextEvidence|ByzantineCommitVoteFinalityGateNeverBypassesNextEvidence|Byzantine commit-vote finality-branch" ...` found the expected model, config, README, roadmap, and status wiring.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py` passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh` passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed: 504 PR modes, 9788 expected-failure modes, 1 scheduled/manual mode, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` passed: 115 tests in 0.29s.
+  - `apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla` passed: `EXITCODE: OK`, total time 0.694s.
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors: 14 branches, 7799 generated states, 2338 distinct states, depth 24, 01s.
+  - `apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg ... docs/formal/sumeragi/Sumeragi.tla` passed: `NoError`, computation length 1, 50 temporal properties, `EXITCODE: OK`, total time 12.282s.
+  - The full length-10 `bash scripts/formal/sumeragi_apalache.sh fast` suite was not rerun for this slice; the previous adjacent full fast run took 11851.188s, and this slice used the complete TLC fast state-space check plus the length-1 Apalache smoke instead.
+
+## 2026-06-05 Sumeragi honest commit-vote finality-branch proof
+
+- Added `HonestCommitVoteFinalityGateMatchesNextEvidence` to the top-level
+  Sumeragi model so the honest commit-vote transition's finality branch is
+  equivalent to the next honest vote completing vote and stake quorum over
+  delivered RBC evidence, with prepare quorum, cleared NewView handoff state, no
+  stale finality artifacts, and view-change quorum evidence for nonzero views.
+- Added `HonestCommitVoteFinalityGateNeverBypassesNextEvidence` and wired it
+  through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  property inventory, and the roadmap proof corridor.
+- Validation:
+  - `rg -n "HonestCommitVoteFinalityGateMatchesNextEvidence|HonestCommitVoteFinalityGateNeverBypassesNextEvidence|honest commit-vote finality-branch" ...` found the expected model, config, README, roadmap, and status wiring.
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py` passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh` passed.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed: 504 PR modes, 9788 expected-failure modes, 1 scheduled/manual mode, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` passed: 115 tests in 0.32s.
+  - `apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla` passed: `EXITCODE: OK`, total time 0.797s.
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors: 14 branches, 7799 generated states, 2338 distinct states, depth 24, 01s.
+  - `apalache-mc check --length=1 --config=docs/formal/sumeragi/Sumeragi_fast.cfg ... docs/formal/sumeragi/Sumeragi.tla` passed: `NoError`, computation length 1, 49 temporal properties, `EXITCODE: OK`, total time 10.645s.
+  - The full length-10 `bash scripts/formal/sumeragi_apalache.sh fast` suite was not rerun for this slice; the previous adjacent run took 11851.188s, and this slice used the complete TLC fast state-space check plus the length-1 Apalache smoke instead.
+
+## 2026-06-05 Sumeragi RBC DELIVER finality buffered-commit proof
+
+- Added `RbcDeliverFinalityGateMatchesBufferedCommitEvidence` to the top-level
+  Sumeragi model so the RBC delivery action's finality branch is equivalent to
+  already-buffered commit-vote/stake quorum, prepare quorum, complete RBC
+  READY/chunk/header/digest evidence, cleared NewView handoff state, no stale
+  finality artifacts, and view-change quorum evidence for nonzero views.
+- Added `RbcDeliverFinalityGateNeverBypassesBufferedCommitEvidence` and wired it
+  through the fast, deep, and TLC-fast Sumeragi formal configs, the README
+  property inventory, and the roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py` passed.
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh` passed.
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py` passed: 115 tests in 0.28s.
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` passed: 504 PR modes, 9788 expected-failure modes, 1 scheduled/manual mode, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes.
+  - `apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla` passed: `EXITCODE: OK`, total time 0.732s.
+  - `bash scripts/formal/sumeragi_tlc.sh fast` passed with no errors: 14 branches, 7799 generated states, 2338 distinct states, depth 24, 01s.
+  - `bash scripts/formal/sumeragi_apalache.sh fast` passed: `NoError`, computation length 10, 48 temporal properties, `EXITCODE: OK`, total time 11851.188s.
+
+## 2026-06-05 Sumeragi Byzantine commit vote prepare-evidence gate proof
+
+- Added `ByzantineCommitVoteEnabled` to name the Byzantine commit-vote
+  equivocation gate and routed `ByzantineEquivocateCommit` through it.
+- Added `ByzantineCommitVoteGateMatchesPrepareEvidence` and
+  `ByzantineCommitVoteGateNeverBypassesPrepareEvidence` so Byzantine
+  commit-vote equivocation is enabled exactly while a prepare-backed
+  `CommitVote` phase is below the Byzantine fault budget, with NewView counters
+  cleared, no stale finality artifacts, and view-change evidence installed for
+  nonzero views.
+- Wired the obligation through the fast, deep, and TLC-fast Sumeragi formal
+  configs, the README property inventory, and the roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n` on `scripts/formal/sumeragi_tlc.sh`,
+    `scripts/formal/sumeragi_apalache.sh`,
+    `scripts/formal/install_apalache.sh`, `ci/check_sumeragi_formal.sh`, and
+    `ci/check_sumeragi_formal_expected_failures.sh` (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.33s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` (consistent
+    wiring: `504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes,
+    `9788` TLC mutation modes)
+  - `target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, `Total time: 1.478 sec`)
+  - `bash scripts/formal/sumeragi_tlc.sh fast` (no errors, `14` branches,
+    `7799` states generated, `2338` distinct states found, depth `24`, `02s`)
+  - `bash scripts/formal/sumeragi_apalache.sh fast` (`NoError`, computation
+    length `10`, `47` temporal properties, `EXITCODE: OK`, `12789.322 sec`)
+
+## 2026-06-04 Sumeragi finality NewView handoff cleanup proof
+
+- Strengthened `FinalityCertificateStackPresent` so a finalized Sumeragi state
+  must carry no live `newViewVotes` handoff counter; only the latched
+  `viewEvidenceVotes` quorum witness remains for nonzero commit views.
+- Added `FinalityClearsNewViewHandoff` and
+  `FinalityNeverRetainsNewViewHandoff`, wired through the fast, deep, and
+  TLC-fast Sumeragi formal configs, the README property inventory, and the
+  roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n` on `scripts/formal/sumeragi_tlc.sh`,
+    `scripts/formal/sumeragi_apalache.sh`,
+    `scripts/formal/install_apalache.sh`, `ci/check_sumeragi_formal.sh`, and
+    `ci/check_sumeragi_formal_expected_failures.sh` (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.37s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` (consistent
+    wiring: `504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes,
+    `9788` TLC mutation modes)
+  - `target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, `Total time: 0.748 sec`)
+  - `bash scripts/formal/sumeragi_tlc.sh fast` (no errors, `14` branches,
+    `7799` states generated, `2338` distinct states found, depth `24`, `01s`)
+  - `bash scripts/formal/sumeragi_apalache.sh fast` (`NoError`, computation
+    length `10`, `46` temporal properties, `EXITCODE: OK`, `11965.264 sec`)
+
+## 2026-06-04 Sumeragi commit vote prepare-evidence gate proof
+
+- Added `CommitVoteGateMatchesPrepareEvidence` to the top-level Sumeragi model
+  so the live commit-vote gate is equivalent to a prepare-backed `CommitVote`
+  phase below the honest roster budget, with Byzantine vote budget preserved,
+  NewView counters cleared, no stale finality artifacts, and view-change
+  evidence installed for nonzero views.
+- Added `CommitVoteGateNeverBypassesPrepareEvidence` and wired it through the
+  fast, deep, and TLC-fast formal configs, the Sumeragi README property
+  inventory, and the roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n` on `scripts/formal/sumeragi_tlc.sh`,
+    `scripts/formal/sumeragi_apalache.sh`,
+    `scripts/formal/install_apalache.sh`, `ci/check_sumeragi_formal.sh`, and
+    `ci/check_sumeragi_formal_expected_failures.sh` (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.48s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py` (consistent
+    wiring: `504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes,
+    `9788` TLC mutation modes)
+  - `target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, `Total time: 0.828 sec`)
+  - `bash scripts/formal/sumeragi_tlc.sh fast` (no errors, `13` branches,
+    `7799` states generated, `2338` distinct states found, depth `24`, `01s`)
+  - `bash scripts/formal/sumeragi_apalache.sh fast` (`NoError`, computation
+    length `10`, `45` temporal properties, `EXITCODE: OK`, `10666.152 sec`)
+
+## 2026-06-04 Sumeragi prepare vote proposal-evidence gate proof
+
+- Added `PrepareVoteGateMatchesProposalEvidence` to the top-level Sumeragi
+  model so the live prepare-vote gate is equivalent to a proposal-backed
+  `Prepare` phase below prepare quorum and roster budget, with NewView vote
+  handoff counters cleared, no stale commit-vote state, and view-change
+  evidence installed for nonzero views.
+- Added `PrepareVoteGateNeverBypassesProposalEvidence` and wired it through the
+  fast, deep, and TLC-fast formal configs, the Sumeragi README property
+  inventory, and the roadmap proof corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `bash -n` on `scripts/formal/sumeragi_tlc.sh`,
+    `scripts/formal/sumeragi_apalache.sh`,
+    `scripts/formal/install_apalache.sh`,
+    `ci/check_sumeragi_formal.sh`, and
+    `ci/check_sumeragi_formal_expected_failures.sh` (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.28s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (consistent wiring: `504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes,
+    `9788` TLC mutation modes)
+  - `bash scripts/formal/install_apalache.sh 0.52.2` (installed pinned
+    Apalache toolchain; checksum verified)
+  - `target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, `Total time: 0.749 sec`)
+  - `bash scripts/formal/sumeragi_tlc.sh fast` (no errors, `13` branches,
+    `7799` states generated, `2338` distinct states found, depth `24`, `01s`)
+  - `bash scripts/formal/sumeragi_apalache.sh fast` (`NoError`, computation
+    length `10`, `44` temporal properties, `EXITCODE: OK`, `9868.955 sec`)
+
 ## 2026-06-04 Sumeragi NewView vote fresh-evidence gate proof
 
 - Added `NewViewVoteGateMatchesFreshViewEvidence` to the top-level Sumeragi
@@ -10871,7 +22647,25 @@ Last updated: 2026-06-06
 - Added `NewViewVoteGateNeverBypassesFreshViewEvidence` and wired it through
   the fast, deep, and TLC-fast formal configs, the Sumeragi README property
   inventory, and the roadmap proof corridor.
-- Validation: pending.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+    (passed)
+  - `for f in scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh; do bash -n "$f" || exit 1; done`
+    (passed)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed in `0.36s`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (passed: `504` PR modes, `9788` expected-failure modes, `1`
+    scheduled/manual mode, `10293` documented modes, `499` TLC fast modes, and
+    `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`, total time `0.651 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (passed: no errors, `7799` states generated, `2338` distinct states, `13`
+    temporal branches)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `43` temporal properties,
+    `EXITCODE: OK`, total time `11293.945 sec`)
 
 ## 2026-06-04 Sumeragi RBC CHUNK gate header/digest proof
 

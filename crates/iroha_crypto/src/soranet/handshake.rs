@@ -22,7 +22,7 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Map, Value},
 };
-use rand_core::{CryptoRng, RngCore};
+use rand_core::TryCryptoRng;
 use sha3::{
     Digest, Sha3_256, Shake256,
     digest::{ExtendableOutput, Update, XofReader},
@@ -224,12 +224,32 @@ pub enum HarnessError {
     /// ML-KEM operation failed while constructing the handshake.
     #[error("ml-kem operation failed: {0}")]
     Kem(String),
+    /// Random byte generation failed while constructing secret handshake material.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
     /// HKDF expansion failed while deriving confirmation or session material.
     #[error("hkdf expansion failed")]
     Kdf,
     /// Signature witness encoding failed while rendering fixture telemetry.
     #[error("signature encoding failed: {0}")]
     SignatureEncoding(String),
+}
+
+fn fill_random<R: TryCryptoRng>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), HarnessError> {
+    rng.try_fill_bytes(dest)
+        .map_err(|err| HarnessError::RandomBytes {
+            operation,
+            message: err.to_string(),
+        })
 }
 
 /// Parse a capability vector into structured TLVs.
@@ -3121,7 +3141,7 @@ impl ClientHelloMaterials {
 /// # Errors
 /// Returns an error when the configured KEM profile is unsupported or when
 /// constructing the handshake payload fails.
-pub fn build_client_hello<R: CryptoRng + RngCore>(
+pub fn build_client_hello<R: TryCryptoRng>(
     params: &RuntimeParams<'_>,
     rng: &mut R,
 ) -> Result<(Vec<u8>, ClientState), HarnessError> {
@@ -3135,20 +3155,28 @@ pub fn build_client_hello<R: CryptoRng + RngCore>(
     )?;
 
     let mut client_nonce = [0u8; 32];
-    rng.fill_bytes(&mut client_nonce);
+    fill_random(rng, "building client hello nonce", &mut client_nonce)?;
 
     let mut client_static_bytes = [0u8; NOISE_SECRET_LEN];
-    rng.fill_bytes(&mut client_static_bytes);
+    fill_random(
+        rng,
+        "building client static Noise secret",
+        &mut client_static_bytes,
+    )?;
     let client_static_secret = StaticSecret::from(client_static_bytes);
     let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
 
     let mut client_ephemeral_bytes = [0u8; NOISE_SECRET_LEN];
-    rng.fill_bytes(&mut client_ephemeral_bytes);
+    fill_random(
+        rng,
+        "building client ephemeral Noise secret",
+        &mut client_ephemeral_bytes,
+    )?;
     let client_ephemeral_secret = StaticSecret::from(client_ephemeral_bytes);
     let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
 
     let mut kem_seed = [0u8; 32];
-    rng.fill_bytes(&mut kem_seed);
+    fill_random(rng, "building client ML-KEM seed", &mut kem_seed)?;
     let mut kem_rng = hedged_chacha20_rng(
         HedgedRngSeed::from_entropy(kem_seed),
         b"soranet-handshake:client-kem",
@@ -3524,7 +3552,7 @@ fn parse_pqfs_relay_response(
 /// # Errors
 /// Returns an error when the relay message is malformed, negotiates unsupported
 /// capabilities, or cryptographic verification fails during the handshake.
-pub fn client_handle_relay_hello<R: CryptoRng + RngCore>(
+pub fn client_handle_relay_hello<R: TryCryptoRng>(
     state: ClientState,
     relay_hello: &[u8],
     _key_pair: &KeyPair,
@@ -4016,27 +4044,31 @@ struct RelayNoiseState {
 }
 
 impl RelayNoiseState {
-    fn generate<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
+    fn generate<R: TryCryptoRng>(rng: &mut R) -> Result<Self, HarnessError> {
         let mut nonce = [0u8; 32];
-        rng.fill_bytes(&mut nonce);
+        fill_random(rng, "building relay nonce", &mut nonce)?;
 
         let mut ephemeral_bytes = [0u8; NOISE_SECRET_LEN];
-        rng.fill_bytes(&mut ephemeral_bytes);
+        fill_random(
+            rng,
+            "building relay ephemeral Noise secret",
+            &mut ephemeral_bytes,
+        )?;
         let ephemeral_secret = StaticSecret::from(ephemeral_bytes);
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret).to_bytes();
 
         let mut static_bytes = [0u8; NOISE_SECRET_LEN];
-        rng.fill_bytes(&mut static_bytes);
+        fill_random(rng, "building relay static Noise secret", &mut static_bytes)?;
         let static_secret = StaticSecret::from(static_bytes);
         let static_public = X25519PublicKey::from(&static_secret).to_bytes();
 
-        Self {
+        Ok(Self {
             nonce,
             ephemeral_secret,
             ephemeral_public,
             static_secret,
             static_public,
-        }
+        })
     }
 }
 
@@ -4333,7 +4365,7 @@ fn assemble_relay_state(inputs: RelayStateInputs<'_, '_>) -> RelayState {
 }
 
 #[allow(dead_code)]
-fn process_nk2_client_hello<R: CryptoRng + RngCore>(
+fn process_nk2_client_hello<R: TryCryptoRng>(
     client_init: &[u8],
     parsed: ClientHelloParsed,
     params: &RuntimeParams<'_>,
@@ -4352,7 +4384,7 @@ fn process_nk2_client_hello<R: CryptoRng + RngCore>(
         ));
     }
 
-    let noise = RelayNoiseState::generate(rng);
+    let noise = RelayNoiseState::generate(rng)?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let transcript =
         compute_relay_transcript(&parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
@@ -4447,7 +4479,7 @@ impl Nk3ConfirmationBundle {
 }
 
 #[allow(dead_code)]
-fn process_nk3_client_hello<R: CryptoRng + RngCore>(
+fn process_nk3_client_hello<R: TryCryptoRng>(
     client_commit: &[u8],
     parsed: ClientHelloParsed,
     params: &RuntimeParams<'_>,
@@ -4456,7 +4488,7 @@ fn process_nk3_client_hello<R: CryptoRng + RngCore>(
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
     let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
 
-    let noise = RelayNoiseState::generate(rng);
+    let noise = RelayNoiseState::generate(rng)?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let forward = RuntimeKemArtifacts::encapsulate(kem_suite, &requirements.forward_public)?;
 
@@ -4536,7 +4568,7 @@ fn process_nk3_client_hello<R: CryptoRng + RngCore>(
 /// # Errors
 /// Returns an error when the client message is malformed, capabilities are
 /// incompatible, or cryptographic material fails validation.
-pub fn process_client_hello<R: CryptoRng + RngCore>(
+pub fn process_client_hello<R: TryCryptoRng>(
     client_hello: &[u8],
     params: &RuntimeParams<'_>,
     _key_pair: &KeyPair,
@@ -4902,6 +4934,7 @@ mod tests {
     use core::ops::Range;
 
     use rand::{SeedableRng, rngs::StdRng};
+    use rand_core::{CryptoRng, RngCore, TryCryptoRng, TryRngCore};
 
     use super::*;
 
@@ -4922,6 +4955,35 @@ mod tests {
     }
 
     impl CryptoRng for PanicRng {}
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("failing SoraNet handshake RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn encode_signature_returns_prefixed_base64() {
@@ -6810,6 +6872,54 @@ mod tests {
                 assert!(message.contains("ML-KEM"), "unexpected message: {message}");
             }
             other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_client_hello_reports_rng_failure() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = FailingTryRng;
+
+        let err = match build_client_hello(&params, &mut rng) {
+            Ok(_) => panic!("expected client RNG failure"),
+            Err(err) => err,
+        };
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building client hello nonce");
+                assert!(
+                    message.contains("failing SoraNet handshake RNG"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_client_hello_reports_relay_rng_failure() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut client_rng = StdRng::seed_from_u64(22);
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut client_rng).expect("client hello");
+        let relay_keys = KeyPair::random();
+        let mut relay_rng = FailingTryRng;
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut relay_rng) {
+            Ok(_) => panic!("expected relay RNG failure"),
+            Err(err) => err,
+        };
+
+        match err {
+            HarnessError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "building relay nonce");
+                assert!(
+                    message.contains("failing SoraNet handshake RNG"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
         }
     }
 

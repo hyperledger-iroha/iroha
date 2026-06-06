@@ -18,7 +18,7 @@ use norito::{
     codec::{decode_adaptive, encode_adaptive},
     derive::{NoritoDeserialize, NoritoSerialize},
 };
-use rand::{CryptoRng, RngCore};
+use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
@@ -218,9 +218,10 @@ impl AdmissionToken {
     /// Mint a new admission token using the provided issuer secret key.
     ///
     /// # Errors
-    /// Returns [`MintError`] if the time bounds are invalid or signing fails.
+    /// Returns [`MintError`] if the time bounds are invalid, random bytes cannot be
+    /// generated, or signing fails.
     #[allow(clippy::too_many_arguments)]
-    pub fn mint<R: RngCore + CryptoRng>(
+    pub fn mint<R: TryCryptoRng>(
         suite: MlDsaSuite,
         issuer_secret_key: &[u8],
         issuer_fingerprint: [u8; 32],
@@ -250,7 +251,7 @@ impl AdmissionToken {
             .map_err(MintError::Signature)?;
 
         let mut nonce = [0u8; 16];
-        rng.fill_bytes(&mut nonce);
+        fill_random(rng, "minting admission token nonce", &mut nonce)?;
         let body = encode_body(
             flags,
             issued_secs,
@@ -988,6 +989,18 @@ fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
     UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
+fn fill_random<R: TryCryptoRng>(
+    rng: &mut R,
+    operation: &'static str,
+    dest: &mut [u8],
+) -> Result<(), MintError> {
+    rng.try_fill_bytes(dest)
+        .map_err(|err| MintError::RandomBytes {
+            operation,
+            message: err.to_string(),
+        })
+}
+
 /// Errors surfaced while decoding a token frame.
 #[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
 pub enum DecodeError {
@@ -1054,6 +1067,14 @@ pub enum MintError {
     /// Flags contained undefined bits.
     #[error("token flags contain unknown bits ({0:#04x})")]
     InvalidFlags(u8),
+    /// Random byte generation failed while minting the token.
+    #[error("random byte generation failed while {operation}: {message}")]
+    RandomBytes {
+        /// Operation that requested random bytes.
+        operation: &'static str,
+        /// Underlying RNG error message.
+        message: String,
+    },
     /// ML-DSA signing failure.
     #[error("ml-dsa signing failed: {0}")]
     Signature(MlDsaError),
@@ -1121,6 +1142,7 @@ pub fn frame_looks_like_token(frame: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng, rngs::StdRng};
+    use rand_core::{TryCryptoRng, TryRngCore};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tempfile::tempdir;
 
@@ -1152,6 +1174,35 @@ mod tests {
             other => panic!("expected ML-DSA bad encoding error, got {other:?}"),
         }
     }
+
+    struct FailingTryRng;
+
+    #[derive(Debug)]
+    struct FailingTryRngError;
+
+    impl std::fmt::Display for FailingTryRngError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failing admission token RNG")
+        }
+    }
+
+    impl TryRngCore for FailingTryRng {
+        type Error = FailingTryRngError;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(FailingTryRngError)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(FailingTryRngError)
+        }
+    }
+
+    impl TryCryptoRng for FailingTryRng {}
 
     #[test]
     fn signing_body_matches_legacy_contiguous_layout() {
@@ -1616,6 +1667,37 @@ mod tests {
         )
         .expect_err("invalid secret key length must fail before signing");
         assert_mint_mldsa_bad_encoding(err, "secret key");
+    }
+
+    #[test]
+    fn mint_reports_rng_failure() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = UNIX_EPOCH + Duration::from_secs(1_700_000_600);
+        let mut rng = FailingTryRng;
+
+        let err = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect_err("mint should surface RNG failure");
+
+        match err {
+            MintError::RandomBytes { operation, message } => {
+                assert_eq!(operation, "minting admission token nonce");
+                assert!(message.contains("failing admission token RNG"));
+            }
+            other => panic!("expected RNG failure, got {other:?}"),
+        }
     }
 
     #[test]

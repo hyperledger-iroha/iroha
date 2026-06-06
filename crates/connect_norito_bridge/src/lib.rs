@@ -133,6 +133,7 @@ const ERR_VERIFYING_KEY_ID: c_int = -403;
 const ERR_ZK_ASSET_MODE: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
 const ERR_IDENTIFIER_RECEIPT: c_int = -406;
+const ERR_CONNECT_KEYPAIR: c_int = -407;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -173,6 +174,7 @@ enum BridgeError {
     SecpParse,
     SecpSign,
     SecpVerify,
+    ConnectKeypair,
 }
 
 impl BridgeError {
@@ -216,6 +218,7 @@ impl BridgeError {
             BridgeError::SecpParse => ERR_SECP_PARSE,
             BridgeError::SecpSign => ERR_SECP_SIGN,
             BridgeError::SecpVerify => ERR_SECP_VERIFY,
+            BridgeError::ConnectKeypair => ERR_CONNECT_KEYPAIR,
         }
     }
 }
@@ -2824,7 +2827,8 @@ pub unsafe extern "C" fn connect_norito_keypair_from_seed(
         }
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let seed_bytes = unsafe { slice::from_raw_parts(seed_ptr, seed_len as usize) };
-        let key_pair = KeyPair::from_seed(seed_bytes.to_vec(), algorithm);
+        let key_pair = KeyPair::try_from_seed(seed_bytes.to_vec(), algorithm)
+            .map_err(|_| BridgeError::ConnectKeypair)?;
         let (public_key, private_key) = key_pair.into_parts();
         let (_alg, private_bytes) = private_key.to_bytes();
         let public_bytes = checked_public_key_payload(&public_key)?;
@@ -4146,7 +4150,10 @@ pub unsafe extern "C" fn connect_norito_connect_generate_keypair(
             return -1;
         }
         let scheme = iroha_crypto::kex::X25519Sha256::new();
-        let (pk, sk) = scheme.keypair(KeyGenOption::Random);
+        let (pk, sk) = match scheme.try_keypair(KeyGenOption::Random) {
+            Ok(keypair) => keypair,
+            Err(_) => return ERR_CONNECT_KEYPAIR,
+        };
         ptr::copy_nonoverlapping(pk.as_bytes().as_ptr(), out_pk, 32);
         ptr::copy_nonoverlapping(sk.to_bytes().as_ref().as_ptr(), out_sk, 32);
         0
@@ -6003,7 +6010,7 @@ fn prove_verified_kagemusha_compact_token_from_record_bundle(
 ///
 /// Inputs are Norito-archive bytes of
 /// `iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle` and a
-/// `Vec<iroha_data_model::zk::OpenVerifyEnvelope>`. The output is Norito-archive
+/// `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`. The output is Norito-archive
 /// bytes of `KagemushaRecursiveAggregationProofBundle`.
 ///
 /// This symbol is proof-carrying and admission-neutral: compact-token
@@ -17044,7 +17051,8 @@ fn java_keypair_from_seed_bytes(
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let algorithm = parse_algorithm_code(algorithm_code as u8)
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
-    let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
+    let key_pair = KeyPair::try_from_seed(seed.to_vec(), algorithm)
+        .map_err(|err| format!("failed to derive key pair: {err}"))?;
     let (public_key, private_key) = key_pair.into_parts();
     let public_bytes = public_key
         .try_to_bytes()

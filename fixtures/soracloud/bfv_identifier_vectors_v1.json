@@ -49,7 +49,7 @@
       "input_hex": "6162",
       "seed_hex": "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
       "expected_ciphertext_bytes": 1240,
-      "expected_ciphertext_sha256": "EB82751711D3251C2285DF3BA751A3CC9166486E864A6823C73D7B154BCD68C9"
+      "expected_ciphertext_sha256": "F9F19B0C2E4C220B2472A95BEEF0BBCC653DA8A55DA6E68BE9A0C671BCFD8F51"
     },
     {
       "name": "soracloud-add-left",
@@ -58,7 +58,7 @@
       "input_hex": "6162",
       "seed_hex": "10112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
       "expected_ciphertext_bytes": 1240,
-      "expected_ciphertext_sha256": "BA9620D9F249698F1E991F5F5930F2E93D3E67472CCB93F7B1FA9C130D2F8A41"
+      "expected_ciphertext_sha256": "A5F8C5E9E053FF92BCF62BA1463A33B425F30A41EF2B1A890DC2893057D09BD0"
     },
     {
       "name": "soracloud-add-middle",
@@ -67,7 +67,7 @@
       "input_hex": "6364",
       "seed_hex": "20112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
       "expected_ciphertext_bytes": 1240,
-      "expected_ciphertext_sha256": "171C8DD5503F97A890CAF356033C5967495A68007FD732A34135B8387AAE4F4E"
+      "expected_ciphertext_sha256": "870AD0124A4CD06F3291DD494871E7C597B8EC26721604097D28610312ADA5C8"
     },
     {
       "name": "soracloud-add-right",
@@ -76,7 +76,7 @@
       "input_hex": "6566",
       "seed_hex": "30112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
       "expected_ciphertext_bytes": 1240,
-      "expected_ciphertext_sha256": "D842AB98E5A5E7A3247B53DD600449FD25431C64DA788BBDFFD4930D62294D6F"
+      "expected_ciphertext_sha256": "E094CB150B7431C02B134117DD979E2F99A94DA4757A5C952076144B2A123D39"
     },
     {
       "name": "soracloud-multiply-left",
@@ -85,7 +85,7 @@
       "input_hex": "6768",
       "seed_hex": "40112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
       "expected_ciphertext_bytes": 1240,
-      "expected_ciphertext_sha256": "F9CD5C8BFAB652854197CBBB061A3E647DF2B1647CA2D49EE265DC28A67D873F"
+      "expected_ciphertext_sha256": "285D088C54B2A90CDF5D6CEC0892D424B359AE090BB37A6002A505BBBBBD132D"
     },
     {
       "name": "soracloud-multiply-middle",
@@ -94,7 +94,7 @@
       "input_hex": "696A",
       "seed_hex": "50112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
       "expected_ciphertext_bytes": 1240,
-      "expected_ciphertext_sha256": "29D6A32107BD439C2085C32E14ED74438227D77FD759C26468236FDF5B3A456F"
+      "expected_ciphertext_sha256": "C3E0F4E05E8C2CACB57ACE8B9F919E667B5548093C079E172FA8F9C66B4BE5C1"
     },
     {
       "name": "soracloud-multiply-right",
@@ -103,7 +103,7 @@
       "input_hex": "6B6C",
       "seed_hex": "60112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
       "expected_ciphertext_bytes": 1240,
-      "expected_ciphertext_sha256": "22F4564F23BC6D774DC4769A90B9A9EA3415DE785CB120A20190FB59ED92B57C"
+      "expected_ciphertext_sha256": "B7AD3542F0CC1378151202B748619D47EC0BD5526EF98E4E6E1404EB89282FA4"
     }
   ],
   "operation_vectors": {
@@ -113,11 +113,11 @@
     "max_input_bytes": 8,
     "public_key": {
       "expected_norito_bytes": 1212,
-      "expected_sha256": "AF7B077A45DC6FDA0AFCD995EA39F475F9DAA6901B37FE81BAB74C7FF059C386"
+      "expected_sha256": "29DC1B6037D95EA0710CAB597CC98C904583E1A078BC7F51C020FC719CD88CD3"
     },
     "public_parameters": {
       "expected_norito_bytes": 1241,
-      "expected_sha256": "F41F1726D28D47B328E7AAC35F15E0595E1A81F00EDE499CEA4BDFAB91AC4B94",
+      "expected_sha256": "6BD07369C57538E97B3AA1A357CE1769C657C611C81B407B4467C0028B9CD98D",
       "polynomial_degree": 64,
       "plaintext_modulus": 257,
       "ciphertext_modulus": "72339069014638592",
@@ -126,12 +126,17 @@
     },
     "rns_modulus_chain": {
       "moduli": [
-        358273,
-        448769,
-        449921
+        30593,
+        30977,
+        31489,
+        31873,
+        32257,
+        33409,
+        35201,
+        35969
       ],
-      "product": "72339115408190977",
-      "expected_digest_hex": "c192e8c50e2a42ffdaee9f3a279a0fb40b73aa7988ae9f8496fd01d261442beb",
+      "product": "1297818766851231300719063877926878849",
+      "expected_digest_hex": "eea5ef5503b1c9fedb3ce920be2d2e004ca07ad4139ef930ed7749666503a5a5",
       "sample_polynomials": {
         "lhs_coefficients": [
           804,
@@ -270,43 +275,63 @@
           "residue_limb_sha256": [
             "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29",
             "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29",
+            "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29",
+            "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29",
+            "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29",
+            "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29",
+            "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29",
             "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29"
           ],
-          "reconstructed_sha256": "BCE48EFA3A2DD7B0A70A62D31820860FE2A2BE64E436020C04E7B0E9AFAF9F29"
+          "reconstructed_sha256": "C97FBBFFF37D0D9B2F5050B5F3F2B20875B8241BC7C25503015220B230625333"
         },
         "rhs": {
           "coefficient_count": 64,
           "residue_limb_sha256": [
             "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319",
             "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319",
+            "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319",
+            "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319",
+            "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319",
+            "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319",
+            "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319",
             "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319"
           ],
-          "reconstructed_sha256": "57B122316455C2F23E33EB804981826FB9A13BDFF97666363BD02D7AFA768319"
+          "reconstructed_sha256": "B0316A9474555A006B8EC2A80CE5CB4BA1ADDD49E5D41F05B5473DB1872B1C79"
         },
         "sum": {
           "coefficient_count": 64,
           "residue_limb_sha256": [
-            "4A71883119B271DA00894EBF676200543E3A601B2DE44CB4FEC90EDF5124A4A0",
-            "4A71883119B271DA00894EBF676200543E3A601B2DE44CB4FEC90EDF5124A4A0",
-            "4A71883119B271DA00894EBF676200543E3A601B2DE44CB4FEC90EDF5124A4A0"
+            "1BCAC99F8237751E2224FF1842F8AA38F41210C5BBD6D901D43C308ECCD2799E",
+            "75C685BA180823D7B6457850D8CF8EC1B8F3139CBA10C11382696A350CE17D0B",
+            "CDE303BCC1DFEEF1DEE6B555C4D8ED073876F4556E48F9E4945C0FBF9A0706A6",
+            "DDFBAD75552465B9C93BA06B90CBCDD9D7665E13B0C9CCE4467CC8FAC1F28107",
+            "6B01890401DC5FB85F7BF6210D38AC28E3C1528E56FDCAB8CF9855859EBBE541",
+            "7246371AFAE5B84B4937FB2380AB0ACA46AB3686C4031FA3C36A45186EE76EE6",
+            "47E524639BF04D2299D7990E77E0CA8FAF0E751D5413574C5B7477A5E664EA9E",
+            "74AA2326F4B95CDC634ED04C2E8EF61534B97DFAD0FAD479CCEA9A84E66A91C5"
           ],
-          "reconstructed_sha256": "4A71883119B271DA00894EBF676200543E3A601B2DE44CB4FEC90EDF5124A4A0"
+          "reconstructed_sha256": "02EBBFE4B539E40C711383E367990913A33193345CCBAC58B7170F0D2FD377D9"
         },
         "negacyclic_product": {
           "coefficient_count": 64,
           "residue_limb_sha256": [
-            "BB6074391839EF4ED755B99E40EC5FC5197DF49B74B39060BF534102705D7B49",
-            "0AD7365207CBD27EE864F677E881C9CCA7D4E619AD94987648B349A3D84E5DC2",
-            "AFC139096083048202E40E81A8C4D88E3D6564CD567306935E4B886B076F9B33"
+            "B82D30AED5E4AFED97EE4BBE374095622D58371C497EFA9F6925C8C6B9BBF737",
+            "171C28F9AE1CB5D3267870329573244F132A530846B087EF62DCF6BFB38CB203",
+            "125F9604E1D7A5FB447B2B471E648C00F65337239062B29AA45EA54AD09057FC",
+            "8985123C3EC2C17673A7AB3DF13FC4EBFD05F92B0C06ED349DB458C1274F08C0",
+            "1084BB907BDEF3AAB14BFEC6CCCE132D08A077C8048C1375D51982D955E04B2E",
+            "E7E3E90752C01D96EDC7F215439FD72342851B9D32E841E37BB433B028283399",
+            "5F2A8E4440F3056BB9E01A3EE73E76486DA3D6F57F87FE6C8EE32376C52DC50C",
+            "025C66D27AEC840E66782CA2BAB73E1F2F6C54D796A63A550F26F056F4CF346D"
           ],
-          "reconstructed_sha256": "E433F33103A46A20C3229E09A81C522FAB971B3FB09328382523E6B9978A1A99"
+          "reconstructed_sha256": "0231C45B0C67C11D7456D21A65377D6E44602B6315CA17E21C7A885150185EAA"
         }
       }
     },
     "evaluation_key_bundle": {
-      "expected_norito_bytes": 14209,
-      "expected_sha256": "4EBE51C40D45D800CA2B2594D62A8303B4AA845FE267E41A535A00F388B9C113",
-      "expected_digest_hex": "f57a6533c188bd467855a68126bd1c3c5d49fce5fb76ab43eeaad2e70ed643df",
+      "expected_norito_bytes": 204955,
+      "expected_sha256": "7B076371CB33971EC051382E31F2B94BF06DB423C2E47A447B1097B32107CF44",
+      "expected_digest_hex": "8b552241c57e4e6ca871e0e32954fb3dadc5f530884fa2b1887fe7b3b7f7ebbb",
       "decomposition_base_log": 12,
       "decomposition_digit_count": 5,
       "relinearization_entry_count": 5,
@@ -314,37 +339,38 @@
         {
           "index": 0,
           "coefficient_count": 64,
-          "b_sha256": "96741836539A99DD8CC392104F37E57AD6BBBB0275C0D031273BB9B84572F49D",
-          "a_sha256": "72DD1ABBD637D29E3B60AAA6284750AE90C1987C6D8540876CAD226D3345570A"
+          "b_sha256": "498F60D7CEEDEC310137335AD1E9EEF72D401154091B0953E91D8225B1B267E3",
+          "a_sha256": "215D56D6E2E325905AA40CDC5E8B9638EA52C96F0F437176FAE33727F8A2D44F"
         },
         {
           "index": 1,
           "coefficient_count": 64,
-          "b_sha256": "C1FA5085623D83940A71C4CB0199EBF8964CB097B13136F0491B78820EE89043",
-          "a_sha256": "810F9388678971F556F54AE4175F24C98C1849D4974185745C2D9974B47AB563"
+          "b_sha256": "8453AD18F6087FA007D42A532F12BA8A7C9290A8609B52729C370A6FFCD25C36",
+          "a_sha256": "9A4335899F586B721D62444013259BFA49837B474AD1B0D2473572B769C16FD5"
         },
         {
           "index": 2,
           "coefficient_count": 64,
-          "b_sha256": "A72063076623F3F1321B5C93FD9EDD6654175CEE51AEC16D2C7DB1C21C8F1F0E",
-          "a_sha256": "9A4335899F586B721D62444013259BFA49837B474AD1B0D2473572B769C16FD5"
+          "b_sha256": "1ED3070A5CE98000C387AC5353E25AF0B36B9BC3718455433D3D8D77BA642A44",
+          "a_sha256": "B5F93D62DC78722E4A026C13068B1147A15D6127EE1CEF4A7D7FC7DF50FDE62C"
         },
         {
           "index": 3,
           "coefficient_count": 64,
-          "b_sha256": "1CDB963B637F76F887F1851F29D758483EE772E8AF64EA709CAD34855269B9AA",
-          "a_sha256": "CEC49710AC3541E82811D271039ADA933F9A3838F5FC13E34DBF99FE5BDF188A"
+          "b_sha256": "CA7429C74A6FA08D1A10D02F02980C1AE6D2C385D084251DBD1C541E7E079B67",
+          "a_sha256": "EFE1E6C8AF82F5B45439B8EB18C54B555EE34F5E4F10290958FEE6F98966DA2D"
         },
         {
           "index": 4,
           "coefficient_count": 64,
-          "b_sha256": "DFB636272EDFC8B08CB987B90E81A381962CB550EEC41F85170C357FA252B3B9",
-          "a_sha256": "DDA04289392BD840D7D2CB13C0ADC5111D81CE6A57DBCB49F603F77833AF0005"
+          "b_sha256": "617D58590E8B184FE3881D847E222D41EF796A952AA2F0683C5D6045023D3A67",
+          "a_sha256": "8A0D0E5CDBA2E0F37C073968DD08F05AA2B314A80D220C43EC577D7F5874FE76"
         }
       ],
       "rotation_key_count": 1,
-      "galois_key_count": 1,
-      "bootstrap_key_id": "bootstrap-test-key"
+      "galois_key_count": 33,
+      "bootstrap_key_id": "bootstrap-test-key",
+      "bootstrap_max_refresh_rounds": 2
     },
     "galois_keys": [
       {
@@ -355,32 +381,1216 @@
           {
             "index": 0,
             "coefficient_count": 64,
-            "b_sha256": "6D60EBBD572D8CF28003F86444F8220F0590E3C5B8A73C60AF8AFC1CC4E0950A",
+            "b_sha256": "35EE6CA9FE6E52F952FB5A2E1E95081F7BAB5B7B01B3A22AD9C2C0FC1A5215FB",
             "a_sha256": "ED7807E824ABB6651277FEED40068D35D0F204E822EF20FDDCF2AEED085A64D1"
           },
           {
             "index": 1,
             "coefficient_count": 64,
-            "b_sha256": "DC515C636F68444A8A33B96FC5F862E209498D9B98270FACDA97D2CEFF368576",
-            "a_sha256": "72B6101BABCC92783EE14EC547F8B13C9317166F4B658E6B5155B1077A2294AA"
+            "b_sha256": "08672FA8C7C740265650A7BFCC27E098F427B778BD1A64307694457A9551AC0E",
+            "a_sha256": "1EBCD2C89B38A22EA525CF54F3B10E77AA5E33FCE9DF51376E9BC4010F17220A"
           },
           {
             "index": 2,
             "coefficient_count": 64,
-            "b_sha256": "3F9A6FB9FBC1306AB328E409A742779D23BA15A619291F2FE40F19156822787F",
-            "a_sha256": "1F58A2B82C17A03AE44D21E1CCBBFEAFD8D9D240B1397D62975435BF83BFC75A"
+            "b_sha256": "D930B271E59C50AE3FF0BAB4C713E45519C54617C2713F950C5A31EB8AC63843",
+            "a_sha256": "B538236C0CD115A8834003B6EA9D68EF13AC5555BCB1824A421E48BA05463C70"
           },
           {
             "index": 3,
             "coefficient_count": 64,
-            "b_sha256": "D3FA0FC0FEA76C4A007A7CF29609F5D1CF36A48D5825CF0CEC3161B172816C9D",
-            "a_sha256": "B538236C0CD115A8834003B6EA9D68EF13AC5555BCB1824A421E48BA05463C70"
+            "b_sha256": "504F0A4405F55FDBA907EF562CD8901673F9CFA8394499871DDE2A7DC1BD0163",
+            "a_sha256": "7ED052F80185EC33BC300A0F457B15AB904DDC07A7290B56EAF2B36C5015FE52"
           },
           {
             "index": 4,
             "coefficient_count": 64,
-            "b_sha256": "414494455DDD7E47D70C7F6F522C0F01A4BD2297C1122248FA303317B3FA1646",
-            "a_sha256": "B13707E164A135CF0C4DADFE980CE40846111E2C31D384614F959CFAAE43E10B"
+            "b_sha256": "D30824DB846E3847B4FCC6FBD9B4702D2576FCFDDC40E6C215BDA833508FB321",
+            "a_sha256": "34A6AF9605264E31D44FB180530A15B3AEB867AA0F7AFF49FB754B80BDB70F3B"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 65,
+        "seed_utf8": "soracloud-fhe-packed-rotate-galois-key",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "404F43FA2206ABF2B9DC7FA299CA5818B89A37DA3EDCFEDD07EB203A3FD5CEA5",
+            "a_sha256": "B07E8983E56983A3B5A4EFB9E7123F3EE1F46CFE9CB499D4D488053A036DE31A"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "BD1F40C63CBF56A8392255C6B1E36F0AC7FF00B35B7515D2D113E3AC6AC6E4BB",
+            "a_sha256": "E0AE6CBEF59C07D763D8D1392EE21EC2B0270062F0EA03178D494B81CBF5523A"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "F7ABCA1D6C53353C349C4CB145DE51655D7D38FE3ED58367EF0CEADB01472246",
+            "a_sha256": "BD42C1CCEFC43496238556F3C003ECB5F59B18D682A55DB44AC1D1EFB07B0F0B"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "98C0858C7A14D4ABC0A8C44EF4DC05BE963F67AF81650820BC38C80BAA43E6A6",
+            "a_sha256": "4CACB063B42BA20C45DCFCE53BFDCBC417A6093B1DC03E0C55CAA231A92B6E1E"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "31418A13CFC181D582DAA4DBB157D2B69396AEEEF4270679E72E8DC515BCB3BA",
+            "a_sha256": "1C367182FB69E1C0723FE12ECCD66CEE7E2D9EE1678E69A01D5BC623A833A656"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 7,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-7",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "25D69619CB651ADD025FA5B4CA7047BA318470F1BBE94A5E48CF127E12FE47E0",
+            "a_sha256": "1999E081E1EF230CE51E3A6D3AC818B8387F4BB35203A827E4A866114DE4E506"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "D16EB736C2051F7EBE1812B4EABD1FF7BA576DC5CF4869724CE9AA485BE24D95",
+            "a_sha256": "0D8A23004F5C9B31F22BBAD3F5155634807F8813AF09D014A15C3A67E16434D2"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "81DAA23228F60EC5EC4A025FB2D553CFE091DCCFCF117A99C77E5D0E3F0AB0ED",
+            "a_sha256": "269AC4E225F6875929633060305C1AC21F514C7FD8DDF0DBCBEDF46D1BF128DD"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "7252435DFDE4C201D32E3D11EC5412C7B2E1778EC2330A290E607B17D6ABE9AA",
+            "a_sha256": "0407EBCB809AC5AB7CE902ECC3B4385E7F76A755DCEF8BCB29BA58B305931077"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "23090ED0ADF315DB1256F440223ED3B6DF62367F2CFD040A6CCD0F794EE26605",
+            "a_sha256": "A509FE3CFEF90600439B6C953CC6A46B0C0F406531D182542C8D98FC3C641D49"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 11,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-11",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "A2BE302CD9D2CDA7582576EFB7E2765C78F6FC4594220EB3C8E2B39F92747E9E",
+            "a_sha256": "F972C7312CAC19F7CE12A5DDC06ACBED6AD0A2E691301805BC655760055F8835"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "CF5337CC7EB5F4947CCD34A0B640006973F39DA94354EF844407E855BDF723A9",
+            "a_sha256": "5C43C690B3C9B6D9EA9FA8998D8B82A0FA1B55084B5F2F380BFDD62000FB6525"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "301DA439BA2D20851551F6017C1659E7BC2471EE3CBA5B5392CC42517CB311C3",
+            "a_sha256": "94E57F4E6FB783F15CBA9CC3DDE31E9C531F5F7F890E88F20E9CEC33A32DFCA1"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "A225F71A008AD7337B42A767BC7867FD8D50186E5DC9BAA0C1478D798FC95575",
+            "a_sha256": "9EB0920E342443082F496539BE5A33431CBADCC2E4ACE11C25701F1B2B59D05C"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "33D4C2CE5D5BF9240AD7729AB153D601C9D54D944CD4CD99E7DE76B08C617114",
+            "a_sha256": "0ABF5102A42E0D3D1B7361FD8C7602462C85272C327F0C45E25638FFA3CE9DF9"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 15,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-15",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "FCE7131C7260B895A7873B7D3052638E1EC04ED1F0714DA8255915B30671B5FE",
+            "a_sha256": "E2935D144D2677F3998009DABD15B3021733E12FE9A1722315A5A2C931F495BA"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "EA0115C11629E4996EBD7864AB6BC167A16E495E6B2CEBE0434A361B1BF3362C",
+            "a_sha256": "01E58ADE453954014BAF79FD887B16086C6DD0A02CE29BA06EE9A8D1FC168F98"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "CFBC97AC86BDF5BC54EC05507F8241AD1823DCEE1415871788269993A67853FB",
+            "a_sha256": "2E6B91A6445368C665239BDC48EB7F1E00F50DDD95FC8013EB08012057463E28"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "49134CFEF2B91B9FF8083A7F76425BEE15BD0EB58F019F8DEC9A1D4DE820D2F9",
+            "a_sha256": "9BBA151070D49827228D2DA3B967F71A8CAEF0676D1C1685DEF340CB4BE5C8E3"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "8A27041F010DFD53A39841D3EA67D04AC99DBEF27AA484F196ABAA63A3B07053",
+            "a_sha256": "C6DA3440EDB38DCB0ACB82814A21139E3C314159B52D6E742865B119C1D03767"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 19,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-19",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "5CB4D4813494044F0773DD7DB3C609202FC3D09E53B7B060A95718CE644D2232",
+            "a_sha256": "E7A03CCC3288108CCD9491111461ECAF1553D1B5ECBCD389687873D5C2BFA365"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "28692048CC5B9E8934C1308B41FDD6A8B813BD7F868E4111DD3A0A264AC0BA0F",
+            "a_sha256": "5964E8C5F361D10C1FF4CEDA3EC15ECA896CD151007CCFE67A7AAF81BAA83AFB"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "D5F569532C967B47EA1071BECD647C52E08DF2D30129FE46642CE63C3202DC6F",
+            "a_sha256": "50EA61891B414568C0CBA5C58089DB40FC5E59A14ECD2744AD13D457E006399C"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "4CBAC04C4269089B051609F490CBEB32256DE2FF40C05C2FA5FC1CDD3B05E782",
+            "a_sha256": "44FF9BDC02CAF42863EF25A146837EE67F1E24FBC5E062F722E9D7DCD85B86DA"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "6103A7922C26CC5022A28B00B7A049A5D26B540DF6CAE66D1437E470B790A783",
+            "a_sha256": "0B4B095EA4DEEE07666C2765FF142AB9E44C8E64BA8047208D836BC691B5579D"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 23,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-23",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "5D7CF3E0FA1284430CBCAF46E5F863D9C1C4E88D240534744C4F11D8A090B567",
+            "a_sha256": "0416C4CCAB5C892CE9D0DC0F2399A39B9D4732EDA298179FD1F3913AB6140451"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "FAD82C6B114D031E87CE42F2E4402AED3D1C106BB7A34737FAC0F663301E9CBD",
+            "a_sha256": "12EFE9FAE64910B0A96BDFCD5EDA66D4958C5EA031C75ABA2EA2E1DC9C98EDE6"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "3186A7564472AE6D9667E5FD35249061300F23BFC5B4D7A1244756210CA47ED1",
+            "a_sha256": "8B7A911C53A99968EA4C8367C81831087618694EC5326BE89F3927074057D98D"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "515084AA7E06B22369079F3487A1283E645AC95786E2EA7AF3A0916DC2BA908F",
+            "a_sha256": "9816939C94ED800286B96AE0AE87F18DAE141ABE21F2DC8B35CBB97D784C1E80"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "7AC2641776558A483953CCC5A14AE206042DEC1DC02BE700F73132F1DB8B8AFA",
+            "a_sha256": "BF608B5BF4F30C13F91B38CBA4D882E6C5DC41B1F760332B40C45BA91C4300E8"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 27,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-27",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "CCB5DB50DEE77F1A11C48684317D948DA6751518171E92F297DE12F33CAA4738",
+            "a_sha256": "D31FC7021273F201FB67A0DCCA7B3569E763E79523C980D43C6E885239562022"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "FD2E9807376A76DCAFC104C1A5FFCA137D8031ED36C0BE705D1211AB8577ED10",
+            "a_sha256": "1F5787BCBB8F2CBEE1794173EFB5174719F9E85DE874BCF5BE2C9A54BA375062"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "250C0EDE004B50E2C29F8ED1872C2B3F6972B83DD8830537630DBD2B643E37A1",
+            "a_sha256": "A950659CD6361FD3CDBAA79C6B39B2A562FF3FBA7579963053B3E69BE1F48848"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "C1303DC6B13C39CD597419A032F0D1C29001798072D44289437ADF246A725A90",
+            "a_sha256": "AD97AE8F5E92069CD288720B05166F26BECA06DC805089EA6CA32096D9ACCA61"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "818C26459F4506DFFD921D61C60C0644D861CC63BCF8D3FAF5B0F090D639A2DD",
+            "a_sha256": "A02F450C9980D71A3E20D3B4DC6E9FF8D51B3FDF69EE3BD9E0973B3B006BF7B8"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 31,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-31",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "7E31226F43A7725F1724DA72DA47DBC5550BB5B58B4E3732814A47B46EE9BBCD",
+            "a_sha256": "4015BE2D51DC489AF123342706E05E24015D66700A7C3C8DD03D79E8E2D25FF4"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "702675AF6EB3FE02C57D8B9480A8A512D3034EF4049DE0BEE716765CBB53D3AB",
+            "a_sha256": "D5AE85BAEFC76DBFA1D7015E3624B5BFF064C138C147225339C5DFE354F7FE31"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "6F7144DD3986581AEA0003E8DB9B611D219EA78970B0465DBBCF158F72B471B3",
+            "a_sha256": "C257933878A82AC509DBBC5150E55C3460D1D205870EABC2938A8933C79E374D"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "B8946854E49FAFDF4A1AB205BD924D275A41012A05973402423CF90510FEC714",
+            "a_sha256": "55466AE5B408B2162F34188D727F948C21003CA511E84D3C046A3E06FB31A747"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "0F330B1A75434EE52D45D6FFC87C23A89298B9973E3096628588D3D8D4191F85",
+            "a_sha256": "8A953DA8AC7875FD628A7CAD47DF558D2E1ACB3403CC752E4F4588600849370C"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 35,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-35",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "2DE3FA69844B956CF608AD9152878C908CEB7E3544FFBAA37BD347F049224DB8",
+            "a_sha256": "C48F18791B5AAB25E75367FAD0CB48E16BBB85B96E5DCDCB7CC9514C5A08FEA9"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "BACA0BA58F7F873A7F89C1BBEDD3FC579B0F6ACD24450D6C5B9C29810C791D77",
+            "a_sha256": "651B24DDF148F829E1975E72202B973EED178A32D5F4C114E685C7286B378C0B"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "0DDEBF27207754C03A6F295B55179CAB6B62CB20A2140BF498B9021C520C3CCC",
+            "a_sha256": "6D9BD3A61C7CDF75A55C1C46BCBA36F83DDC58555306236A950A4AFB37903272"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "7C6C979AEFEE557F62BC04CE3C94A7C4F9F562FECC6EBE28B2746EAE0AA9B29D",
+            "a_sha256": "6284E229BA8E8A1B79F7E12AD36094EBD5B7A49E3CB6CB086ED0EC6ED915091B"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "148FCD2978393A496E35C6A080E36E80E8D60AD1AF79CC1881843A63A757AE37",
+            "a_sha256": "015CF161CBC58823CD57D0A258E5A20654BB9A97684F39BB5DE56DB8BF3E13C9"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 39,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-39",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "45B98535FA4CEF10D631DD4D0353C9D60F487AA182984BCE76B04C797115394C",
+            "a_sha256": "D0FA9478856EF8F6EA9A39D6D04AF577343B22473CCB52D576F355CF6E9DD66B"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "2EE1CFDAEA8010B34DE96F1208206D32571F5178356425DE2CB07B877A17037D",
+            "a_sha256": "3175F8EAF322BC5B5A821FEA75C2BCACCBA5443EB48A8A6849A29846BFCA9DC8"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "FAC115D4EDE03AC062C25FED02BC18A58A0BD8ED6D9B582ABD34E1AEA275E198",
+            "a_sha256": "20E12339A1DEF7E29D11FF377E41BE9F7145922AA578D67BA248C4087E605FBD"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "28330C4FE3F40C8D148DF03C9060EF50317A55856AE8D61EBF604E9E67812084",
+            "a_sha256": "10A1C0D880593436D46A17ECAD413B61EB007FAF100FF208EBF0FFF0BFA6C9AA"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "7D3A593A8AF6248F5394E01CBEA7F672852B72F05FD186D0A9820CA2CA0C2F40",
+            "a_sha256": "2F375F2DE5ADB9F18402360CD3D4F6E790569225EDBAA400B961EA39665A660E"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 43,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-43",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "5B9EE089F7F5A6C05F7EAEC5E7E72AE64B3A8B26FD971B36AC2A222ED7AFBCDD",
+            "a_sha256": "E865437E0A7A5072C3E0C988AACE306FCDB68029AB15812FD6838CF7694017DF"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "7B7EEA9EE409A8A7E7011A16CD7F571A7EFF9222F1C3D8E6C3076D4BE801CB9F",
+            "a_sha256": "CB4A7B6767E4D0245034023D4B77C933C370112650662141CB1F7D99EACD05A7"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "32036D3D4C8E4700DEB8A5BC5B9807AAD0CDA08DD08C8D407E2F7E7EC30C5EA8",
+            "a_sha256": "0E25A7CA126B9B0F6AB3DFFBECEF6DC2A47D49F88E26FD46D2E3A4C57B0AB200"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "CDA7049F751ECD4DE38D6FB0BCC01E19B2C5DCDC83B7B65656335DC199693FCE",
+            "a_sha256": "4841362C91E81B200E951FAA7E743B45BB6312AFE6411CBF913C485C2AAC64D1"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "3250A431F300517C883C5299CC4B88BCD46FC5A9E87E7CC5ED63D1E7E519AB8E",
+            "a_sha256": "7AE964DBFFAA0ED5ED8CB55563C27A66BE9A2EAD8317423DA4E4CD217EF11411"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 47,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-47",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "4D05EABE8151D7AF88A378A1318FF8879AB56FDEEB24527436530AF637F8FB7B",
+            "a_sha256": "A5623405F0D74DAEC893A52DEE27CA1C4A8AFB0E263DD7662C48CCF6FF97E9BF"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "3D39955014BA4111C9C6F2C0B5DD1BFEF167CD1D696A037057BC3B9694ED8C58",
+            "a_sha256": "B36510A859A99359E804A37179A1D84F9ADEBC98CD56B75901F6A3D1F2A5E70E"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "B9E7C675488EE11A876B61B728FE08D9D5C56563CB75347F201A72FBFC40337E",
+            "a_sha256": "6F3C76B6E5A86A30968DC703F06124E9854452D2923932C2AC90060730591974"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "A6248D13735486C145AC802B424D45660D0BE3A52A353724F8707AD105331D59",
+            "a_sha256": "AFCEBA402AAF592D5E53A65E25B66A019E246A881577CFBA73DE4A593E211795"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "0E2D7D28E4BEE3F6EB63F2275391390AAC6CC5AED83BEA37A6C237F67F1F37BA",
+            "a_sha256": "9DEC7D6F926C4280DB243453ACA9F1EEF014ED599789F2EE93E08D1A42DDED8C"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 51,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-51",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "2C34D212770F96F492404DA40615D5FCB13D990E48DDCD773806423D239936ED",
+            "a_sha256": "60ECB1D68DCDC5ED1B08C9686C6BA01BBCA346AF4EEC1A8F975354AD77582071"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "9C5735D32602F6C2C3DBD507EF804B0C4A2F41DC21C3A2876432155F41DC2216",
+            "a_sha256": "163E10BDE4AD9ED92ADAD1F5849B22F051B96BC13A0B3672F4BC0D68B9A539C2"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "8BA8C34C39797DD7F6C39C1D5BB14013839693788850B6087EEC8CFC01882D39",
+            "a_sha256": "F03798C096EE5FDA8011D083E3FF19647D3F965D18C4EAC141210E464DF41180"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "0451A2724939D389ACA8E442EF2041A3AA578D4A046A4E2CFD2E3E98CBE879AD",
+            "a_sha256": "F24585A8355A18A21F25F13D8AC1D167CDC243A2BC4F7DA9E1619CB9DC32DAC7"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "F6FB58E047BA658B2F63A395A04B88640F86C65A86B3CF6986E91889C790D5E2",
+            "a_sha256": "91835FF13A1BF7D6FD6730907785CD3CB0B4D4BF4D3ABE7FEBA0F2B712AE07E4"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 55,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-55",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "E093B8FA79BE18E9C38CF5A1FC4E7E4C45A603D00C742B4275B081273DF06EA9",
+            "a_sha256": "8556F40088D9EDEA54831E3835A334F7B4CF5F0362A7A52750756BD760F49B94"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "B63B82B4D9D4680ADF75E347891A3A50991583399283954A5315EC4AE71CC26A",
+            "a_sha256": "8ECFD82844C4139B6F754C40FF02E114E92D347C6A0D727417AC725B29732449"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "13395996224EF395282AD035F71131B8131D786379622804035B05D5A93E106B",
+            "a_sha256": "92B4EE0A4629DC5FB8460B574F791EC281D83030AD051DCFBF6821FE5FFCB00C"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "4799B2CCE6C41DFD7917820CE8E9AA5426BD6B268FD9D783832DA5B6B6E3C4A3",
+            "a_sha256": "B077A65DDB062E976611755BD7A4B4FAAE31A30520BDD0CF91130AE17F443483"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "28E8F664B0D942A58011321B8CA89353F6AAC73678E7C73676F25CB0A3FB5026",
+            "a_sha256": "62256CC190EAD68456792922026B3123DCB392B1AE0D474A7B5FF740893BE88F"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 59,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-59",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "DEF0D666F4698A66C995BA80E41CAF4F702B1E3FE53545CF0228D78D8D38115A",
+            "a_sha256": "11910357111746907FF52D90870155B5695277C9BF2BFA5D42FC12DF0ED7DDA2"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "7A2E90836C390994C7137F958F1A99AC5433302BDAD2FFD7AF4A92CCC9B41CF1",
+            "a_sha256": "9C739870FAC16BBFE79FE391C29473A3F206C3204DCD6FF66B8F180575EDA74D"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "B51E45FF0FDE3C0D30AE169E0B353391C92AA7ECD3AC6A50866BD670425DF295",
+            "a_sha256": "B844681E15BC3469CD0348ECBEF25B207E900080DF041265FB0DFCEC6D0A000D"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "450E2C336E850ABFCEE88AA4649353025E436B1CA373AC9543D1780E1A046748",
+            "a_sha256": "73040399C2D86BBEA176F2C005652FC3AB40A29798EB5413301250FDCFF31DBD"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "53DFD4DED09A6BFB454B55068FE1611F9D49EE944BDE00E649F86529C1CBABF6",
+            "a_sha256": "9C0B4DAEF17F3E7E774BF8DD631F7415081AA95AFE78C4858826DC4A551E618C"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 63,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-63",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "C07F195E8E687A689A3C954E6D73D2BEAEB412F80AFCF2F05621496D315703F3",
+            "a_sha256": "391978CFCAC4B6109E65B093964C88FBDB6E456C96AA5A02A2864C5354DFF914"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "26B2A63560F305C2EFCA66F2E9B6E970C94EE942B6677A2788E922975633F8EB",
+            "a_sha256": "4F4E1DBF2B82CDEEDD45E7C8503CCDF247CA1CB3A92EB1A4F7BA455B6EC138C0"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "CE38680AF0E8B379AF392842E8395D1B23C8E1E9FAA4767E770479065CF30114",
+            "a_sha256": "C9A3B1CD4C36AB2D92BABF0D7ED5FC98F517B494DF8F73F5CD801EA296FB7576"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "A6910DE2516C6CDDB19BA9CBE9559F48F7279D0BE5678FECD59B84358D1AF6E0",
+            "a_sha256": "FA6CDFEBC1DE30386D8766C4113DC5748D37251FA419A35C7AF483D28623B8DC"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "24730FD059995A6B52C1173C882A5320FF6256E88A1EC45546DF73DDD715510B",
+            "a_sha256": "E5D07B996C5B046ADCF6DF9064B3AC0BFB72DAC2363419D8CDAF9F39FC7ADAAE"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 67,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-67",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "95A4A3F9E427B28BFC5224DD9D301FE23FA84E21CF220EB7E80E7B05E10F4B25",
+            "a_sha256": "617C9DF1B08D205FF9F9A4EE3C8C6C07B236861E09266CDE20AE3E488DF1381A"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "94CE81B6EC5AEDCB8007397D5FB40CFFA85B481CCC0E444A05E8EC3A3FFE14CD",
+            "a_sha256": "0F6F2993FAA3DBDB878FAE9240BE70A8EE7CA8B2C9DB88895BDD6A27FAC23D9A"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "90619215F5F60552C328C8F362322A0F487A215F58ACE4A3457DEA373147E148",
+            "a_sha256": "0553A12257C86850B59DCA52F4850F8EDDF03265F7CC3EB4E5BCB2C3321DB283"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "725E60553A64079D6FF9A1327EDE5A60F256B08D912C7AD4D758AEAF5C7C7CDC",
+            "a_sha256": "8262939982B790F90925746D3B4A6E5E62BCE7DAB67F0EC0A258CF14D4C32504"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "26A289F5FEAD6E37013B241EC1730D4CAA015E19F0CCBD8C95507D9122461DB1",
+            "a_sha256": "39D92860DBE80B27596E5058B4975A259EEA7B8C8D9F5FDA81A4EB18F893AFA3"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 71,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-71",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "12F238D3DB5B6F74CBC8E89D2B094911F59B77207C945452D7EC9F048D9144FA",
+            "a_sha256": "6286A482230A0806EC8CEE715857DF63505F0A880FFF205806D453A9EEF74FC4"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "126B4B65EB59516410B7509681ADBB78D61726CC9ECA813D367B6F46C0B0093C",
+            "a_sha256": "5C289624CB3C3241E00BD8A4E410FB3D4CC63127389B1008422ED1CD9A9BA8C5"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "98219F672B08BB0894336707FD5285E2530016B70B3ED90B297015AA57EA696E",
+            "a_sha256": "0E2523F6CB84E6AA92FAB2181A93A73BA0B766E890BD70E2F8E52A3A943CB02B"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "51A4077CDBCFCC4998EFFB4CE92A1408D8894C0A56717DE69B17E47BBAB10CF1",
+            "a_sha256": "762D6C79172EEE11570E61FA4B7636F1C071A15A8EC598AD94AA6378D038FEE4"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "CCC5CE1355CAA0E4375D98FA95FA9C3C7717D482DA46FEA4D3B030995C2CE249",
+            "a_sha256": "EF12A86260F8ABECF43DA70D52438ED71977403E6DACAD90A38946D428B72F5D"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 75,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-75",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "A163C51E65FE5C1795F8B37D80175D76447137713952C040931DBCB9263DBB40",
+            "a_sha256": "375B32E0C891075528F8FAF95E3BBE5392C94C68A09A5995C04C9BF6D338F0F4"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "E1EB0FFF0FD9E5A08BFCF8F5F0148914968F855AE9EE4C9FEB418993F8C97041",
+            "a_sha256": "23FFA903E09960A24EFB608C205BFBDFDB70B24E76C06D45D91A0A01BADC614E"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "712352886D66502C691FE9ABBF7C7D8EF04BB65469692CDC5EA64C0BBC1F1DB2",
+            "a_sha256": "30D995A52ED7E8F2D419B29229980F26E989873894DF78977F7F299A37BE25C4"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "5F402DD782BAC92CD55155BACBD2E9525F2A5F0802EDC4B05EAEDD8F6175B98B",
+            "a_sha256": "F7FDD56D364AEE1B049152643F5AE5F2E25E70CEF706BED16010E2FAD3175F6D"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "CE74C8C9D22E87AE49E5CEF37AF9DCF8DECDCD44F9E6F012D5EBC10FC84207CB",
+            "a_sha256": "CCD206B7251C60A7FAC53A0935A9FB6021653736E243B8E3D9CD71816AD633FA"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 79,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-79",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "909F15199FF123DDA7E5ADA83D0EAECF9EDF9976737BDADF49C557E2D1B750A3",
+            "a_sha256": "3A747B6D3A4FCD382867D9C91BC89642101B84F2C63BE3868D114978F23B6214"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "E5DAD73EA7A9C33353F5390378857B66778FBEB08618042282485C12168B833F",
+            "a_sha256": "F2705502285AC0F384D78CD5DCDAF9AA9EB6F4F5D861BCCCABB292451EAACE15"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "4406B9902C49204B91D967243FA8B1C78B9ED6BC503F4CBE239312836871F35A",
+            "a_sha256": "0D8C5584F102111E6AB5B036452BB3AF24330BC047CDD49F2DA15C5CFD56F7CB"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "96121000F7B76E55A50D04F56DA98AB04DC79F9D21AA1E838EA94C8C6A025A42",
+            "a_sha256": "E832B73F25F1359F231D15A230F39DF48FC9A1F8D70551546EF4095A386F65D7"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "39D48140C78701EB88B3358AEA76F088AAD8BFECBBAC1063E1866C049151C109",
+            "a_sha256": "40E7C1FE8CC52411BF70504DC104C64676DFA0A9779390425F60B8C7196F48C7"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 83,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-83",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "0DA8CD527132D3AA3E65B8DD63B67FAC81626835CB87AAFA55A1B23785D924F7",
+            "a_sha256": "239F052B22F8C419403ADC42D2B090C4E5A63F6A9561BB47EAC1B1FE618C3AB1"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "85024822C81D61156D749341170909AA5C3990E002730C8C2B496230C3BFFA95",
+            "a_sha256": "A5F277284FA436FE630F92C87C2338EC4B2E03B773C763601AD6F994F070EA0E"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "076C4452974D4FD36113C883E552BB255382555D9460FCD1F473E16C5C87D972",
+            "a_sha256": "B8B05E2A8F21A8B4F0F9ACF230E96D13C24142DE31297B46367B38638C3D7B26"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "6119AF1026F9B5DE218760E7CF16792F8C76D2C5CEE6E84AFDF7ADD1B73D15DE",
+            "a_sha256": "AFD8FD518C42CE94F3B613977586C085FD29E17577B27E1C35C304A011084452"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "25147B169A03DD3C4E5D9CD7298E6F1F4AB5B0CDF8FA5DFF9FA1052681431DE4",
+            "a_sha256": "AEF33FA3F7675BCD17E6FD54F361E836B26F0E864CA81F87CC5AEA7E648DA4C1"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 87,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-87",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "D7070E60DE8D009540E38400042151029665E068369F5B6EA918F8063EAA749D",
+            "a_sha256": "4473465C7B6AC8D0DC3BD92F0F0EC2EC9303048F9DB7819081562FD8B9D5A4EF"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "2423C21CFB070D41ACDE4129920B845485D2A1F83E0F0367C2E7E44FECC0953B",
+            "a_sha256": "AAAFF6690B9FE6A326DD78A120713900991315240051EF7EB8EC9CCF42174F1E"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "D23F7A03B8AFA72A78CB5E9DD35C77F4DED45FFA39DB7B4459D4A4C8173E7DC3",
+            "a_sha256": "1C6EBCA2C6672E6E344C16FC4FA8465BBAB04F88A4BF16138B2F359110FA9D78"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "563CA104806E91E3B77BD8E7BD6356484526B23F1AD7A9505D79E4C9850D974A",
+            "a_sha256": "DFCF03D387D49B8609FAAA474EBC9696464336C6AC2C25891113124227031FE0"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "F81C2BA715CF916C642321925AECE94003CE4698ED1B15328ECBA2EBF56145F2",
+            "a_sha256": "D9FE8113A36C14DF0AC648898704FCB0B920E476BA93D3400304921FAF4300E6"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 91,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-91",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "684E88A81DA97E90EB68B073F60DD47A7D97DE3202BF18C548342E065345DC9F",
+            "a_sha256": "00524406FE09C45CF25DE353CC4DC3EED55455DE482454C4C908EB09C65B137A"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "95B0E9A362F992190F4AE369A7ADF985C56B67B9389B9D1928569B71FF171B5D",
+            "a_sha256": "7DEDE6D030F36BEC9E2E2E6D824420F612F6602721FE8205418BBB7F8C7C3837"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "1B24526B240CC14C3C7C75E819E726E3972746EF00A09CF6EAD1D7BFE2F19CB9",
+            "a_sha256": "B94C8051D0C41E673CA91768A4F47C6FE23F8A1D80D609019C22D545B55BB5A2"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "FD8B18F5F4BDFFA9FB722D304903FA3B253A5DF73D4F3AEC5065378F9EB43143",
+            "a_sha256": "578238D1C2B871B9C132E186147ADED9B438F4EADAAE049EA218B44EB2C536E8"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "E370BB001648116982FE40F57E629FC1017EE08359261B1A0C24673188807B73",
+            "a_sha256": "4DDD2F1B8CEB97565B9E7D3E87245B930BDE6877864E26605A293B43DEFD4D45"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 95,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-95",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "E312E05B7B117D7FBB651F31F7263CEBE80216E41F868ADBC24DAB232F0346DC",
+            "a_sha256": "7A15AAF2AC4BB53F1EC705D9818829D2CE650D51F6133F47ADF21ADE943665F3"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "895A01CFC42D2F5F1A8D6303E57DB5B284CE76C2DBB879C72F7260EB2ECCD41B",
+            "a_sha256": "D127162B74820B3DBC82F64CFCD35ACDB48E9B0227477BDC24F5053D78A9BB5A"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "2717A371285B006E1183BFF3941E61F1602C8FD7F956242511F699A171CF90DC",
+            "a_sha256": "84B520BBE18850C8ED2334E15C02C00D019AE31F6760B4BA6CF4D77DFE3BD6D0"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "FD4E8759945D2D35980924B34BDE37D46C976AED9A0C22BA1C92DCBF6E76ABFD",
+            "a_sha256": "AC6C311929DD2FC985F54859A1CCF7929E07E4E323362F5D41ACB601F4D3CE37"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "B2D064BC10B382B2603A93E135273F4C0E195EF5A3185ADC3F9ED299BDAB0D4D",
+            "a_sha256": "32E689ABBC0D58874F7CCBC76EB09AF01FE24985DCC5E1CEE3724F43986596BA"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 99,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-99",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "E2A3D139175703FF7DEBA32B316898F20109E8D8732CB41D00AB8B3E23737D70",
+            "a_sha256": "3B60988B406D099FAA91CBDFACC16540BC4909BBDE107381ABCF85DA291F7068"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "45D32E985BACE1F6F467B8D54F36074F2AE3E620B0718BFBF002828735C50FB1",
+            "a_sha256": "9D545E24F6BA6394CA01BE682DFA55596DCC13EEC7EDB8CB397D18BB97124384"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "1B44EB06D5CCA0F8E19F702B537F559E6011A4872A56F607200FED0B69479A8B",
+            "a_sha256": "CEB1F24EFE0E981D04498BA2CA3CC154BD3A7D7A36CCD0290C231F4062CDA6A2"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "8699E767563D96C8FF9DAD5F32A73FC38A72CCC91182721A5807075E58F01BB4",
+            "a_sha256": "A720A2E5451D55F7D44FFD24DCCE2C36FBC96327DDA781116BDBB1F766F45B4C"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "BB7C182F34D5D8A8F14B32DC403EBDFCEB72F5863ADE8B91EF008B55425039BC",
+            "a_sha256": "006E34458FFB828C81BBCB48432669308A13899F0ED596A41A56DF74E1C0CF58"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 103,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-103",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "CE48AA6FCB483C9180871FCB5FFA1C13A18D47AA2BC6BA87293A194F10F9A9FF",
+            "a_sha256": "241BBC5A58F18DF785BEEBBD5B3863E3899975639B3FD2E350CC665026FDFB4C"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "FAF3570AA29971AA0D1BF45F8D84AC1D7CD864C467BBE62272D8BC5662D2B941",
+            "a_sha256": "0E2DAA6583CB8D74C8D18E5AA66C9D24A4502A63216D4B4CB03EC89E06992EEF"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "B518D7E4C0E15A4BA035B661A4E306260804F939CEE88555CF297152AD1CC8C9",
+            "a_sha256": "004371CD82947C66018AFEE95414F06D4758EAA121A766657F939FDF6081D151"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "042ABEE64114078933DC7086C9006E289C70DF9EE752BF8030328511C598A955",
+            "a_sha256": "028215DD669004EEE842E90526B01C3C12DAA8ED044E31147D3AE9BB9A763384"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "8B9B95C38416A2885FBA1EFA9C21A806949DE37E2F717B75521ECB80A23BD5D6",
+            "a_sha256": "C2F41567C0DEF2A38E9F4052171A58DA8B9A72B6864CD1398EA08DEEBAC5A4E9"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 107,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-107",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "19BF68A97E9E60A717417FA97D55888E25E5B292E68D21D3C63B8DC8640AF80C",
+            "a_sha256": "316F9DC64BB88390D2352E3A5F520216A67D24C97D8732A88E0EA58A4F3CAD0F"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "374F03AC92CFBB525346A8683087E9C187B8B7FE0D80EAD99806EEA4A03AC526",
+            "a_sha256": "1A6986C6B64F9AAC124A9111B22965AB96892614098ACD5A5A168C311438ED52"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "D9F9C01F9976C75187C4D5468E4CD8DB82F3BF8973CCFD68A1286712155AB70D",
+            "a_sha256": "E234F4C2CE27F05CF600EE7735E6FECE0625A2C4127D5EA960AC878BE1EABF3F"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "C114ACE8A86370E48475743ECD6BB60D10EC1F0D2CC731F5A9845EEBB7DE79D4",
+            "a_sha256": "294F93F694C1C379A84DB3A0248E3F53636577B097735B2DF03737490534B0ED"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "334F78A699D67CA279788BD151399F036F5634A2B6AB4A91B7707F19D188CAD4",
+            "a_sha256": "9E8414B78A62F59FE0A71FAECFF7879E79B415265A8A5D5855307593130A3A29"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 111,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-111",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "5D0C55D8F5670B848D4A6CC5E06DE19693DA4FB21DC4A0B9A6FE6375F3746E40",
+            "a_sha256": "0A7E6EA4106ACBF26B1E33EEBEF4241FEED6E7F7C3D5423064EAE30BC4389226"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "FCC6B227DCBA2E45F9661E169A6B6F83B4C2399115ADBF0AD6102B3E508E62DD",
+            "a_sha256": "F1742D5F0B72D1AD2646F112CFFB356749B5CBF3E75DF6BF125B7E73A28F06EE"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "3A8A370A88BDCC7F88F8F91099BBD07D01F81AF3DCB8AE2090A94D50D5181673",
+            "a_sha256": "8A8AC3060E1E9322AB01F4AEC242557AC3FE5B513B0A8FD495BCAF7558801381"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "5908545C8EE88BB0EB02BF36BD8E31531BFE28BB9E9CB8F14E0A4381313F1A76",
+            "a_sha256": "06F602D745FD636046278100F6A850158F8077BFD352E3D1B24E7FDC5EF9914D"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "37C7B60B01DFE2EBBA73837AC9DE77A96D2E401C5626E81572E655DBEEB7EFE7",
+            "a_sha256": "6873FC410BF0A5C302B6D8C8883EA3F5242972678421914A3B9391366EC508A3"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 115,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-115",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "7517BD0359717378DC7BEC7C20B7A324E3B6F88F146314C9867446A075D8713A",
+            "a_sha256": "08D3A08F7C383873006C683F6C827007ACA67E976093ABBF5C3A9F65B32270D3"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "23D91206A499021EFE5077A0909B59A9EAD6655FC2789798E418F8FA2254F018",
+            "a_sha256": "31277B078FB12621DD5CD8FE0DC6C113B9D23DEB5D33A77CFEB910254F4287C8"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "189B7982252D5D00C948112B4C82CF33A3145909896D4D4D9DF49A343BBAFD04",
+            "a_sha256": "F358AF6E0547CA2697F879922503FA37432F0CCDFB63932DAC62A42F636FD2F6"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "340A0801195AA5C596264A5F96315BC2D68928AD21EFA6BA4E37D297DB5D2DB6",
+            "a_sha256": "24197429669B2E9FECC908E60298593E7FE54AF40CB253D771A86B96130DD803"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "2088D856418465B567928D253D7AB0E74445FD777F78CEC9030AE49047056330",
+            "a_sha256": "CDE243FE57F90E00251EDAEDF14511CFF780271B17517C66CC4E202FA830C79C"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 119,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-119",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "72C6DF752E9B63688618BCF2ADFF81093DEF318F33B8E08C532A93F09C0E8F8E",
+            "a_sha256": "F2142B00BC0ADE1B17B88339CB4030CA96F7A8B780A5EEE8A911BD109AB491D9"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "1966DA551C9E665CF4E97B3EDA552B94B8D17FD2CC65C130CB932B00A74CB552",
+            "a_sha256": "0157668D0DA2265E0D4E166656FFB37ACF1AF9F8C3BFF621A2BD96F045B1D243"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "169F13816DB3E6B73A64937E23D0E3362569495D2CBE0496C4D78452E36D600C",
+            "a_sha256": "F9A7B8E7231BD6F4CE1DDA97DC7798AA42DD705E7210D874EA362C20635D39F8"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "B259DF8F917C77ECDD5DF452DC82A2FA9B52DA858552E1CE459D4662B62F20AC",
+            "a_sha256": "BAFCFAB431FF425DE851F95588575C0E0573612D7E37714D17BFAA6DCDF9CD1E"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "E2B0DB15DC4A8A9F15C835EB0419447D6CE6B8FB96D568B03DF02118D14A13A3",
+            "a_sha256": "C9ECCFF9EE694574AFF6981361017881C5767AE1EF5E91F6965090C3EA32E830"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 123,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-123",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "CA1C39B51E258EEB46229F4222749675676EB5D51BFE75B45FB9C844250E59AF",
+            "a_sha256": "D7FCC6AF3577139B14FBCF78C6220E52AE973753BB3ECEA2CA0B8BAFFC3855EF"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "AAC56C87F29A1F6165ECECF88D61BEE209E5AD0D3F206739CCB25735F7A5EE74",
+            "a_sha256": "3BFD4A7FAA12BE80EA2FC0701FADA2CD7584A65C4CF717186E8F3756DC68F325"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "43167268AC91C99DD9E761078951D5DC4F65DAC9C00F6320A80A7F49FA3E3264",
+            "a_sha256": "0C8320DC9CCB79E450368A7B15893853B18233DFE33EE619531FFF66C3F56C3D"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "77964C79D3BEB0FAB7E11B194230F76D63F06104EA31B8A4DC2C12565ECF72C6",
+            "a_sha256": "38BD9B1CF72C4E081E5696EC74C8C89CD91DFF7134AF89320E933F9C957E93C0"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "B7F0C52CD168DE026F6B5215AB54ED1DA93B5339AA59053665596C506B8F4E9B",
+            "a_sha256": "846ED5847F80B616EFA9C2744C776637FAE5BD6A5EB931DB420472AB3050908D"
+          }
+        ]
+      },
+      {
+        "automorphism_power": 127,
+        "seed_utf8": "soracloud-fhe-packed-rotate-schedule-galois-key-127",
+        "entry_count": 5,
+        "entries": [
+          {
+            "index": 0,
+            "coefficient_count": 64,
+            "b_sha256": "940D09858DA180A247F28C8EC3410B43FF7DB6F9CF6F1A5AA94EAF9620B91643",
+            "a_sha256": "BACCED43204A162E7DF11E48740041CA96485C7BEC55DEA8DE96376668DD835B"
+          },
+          {
+            "index": 1,
+            "coefficient_count": 64,
+            "b_sha256": "8E456DDDB493515C824856B2B8FC6C96705212F912EB72FF2617A51ECF7C4F86",
+            "a_sha256": "963AB6334FA44BD0D739DA2984B2BE84AA687D0B0C3C3B45538C713883723B9A"
+          },
+          {
+            "index": 2,
+            "coefficient_count": 64,
+            "b_sha256": "F11EB94A4FCB668CA0698551EB9356570B5D249ED06DDB690BF7A57AFAC3D653",
+            "a_sha256": "BBB2CA89ECCF9BD7182E7D2C82F9D732E82296E92B313634CECC938944351920"
+          },
+          {
+            "index": 3,
+            "coefficient_count": 64,
+            "b_sha256": "0459F12C6C98274682177932DE53964918035A1CBE7089D152B208FC0007EDB9",
+            "a_sha256": "C430D54E3CCFFC7FD8A6A826DB8A5AE6444513B96FF4FF9D5FC95BD10E94B2D0"
+          },
+          {
+            "index": 4,
+            "coefficient_count": 64,
+            "b_sha256": "A70F29001C13CA6E85AF4147184ACCD239AD211B47DF0751B16533A16AE9E14C",
+            "a_sha256": "27BB978A60186577EA7D80ABDA7A182B16C0A580C76C8AD383076577B7A01942"
           }
         ]
       }
@@ -402,14 +1612,14 @@
           8
         ],
         "expected_input_ciphertext_bytes": 1212,
-        "expected_input_ciphertext_sha256": "4471F88FDD8AB33481F4275358A968899A9D01A6C069477F3B5F5E67C1FD4C44",
+        "expected_input_ciphertext_sha256": "FDB19BE76D5FF14979FE1F2E6E9EE60A15C78E58E975BEB19185E429D4CE59E4",
         "expected_output_ciphertext_bytes": 1212,
-        "expected_output_ciphertext_sha256": "505913FF6A483C7323C79C697A06582716DE09EFEDB33449C5EFB856D2033471",
+        "expected_output_ciphertext_sha256": "A02A4E515CCD1752F1145DDDDEC864702CDD00558FFD14AD9D70B4E1471A82A0",
         "expected_plaintext_sha256": "B6D52A647095DA740F976C9DB2F34E2A44235F87016B4F38E17E8F6D5355B379",
         "output_components": {
           "coefficient_count": 64,
-          "c0_sha256": "BF0851D3431FD4CA5A7C7FEA8D7E22813C5410DAEBEE04E4BBD0E0521D299038",
-          "c1_sha256": "025EF0DA770CB38FA53DA71EF65D3455D69839FD84B7E5A61A10916B8260F175"
+          "c0_sha256": "7BE24B901E1663F87B6DD6C7249F2615072C3860420BBFD66EC08470830B062E",
+          "c1_sha256": "1916FE14F32CCAB543B9CDFBEF647CBC143488CA04C248C6FC146CC56D161B88"
         }
       }
     ],
@@ -619,14 +1829,14 @@
         ],
         "expected_packed_plaintext_sha256": "B536DB774A23E78DCD021848CD2497D30CB6999A6F1D268F4596432B272963B9",
         "expected_input_ciphertext_bytes": 1212,
-        "expected_input_ciphertext_sha256": "6EA6B8D881B36115C7C7B1B4BB6586BEC5BA3E06443A5BF5738EC32E0C9967E9",
+        "expected_input_ciphertext_sha256": "AF359593AD57090B70002157EBF4DC8326C725C552F11242D4444E215D4FEB20",
         "expected_output_ciphertext_bytes": 1212,
-        "expected_output_ciphertext_sha256": "4E52CF63F38D45A72220C8DEFEDD43BA32B698A16D36CF069C23431E15A8CA40",
+        "expected_output_ciphertext_sha256": "1653FFF090A1C9F12F19EA7D5CA7E4BC650B4A46BBBF6DAFA7DE0F06A44D1407",
         "expected_plaintext_coefficients_sha256": "884A25D56DC0AB78BB1F9FCDEEAE58588F991E255CB11B04CC94C9504E8BEFAE",
         "output_components": {
           "coefficient_count": 64,
-          "c0_sha256": "560B2E2FECC8161F32F7C39B356F1F7270603692AA38BAC1C111D384F8DCC083",
-          "c1_sha256": "8FE324EA69E82697DA3A04356675259B1C019653BB20556D8D7F460CAA250680"
+          "c0_sha256": "2AB0FD21698D641328B08862E9470B2173BD4D61304F9BFA7D7BD6BEFAAAB722",
+          "c1_sha256": "172B5A5CAFA7BF50B3A7E36A9E0E921066DC32277129156FBD52A11DA3EAE2A2"
         }
       }
     ],
@@ -635,25 +1845,104 @@
         "rotation_steps": 1,
         "seed_utf8": "soracloud-fhe-rotation-key",
         "expected_zero_refresh_bytes": 1212,
-        "expected_zero_refresh_sha256": "2C968758FFC5CE42D247F91D4D265C78BDACCA088356E5AD835F0EBE8F0B9488",
+        "expected_zero_refresh_sha256": "EBCB58138E3AC17722D3DD869B35A2F423588252D70FCDAC6725AD5E4DC13B7E",
         "zero_refresh_components": {
           "coefficient_count": 64,
-          "c0_sha256": "4BC9BD805149457B9AAF04F23B7511720A4A60DFFD536BB000BF65EBD7B52A03",
-          "c1_sha256": "2CB9A17318A1A31A941EFF3D8B620FF0765CC5E4C2EFC24089052C77F6F2CD14"
+          "c0_sha256": "5A8FE71791797ADA7248D291F7D3575E70E23A7CA62D9B34C03DEFC04BE54F18",
+          "c1_sha256": "A89C884BB4CFF219FD50DFD6D3193E17D21802E23912FCDF1046D2887F27E571"
         }
       }
     ],
     "bootstrap_key": {
       "key_id": "bootstrap-test-key",
+      "max_refresh_rounds": 2,
       "seed_utf8": "soracloud-fhe-bootstrap-key",
       "expected_zero_refresh_bytes": 1212,
-      "expected_zero_refresh_sha256": "A56033A6AE99D031BA48F010B2DF4BC877BC5918B48C85A44BAB6FCCC3D1DA51",
+      "expected_zero_refresh_sha256": "79DB2A2637253DA53BD71096E6CD0CB47CAD01E52E3E8EFE9FD479F605A536EA",
       "zero_refresh_components": {
         "coefficient_count": 64,
-        "c0_sha256": "A0F0898E8080D91AF19D3A3FF9D7C32690E4298E61876DD31C0341AD3B4B539D",
-        "c1_sha256": "5FC76E1A70CC683F5EE23889B3CCFCD5674FE9430D547A55FB0FB13B5DBE1738"
-      }
+        "c0_sha256": "7C186AFDAB3E7A276533303839A81E9BB86A16F19DE8504EE89F549E3BE70011",
+        "c1_sha256": "D9D95DC1EC48CA1BC194E5574AB5DCEC4902572D851959BD8462854F2E0DA38D"
+      },
+      "round_refreshes": [
+        {
+          "round_index": 0,
+          "expected_refresh_bytes": 1212,
+          "expected_refresh_sha256": "79DB2A2637253DA53BD71096E6CD0CB47CAD01E52E3E8EFE9FD479F605A536EA",
+          "components": {
+            "coefficient_count": 64,
+            "c0_sha256": "7C186AFDAB3E7A276533303839A81E9BB86A16F19DE8504EE89F549E3BE70011",
+            "c1_sha256": "D9D95DC1EC48CA1BC194E5574AB5DCEC4902572D851959BD8462854F2E0DA38D"
+          }
+        },
+        {
+          "round_index": 1,
+          "expected_refresh_bytes": 1212,
+          "expected_refresh_sha256": "DAD25147A20A4785F814A27DB33FE28A721DD15DFE834587D2BD354A6B4E4404",
+          "components": {
+            "coefficient_count": 64,
+            "c0_sha256": "05F155266A9C9F052952C3117513C881B3587F1684B4345F659A2A6D7D88CE7D",
+            "c1_sha256": "FF9FF9CEF06F8BCC410A1B92075BC8DBCA6ABBFAA9F4444AF4C8D3468A72A194"
+          }
+        }
+      ]
     },
+    "bootstrap_refresh_vectors": [
+      {
+        "name": "soracloud-bootstrap-refresh-output",
+        "purpose": "BFV bootstrap encrypted-zero refresh output over one scalar ciphertext",
+        "key_id": "bootstrap-test-key",
+        "refresh_rounds": 1,
+        "seed_utf8": "soracloud-fhe-bootstrap-refresh-input",
+        "input_plaintext_slots": [
+          9,
+          8,
+          7,
+          6,
+          5,
+          4,
+          3,
+          2
+        ],
+        "expected_input_ciphertext_bytes": 1212,
+        "expected_input_ciphertext_sha256": "5D8184D7685D5F3A6F7577DC347850C90BF6A0095E94F93F63B8E4A99D524175",
+        "expected_output_ciphertext_bytes": 1212,
+        "expected_output_ciphertext_sha256": "BE7383A7EBB905AF5A4F3808DCE1ACA253B5FD9EFF4A6750E8A74124F2843AAB",
+        "expected_plaintext_sha256": "1D2859809825EECF5C253A07388EA71F9B43318E7AFC7056EA6AE99C71B68F89",
+        "output_components": {
+          "coefficient_count": 64,
+          "c0_sha256": "50C9975C37CE4EEDA7D76C6D901BB9FB806DBD8211B564C7EB1D4A7052F40A8D",
+          "c1_sha256": "90250F4C51BFA4E1AA00707D18317F6BF9B2F3034AC69421016F37772C5F1F2E"
+        }
+      },
+      {
+        "name": "soracloud-bootstrap-refresh-two-round-output",
+        "purpose": "BFV bounded two-round bootstrap encrypted-zero refresh output over one scalar ciphertext",
+        "key_id": "bootstrap-test-key",
+        "refresh_rounds": 2,
+        "seed_utf8": "soracloud-fhe-bootstrap-refresh-input",
+        "input_plaintext_slots": [
+          9,
+          8,
+          7,
+          6,
+          5,
+          4,
+          3,
+          2
+        ],
+        "expected_input_ciphertext_bytes": 1212,
+        "expected_input_ciphertext_sha256": "5D8184D7685D5F3A6F7577DC347850C90BF6A0095E94F93F63B8E4A99D524175",
+        "expected_output_ciphertext_bytes": 1212,
+        "expected_output_ciphertext_sha256": "5A17E7FD0D99ACC3F3C249C7F0C4C83C00B9DC83053A6721F78C3BE4A25C5226",
+        "expected_plaintext_sha256": "1D2859809825EECF5C253A07388EA71F9B43318E7AFC7056EA6AE99C71B68F89",
+        "output_components": {
+          "coefficient_count": 64,
+          "c0_sha256": "CCC4C520882963491665237F2D11D324E7BFCD7666A0A5E2A9727AB88343A614",
+          "c1_sha256": "94F42BFA3B806327B31854938F80FD936EBFBB7F6869F5F5A8B05398F48ABA49"
+        }
+      }
+    ],
     "vectors": [
       {
         "name": "soracloud-add-output",
@@ -664,23 +1953,24 @@
             "input_hex": "0102",
             "seed_utf8": "soracloud-fhe-add-input-1",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "4FABDDA333FD34815C3F759EAD9D9CF9F5081FC2645321448C2E7A976EEC41EA"
+            "expected_ciphertext_sha256": "083306E76880A0433ADD93F13F5440E958C87E1180F5F6BC36DC4E1AA24DCAE8"
           },
           {
             "input_hex": "0304",
             "seed_utf8": "soracloud-fhe-add-input-2",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "F9758578BE1AFC5FEEF53416502CA066B0136208709D19A19A3EEC45B4EED25E"
+            "expected_ciphertext_sha256": "35C5B5BEE260D69C24C35E98FE65A4A0196583BAAB8D728CD3B24F9360DB0D85"
           },
           {
             "input_hex": "0506",
             "seed_utf8": "soracloud-fhe-add-input-3",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "DFEC77C965B162AF5CC1972B2A88DD0E3641EA400D3E88C193D79040E184D8DC"
+            "expected_ciphertext_sha256": "00B5F2A4010E2109710E958D849E52D3A9021C3BBB568AAFE1ABAFB5F8B98CA0"
           }
         ],
+        "requested_multiplication_depth": 0,
         "expected_output_ciphertext_bytes": 10616,
-        "expected_output_ciphertext_sha256": "C72C6E771F7E8FB6394D506A3DB4BA69D422CB35CCE32F04203DDA1CF7455430",
+        "expected_output_ciphertext_sha256": "256F9007FA4F02BFDB916B3439A50186902B9CC6B67917BAEB691123A06E9075",
         "expected_plaintext_slots": [
           6,
           9,
@@ -702,23 +1992,24 @@
             "input_hex": "0203",
             "seed_utf8": "soracloud-fhe-mul-input-1",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "EEE740942D3CB2CEAFD9FF9AA3E1ECEB7F6CE41D06BCE6092209B4FE03212B1F"
+            "expected_ciphertext_sha256": "EDA96DD6B8339621258A97F9E7128332D2D5C78337C78037B109A29DEE17BFC5"
           },
           {
             "input_hex": "0405",
             "seed_utf8": "soracloud-fhe-mul-input-2",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "D464C7366A87B9D37BED05D9DDDDF1B8C0BDF9D5EABAD933BC521BB7F900AC86"
+            "expected_ciphertext_sha256": "AFE738D0D0FDCCFCE09B077DEF62D4BC8C4A83FA5A13B8250BC7FE27980E4F01"
           },
           {
             "input_hex": "0607",
             "seed_utf8": "soracloud-fhe-mul-input-3",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "25340D1C426472B729F2948E841630D57550FD8246673BADBF23441EB51B83DB"
+            "expected_ciphertext_sha256": "9BEE724DB68DCADD645B4FEFC861A891EAB6671A29B084808C5560346CBD5D70"
           }
         ],
+        "requested_multiplication_depth": 2,
         "expected_output_ciphertext_bytes": 10616,
-        "expected_output_ciphertext_sha256": "7E2BB3CA5EE53C8B00F8061D5DF4F5BF1FC2649A24A8521806CEDFD351BCE043",
+        "expected_output_ciphertext_sha256": "23E69731EECE8A9747416F47FF521DC99400376B6D6D8AA26BCD1C2DCF2477FF",
         "expected_plaintext_slots": [
           8,
           48,
@@ -740,12 +2031,13 @@
             "input_hex": "6162",
             "seed_utf8": "soracloud-rotate-input",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "9E49DF51AF687CCF584FE79A22B9351728069B919876DEAF1B015297B05A0CCF"
+            "expected_ciphertext_sha256": "D23723790CC9BB045AB2F4FF14852DD5AFF2562F63DA93D4A0E0AE779A7A76E1"
           }
         ],
         "rotation_steps": 1,
+        "requested_multiplication_depth": 0,
         "expected_output_ciphertext_bytes": 10616,
-        "expected_output_ciphertext_sha256": "F2F2E028FE7CE7FD2189C0AD960D5F2CDDB1883008CCA665D6A4D9EA341215C6",
+        "expected_output_ciphertext_sha256": "2E0567C916ADAD49E616D71FCD81539C86E524EACDB1A237889CC827B24A2F97",
         "expected_plaintext_slots": [
           97,
           98,
@@ -759,6 +2051,162 @@
         ]
       },
       {
+        "name": "soracloud-packed-rotate-left-output",
+        "purpose": "Soracloud runtime packed-slot RotateLeft output backed by BFV Galois key-switching",
+        "operation": "RotateLeft",
+        "inputs": [
+          {
+            "packed_slots": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              42,
+              43,
+              44,
+              45,
+              46,
+              47,
+              48,
+              49,
+              50,
+              51,
+              52,
+              53,
+              54,
+              55,
+              56,
+              57,
+              58,
+              59,
+              60,
+              61,
+              62,
+              63,
+              64
+            ],
+            "seed_utf8": "soracloud-fhe-packed-rotate-input",
+            "expected_packed_plaintext_sha256": "B536DB774A23E78DCD021848CD2497D30CB6999A6F1D268F4596432B272963B9",
+            "expected_ciphertext_bytes": 1224,
+            "expected_ciphertext_sha256": "AF6C5F2266D30A747C122455292340E001C6F5C0F74B4EE9F900450E81F95770"
+          }
+        ],
+        "rotation_steps": 32,
+        "requested_multiplication_depth": 0,
+        "automorphism_power": 65,
+        "expected_output_ciphertext_bytes": 1224,
+        "expected_output_ciphertext_sha256": "A57D6A529271F833EB5EE9BB67B96F410314FC11DCC808F178A085CF840942CD",
+        "expected_plaintext_coefficients_sha256": "9AFEEFF30BEA51277ED8B8FEDEC63CB1FC23F1A8EC6B60C89797803D3E605B5C",
+        "expected_packed_slots": [
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32
+        ],
+        "output_components": {
+          "coefficient_count": 64,
+          "c0_sha256": "2D6708847CC73254314B2383DACAF6382D93060DB06ABCAEFC64D87696366E4F",
+          "c1_sha256": "C723904547F1FE666EF18C53DAE0BBC5F6F33C6986299F7482135F60EC560CF0"
+        }
+      },
+      {
         "name": "soracloud-bootstrap-output",
         "purpose": "Soracloud Bootstrap output shape with public encrypted-zero refresh material",
         "operation": "Bootstrap",
@@ -767,12 +2215,13 @@
             "input_hex": "616263",
             "seed_utf8": "soracloud-bootstrap-input",
             "expected_ciphertext_bytes": 10616,
-            "expected_ciphertext_sha256": "AEE43A9FB38F9E596A897565134B3CA20F15F92CDAA9850F8BA961E95AC9043D"
+            "expected_ciphertext_sha256": "29276AADE59829B4147C51EB295C8E19232732E22328A9085A7B0DD065D21319"
           }
         ],
         "bootstrap_count": 1,
+        "requested_multiplication_depth": 0,
         "expected_output_ciphertext_bytes": 10616,
-        "expected_output_ciphertext_sha256": "D873550CE7FB4C9B96397CF1B2E2927D3038475058399C10EDBACED73E9F3E86",
+        "expected_output_ciphertext_sha256": "9CCCF83B67E4F4D082889DC6905116ED4ABD94D401D00B4C9F599EE27E4FCF69",
         "expected_plaintext_slots": [
           3,
           97,
@@ -785,6 +2234,195 @@
           0
         ],
         "expected_output_utf8": "abc"
+      },
+      {
+        "name": "soracloud-packed-rotate-left-schedule-output",
+        "purpose": "Soracloud runtime packed-slot RotateLeft output backed by a BFV Galois mask-and-sum key schedule",
+        "operation": "RotateLeft",
+        "inputs": [
+          {
+            "packed_slots": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              42,
+              43,
+              44,
+              45,
+              46,
+              47,
+              48,
+              49,
+              50,
+              51,
+              52,
+              53,
+              54,
+              55,
+              56,
+              57,
+              58,
+              59,
+              60,
+              61,
+              62,
+              63,
+              64
+            ],
+            "seed_utf8": "soracloud-fhe-packed-rotate-schedule-input",
+            "expected_packed_plaintext_sha256": "B536DB774A23E78DCD021848CD2497D30CB6999A6F1D268F4596432B272963B9",
+            "expected_ciphertext_bytes": 1224,
+            "expected_ciphertext_sha256": "5B80BBA9AE06B599E8D4D62BA69C1A726996DB53A7D2EED2392F0AF7ACCD262A"
+          }
+        ],
+        "rotation_steps": 1,
+        "requested_multiplication_depth": 0,
+        "automorphism_powers": [
+          3,
+          7,
+          11,
+          15,
+          19,
+          23,
+          27,
+          31,
+          35,
+          39,
+          43,
+          47,
+          51,
+          55,
+          59,
+          63,
+          67,
+          71,
+          75,
+          79,
+          83,
+          87,
+          91,
+          95,
+          99,
+          103,
+          107,
+          111,
+          115,
+          119,
+          123,
+          127
+        ],
+        "expected_output_ciphertext_bytes": 1224,
+        "expected_output_ciphertext_sha256": "91D87B7C5FD95C458B345835AB28BE83BA721B1FEC85EF897A46735E8570D113",
+        "expected_plaintext_coefficients_sha256": "3AD9C293D9B8A35B716CABDEF4FE6AAE4DA5AD6DAFD6C9532F3379817C9BF151",
+        "expected_packed_slots": [
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          1
+        ],
+        "output_components": {
+          "coefficient_count": 64,
+          "c0_sha256": "75DA3FCD374319889F43D01E2B930F892D1EAD4E9C745917C195E42241DA82CD",
+          "c1_sha256": "725A13A3F817462C17D548FCB4BE7BC248DD88F7C2A02DD2409AD6A6365B52C0"
+        }
       }
     ],
     "public_parameters_decoded": {
@@ -796,70 +2434,70 @@
       },
       "public_key": {
         "b": [
-          "2386007989367717",
-          "6318092823850044",
-          "32674293955861105",
-          "31242067094471831",
+          "2386007989367974",
+          "6318092823849787",
+          "32674293955861362",
+          "31242067094471574",
           "44426112831362282",
-          "31420999594286269",
-          "5877659248627225",
-          "55731316239454479",
-          "40169923226594581",
+          "31420999594286012",
+          "5877659248626968",
+          "55731316239454736",
+          "40169923226594838",
           "52584487086135468",
           "17848715689611456",
-          "56926454785088410",
-          "57380207509045902",
-          "54526520683987453",
+          "56926454785088667",
+          "57380207509045645",
+          "54526520683987710",
           "16140815915328537",
           "36498033715375116",
-          "29424120301713270",
+          "29424120301713527",
           "37229348469900733",
-          "9755782702219258",
+          "9755782702219001",
           "56325830880939895",
           "22647389252999048",
-          "23974308496153517",
-          "62063888202424540",
+          "23974308496153260",
+          "62063888202424283",
           "33787972498722721",
-          "34036927948012330",
-          "7280554284531371",
-          "42848545180510555",
-          "61046011220730974",
-          "64698666899015488",
+          "34036927948012073",
+          "7280554284531114",
+          "42848545180510298",
+          "61046011220731231",
+          "64698666899015745",
           "22135986411208491",
-          "19155945226420937",
-          "4179936611484582",
-          "470879580115841",
+          "19155945226420680",
+          "4179936611484839",
+          "470879580116098",
           "34836614614614210",
-          "21733575125708172",
+          "21733575125707915",
           "68545144174768933",
-          "48627532496217423",
-          "70691516926562804",
-          "65582572247375242",
-          "12917503518525269",
-          "19364211777750967",
+          "48627532496217166",
+          "70691516926563061",
+          "65582572247375499",
+          "12917503518525526",
+          "19364211777751224",
           "44436061219880226",
           "67010515738182800",
-          "70109518035890024",
-          "37325659940018136",
+          "70109518035890281",
+          "37325659940017879",
           "66927575037312776",
-          "24501336240203991",
-          "67393874004878359",
+          "24501336240203734",
+          "67393874004878102",
           "50205632770544623",
-          "66759074121198901",
-          "40125128045418971",
-          "18590801085494962",
-          "58960030900225617",
-          "18615779175839022",
-          "54122339124089101",
-          "10575081016428098",
+          "66759074121199158",
+          "40125128045419228",
+          "18590801085495219",
+          "58960030900225874",
+          "18615779175839279",
+          "54122339124088844",
+          "10575081016427841",
           "36503249659893610",
           "62443527661256205",
           "31268363898439422",
-          "69789340578293628",
-          "41137367216534495",
-          "71155215024711969",
-          "13931493880732993",
-          "11999306225874296"
+          "69789340578293885",
+          "41137367216534752",
+          "71155215024712226",
+          "13931493880732736",
+          "11999306225874039"
         ],
         "a": [
           "41751510850786309",
