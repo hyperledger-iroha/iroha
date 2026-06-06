@@ -190,6 +190,12 @@ pub(super) struct FrontierSlot {
     pub(super) quorum_progress: FrontierQuorumProgress,
     pub(super) timers: FrontierTimers,
     pub(super) repair_state: FrontierRepairState,
+    pub(super) body_present: bool,
+    pub(super) observed_at: Instant,
+    pub(super) last_fetch_at: Option<Instant>,
+    pub(super) fetch_stage: FrontierBodyFetchStage,
+    pub(super) retry_window: Duration,
+    pub(super) pending_requesters: BTreeSet<PeerId>,
 }
 
 impl FrontierSlot {
@@ -263,7 +269,8 @@ impl FrontierSlot {
         } else {
             SlotOwnerKind::ProposalLed
         };
-        let mut slot = Self {
+        let pending_requesters_compat = repair_state.pending_requesters.clone();
+        Self {
             height,
             active_view: view,
             owner_generation: 0,
@@ -275,7 +282,22 @@ impl FrontierSlot {
             quorum_progress: FrontierQuorumProgress::default(),
             timers,
             repair_state,
+            body_present,
+            observed_at: now,
+            last_fetch_at: None,
+            fetch_stage: FrontierBodyFetchStage::Leader,
+            retry_window,
+            pending_requesters: pending_requesters_compat,
         }
+    }
+
+    pub(super) fn sync_compat_fields(&mut self) {
+        self.body_present = self.body_present();
+        self.observed_at = self.timers.observed_at;
+        self.last_fetch_at = self.timers.last_fetch_at;
+        self.fetch_stage = self.repair_state.fetch_stage;
+        self.retry_window = self.repair_state.retry_window;
+        self.pending_requesters = self.repair_state.pending_requesters.clone();
     }
 
     pub(super) fn lag_started_at(&self) -> Instant {
@@ -302,10 +324,13 @@ impl FrontierSlot {
         }
         self.phase = FrontierSlotPhase::ValidateBody;
         self.record_progress(now);
+        self.sync_compat_fields();
     }
 
     pub(super) fn take_pending_requesters(&mut self) -> BTreeSet<PeerId> {
-        std::mem::take(&mut self.repair_state.pending_requesters)
+        let pending_requesters = std::mem::take(&mut self.repair_state.pending_requesters);
+        self.sync_compat_fields();
+        pending_requesters
     }
 
     pub(super) fn note_local_vote_emitted(&mut self) {
@@ -812,6 +837,7 @@ impl FrontierSlot {
             }
         }
 
+        self.sync_compat_fields();
         actions
     }
 }

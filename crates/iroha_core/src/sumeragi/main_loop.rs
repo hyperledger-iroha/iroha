@@ -167,10 +167,12 @@ use roster::{
 };
 #[cfg(test)]
 use roster::{derive_active_topology, derive_local_validator_index};
+#[cfg(test)]
+use slot_tracker::FrontierBodyState;
 use slot_tracker::{
-    FrontierBodyFetchStage, FrontierBodyState, FrontierOwnerLockState, FrontierPrefetchSlot,
-    FrontierSlot, FrontierSlotActions, FrontierSlotEvent, FrontierSlotMode, FrontierSlotPhase,
-    SlotOwnerKind, SlotTrackerState,
+    FrontierBodyFetchStage, FrontierOwnerLockState, FrontierPrefetchSlot, FrontierSlot,
+    FrontierSlotActions, FrontierSlotEvent, FrontierSlotMode, FrontierSlotPhase, SlotOwnerKind,
+    SlotTrackerState,
 };
 use vrf::VrfActor;
 #[cfg(test)]
