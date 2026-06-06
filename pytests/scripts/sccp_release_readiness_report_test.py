@@ -2944,12 +2944,12 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         surface["lanes"]: surface
         for surface in payload["user_prover_submission_surfaces"]
     }
+    assert set(surfaces) == {"eth,bsc", "tron", "sol", "ton"}
     assert "ton" in surfaces
     assert surfaces["sol"]["proof_backend"] == "sccp-solana-recursive-mainnet-v1"
     assert surfaces["ton"]["proof_backend"] == "ton-contract-v1"
     assert surfaces["eth,bsc"]["proof_backend"] == "evm-groth16-bn254-v1"
     assert surfaces["tron"]["proof_backend"] == "tron-groth16-bn254-v1"
-    assert surfaces["substrate"]["proof_backend"] == "substrate-runtime-v1"
     assert "canonicalEvmSccpReceiptProofBytes" in surfaces["eth,bsc"]["sdk_helpers"]
     assert "canonicalBscSccpReceiptProofBytes" in surfaces["eth,bsc"]["sdk_helpers"]
     assert surfaces["eth,bsc"]["sdk_helper_symbols"] == list(
@@ -3320,25 +3320,6 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         "TronSccpProofEngine"
         in surfaces["tron"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
     )
-    assert (
-        "buildSubstrateSccpRuntimeStorageProofRequest"
-        in surfaces["substrate"]["sdk_helpers"]
-    )
-    assert "SubstrateSccpProver" in surfaces["substrate"]["sdk_helper_symbols"]
-    assert (
-        "build_substrate_sccp_runtime_storage_proof_request"
-        in surfaces["substrate"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
-    )
-    assert (
-        "SccpSourceProofs.buildSubstrateRuntimeStorageProofRequest"
-        in surfaces["substrate"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
-    )
-    assert "witnessProvider" in surfaces["substrate"]["sdk_helper_symbols"]
-    assert "proveFn" in surfaces["substrate"]["sdk_helper_symbols"]
-    assert (
-        "SubstrateSccpProver.ProofEngine"
-        in surfaces["substrate"]["sdk_helper_symbols_by_sdk"]["java-android"]
-    )
     assert "buildTonSccpSubmission" in surfaces["ton"]["sdk_helpers"]
     assert "TonSccpSourceStateProver" in surfaces["ton"]["sdk_helper_symbols"]
     assert (
@@ -3575,10 +3556,12 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "`ton_live_account_snapshot`" in completed.stdout
     assert "`substrate_finalized_runtime_snapshot`" in completed.stdout
     assert "## User Prover Submission Surfaces" in completed.stdout
-    assert "`substrate` | `substrate-runtime-v1`" in completed.stdout
-    assert "Substrate runtime call envelope" in completed.stdout
-    assert "| `substrate` | `substrate-runtime-v1`" in completed.stdout
+    assert "| `eth,bsc` | `evm-groth16-bn254-v1`" in completed.stdout
+    assert "| `tron` | `tron-groth16-bn254-v1`" in completed.stdout
+    assert "| `sol` | `sccp-solana-recursive-mainnet-v1`" in completed.stdout
     assert "| `ton` | `ton-contract-v1`" in completed.stdout
+    assert "| `substrate` | `substrate-runtime-v1`" not in completed.stdout
+    assert "Substrate runtime call envelope" not in completed.stdout
     assert " | passed |" in completed.stdout
     assert "`governed_deployment_evidence` | ready" in completed.stdout
     assert "`live_route_canary_evidence` | ready" in completed.stdout
@@ -3970,6 +3953,56 @@ def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash(
         "native EVM Groth16 prover bundle "
         "native_sdk_artifacts[0].implementation_hash must not reuse "
         "proof_artifact_hash"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_reused_native_evm_prover_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Native prover artifact paths must be unique across evidence roles."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proving_key"] = payload["proof_artifact"]
+    payload["native_sdk_artifacts"][1]["implementation_artifact"] = (
+        payload["verifier_key"]
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proving_key path must not reuse "
+        "proof_artifact: native-prover-artifacts/proof-artifact.bin"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle "
+        "native_sdk_artifacts[1].implementation_artifact path must not reuse "
+        "verifier_key: native-prover-artifacts/verifier-key.bin"
     ) in blockers
     assert payload["release_checklist"]["ready"] is False
 
@@ -4548,6 +4581,85 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
     assert "Status: READY" in completed.stdout
     assert f"| `js-sdk` | passed | `{js_log}` |" in completed.stdout
     assert "## Blocking Items\n\n- None" in completed.stdout
+
+
+def test_release_readiness_report_rejects_duplicate_phase_evidence_assignment(
+    tmp_path: Path,
+) -> None:
+    """Explicit phase evidence must not overwrite an earlier assignment."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    first_log = tmp_path / "rust-sccp-first.log"
+    second_log = tmp_path / "rust-sccp-second.log"
+    first_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+    second_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={first_log}",
+            "--phase-evidence",
+            f"rust-sccp={second_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "duplicate SCCP corridor phase evidence for rust-sccp"
+    ) in completed.stderr
+    assert "already set by --phase-evidence rust-sccp=" in completed.stderr
+    assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
+
+
+def test_release_readiness_report_rejects_phase_evidence_dir_override(
+    tmp_path: Path,
+) -> None:
+    """Explicit evidence must not replace a downloaded phase artifact."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    phase_artifacts = write_downloaded_phase_artifacts(tmp_path)
+    override_log = tmp_path / "rust-sccp-override.log"
+    override_log.write_text(complete_corridor_log(("rust-sccp",)), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence-dir",
+            str(phase_artifacts),
+            "--phase-evidence",
+            f"rust-sccp={override_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "duplicate SCCP corridor phase evidence for rust-sccp"
+    ) in completed.stderr
+    assert "already set by --phase-evidence-dir" in completed.stderr
+    assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
 
 
 def test_release_readiness_report_rejects_forged_phase_log(
@@ -7476,3 +7588,82 @@ def test_release_readiness_rejects_control_character_artifact_paths(
     assert completed.returncode == 2
     assert "release artifact path contains control character '\\n':" in completed.stderr
     assert "complete\\noperator.toml" in completed.stderr
+
+
+def test_release_readiness_rejects_markdown_unsafe_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Release-readiness artifact paths must not break Markdown review tables."""
+
+    _, payload = write_complete_evidence(tmp_path)
+    evidence = tmp_path / "complete|operator.toml"
+    evidence.write_text(payload, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release artifact path contains Markdown-unsafe character '|':"
+    ) in completed.stderr
+    assert "complete|operator.toml" in completed.stderr
+
+
+def test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths(
+    tmp_path: Path,
+) -> None:
+    """Native prover payload paths must not break Markdown review tables."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_unsafe = (
+        tmp_path / "native-prover-artifacts" / "proof-artifact|operator.bin"
+    )
+    proof_path.rename(proof_unsafe)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact"] = (
+        "native-prover-artifacts/proof-artifact|operator.bin"
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    report = json.loads(completed.stdout)
+    native_status = report["native_evm_prover_bundle"]
+    assert native_status["validation_status"] == "blocked"
+    assert any(
+        "native EVM Groth16 prover bundle proof_artifact path contains "
+        "Markdown-unsafe character '|'"
+        in blocker
+        for blocker in native_status["validation_blockers"]
+    )

@@ -107,9 +107,10 @@ pub fn vendor_execute_query_bytes(host: &mut dyn IVMHost, vm: &mut IVM, query_by
 /// is the value left in `r11` and `out_ptr` is the pointer returned in `r10`
 /// (0 if no pointer was returned).
 ///
-/// `DefaultHost` intentionally leaves this syscall disabled and reports
-/// `ERR_DISABLED`. Only `iroha_core::smartcontracts::ivm::host::CoreHost`
-/// returns per-item status bytes in `&NoritoBytes(Vec<u8>)`.
+/// `DefaultHost` and `iroha_core::smartcontracts::ivm::host::CoreHost` both
+/// return per-item status bytes in `&NoritoBytes(Vec<u8>)` when the batch passes
+/// preflight gates. `status` is the first non-zero verifier error, or zero when
+/// every item verifies.
 pub fn zk_verify_batch_envs(
     host: &mut dyn IVMHost,
     vm: &mut IVM,

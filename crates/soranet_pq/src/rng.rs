@@ -3,7 +3,7 @@ use rand::rngs::OsRng;
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, RngCore, SeedableRng, TryCryptoRng, TryRngCore};
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const HEDGED_RNG_DOMAIN: &[u8] = b"soranet-pq:hedged-chacha20:v2";
 const OS_ENTROPY_MIXED: &[u8] = b"os-entropy:mixed";
@@ -81,9 +81,9 @@ impl HedgedRngSeed {
     /// # Errors
     /// Returns [`RngError`] when the supplied RNG cannot provide seed material.
     pub fn from_rng<R: TryCryptoRng + ?Sized>(rng: &mut R) -> Result<Self, RngError> {
-        let mut buf = [0_u8; 32];
-        rng.try_fill_bytes(&mut buf).map_err(|_| RngError)?;
-        Ok(Self { seed: buf })
+        let mut buf = Zeroizing::new([0_u8; 32]);
+        rng.try_fill_bytes(buf.as_mut()).map_err(|_| RngError)?;
+        Ok(Self { seed: *buf })
     }
 
     /// Borrow the underlying seed bytes.
@@ -98,9 +98,9 @@ impl HedgedRngSeed {
 #[allow(clippy::needless_pass_by_value)] // Seed is consumed to trigger zeroization on drop.
 #[must_use]
 pub fn hedged_chacha20_rng(seed: HedgedRngSeed, personalization: &[u8]) -> HedgedChaCha20Rng {
-    let mut os_entropy = [0_u8; 32];
+    let mut os_entropy = Zeroizing::new([0_u8; 32]);
     let mut os = OsRng;
-    let status = match os.try_fill_bytes(&mut os_entropy) {
+    let status = match os.try_fill_bytes(os_entropy.as_mut()) {
         Ok(()) => HedgedEntropyStatus::MixedOsEntropy,
         Err(_) => HedgedEntropyStatus::OsEntropyUnavailable,
     };
@@ -169,10 +169,10 @@ fn build_rng(
     hasher.update(seed.as_bytes());
     hasher.update(os_entropy);
     hasher.update(personalization);
-    let mut derived = [0_u8; 32];
+    let mut derived = Zeroizing::new([0_u8; 32]);
     derived.copy_from_slice(hasher.finalize().as_bytes());
     HedgedChaCha20Rng {
-        inner: ChaCha20Rng::from_seed(derived),
+        inner: ChaCha20Rng::from_seed(*derived),
         status,
     }
 }
@@ -215,6 +215,31 @@ mod tests {
     }
 
     impl TryCryptoRng for FailingSeedRng {}
+
+    struct FixedSeedRng {
+        seed: [u8; 32],
+    }
+
+    impl TryRngCore for FixedSeedRng {
+        type Error = core::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes(self.seed[..4].try_into().unwrap()))
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes(self.seed[..8].try_into().unwrap()))
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            for (index, byte) in dst.iter_mut().enumerate() {
+                *byte = self.seed[index % self.seed.len()];
+            }
+            Ok(())
+        }
+    }
+
+    impl TryCryptoRng for FixedSeedRng {}
 
     #[test]
     fn personalization_affects_stream() {
@@ -335,6 +360,16 @@ mod tests {
     fn seed_from_entropy_exposes_original_seed_bytes() {
         let raw = [0xA9; 32];
         let seed = HedgedRngSeed::from_entropy(raw);
+
+        assert_eq!(seed.as_bytes(), &raw);
+    }
+
+    #[test]
+    fn seed_from_rng_exposes_injected_seed_bytes() {
+        let raw = [0xB9; 32];
+        let mut rng = FixedSeedRng { seed: raw };
+
+        let seed = HedgedRngSeed::from_rng(&mut rng).expect("fixed RNG seed");
 
         assert_eq!(seed.as_bytes(), &raw);
     }

@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -73,6 +74,16 @@ def _path_control_character(path: str) -> str | None:
     return None
 
 
+MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset("|`<>")
+
+
+def _path_markdown_unsafe_character(path: str) -> str | None:
+    for character in path:
+        if character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
+            return repr(character)
+    return None
+
+
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
     payload = path.read_bytes()
     artifact_path = path.relative_to(root).as_posix()
@@ -82,6 +93,12 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
             "release artifact path contains control character "
             f"{control_character}: {artifact_path!r}"
         )
+    markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
+    if markdown_unsafe_character is not None:
+        raise ValueError(
+            "release artifact path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {artifact_path!r}"
+        )
     return {
         "path": artifact_path,
         "bytes": len(payload),
@@ -90,6 +107,8 @@ def _artifact(path: Path, root: Path) -> dict[str, Any]:
 
 
 def _copy_file(source: Path, destination: Path) -> Path:
+    if source.is_symlink():
+        raise ValueError(f"release bundle source path must not be a symlink: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
     return destination
@@ -97,6 +116,12 @@ def _copy_file(source: Path, destination: Path) -> Path:
 
 def _safe_name(path: Path, index: int) -> str:
     name = path.name.replace("/", "_").replace("\\", "_")
+    markdown_unsafe_character = _path_markdown_unsafe_character(name)
+    if markdown_unsafe_character is not None:
+        raise ValueError(
+            "release bundle copied filename contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {name!r}"
+        )
     return f"{index:02d}-{name}"
 
 
@@ -143,18 +168,35 @@ def _phase_evidence_sources(
     phase_evidence_dir: Path | None,
 ) -> dict[str, Path]:
     sources: dict[str, Path] = {}
+    source_labels: dict[str, str] = {}
+
+    def assign(phase: str, path: Path, label: str) -> None:
+        previous = source_labels.get(phase)
+        if previous is not None:
+            raise argparse.ArgumentTypeError(
+                f"duplicate SCCP corridor phase evidence for {phase}: "
+                f"already set by {previous}, cannot set from {label}"
+            )
+        sources[phase] = path
+        source_labels[phase] = label
+
     if phase_evidence_dir is not None:
         for phase in phases:
-            sources[phase] = _phase_log_from_dir(phase_evidence_dir, phase)
+            assign(
+                phase,
+                _phase_log_from_dir(phase_evidence_dir, phase),
+                "--phase-evidence-dir",
+            )
     for raw in phase_evidence:
         name, path = _parse_phase_evidence_arg(raw)
+        label = f"--phase-evidence {raw}"
         if name == "all":
             for phase in phases:
-                sources[phase] = path
+                assign(phase, path, label)
             continue
         if name not in phases:
             raise argparse.ArgumentTypeError(f"unknown SCCP corridor phase: {name}")
-        sources[name] = path
+        assign(name, path, label)
     return sources
 
 
@@ -192,6 +234,13 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
             "native EVM Groth16 prover bundle "
             f"{label} path contains control character {control_character}: {value!r}"
         )
+    markdown_unsafe_character = _path_markdown_unsafe_character(value)
+    if markdown_unsafe_character is not None:
+        raise ValueError(
+            "native EVM Groth16 prover bundle "
+            f"{label} path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {value!r}"
+        )
     if "\\" in value:
         raise ValueError(
             f"native EVM Groth16 prover bundle {label} path must use POSIX separators"
@@ -226,9 +275,18 @@ def _native_evm_prover_payload_sources(
         raise ValueError("native EVM Groth16 prover bundle must be a JSON object")
 
     paths: list[tuple[PurePosixPath, Path]] = []
+    seen_roles_by_path: dict[str, str] = {}
 
     def add_path(raw_path: Any, label: str) -> None:
         relative_path = _native_evm_manifest_relative_path(raw_path, label)
+        relative_text = relative_path.as_posix()
+        previous_label = seen_roles_by_path.get(relative_text)
+        if previous_label is not None:
+            raise ValueError(
+                f"native EVM Groth16 prover bundle {label} path must not reuse "
+                f"{previous_label}: {relative_text}"
+            )
+        seen_roles_by_path[relative_text] = label
         artifact_path = source.parent.joinpath(*relative_path.parts)
         if artifact_path.resolve() == source.resolve():
             raise ValueError(
@@ -482,6 +540,75 @@ def _path_contains(parent: Path, child: Path) -> bool:
     return True
 
 
+def _reject_path_control_characters(path: Path, label: str) -> None:
+    path_text = str(path)
+    control_character = _path_control_character(path_text)
+    if control_character is not None:
+        raise ValueError(
+            f"{label} contains control character {control_character}: "
+            f"{path_text!r}"
+        )
+
+
+def _reject_path_markdown_unsafe_characters(path_text: str, label: str) -> None:
+    markdown_unsafe_character = _path_markdown_unsafe_character(path_text)
+    if markdown_unsafe_character is not None:
+        raise ValueError(
+            f"{label} contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {path_text!r}"
+        )
+
+
+def _reject_symlink_sources(paths: list[Path]) -> None:
+    for path in paths:
+        _reject_path_control_characters(path, "release bundle source path")
+        _reject_path_markdown_unsafe_characters(
+            path.name,
+            "release bundle source filename",
+        )
+        if path.is_symlink():
+            raise ValueError(
+                f"release bundle source path must not be a symlink: {path}"
+            )
+        current = Path(path.anchor) if path.is_absolute() else Path(".")
+        parts = path.parts[1:] if path.is_absolute() else path.parts
+        for part in parts:
+            current = current / part
+            try:
+                mode = current.lstat().st_mode
+            except FileNotFoundError:
+                break
+            if stat.S_ISLNK(mode):
+                if path.is_absolute() and current.parent == Path(path.anchor):
+                    continue
+                raise ValueError(
+                    "release bundle source path ancestor must not be a symlink: "
+                    f"{current}"
+                )
+
+
+def _reject_symlinked_existing_output_path(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(mode):
+            if path.is_absolute() and current.parent == Path(path.anchor):
+                continue
+            if current == path:
+                raise ValueError(
+                    f"release bundle output directory must not be a symlink: {current}"
+                )
+            raise ValueError(
+                "release bundle output directory ancestor must not be a symlink: "
+                f"{current}"
+            )
+
+
 def _validate_output_dir(
     output_dir: Path,
     *,
@@ -490,6 +617,7 @@ def _validate_output_dir(
     native_evm_prover_bundle: Path | None,
     force: bool,
 ) -> None:
+    _reject_path_control_characters(output_dir, "release bundle output directory")
     resolved_output = output_dir.resolve()
     forbidden_outputs = {
         Path("/").resolve(),
@@ -503,18 +631,22 @@ def _validate_output_dir(
         raise ValueError(
             f"refusing output directory that contains the repository root: {output_dir}"
         )
-    if not force:
-        return
-
+    _reject_symlinked_existing_output_path(output_dir)
     protected_paths = [*input_paths, *phase_sources.values()]
     if native_evm_prover_bundle is not None:
         protected_paths.append(native_evm_prover_bundle)
-        protected_paths.extend(
-            source
-            for _, source in _native_evm_prover_payload_sources(
-                native_evm_prover_bundle
-            )
-        )
+    _reject_symlink_sources(protected_paths)
+    native_payload_sources = (
+        _native_evm_prover_payload_sources(native_evm_prover_bundle)
+        if native_evm_prover_bundle is not None
+        else []
+    )
+    _reject_symlink_sources([source for _, source in native_payload_sources])
+    if not force:
+        return
+
+    if native_evm_prover_bundle is not None:
+        protected_paths.extend(source for _, source in native_payload_sources)
     for protected_path in protected_paths:
         resolved_protected = protected_path.resolve()
         if _path_contains(resolved_output, resolved_protected):

@@ -166,6 +166,8 @@ Rust-ის განმარტებები ცხოვრობს `crate
 - FHE შესრულების პოლიტიკა:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - პარამეტრების ნაკრების დაკავშირება უნდა შეესაბამებოდეს `(param_set, version)`-ს.
   - `max_multiplication_depth` არ უნდა აღემატებოდეს პარამეტრებში მითითებული სიღრმეს.
   - პოლიტიკის დაშვება უარყოფს `Proposed` ან `Withdrawn` პარამეტრებში მითითებული სიცოცხლის ციკლს.

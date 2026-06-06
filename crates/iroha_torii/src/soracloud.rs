@@ -70,8 +70,8 @@ use iroha_data_model::{
         SoraStateMutationOperationV1, SoraTlsModeV1, SoraTrainingJobActionV1,
         SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
         SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
-        SoraUploadedModelRuntimeFormatV1, SoracloudFheInputAdmissionProofV1,
-        encode_agent_artifact_allow_provenance_payload,
+        SoraUploadedModelRuntimeFormatV1, SoracloudFheBootstrapKeyProofV1,
+        SoracloudFheInputAdmissionProofV1, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -841,6 +841,8 @@ pub(crate) struct FheJobRunPayload {
     pub param_set: FheParamSetV1,
     pub evaluation_keys: BfvEvaluationKeyBundle,
     pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    #[norito(default)]
+    pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     pub governance_tx_hash: Hash,
 }
 
@@ -5117,6 +5119,7 @@ fn encode_fhe_job_run_signature_payload(
         payload.param_set.clone(),
         payload.evaluation_keys.clone(),
         payload.evaluation_key_refresh_transcript.clone(),
+        payload.bootstrap_key_zero_refresh_proof.clone(),
         payload.governance_tx_hash.clone(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode fhe job payload: {err}")))
@@ -10847,6 +10850,7 @@ pub(crate) async fn handle_fhe_job_run(
             param_set: request.payload.param_set,
             evaluation_keys: request.payload.evaluation_keys,
             evaluation_key_refresh_transcript: request.payload.evaluation_key_refresh_transcript,
+            bootstrap_key_zero_refresh_proof: request.payload.bootstrap_key_zero_refresh_proof,
             governance_tx_hash: request.payload.governance_tx_hash,
             provenance: request.provenance,
         }),
@@ -13509,6 +13513,7 @@ mod tests {
         name::Name,
         permission::Permission,
         prelude::Register,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         sns::{NameControllerV1, NameRecordV1},
         soracloud::{
             AgentApartmentManifestV1, CiphertextQueryMetadataLevelV1, CiphertextQuerySpecV1,
@@ -13532,6 +13537,7 @@ mod tests {
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy, StorageClass,
         },
+        zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
@@ -13664,6 +13670,44 @@ mod tests {
             },
             rotation_transcripts: Vec::new(),
             bootstrap_transcript: None,
+        }
+    }
+
+    fn sample_fhe_bootstrap_key_proof() -> SoracloudFheBootstrapKeyProofV1 {
+        let vk_hash = [0x52; Hash::LENGTH];
+        let statement_hash = Hash::new(b"torii-bootstrap-key-proof-statement");
+        let open_proof = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+            envelope_bytes: vec![0xB5; 32],
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            vk_hash,
+            iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1
+                .to_vec(),
+            norito::to_bytes(&open_proof).expect("encode FHE bootstrap-key STARK wrapper"),
+        );
+        let proof_box = ProofBox::new(
+            "stark/fri/sha256-goldilocks".into(),
+            norito::to_bytes(&envelope).expect("encode FHE bootstrap-key OpenVerifyEnvelope"),
+        );
+        let mut proof = ProofAttachment::new_ref(
+            "stark/fri/sha256-goldilocks".into(),
+            proof_box,
+            VerifyingKeyId::new(
+                "stark/fri/sha256-goldilocks",
+                iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            ),
+        );
+        proof.vk_commitment = Some(vk_hash);
+        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
+        SoracloudFheBootstrapKeyProofV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            statement_hash,
+            proof,
         }
     }
 
@@ -16970,6 +17014,7 @@ mod tests {
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -16982,10 +17027,62 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            Option::<SoracloudFheBootstrapKeyProofV1>::None,
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn fhe_job_run_signature_payload_binds_bootstrap_key_proof_option() {
+        let job = fixture_fhe_job_spec();
+        let policy = fixture_fhe_execution_policy();
+        let param_set = fixture_fhe_param_set();
+        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = fixture_bfv_evaluation_key_refresh_transcript();
+        let proof = sample_fhe_bootstrap_key_proof();
+        let governance_tx_hash = Hash::new(b"governance-with-bootstrap-proof");
+        let payload = FheJobRunPayload {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: Some(proof.clone()),
+            governance_tx_hash: governance_tx_hash.clone(),
+        };
+        let encoded =
+            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            job.clone(),
+            policy,
+            param_set,
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            Some(proof),
+            governance_tx_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+
+        let stripped = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            job,
+            payload.policy,
+            payload.param_set,
+            payload.evaluation_keys,
+            payload.evaluation_key_refresh_transcript,
+            Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            payload.governance_tx_hash,
+        ))
+        .expect("encode stripped canonical tuple");
+        assert_ne!(encoded, stripped);
     }
 
     #[test]

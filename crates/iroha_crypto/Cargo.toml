@@ -87,7 +87,7 @@ parking_lot = { workspace = true }
 signature = { version = "2.2.0", default-features = false, features = ["alloc", "std"] }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc", "rand_core", "zeroize", "std"] }
 curve25519-dalek = { version = "4.1.3", default-features = false }
-x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"] }
+x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets", "zeroize"] }
 
 rand = { workspace = true, default-features = false, features = ["std_rng", "alloc", "std"] }
 rand_core_06 = { workspace = true }

@@ -3122,7 +3122,7 @@ impl Actor {
             let frontier_height = local_height.saturating_add(1);
             let keep_through_height = frontier_height.saturating_add(1);
             let frontier_exact_owner_unresolved = self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == frontier_height && slot.exact_fetch_armed && !slot.body_present
+                slot.height == frontier_height && slot.exact_fetch_armed && !slot.body_present()
             });
             if stats_snapshot.height > keep_through_height {
                 let (

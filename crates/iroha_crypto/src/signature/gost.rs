@@ -840,45 +840,45 @@ impl DeterministicNonceGenerator for StreebogNonceGenerator {
         const BLOCK_LEN: usize = 64;
 
         let hash_len = params.digest_len;
-        let mut k = vec![0_u8; hash_len];
-        let mut v = vec![0x01_u8; hash_len];
+        let mut k = Zeroizing::new(vec![0_u8; hash_len]);
+        let mut v = Zeroizing::new(vec![0x01_u8; hash_len]);
 
-        let private_octets = int_to_octets(private_scalar, params.scalar_len);
-        let message_octets = bits_to_octets(params, message);
+        let private_octets = Zeroizing::new(int_to_octets(private_scalar, params.scalar_len));
+        let message_octets = Zeroizing::new(bits_to_octets(params, message));
 
         k = hmac_streebog_nonce_seed(
             hash_len,
             BLOCK_LEN,
-            &k,
+            k.as_slice(),
             NonceSeedParts {
-                v: &v,
+                v: v.as_slice(),
                 marker: &[0x00],
                 domain_tag: self.domain_tag,
-                private_octets: &private_octets,
-                message_octets: &message_octets,
+                private_octets: private_octets.as_slice(),
+                message_octets: message_octets.as_slice(),
                 extra_entropy,
             },
         );
-        v = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v]);
+        v = hmac_streebog(hash_len, BLOCK_LEN, k.as_slice(), &[v.as_slice()]);
         k = hmac_streebog_nonce_seed(
             hash_len,
             BLOCK_LEN,
-            &k,
+            k.as_slice(),
             NonceSeedParts {
-                v: &v,
+                v: v.as_slice(),
                 marker: &[0x01],
                 domain_tag: self.domain_tag,
-                private_octets: &private_octets,
-                message_octets: &message_octets,
+                private_octets: private_octets.as_slice(),
+                message_octets: message_octets.as_slice(),
                 extra_entropy,
             },
         );
-        v = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v]);
+        v = hmac_streebog(hash_len, BLOCK_LEN, k.as_slice(), &[v.as_slice()]);
 
         loop {
-            let mut t = Vec::with_capacity(params.scalar_len);
+            let mut t = Zeroizing::new(Vec::with_capacity(params.scalar_len));
             while t.len() < params.scalar_len {
-                v = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v]);
+                v = hmac_streebog(hash_len, BLOCK_LEN, k.as_slice(), &[v.as_slice()]);
                 t.extend_from_slice(&v);
             }
             let candidate = BigUint::from_bytes_be(&t[..params.scalar_len]);
@@ -886,8 +886,8 @@ impl DeterministicNonceGenerator for StreebogNonceGenerator {
             if !nonce.is_zero() {
                 return nonce;
             }
-            k = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v, &[0x00]]);
-            v = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v]);
+            k = hmac_streebog(hash_len, BLOCK_LEN, k.as_slice(), &[v.as_slice(), &[0x00]]);
+            v = hmac_streebog(hash_len, BLOCK_LEN, k.as_slice(), &[v.as_slice()]);
         }
     }
 }
@@ -928,7 +928,7 @@ fn hmac_streebog_nonce_seed(
     block_len: usize,
     key: &[u8],
     parts: NonceSeedParts<'_>,
-) -> Vec<u8> {
+) -> Zeroizing<Vec<u8>> {
     parts.extra_entropy.map_or_else(
         || {
             hmac_streebog(
@@ -962,24 +962,36 @@ fn hmac_streebog_nonce_seed(
     )
 }
 
-fn hmac_streebog(digest_len: usize, block_len: usize, key: &[u8], data: &[&[u8]]) -> Vec<u8> {
-    let mut key_block = vec![0_u8; block_len];
+fn hmac_streebog(
+    digest_len: usize,
+    block_len: usize,
+    key: &[u8],
+    data: &[&[u8]],
+) -> Zeroizing<Vec<u8>> {
+    let mut key_block = Zeroizing::new(vec![0_u8; block_len]);
     if key.len() > block_len {
-        let hashed = streebog_hash(digest_len, &[key]);
+        let hashed = Zeroizing::new(streebog_hash(digest_len, &[key]));
         key_block[..hashed.len()].copy_from_slice(&hashed);
     } else {
         key_block[..key.len()].copy_from_slice(key);
     }
 
-    let mut inner_pad = vec![0x36_u8; block_len];
-    let mut outer_pad = vec![0x5c_u8; block_len];
+    let mut inner_pad = Zeroizing::new(vec![0x36_u8; block_len]);
+    let mut outer_pad = Zeroizing::new(vec![0x5c_u8; block_len]);
     for i in 0..block_len {
         inner_pad[i] ^= key_block[i];
         outer_pad[i] ^= key_block[i];
     }
 
-    let inner_hash = streebog_hash_prefixed(digest_len, inner_pad.as_slice(), data);
-    streebog_hash(digest_len, &[outer_pad.as_slice(), inner_hash.as_slice()])
+    let inner_hash = Zeroizing::new(streebog_hash_prefixed(
+        digest_len,
+        inner_pad.as_slice(),
+        data,
+    ));
+    Zeroizing::new(streebog_hash(
+        digest_len,
+        &[outer_pad.as_slice(), inner_hash.as_slice()],
+    ))
 }
 
 fn streebog_hash_prefixed(digest_len: usize, prefix: &[u8], parts: &[&[u8]]) -> Vec<u8> {
@@ -1024,7 +1036,7 @@ fn streebog_hash(digest_len: usize, parts: &[&[u8]]) -> Vec<u8> {
     }
 }
 
-use crate::{Algorithm, Error, ParseError, rng::rng_from_seed};
+use crate::{Algorithm, Error, ParseError, rng::rng_from_seed_slice};
 
 /// Parsed GOST private key (little-endian scalar).
 #[derive(Clone, PartialEq, Eq)]
@@ -1630,10 +1642,10 @@ fn derive_public_impl(params: &CurveParams, private: &PrivateKey) -> Result<Publ
 }
 
 fn random_scalar<R: RngCore>(params: &CurveParams, rng: &mut R) -> BigUint {
-    let mut buf = vec![0u8; params.scalar_len];
+    let mut buf = Zeroizing::new(vec![0u8; params.scalar_len]);
     loop {
-        rng.fill_bytes(&mut buf);
-        let scalar = BigUint::from_bytes_le(&buf);
+        rng.fill_bytes(buf.as_mut_slice());
+        let scalar = BigUint::from_bytes_le(buf.as_slice());
         if scalar.is_zero() || scalar >= params.q {
             continue;
         }
@@ -1669,7 +1681,7 @@ fn keypair_random_impl(params: &CurveParams) -> Result<(PublicKey, PrivateKey), 
 }
 
 fn keypair_seed_impl(params: &CurveParams, seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
-    let mut rng = rng_from_seed(seed.to_vec());
+    let mut rng = rng_from_seed_slice(seed);
     let scalar = random_scalar(params, &mut rng);
     let private = PrivateKey {
         bytes_le: Zeroizing::new(scalar_to_le_bytes(&scalar, params.scalar_len)),
@@ -1872,9 +1884,10 @@ mod tests {
         let data: [&[u8]; 4] = [b"alpha", b"", b"beta", tail.as_slice()];
 
         for digest_len in [32, 64] {
+            let actual = hmac_streebog(digest_len, LEGACY_HMAC_BLOCK_LEN, &key, &data);
             assert_eq!(
-                hmac_streebog(digest_len, LEGACY_HMAC_BLOCK_LEN, &key, &data),
-                legacy_hmac_streebog(digest_len, LEGACY_HMAC_BLOCK_LEN, &key, &data)
+                actual.as_slice(),
+                legacy_hmac_streebog(digest_len, LEGACY_HMAC_BLOCK_LEN, &key, &data).as_slice()
             );
         }
     }
@@ -2171,7 +2184,7 @@ mod tests {
 
     #[test]
     fn mul_add_matches_compat() {
-        let mut rng = rng_from_seed(b"gost-mul-add".to_vec());
+        let mut rng = crate::rng::rng_from_seed(b"gost-mul-add".to_vec());
         for algorithm in [
             Algorithm::Gost3410_2012_256ParamSetA,
             Algorithm::Gost3410_2012_256ParamSetB,

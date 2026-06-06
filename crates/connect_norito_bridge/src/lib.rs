@@ -72,6 +72,7 @@ use sorafs_car::{
         TransportHintInput,
     },
 };
+use zeroize::Zeroizing;
 
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -2831,8 +2832,9 @@ pub unsafe extern "C" fn connect_norito_keypair_from_seed(
             .map_err(|_| BridgeError::ConnectKeypair)?;
         let (public_key, private_key) = key_pair.into_parts();
         let (_alg, private_bytes) = private_key.to_bytes();
+        let private_bytes = Zeroizing::new(private_bytes);
         let public_bytes = checked_public_key_payload(&public_key)?;
-        match unsafe { write_bytes(out_private_ptr, out_private_len, &private_bytes) } {
+        match unsafe { write_bytes(out_private_ptr, out_private_len, private_bytes.as_slice()) } {
             Ok(()) => {}
             Err(code) => {
                 return Err(match code {
@@ -4155,7 +4157,8 @@ pub unsafe extern "C" fn connect_norito_connect_generate_keypair(
             Err(_) => return ERR_CONNECT_KEYPAIR,
         };
         ptr::copy_nonoverlapping(pk.as_bytes().as_ptr(), out_pk, 32);
-        ptr::copy_nonoverlapping(sk.to_bytes().as_ref().as_ptr(), out_sk, 32);
+        let sk_bytes = Zeroizing::new(sk.to_bytes());
+        ptr::copy_nonoverlapping(sk_bytes.as_ref().as_ptr(), out_sk, 32);
         0
     }
 }
@@ -13996,10 +13999,15 @@ pub unsafe extern "C" fn connect_norito_sm2_keypair_from_seed(
         Ok(k) => k,
         Err(_) => return ERR_SM2_DERIVE,
     };
-    let private_bytes = key.secret_bytes();
+    let private_bytes = Zeroizing::new(key.secret_bytes());
+    let private_bytes_slice: &[u8] = private_bytes.as_ref();
     let public_bytes = key.public_key().to_sec1_bytes(false);
     unsafe {
-        ptr::copy_nonoverlapping(private_bytes.as_ptr(), out_private_ptr, private_bytes.len());
+        ptr::copy_nonoverlapping(
+            private_bytes_slice.as_ptr(),
+            out_private_ptr,
+            private_bytes_slice.len(),
+        );
         ptr::copy_nonoverlapping(public_bytes.as_ptr(), out_public_ptr, public_bytes.len());
     }
     0
@@ -14490,6 +14498,67 @@ mod accel_tests {
             free(out_private_ptr as *mut _);
             free(out_public_ptr as *mut _);
         }
+    }
+
+    #[test]
+    fn keypair_from_seed_private_output_derives_public_key() {
+        let _guard = chain_guard();
+        let seed = vec![0x5C; 32];
+        let mut out_private_ptr: *mut u8 = ptr::null_mut();
+        let mut out_private_len: c_ulong = 0;
+        let mut out_public_ptr: *mut u8 = ptr::null_mut();
+        let mut out_public_len: c_ulong = 0;
+        let result = unsafe {
+            connect_norito_keypair_from_seed(
+                Algorithm::Ed25519 as u8,
+                seed.as_ptr(),
+                seed.len() as c_ulong,
+                &mut out_private_ptr,
+                &mut out_private_len,
+                &mut out_public_ptr,
+                &mut out_public_len,
+            )
+        };
+        assert_eq!(result, 0, "expected success");
+        assert!(!out_private_ptr.is_null());
+        assert!(!out_public_ptr.is_null());
+        let private_bytes =
+            unsafe { slice::from_raw_parts(out_private_ptr, out_private_len as usize) };
+        let public_bytes =
+            unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
+        let private_key =
+            parse_private_key_with_algorithm(private_bytes, Algorithm::Ed25519).expect("private");
+        let derived = KeyPair::from_private_key(private_key).expect("derive public key");
+        let derived_public = checked_public_key_payload(derived.public_key())
+            .expect("checked public bytes")
+            .to_vec();
+        assert_eq!(derived_public.as_slice(), public_bytes);
+        unsafe {
+            free(out_private_ptr as *mut _);
+            free(out_public_ptr as *mut _);
+        }
+    }
+
+    #[cfg(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
+    #[test]
+    fn java_keypair_from_seed_private_output_derives_public_key() {
+        let seed = [0x6D; 32];
+        let (private_bytes, public_bytes) =
+            java_keypair_from_seed_bytes(Algorithm::Ed25519 as jni::sys::jint, &seed)
+                .expect("java keypair from seed");
+        let private_key =
+            parse_private_key_with_algorithm(private_bytes.as_slice(), Algorithm::Ed25519)
+                .expect("private");
+        let derived = KeyPair::from_private_key(private_key).expect("derive public key");
+        let derived_public = checked_public_key_payload(derived.public_key())
+            .expect("checked public bytes")
+            .to_vec();
+        assert_eq!(derived_public.as_slice(), public_bytes.as_slice());
     }
 
     #[test]
@@ -15412,6 +15481,34 @@ mod accel_tests {
         assert_eq!(result, -3);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn connect_generate_keypair_private_output_derives_public_key() {
+        let mut public_key = [0_u8; 32];
+        let mut private_key = [0_u8; 32];
+
+        let result = unsafe {
+            connect_norito_connect_generate_keypair(
+                public_key.as_mut_ptr(),
+                private_key.as_mut_ptr(),
+            )
+        };
+
+        assert_eq!(result, 0);
+        assert!(public_key.iter().any(|&byte| byte != 0));
+        assert!(private_key.iter().any(|&byte| byte != 0));
+
+        let mut derived_public_key = [0_u8; 32];
+        let result = unsafe {
+            connect_norito_connect_public_from_private(
+                private_key.as_ptr(),
+                derived_public_key.as_mut_ptr(),
+            )
+        };
+
+        assert_eq!(result, 0);
+        assert_eq!(derived_public_key, public_key);
     }
 
     #[test]
@@ -17048,7 +17145,7 @@ fn java_public_key_from_private_bytes(
 fn java_keypair_from_seed_bytes(
     algorithm_code: jni::sys::jint,
     seed: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>), String> {
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>), String> {
     let algorithm = parse_algorithm_code(algorithm_code as u8)
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let key_pair = KeyPair::try_from_seed(seed.to_vec(), algorithm)
@@ -17058,7 +17155,7 @@ fn java_keypair_from_seed_bytes(
         .try_to_bytes()
         .map(|(_algorithm, payload)| payload.to_vec())
         .map_err(|_| "failed to extract public key bytes".to_string())?;
-    Ok((private_key.to_bytes().1.to_vec(), public_bytes))
+    Ok((Zeroizing::new(private_key.to_bytes().1), public_bytes))
 }
 
 #[cfg(any(
@@ -23737,6 +23834,37 @@ mod tests {
                 "{algorithm:?} must be rejected",
             );
         }
+    }
+
+    #[test]
+    fn sm2_keypair_from_seed_private_output_derives_public_key() {
+        let distid = "connect-sm2-keypair-from-seed";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let seed = b"connect-sm2-keypair-from-seed";
+        let mut private = [0_u8; 32];
+        let mut public = [0_u8; 65];
+
+        let rc = unsafe {
+            connect_norito_sm2_keypair_from_seed(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                seed.as_ptr(),
+                seed.len() as c_ulong,
+                private.as_mut_ptr(),
+                private.len() as c_ulong,
+                public.as_mut_ptr(),
+                public.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, 0, "SM2 keypair derivation must succeed");
+        assert!(private.iter().any(|&byte| byte != 0));
+        assert!(public.iter().any(|&byte| byte != 0));
+
+        let parsed_private =
+            Sm2PrivateKey::from_bytes(distid, &private).expect("parse returned private key");
+        let derived_public = parsed_private.public_key().to_sec1_bytes(false);
+        assert_eq!(derived_public.as_slice(), public.as_slice());
     }
 
     #[test]

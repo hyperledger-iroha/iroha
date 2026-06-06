@@ -340,9 +340,10 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 fn_returns.insert(f.name.clone(), ret);
                 fn_modifiers.insert(f.name.clone(), f.modifiers.clone());
             }
-            Item::Trigger(trigger) => {
+            Item::Trigger(trigger) if trigger.call.namespace.is_none() => {
                 trigger_callbacks.insert(trigger.call.entrypoint.clone());
             }
+            Item::Trigger(_) => {}
             Item::Kotoba(block) => {
                 kotoba_entries.extend(block.entries.clone());
             }
@@ -1208,28 +1209,30 @@ fn analyze_trigger(
         })?;
     let id = TriggerId::new(name);
 
-    let entry = &trigger.call.entrypoint;
-    let modifiers = fn_modifiers.get(entry).ok_or_else(|| SemanticError {
-        message: format!(
-            "trigger `{}` targets unknown entrypoint `{entry}`",
-            trigger.name
-        ),
-    })?;
-    if modifiers.visibility != FunctionVisibility::Public {
-        return Err(SemanticError {
+    if trigger.call.namespace.is_none() {
+        let entry = &trigger.call.entrypoint;
+        let modifiers = fn_modifiers.get(entry).ok_or_else(|| SemanticError {
             message: format!(
-                "trigger `{}` must call public entrypoint `{entry}`",
+                "trigger `{}` targets unknown entrypoint `{entry}`",
                 trigger.name
             ),
-        });
-    }
-    if modifiers.kind == FunctionKind::View {
-        return Err(SemanticError {
-            message: format!(
-                "trigger `{}` cannot target read-only view entrypoint `{entry}`",
-                trigger.name
-            ),
-        });
+        })?;
+        if modifiers.visibility != FunctionVisibility::Public {
+            return Err(SemanticError {
+                message: format!(
+                    "trigger `{}` must call public entrypoint `{entry}`",
+                    trigger.name
+                ),
+            });
+        }
+        if modifiers.kind == FunctionKind::View {
+            return Err(SemanticError {
+                message: format!(
+                    "trigger `{}` cannot target read-only view entrypoint `{entry}`",
+                    trigger.name
+                ),
+            });
+        }
     }
 
     let filter = match &trigger.filter {
@@ -2062,13 +2065,6 @@ fn analyze_invoke_entrypoint_as_call(
         });
     }
     let ret_ty = runtime_entrypoint_return_type(&target_name)?;
-    if matches!(ret_ty, Type::Tuple(_)) {
-        return Err(SemanticError {
-            message: format!(
-                "invoke_entrypoint_as does not yet support tuple-returning entrypoints (`{target_name}`)"
-            ),
-        });
-    }
 
     Ok(TypedExpr {
         expr: ExprKind::Call {
@@ -6184,7 +6180,7 @@ fn analyze_const_expr(
         }),
         Expr::Ident(name) => consts.get(name).cloned().ok_or_else(|| SemanticError {
             message: format!(
-                "const `{name}` is undefined or not yet declared; constants must be declared before use"
+                "const `{name}` is undefined or declared after use; constants must be declared before use"
             ),
         }),
         Expr::Unary {
@@ -6232,34 +6228,13 @@ fn parse_declared_param_type(
                 ),
             });
         }
-        if !is_supported_state_param_type(&ty) {
-            return Err(SemanticError {
-                message: format!(
-                    "state parameter `{}` currently supports durable scalar roots and Map<K, V> handles; aggregate state handles are not supported yet",
-                    param.name
-                ),
-            });
-        }
+        validate_state_type(&ty)?;
     }
     Ok(TypedParam {
         name: param.name.clone(),
         ty,
         is_state: param.is_state,
     })
-}
-
-fn is_supported_state_param_type(ty: &Type) -> bool {
-    match resolve_struct_type(ty) {
-        Type::Map(_, _)
-        | Type::Int
-        | Type::Bool
-        | Type::Json
-        | Type::Blob
-        | Type::Bytes
-        | Type::String => true,
-        ty if is_wide_numeric_type(&ty) || is_pointer_type(&ty) => true,
-        _ => false,
-    }
 }
 
 fn convert_type_expr(ty: &TypeExpr) -> Result<Type, SemanticError> {
@@ -6364,7 +6339,8 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
         (Type::Int, Type::Map(_, _)) => Ok(()),
         // Booleans lower to 0/1; permit implicit promotion to int.
         (Type::Int, Type::Bool) => Ok(()),
-        // Allow assigning opaque to opaque of any name (best-effort placeholder)
+        // Opaque handles are ABI-level capabilities; internal assignments can
+        // preserve them without interpreting the handle name.
         (Type::Opaque(_), Type::Opaque(_)) => Ok(()),
         // Structs may be referenced by opaque name annotations in struct fields.
         (Type::Opaque(expected_name), Type::Struct { name, .. }) if expected_name == name => Ok(()),
@@ -7745,16 +7721,29 @@ mod tests {
     }
 
     #[test]
-    fn state_struct_helper_param_is_rejected() {
+    fn state_struct_helper_param_is_accepted() {
         let program = parse(
             "struct Ledger { counter: int; } \
-             fn read(state Ledger ledger) -> int { return ledger.counter; }",
+             state Ledger LedgerState; \
+             fn read(state Ledger ledger) -> int { return ledger.counter; } \
+             fn main() -> int { return read(LedgerState); }",
         )
         .expect("parse state struct helper");
-        let err = analyze(&program).expect_err("aggregate state params should be rejected");
+        analyze(&program).expect("aggregate state params should analyze");
+    }
+
+    #[test]
+    fn state_struct_helper_param_requires_state_handle_argument() {
+        let program = parse(
+            "struct Ledger { counter: int; } \
+             fn read(state Ledger ledger) -> int { return ledger.counter; } \
+             fn main() -> int { let snapshot = Ledger(7); return read(snapshot); }",
+        )
+        .expect("parse state struct helper arg");
+        let err = analyze(&program).expect_err("passing loaded aggregate state should error");
         assert!(
             err.message
-                .contains("aggregate state handles are not supported yet")
+                .contains("requires a durable state handle argument")
         );
     }
 
@@ -8079,6 +8068,53 @@ mod tests {
     }
 
     #[test]
+    fn namespaced_trigger_callback_does_not_require_local_entrypoint() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                kotoage fn arm() {}
+
+                register_trigger wake {
+                    call callee::run;
+                    on time pre_commit;
+                }
+            }
+            "#,
+        )
+        .expect("parse namespaced trigger callback");
+
+        analyze(&program).expect("namespaced trigger callback target is resolved at activation");
+    }
+
+    #[test]
+    fn namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                kotoage fn arm() {}
+                kotoage fn run() {
+                    let _ev = trigger_event();
+                }
+
+                register_trigger wake {
+                    call callee::run;
+                    on time pre_commit;
+                }
+            }
+            "#,
+        )
+        .expect("parse namespaced trigger callback");
+        let err = analyze(&program)
+            .expect_err("remote trigger callback must not permit local trigger_event access");
+
+        assert!(
+            err.message.contains("cannot use `trigger_event` here"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn invoke_entrypoint_accepts_test_functions() {
         let program = parse(
             r#"
@@ -8219,7 +8255,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_entrypoint_as_rejects_tuple_returning_targets() {
+    fn invoke_entrypoint_as_accepts_tuple_returning_targets() {
         let program = parse(
             r#"
             seiyaku Demo {
@@ -8233,11 +8269,7 @@ mod tests {
             "#,
         )
         .expect("parse tuple invoke_entrypoint_as");
-        let err = analyze(&program).expect_err("tuple-returning target should fail");
-        assert!(
-            err.message
-                .contains("does not yet support tuple-returning entrypoints")
-        );
+        analyze(&program).expect("tuple-returning target should type-check");
     }
 
     #[test]

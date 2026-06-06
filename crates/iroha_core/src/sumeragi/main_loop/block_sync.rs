@@ -1781,13 +1781,9 @@ impl Actor {
         if slot.block_hash != block_hash || slot.height != height || slot.view != view {
             return;
         }
-        slot.candidate.body_state = super::FrontierBodyState::Available;
-        slot.body_present = true;
-        slot.phase = super::FrontierSlotPhase::ValidateBody;
-        slot.timers.last_progress_at = Instant::now();
-        let requesters = std::mem::take(&mut slot.repair_state.pending_requesters);
-        slot.pending_requesters.clear();
-        slot.sync_compat_fields();
+        let now = Instant::now();
+        slot.mark_body_available(now);
+        let requesters = slot.take_pending_requesters();
         for peer in requesters {
             self.send_block_body_response(peer, block);
         }

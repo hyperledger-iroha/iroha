@@ -15,9 +15,9 @@ fn simulate_writes_frames_and_telemetry() {
     cmd.args([
         "simulate",
         "--client-hex",
-        "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+        "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
         "--relay-hex",
-        "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+        "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
         "--client-static-sk-hex",
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
         "--relay-static-sk-hex",
@@ -123,4 +123,32 @@ fn simulate_writes_frames_and_telemetry() {
     );
 
     assert!(report.contains("transcript_hash_hex"));
+}
+
+#[test]
+fn inspect_rejects_pre_release_only_suite_lists() {
+    let mut cmd = cargo_bin_cmd!("soranet-handshake-harness");
+    cmd.args([
+        "inspect",
+        "--client-hex",
+        "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+        "--relay-hex",
+        "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+        "--descriptor-commit-hex",
+        "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
+        "--client-nonce-hex",
+        "2c1f64028dbe42410d1921cd9a316bed4f8f5b52ffb62b4dcaf149048393ca8a",
+        "--relay-nonce-hex",
+        "d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de",
+        "--kem-id",
+        "1",
+        "--sig-id",
+        "1",
+    ]);
+    let assert = cmd.assert().failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("pre-release handshake suite identifiers are not accepted"),
+        "unexpected stderr: {stderr}"
+    );
 }

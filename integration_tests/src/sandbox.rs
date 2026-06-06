@@ -15,8 +15,9 @@ use crate::sync::get_status_with_retry;
 
 /// Optional guard that limits concurrent integration tests which spin up a network.
 ///
-/// Defaults to CPU-scaled parallelism (cores / 16). Set `IROHA_TEST_NETWORK_PARALLELISM=<N>`
-/// to override or `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
+/// Defaults to one network at a time so plain `cargo test` stays usable on WSL and
+/// memory-constrained VMs. Set `IROHA_TEST_NETWORK_PARALLELISM=<N>` to override or
+/// `IROHA_TEST_SERIALIZE_NETWORKS=1` to force serialization explicitly.
 #[must_use]
 pub struct SerialGuard {
     #[allow(dead_code)]
@@ -235,7 +236,7 @@ const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
-const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64; // Match iroha_test_network default.
+const DEFAULT_NETWORK_PARALLELISM: usize = 1;
 const NETWORK_START_ATTEMPTS: usize = 3;
 const NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
@@ -336,12 +337,7 @@ impl Drop for NetworkParallelismGuard {
 }
 
 fn default_network_parallelism() -> usize {
-    // Keep parallelism conservative by scaling with cores per minimal test network size.
-    let cores = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
-    let per_network = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
-    cores.saturating_div(per_network).max(1)
+    DEFAULT_NETWORK_PARALLELISM
 }
 
 fn network_parallelism_limit() -> usize {
@@ -1037,17 +1033,12 @@ mod tests {
         let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
         let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
         let _override_guard = override_network_parallelism(Some(false), None);
-        let expected = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1)
-            .saturating_div(DEFAULT_NETWORK_PARALLELISM_PEERS.max(1))
-            .max(1);
         let (_, in_use_before) = network_permit_snapshot();
         let guard = serial_guard();
         let (limit, in_use) = network_permit_snapshot();
         assert_eq!(
-            limit, expected,
-            "default network parallelism should scale with CPU"
+            limit, DEFAULT_NETWORK_PARALLELISM,
+            "default network parallelism should be WSL-safe"
         );
         assert_eq!(in_use, in_use_before.saturating_add(1));
         drop(guard);

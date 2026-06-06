@@ -82,15 +82,54 @@ impl<R> CryptoRngOld for CompatRng<R> where R: TryRngCoreNew + TryCryptoRng {}
 /// Deterministic RNG derived from an arbitrary seed via SHA-256, implementing both
 /// modern and 0.6 `rand_core` traits.
 pub fn rng_from_seed(mut seed: Vec<u8>) -> CompatRng<ChaChaRng> {
-    let hash = Sha256::digest(&seed);
+    let rng = rng_from_seed_slice(&seed);
     seed.zeroize();
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&hash);
-    CompatRng::new(ChaChaRng::from_seed(key))
+    rng
+}
+
+/// Deterministic RNG derived from borrowed seed bytes via SHA-256, implementing
+/// both modern and 0.6 `rand_core` traits.
+pub fn rng_from_seed_slice(seed: &[u8]) -> CompatRng<ChaChaRng> {
+    let mut key: [u8; 32] = Sha256::digest(seed).into();
+    let rng = CompatRng::new(ChaChaRng::from_seed(key));
+    key.zeroize();
+    rng
 }
 
 /// Operating-system RNG wrapped in the dual-trait adapter.
 #[cfg(test)]
 pub fn os_rng() -> CompatRng<OsRng> {
     CompatRng::new(OsRng)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rng_from_seed_is_deterministic() {
+        let mut first_rng = rng_from_seed(b"deterministic seed".to_vec());
+        let mut second_rng = rng_from_seed(b"deterministic seed".to_vec());
+        let mut first = [0u8; 64];
+        let mut second = [0u8; 64];
+
+        rand_core::RngCore::fill_bytes(&mut first_rng, &mut first);
+        rand_core::RngCore::fill_bytes(&mut second_rng, &mut second);
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn rng_from_seed_slice_matches_owned_seed() {
+        let seed = b"deterministic borrowed seed";
+        let mut owned_rng = rng_from_seed(seed.to_vec());
+        let mut borrowed_rng = rng_from_seed_slice(seed);
+        let mut owned = [0u8; 64];
+        let mut borrowed = [0u8; 64];
+
+        rand_core::RngCore::fill_bytes(&mut owned_rng, &mut owned);
+        rand_core::RngCore::fill_bytes(&mut borrowed_rng, &mut borrowed);
+
+        assert_eq!(owned, borrowed);
+    }
 }

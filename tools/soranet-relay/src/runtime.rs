@@ -2034,7 +2034,7 @@ impl RelayRuntime {
                     target: SORANET_HANDSHAKE_LOG_TARGET,
                     remote = %remote,
                     mode = mode.as_label(),
-                    key_len = session.session_key.len(),
+                    key_len = session.session_key.payload().len(),
                     "derived SoraNet session key"
                 );
 

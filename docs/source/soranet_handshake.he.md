@@ -505,7 +505,7 @@ but SHOULD maintain the same ordering to simplify transcript analysis. The
 | 0x0101     | `snnet.pqkem`        | `kem_id:u8` `flags:u8`                                                         | `flags & 0x01` marks the KEM as *required* for the advertising side. |
 | 0x0102     | `snnet.pqsig`        | `sig_id:u8` `flags:u8`                                                         | Multiple TLVs allowed when dual-signing. |
 | 0x0103     | `snnet.transcript_commit` | `sha256` digest (32 bytes) of the descriptor-advertised capabilities.       | Binds directory metadata into the session. |
-| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x02` = `nk2.hybrid`, `0x03` = `nk3.pq_forward_secure`; unknown identifiers are ignored for negotiation. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
+| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x04` = `nk2.hybrid.v1`, `0x05` = `nk3.pq_forward_secure.v1`; old pre-release identifiers `0x02`/`0x03` are rejected as unsupported. Other unknown identifiers are ignored for negotiation. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
 | 0x0201     | `snnet.role`         | `role_bits:u8` (`0x01` guard, `0x02` middle, `0x04` exit)                      | Relays MUST emit exactly one entry; clients omit. |
 | 0x0202     | `snnet.padding`      | `u16` padded cell size (little-endian)                                         | Used to negotiate circuit padding buckets. |
 | 0x7Fxx     | GREASE fillers       | Arbitrary bytes                                                                | Implementations MUST ignore and preserve order. Clients emit ≥2 per handshake. |
@@ -535,14 +535,14 @@ automatically. Negotiation proceeds as follows:
 Relays MUST reject `ClientHello` frames whose `kem_id` or `sig_id` do not appear
 in the negotiated capability intersection. When a relay is configured with a
 certificate bundle it advertises the suite order from the certificate;
-otherwise it defaults to `[nk2.hybrid, nk3.pq_forward_secure]`.
+otherwise it defaults to `[nk2.hybrid.v1, nk3.pq_forward_secure.v1]`.
 
 Supported suite identifiers are:
 
 | ID | Label                 | Description |
 |----|----------------------|-------------|
-| 0x02 | `nk2.hybrid`          | Two-message hybrid handshake that carries classical and ML-KEM material in the first flight. |
-| 0x03 | `nk3.pq_forward_secure` | Forward-secure variant with dual ML-KEM commitments and post-handshake rekey. |
+| 0x04 | `nk2.hybrid.v1`          | Two-message hybrid handshake that carries classical and ML-KEM material in the first flight. |
+| 0x05 | `nk3.pq_forward_secure.v1` | Forward-secure variant with dual ML-KEM commitments and post-handshake rekey. |
 
 `NK2` and `NK3` now ship on the runtime path. When either suite is negotiated
 the relay responds with the new hybrid/PQFS frames and the client derives the
@@ -553,7 +553,7 @@ always `None` for the current suites. Deterministic unit tests exercise each
 path and assert that both peers produce identical transcript hashes and
 session keys for NK2 and NK3 handshakes.【crates/iroha_crypto/src/soranet/handshake.rs:4720】【crates/iroha_crypto/src/soranet/handshake.rs:5290】
 
-##### NK2 hybrid (`nk2.hybrid`) state machine
+##### NK2 hybrid (`nk2.hybrid.v1`) state machine
 
 ```mermaid
 sequenceDiagram
@@ -565,14 +565,14 @@ sequenceDiagram
     R->>R: Select mutually supported suite/KEM/sig<br/>Validate capabilities
     R->>C: HybridRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>ML-KEM ciphertext,<br/>confirmation tag,<br/>transcript_hash,<br/>Dilithium + Ed25519 witnesses
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
-    Note over C: HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk2.session"<br/>confirm info = "soranet.handshake.nk2.confirm"<br/>key material = primary_shared || transcript_hash
+    Note over C: HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk2.session.v1"<br/>confirm info = "soranet.handshake.nk2.confirm.v1"<br/>key material = primary_shared || transcript_hash
 ```
 
 - Relay-only confirmation lets the client detect tampering without
   re-transmitting `ClientFinish`. Runtime coverage ensures the relay skips the
   third flight and that negotiated warnings stay empty when suite lists align.
 
-##### NK3 forward-secure (`nk3.pq_forward_secure`) state machine
+##### NK3 forward-secure (`nk3.pq_forward_secure.v1`) state machine
 
 ```mermaid
 sequenceDiagram
@@ -584,7 +584,7 @@ sequenceDiagram
     R->>R: Verify commitment & capabilities<br/>Select suite/KEM/sig
     R->>C: PqfsRelayResponse<br/>nonce_r, X25519_static_r,<br/>ML-KEM public,<br/>primary & forward ciphertexts,<br/>confirmation tags, dual_mix,<br/>transcript_hash,<br/>Dilithium + Ed25519 witnesses
     Note over C,R: transcript_hash = SHA3-256("soranet.transcript.v1" || H(descriptor_commit) || nonce_c || nonce_r || len(capabilities) || capability bytes || kem_id || sig_id || suite_id || resume_hash?)
-    Note over C: dual_mix = HKDF-expand("soranet.kem.dual.mix", primary_shared || forward_shared || transcript_hash)<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk3.session"<br/>confirm info = "soranet.handshake.nk3.confirm"
+    Note over C: dual_mix = HKDF-expand("soranet.kem.dual.mix.v1", primary_shared || forward_shared || transcript_hash)<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk3.session.v1"<br/>confirm info = "soranet.handshake.nk3.confirm.v1"
 ```
 
 - The client recomputes the forward commitment and dual-mix before accepting.
@@ -637,7 +637,7 @@ Example client advertisement (hex, ASCII comments):
 ```
 01 01 00 02 01 01  # snnet.pqkem { id=0x01 (ML-KEM-768), required }
 01 02 00 02 01 01  # snnet.pqsig { id=0x01 (Dilithium3), required }
-01 04 00 02 02 03  # snnet.suite_list { preferred=[nk2.hybrid, nk3.pq_forward_secure] }
+01 04 00 02 84 05  # snnet.suite_list { preferred=[nk2.hybrid.v1, nk3.pq_forward_secure.v1], required }
 02 02 00 02 04 00  # snnet.padding { 1024-byte cells }
 7F 10 00 04 DE AD BE EF  # GREASE
 7F 11 00 04 CA FE BA BE  # GREASE
@@ -649,7 +649,7 @@ Example relay echo for a PQ-capable guard:
 01 01 00 02 01 01
 01 02 00 02 01 01
 01 03 00 20 <32-byte SHA-256 descriptor commit>
-01 04 00 02 02 03
+01 04 00 02 84 05
 02 01 00 01 01
 02 02 00 02 04 00
 7F 12 00 04 12 34 56 78
@@ -667,8 +667,8 @@ session key schedule:
 
 | Suite | Messages | Purpose |
 |-------|----------|---------|
-| `nk2.hybrid` | `HybridClientInit` → `HybridRelayResponse` | Two-message hybrid handshake that folds the confirmation and classical+PQ material into the relay response while still hashing the descriptor commit and capability vector. |
-| `nk3.pq_forward_secure` | `PqfsClientCommit` → `PqfsRelayResponse` | Forward secure profile that binds two ML-KEM commitments (baseline + FS) and carries a mix commitment alongside the transcript hash. |
+| `nk2.hybrid.v1` | `HybridClientInit` → `HybridRelayResponse` | Two-message hybrid handshake that folds the confirmation and classical+PQ material into the relay response while still hashing the descriptor commit and capability vector. |
+| `nk3.pq_forward_secure.v1` | `PqfsClientCommit` → `PqfsRelayResponse` | Forward secure profile that binds two ML-KEM commitments (baseline + FS) and carries a mix commitment alongside the transcript hash. |
 
 All suites continue to hash the same capability bytes and descriptor commit to
 guarantee downgrade detection. The transcript hash feeds the labelled HKDF
@@ -760,8 +760,8 @@ Example (success case) encoded as Norito JSON:
 {
   "fixture_id": "snnet-cap-001-success",
   "description": "PQ-capable guard echoes ML-KEM-768 + Dilithium3",
-  "client_vector_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
-  "relay_vector_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+  "client_vector_hex": "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
+  "relay_vector_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
   "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
   "client_nonce_hex": "2c1f64028dbe42410d1921cd9a316bed4f8f5b52ffb62b4dcaf149048393ca8a",
   "relay_nonce_hex": "d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de",

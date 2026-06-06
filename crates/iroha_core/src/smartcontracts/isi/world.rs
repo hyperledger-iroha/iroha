@@ -86,6 +86,12 @@ pub mod isi {
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
+        soracloud::{
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
+        },
         zk::{
             BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
             OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
@@ -129,6 +135,134 @@ pub mod isi {
         Ok(())
     }
 
+    struct TriggerCallbackContract {
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+        code_hash: Hash,
+        code_bytes: Vec<u8>,
+    }
+
+    fn invalid_smart_contract_parameter(message: impl Into<String>) -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message.into().into(),
+        ))
+    }
+
+    fn parse_trigger_callback_alias_namespace(
+        namespace: &str,
+    ) -> Result<iroha_data_model::smart_contract::ContractAlias, Error> {
+        if namespace.contains("::") {
+            return namespace.parse().map_err(|err| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid cross-contract trigger callback namespace `{namespace}`: {err}"
+                ))
+            });
+        }
+
+        iroha_data_model::smart_contract::ContractAlias::from_components(
+            namespace,
+            None,
+            "universal",
+        )
+        .map_err(|err| {
+            invalid_smart_contract_parameter(format!(
+                "invalid cross-contract trigger callback namespace `{namespace}`: {err}"
+            ))
+        })
+    }
+
+    fn resolve_trigger_callback_contract_address(
+        state_transaction: &StateTransaction<'_, '_>,
+        namespace: &str,
+    ) -> Result<iroha_data_model::smart_contract::ContractAddress, Error> {
+        let namespace = namespace.trim();
+        if namespace.is_empty() {
+            return Err(invalid_smart_contract_parameter(
+                "cross-contract trigger callback namespace must not be empty",
+            ));
+        }
+        if let Ok(contract_address) = namespace.parse() {
+            return Ok(contract_address);
+        }
+
+        let alias = parse_trigger_callback_alias_namespace(namespace)?;
+        let Some(contract_address) = state_transaction
+            .world
+            .contract_aliases
+            .get(&alias)
+            .cloned()
+        else {
+            return Err(invalid_smart_contract_parameter(format!(
+                "cross-contract trigger callback namespace `{namespace}` does not resolve to an active contract alias"
+            )));
+        };
+        let now_ms = state_transaction.block_unix_timestamp_ms();
+        match state_transaction
+            .world
+            .contract_alias_bindings
+            .get(&contract_address)
+        {
+            Some(binding) if binding.alias == alias && !binding.is_grace_expired_at(now_ms) => {
+                Ok(contract_address)
+            }
+            Some(_) => Err(invalid_smart_contract_parameter(format!(
+                "cross-contract trigger callback namespace `{namespace}` resolves to an expired or stale contract alias"
+            ))),
+            None => Ok(contract_address),
+        }
+    }
+
+    fn resolve_trigger_callback_contract(
+        state_transaction: &StateTransaction<'_, '_>,
+        namespace: Option<&str>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        code_hash: Hash,
+        code_bytes: &[u8],
+    ) -> Result<TriggerCallbackContract, Error> {
+        let Some(namespace) = namespace else {
+            return Ok(TriggerCallbackContract {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                code_hash,
+                code_bytes: code_bytes.to_vec(),
+            });
+        };
+
+        let target_address =
+            resolve_trigger_callback_contract_address(state_transaction, namespace)?;
+        let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record(
+            state_transaction,
+            &target_address,
+        ) else {
+            return Err(invalid_smart_contract_parameter(format!(
+                "cross-contract trigger callback namespace `{}` resolved to inactive contract `{}`",
+                namespace.trim(),
+                target_address
+            )));
+        };
+
+        Ok(TriggerCallbackContract {
+            contract_address: record.contract_address,
+            contract_alias: record.contract_alias,
+            code_hash: record.code_hash,
+            code_bytes: record.code_bytes,
+        })
+    }
+
+    fn validate_trigger_callback_dispatch(
+        trigger_id: &TriggerId,
+        metadata: &Metadata,
+        code_bytes: &[u8],
+    ) -> Result<(), Error> {
+        crate::executor::parse_contract_call_execution_context(metadata, code_bytes)
+            .map(|_| ())
+            .map_err(|err| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid trigger `{trigger_id}` callback dispatch metadata: {err}"
+                ))
+            })
+    }
+
     fn register_manifest_triggers(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -153,25 +287,43 @@ pub mod isi {
 
         for entrypoint in entrypoints {
             for descriptor in &entrypoint.triggers {
-                let code_hash_string = code_hash.to_string();
+                let callback_contract = resolve_trigger_callback_contract(
+                    state_transaction,
+                    descriptor.callback.namespace.as_deref(),
+                    contract_address,
+                    code_hash,
+                    code_bytes,
+                )?;
+                let code_hash_string = callback_contract.code_hash.to_string();
                 let trigger_id_string = descriptor.id.to_string();
-                if descriptor.callback.namespace.is_some() {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "cross-contract trigger callbacks are not supported yet".into(),
-                        ),
-                    ));
-                }
                 let mut metadata = descriptor.metadata.clone();
                 let address_key = Name::from_str("contract_address").expect("static metadata key");
+                let alias_key = Name::from_str("contract_alias").expect("static metadata key");
+                let namespace_key =
+                    Name::from_str("contract_callback_namespace").expect("static metadata key");
                 let ep_key = Name::from_str("contract_entrypoint").expect("static metadata key");
                 let code_key = Name::from_str("contract_code_hash").expect("static metadata key");
                 let trigger_key = Name::from_str("contract_trigger_id").expect("static metadata");
                 ensure_metadata_value(
                     &mut metadata,
                     &address_key,
-                    iroha_primitives::json::Json::from(contract_address.as_str()),
+                    iroha_primitives::json::Json::from(callback_contract.contract_address.as_str()),
                 )?;
+                if let Some(contract_alias) = callback_contract.contract_alias.as_ref() {
+                    let alias_string = contract_alias.to_string();
+                    ensure_metadata_value(
+                        &mut metadata,
+                        &alias_key,
+                        iroha_primitives::json::Json::from(alias_string.as_str()),
+                    )?;
+                }
+                if let Some(namespace) = descriptor.callback.namespace.as_deref() {
+                    ensure_metadata_value(
+                        &mut metadata,
+                        &namespace_key,
+                        iroha_primitives::json::Json::from(namespace.trim()),
+                    )?;
+                }
                 ensure_metadata_value(
                     &mut metadata,
                     &ep_key,
@@ -187,13 +339,18 @@ pub mod isi {
                     &trigger_key,
                     iroha_primitives::json::Json::from(trigger_id_string.as_str()),
                 )?;
+                validate_trigger_callback_dispatch(
+                    &descriptor.id,
+                    &metadata,
+                    callback_contract.code_bytes.as_ref(),
+                )?;
 
                 let trigger_authority = descriptor
                     .authority
                     .clone()
                     .unwrap_or_else(|| authority.clone());
                 let action = iroha_data_model::trigger::action::Action::new(
-                    Executable::Ivm(IvmBytecode::from_compiled(code_bytes.to_vec())),
+                    Executable::Ivm(IvmBytecode::from_compiled(callback_contract.code_bytes)),
                     descriptor.repeats,
                     trigger_authority,
                     descriptor.filter.clone(),
@@ -763,6 +920,72 @@ pub mod isi {
                 InvalidParameterError::SmartContract(
                     "unsupported verifying key backends are not supported".into(),
                 ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_soracloud_fhe_bootstrap_key_verifying_key_record(
+        id: &VerifyingKeyId,
+        record: &VerifyingKeyRecord,
+    ) -> Result<(), Error> {
+        if id.name != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1
+            && record.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1
+        {
+            return Ok(());
+        }
+        if id.name != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key id name must use the canonical v1 circuit",
+            ));
+        }
+        if !crate::zk::is_stark_fri_v1_backend(id.backend.as_str()) {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key id backend must target STARK/FRI v1",
+            ));
+        }
+        if record.namespace != "soracloud" {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key must be in the soracloud namespace",
+            ));
+        }
+        if record.backend != BackendTag::Stark {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key must use STARK backend",
+            ));
+        }
+        if record.curve != "goldilocks" {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key must use goldilocks STARK field",
+            ));
+        }
+        if record.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key must use the canonical v1 circuit",
+            ));
+        }
+        if record.version != u32::from(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1) {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key must use the canonical v1 circuit version",
+            ));
+        }
+        if record.public_inputs_schema_hash
+            != soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()
+        {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key public-input schema mismatch",
+            ));
+        }
+        if record.gas_schedule_id.as_deref()
+            != Some(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1)
+        {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key verifying key must use the canonical gas_schedule_id",
+            ));
+        }
+        if record.status == ConfidentialStatus::Active && record.key.is_none() {
+            return Err(invalid_smart_contract_parameter(
+                "FHE bootstrap-key active verifying key bytes missing",
             ));
         }
         Ok(())
@@ -2474,6 +2697,7 @@ pub mod isi {
                     ),
                 ));
             }
+            validate_soracloud_fhe_bootstrap_key_verifying_key_record(&id, &record)?;
             state_transaction
                 .world
                 .verifying_keys
@@ -6426,6 +6650,7 @@ pub mod isi {
                 ),
             ));
         }
+        validate_soracloud_fhe_bootstrap_key_verifying_key_record(id, new)?;
         Ok(())
     }
 
@@ -22835,6 +23060,39 @@ pub mod isi {
             }
         }
 
+        fn grant_manage_verifying_keys(stx: &mut StateTransaction<'_, '_>) {
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, stx)
+                .expect("grant manage vk");
+        }
+
+        fn soracloud_bootstrap_vk_id() -> VerifyingKeyId {
+            VerifyingKeyId::new(
+                "stark/fri/sha256-goldilocks",
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            )
+        }
+
+        fn soracloud_bootstrap_vk_record(version: u32) -> VerifyingKeyRecord {
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                version,
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+                None,
+                "soracloud",
+                BackendTag::Stark,
+                "goldilocks",
+                soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
+                [0x91; 32],
+            );
+            record.gas_schedule_id =
+                Some(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1.into());
+            record
+        }
+
         const PENDING_PRODUCTION_VERIFIER_LABELS: &[&str] = &[
             "halo2/ipa/orchard",
             "halo2/ipa:zcash-orchard",
@@ -24219,6 +24477,179 @@ pub mod isi {
             assert!(msg.contains("collision"), "unexpected error: {msg}");
             let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
             assert_eq!(snapshot.identifier_collision_total, 1);
+        }
+
+        #[test]
+        fn register_vk_accepts_canonical_soracloud_bootstrap_record() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let id = soracloud_bootstrap_vk_id();
+            let record = soracloud_bootstrap_vk_record(u32::from(
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            ));
+            let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record,
+            }
+            .into();
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect("canonical Soracloud bootstrap verifier record should register");
+            let stored = stx
+                .world
+                .verifying_keys
+                .get(&id)
+                .expect("verifying key stored");
+            assert_eq!(
+                stored.circuit_id,
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1
+            );
+        }
+
+        #[test]
+        fn register_vk_rejects_soracloud_bootstrap_metadata_drift() {
+            #[derive(Clone, Copy)]
+            enum Tamper {
+                IdName,
+                Namespace,
+                Schema,
+                Version,
+                GasSchedule,
+            }
+
+            for (suffix, tamper, expected_msg) in [
+                (
+                    "id_name",
+                    Tamper::IdName,
+                    "id name must use the canonical v1 circuit",
+                ),
+                (
+                    "namespace",
+                    Tamper::Namespace,
+                    "must be in the soracloud namespace",
+                ),
+                ("schema", Tamper::Schema, "public-input schema mismatch"),
+                ("version", Tamper::Version, "canonical v1 circuit version"),
+                ("gas", Tamper::GasSchedule, "canonical gas_schedule_id"),
+            ] {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let block = new_dummy_block();
+                let mut state_block = state.block(block.as_ref().header());
+                let mut stx = state_block.transaction();
+                bootstrap_alice_account(&mut stx);
+                grant_manage_verifying_keys(&mut stx);
+                stx.apply();
+
+                let mut id = soracloud_bootstrap_vk_id();
+                let mut record = soracloud_bootstrap_vk_record(u32::from(
+                    SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+                ));
+                match tamper {
+                    Tamper::IdName => id.name = format!("{}_drift", id.name),
+                    Tamper::Namespace => record.namespace = "test".to_owned(),
+                    Tamper::Schema => record.public_inputs_schema_hash = [0x92; 32],
+                    Tamper::Version => record.version += 1,
+                    Tamper::GasSchedule => record.gas_schedule_id = Some("stark_default".into()),
+                }
+
+                let mut stx = state_block.transaction();
+                let exec = Executor::default();
+                let instr: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey { id, record }.into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("Soracloud bootstrap verifier metadata drift must fail");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains(expected_msg),
+                    "unexpected msg for {suffix}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_active_soracloud_bootstrap_without_inline_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let id = soracloud_bootstrap_vk_id();
+            let mut record = soracloud_bootstrap_vk_record(u32::from(
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            ));
+            record.status = ConfidentialStatus::Active;
+            let instr: InstructionBox = verifying_keys::RegisterVerifyingKey { id, record }.into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("active Soracloud bootstrap verifier requires inline key bytes");
+            let msg = smart_contract_error_message(err);
+            assert!(msg.contains("active verifying key bytes missing"));
+        }
+
+        #[test]
+        fn update_vk_rejects_soracloud_bootstrap_metadata_drift() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let id = soracloud_bootstrap_vk_id();
+            let old_record = soracloud_bootstrap_vk_record(0);
+            let mut seed_stx = state_block.transaction();
+            seed_stx
+                .world
+                .verifying_keys
+                .insert(id.clone(), old_record.clone());
+            seed_stx.world.verifying_keys_by_circuit.insert(
+                (old_record.circuit_id.clone(), old_record.version),
+                id.clone(),
+            );
+            seed_stx.apply();
+
+            let mut new_record = soracloud_bootstrap_vk_record(u32::from(
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            ));
+            new_record.public_inputs_schema_hash = [0x93; 32];
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let instr: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                id,
+                record: new_record,
+            }
+            .into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("Soracloud bootstrap verifier update drift must fail");
+            let msg = smart_contract_error_message(err);
+            assert!(msg.contains("public-input schema mismatch"));
         }
 
         #[test]

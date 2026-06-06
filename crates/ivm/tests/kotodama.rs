@@ -469,7 +469,7 @@ fn durable_state_rejects_string_key_maps() {
 fn parse_for_each_map_and_builtins() {
     let src = r#"fn f(m: Map<int, int>) { for (k, v) in m { info("kv"); } }"#;
     let prog = parse(src).expect("parse");
-    // Unbounded map iteration is currently rejected by the semantic phase.
+    // Bare map iteration is rejected by the semantic phase; callers must bound it.
     let err = analyze(&prog).expect_err("expected unbounded iteration error");
     assert!(
         err.message.contains("#[bounded") || err.message.contains(".take"),

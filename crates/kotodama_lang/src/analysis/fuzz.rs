@@ -115,7 +115,7 @@ pub fn run_fuzz(
                         AnalysisCategory::Fuzz,
                         "fuzz-skip-feature",
                         format!(
-                            "function `{name}` skipped: feature `{feature}` not yet supported by interpreter"
+                            "function `{name}` skipped: feature `{feature}` is outside the fuzz interpreter subset"
                         ),
                     ));
                     executed = 0;

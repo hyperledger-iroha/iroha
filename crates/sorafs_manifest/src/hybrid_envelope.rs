@@ -199,10 +199,51 @@ mod tests {
 
         let envelope =
             encrypt_payload(&payload, aad, pair.public(), &mut rng).expect("encryption succeeds");
+        assert_eq!(envelope.version, HYBRID_PAYLOAD_ENVELOPE_VERSION_V1);
+        assert_eq!(
+            envelope.suite,
+            "x25519-mlkem768-chacha20poly1305-transcript-v1"
+        );
         let decrypted =
             decrypt_payload(&envelope, aad, pair.secret()).expect("decryption succeeds");
 
         assert_eq!(decrypted, payload);
+    }
+
+    #[test]
+    fn decrypt_rejects_old_pre_release_suite_label() {
+        let mut rng = ChaCha20Rng::from_seed([0x56; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let mut envelope = encrypt_payload(b"payload", b"aad", pair.public(), &mut rng)
+            .expect("encryption succeeds");
+
+        envelope.suite = "x25519-mlkem768-chacha20poly1305".to_owned();
+        let err = decrypt_payload(&envelope, b"aad", pair.secret())
+            .expect_err("old pre-release suite label must be rejected");
+
+        assert!(
+            matches!(err, HybridEnvelopeError::UnsupportedSuite(label) if label == "x25519-mlkem768-chacha20poly1305")
+        );
+    }
+
+    #[test]
+    fn decrypt_rejects_every_non_v1_envelope_version_before_suite_parsing() {
+        let mut rng = ChaCha20Rng::from_seed([0x57; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let envelope = encrypt_payload(b"payload", b"aad", pair.public(), &mut rng)
+            .expect("encryption succeeds");
+
+        for unsupported in [0, 2, u8::MAX] {
+            let mut tampered = envelope.clone();
+            tampered.version = unsupported;
+            tampered.suite = "x25519-mlkem768-chacha20poly1305".to_owned();
+
+            let err = decrypt_payload(&tampered, b"aad", pair.secret())
+                .expect_err("non-v1 envelope versions must be rejected");
+            assert!(
+                matches!(err, HybridEnvelopeError::UnsupportedVersion(version) if version == unsupported)
+            );
+        }
     }
 
     #[test]
@@ -234,5 +275,60 @@ mod tests {
             encrypt_payload(&payload, b"aad-ok", pair.public(), &mut rng).expect("encrypt ok");
         let result = decrypt_payload(&envelope, b"aad-wrong", pair.secret());
         assert!(matches!(result, Err(HybridEnvelopeError::AeadFailure)));
+    }
+
+    #[test]
+    fn decrypt_rejects_tampered_ciphertext() {
+        let mut rng = ChaCha20Rng::from_seed([0x12; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let mut envelope =
+            encrypt_payload(b"payload", b"aad", pair.public(), &mut rng).expect("encrypt ok");
+
+        envelope.ciphertext[0] ^= 0x80;
+        let err = decrypt_payload(&envelope, b"aad", pair.secret())
+            .expect_err("ciphertext authentication must fail closed");
+        assert!(matches!(err, HybridEnvelopeError::AeadFailure));
+    }
+
+    #[test]
+    fn decrypt_rejects_tampered_nonce() {
+        let mut rng = ChaCha20Rng::from_seed([0x13; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let mut envelope =
+            encrypt_payload(b"payload", b"aad", pair.public(), &mut rng).expect("encrypt ok");
+
+        envelope.nonce[0] ^= 0x01;
+        let err = decrypt_payload(&envelope, b"aad", pair.secret())
+            .expect_err("nonce authentication must fail closed");
+        assert!(matches!(err, HybridEnvelopeError::AeadFailure));
+    }
+
+    #[test]
+    fn decrypt_rejects_malformed_kem_fields_before_aead() {
+        let mut rng = ChaCha20Rng::from_seed([0x14; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let envelope =
+            encrypt_payload(b"payload", b"aad", pair.public(), &mut rng).expect("encrypt ok");
+
+        let mut bad_ephemeral = envelope.clone();
+        bad_ephemeral.kem.ephemeral_public.truncate(31);
+        let err = decrypt_payload(&bad_ephemeral, b"aad", pair.secret())
+            .expect_err("short ephemeral public key must fail");
+        assert!(matches!(
+            err,
+            HybridEnvelopeError::Hybrid(HybridError::InvalidX25519PublicKeyLength {
+                expected: 32,
+                found: 31
+            })
+        ));
+
+        let mut bad_ciphertext = envelope;
+        bad_ciphertext.kem.kyber_ciphertext.truncate(1);
+        let err = decrypt_payload(&bad_ciphertext, b"aad", pair.secret())
+            .expect_err("short ML-KEM ciphertext must fail");
+        assert!(matches!(
+            err,
+            HybridEnvelopeError::Hybrid(HybridError::InvalidKyberCiphertext)
+        ));
     }
 }

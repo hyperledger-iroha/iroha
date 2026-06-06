@@ -5519,8 +5519,8 @@ impl Actor {
                             && slot.view == view_idx
                             && slot.block_hash == hint.block_hash
                             && slot.exact_fetch_armed
-                            && !slot.body_present)
-                            .then(|| now.saturating_duration_since(slot.lag_started_at()))
+                            && !slot.body_present())
+                        .then(|| now.saturating_duration_since(slot.lag_started_at()))
                     })
                 });
                 let repair_exhausted = repair_age
@@ -5542,7 +5542,7 @@ impl Actor {
                                 && slot.view == view_idx
                                 && slot.block_hash == hint.block_hash
                                 && slot.exact_fetch_armed
-                                && !slot.body_present
+                                && !slot.body_present()
                         });
                     if repair_active {
                         debug!(

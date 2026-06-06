@@ -4,7 +4,7 @@ fn should_run_wrappers() -> bool {
 
 use iroha_zkp_halo2::backend::pallas::PallasBackend;
 use ivm::{
-    IVM,
+    IVM, PointerType,
     host::{DefaultHost, ZkCurve, ZkHalo2Backend, ZkHalo2Config},
     kotodama::std as kstd,
 };
@@ -34,6 +34,12 @@ fn build_env_bytes(k: u32) -> Vec<u8> {
     norito::to_bytes(&env).expect("encode")
 }
 
+fn decode_statuses(vm: &IVM, ptr: u64) -> Vec<u8> {
+    let output = vm.memory.validate_tlv(ptr).expect("batch status tlv");
+    assert_eq!(output.type_id, PointerType::NoritoBytes);
+    norito::decode_from_bytes(output.payload).expect("status vector")
+}
+
 #[test]
 fn zk_verify_transfer_wrapper_positive() {
     if !should_run_wrappers() {
@@ -58,7 +64,7 @@ fn zk_verify_transfer_wrapper_positive() {
 }
 
 #[test]
-fn zk_verify_batch_wrapper_reports_disabled_under_default_host() {
+fn zk_verify_batch_wrapper_returns_status_vector_under_default_host() {
     if !should_run_wrappers() {
         eprintln!("Skipping: set IROHA_RUN_ZK_WRAPPERS=1 to run kotodama wrapper tests.");
         return;
@@ -106,6 +112,7 @@ fn zk_verify_batch_wrapper_reports_disabled_under_default_host() {
     let mut host = DefaultHost::new().with_zk_halo2_config(cfg);
     let (status, out_ptr) =
         ivm::kotodama::std::zk_verify_batch_envs(&mut host, &mut vm, &[env_ok, env_bad]);
-    assert_eq!(status, ivm::host::ERR_DISABLED);
-    assert_eq!(out_ptr, 0);
+    assert_eq!(status, ivm::host::ERR_VERIFY);
+    assert_ne!(out_ptr, 0);
+    assert_eq!(decode_statuses(&vm, out_ptr), vec![1, 0]);
 }
