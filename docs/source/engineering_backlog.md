@@ -291,7 +291,8 @@ track detailed unfinished engineering work.
   now rejects public step, key-id, round-count, and transcript seed metadata
   before rounded-capacity failures. Exact and bounded seeded keygen/encryption
   now reject public seed and plaintext metadata before exact residual or rounded
-  capacity failures. Exact and
+  capacity failures. Bounded Galois key generation now rejects public
+  automorphism and seed metadata before rounded-capacity failures. Exact and
   bounded plaintext-polynomial bound propagation now rejects oversized public
   input bounds before validating
   caller-supplied plaintext polynomial shape. Exact and bounded Galois

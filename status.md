@@ -302,14 +302,16 @@ Last updated: 2026-06-06
 - Hardened exact and bounded seeded keygen/encryption so public seed and
   plaintext metadata are rejected before exact residual-capacity or rounded
   capacity failures.
+- Hardened bounded Galois key generation so public automorphism and seed
+  metadata are rejected before too-narrow rounded-capacity failures.
 - Added crypto regressions that combine malformed secret keys with invalid
   automorphism/seed metadata, malformed public keys, and malformed public
   evaluation keys across exact and bounded paths, too-narrow bounded profiles,
   oversized bounded noise bounds, oversized exact residual bounds, and
   too-narrow exact seeded-refresh residual profiles, with exact refresh
   transcript, exact/bootstrap bounded execution, seeded keygen/encryption,
-  bounded refresh-key generation, and registered wrapper coverage for bootstrap
-  round metadata.
+  bounded refresh-key generation, bounded Galois keygen, and registered wrapper
+  coverage for bootstrap round metadata.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_keygen_preflights_public_metadata_before_secret_key_shape --lib -- --nocapture`
@@ -350,6 +352,10 @@ Last updated: 2026-06-06
     (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key_generators_preflight_metadata_and_public_key_before_masks --lib -- --nocapture`
     (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_keygen_preflights_public_metadata_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto transcript --lib -- --nocapture`
     (`17` tests passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
@@ -367,6 +373,8 @@ Last updated: 2026-06-06
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
     (passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
     (passed)
   - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs`
   - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`

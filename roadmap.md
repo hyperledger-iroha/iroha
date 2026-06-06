@@ -7421,7 +7421,8 @@ or ABI behavior.
   now rejects public step, key-id, round-count, and transcript seed metadata
   before rounded-capacity failures. Exact and bounded seeded keygen/encryption
   now reject public seed and plaintext metadata before exact residual or rounded
-  capacity failures.
+  capacity failures. Bounded Galois key generation now rejects public
+  automorphism and seed metadata before rounded-capacity failures.
   Soracloud BFV refresh-transcript admission now also derives its deterministic
   seed, bootstrap key-id, rotation-transcript, and bootstrap max-round caps from
   the public `iroha_crypto` constants.

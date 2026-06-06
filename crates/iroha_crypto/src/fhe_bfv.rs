@@ -2395,9 +2395,9 @@ pub fn galois_key_bounded_noise_from_seed(
     automorphism_power: u32,
     seed: &[u8],
 ) -> Result<BfvGaloisKey, BfvError> {
-    validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_galois_automorphism_power(params, automorphism_power)?;
     validate_deterministic_seed("bounded-noise BFV Galois key seed", seed)?;
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_secret_key(params, secret_key)?;
 
     let target_secret = apply_galois_automorphism_poly(params, &secret_key.s, automorphism_power)?;
@@ -10008,6 +10008,7 @@ mod tests {
             b: Vec::new(),
             a: Vec::new(),
         };
+        let malformed_secret_key = BfvSecretKey { s: Vec::new() };
         assert_error_contains(
             keygen_bounded_noise_from_seed(&insufficient, b""),
             "must not be empty",
@@ -10027,6 +10028,21 @@ mod tests {
             encrypt_bounded_noise_from_seed(&insufficient, &malformed_public_key, &[0], b""),
             "must not be empty",
             "bounded encryption must reject seed metadata before rounded capacity",
+        );
+        assert_error_contains(
+            galois_key_bounded_noise_from_seed(
+                &insufficient,
+                &malformed_secret_key,
+                0,
+                b"bfv-rounded-narrow-galois-keygen",
+            ),
+            "automorphism power",
+            "bounded Galois keygen must reject automorphism metadata before rounded capacity",
+        );
+        assert_error_contains(
+            galois_key_bounded_noise_from_seed(&insufficient, &malformed_secret_key, 1, b""),
+            "must not be empty",
+            "bounded Galois keygen must reject seed metadata before rounded capacity",
         );
         assert_error_contains(
             rotation_key_bounded_noise_from_seed(&insufficient, &malformed_public_key, 1, b""),
