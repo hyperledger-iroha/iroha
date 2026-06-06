@@ -4456,6 +4456,16 @@ FinalitySourceActionCompletesCommittedDeliveryFromExactSourceStep ==
     /\ CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
     /\ CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
 
+FinalitySourceActionMatchesCertifiedSourceStackStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    FinalityLatchChangeMatchesCertifiedSourceStackStep
+
+FinalitySourceActionQuorumGatesHoldStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    FinalityLatchSourceQuorumGatesHoldStep
+
 FinalitySourceActionDisablesProgressAfterCommittedDeliveryStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
    ~committed /\ committed') =>
@@ -4465,6 +4475,16 @@ FinalitySourceActionInstallsCommitCertificateWitnessesStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
    ~committed /\ committed') =>
     CommitCertificateWitnessesInstallWithFinalityLatchStep
+
+FinalitySourceActionInstallsCommitViewWitnessStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    CommitViewWitnessInstallsWithFinalityLatchStep
+
+FinalitySourceActionNeverCarriesNewViewHandoffStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    FinalityLatchNeverCarriesNewViewHandoffStep
 
 RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence ==
   (RbcDeliverGoodEnabled /\ ~CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, "Delivered")) <=>
@@ -4847,11 +4867,23 @@ FinalityLatchSourceQuorumGatesAlwaysHold ==
 FinalitySourceActionAlwaysCompletesCommittedDeliveryFromExactSource ==
   [] [FinalitySourceActionCompletesCommittedDeliveryFromExactSourceStep]_vars
 
+FinalitySourceActionAlwaysMatchesCertifiedSourceStack ==
+  [] [FinalitySourceActionMatchesCertifiedSourceStackStep]_vars
+
+FinalitySourceActionQuorumGatesAlwaysHold ==
+  [] [FinalitySourceActionQuorumGatesHoldStep]_vars
+
 FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery ==
   [] [FinalitySourceActionDisablesProgressAfterCommittedDeliveryStep]_vars
 
 FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses ==
   [] [FinalitySourceActionInstallsCommitCertificateWitnessesStep]_vars
+
+FinalitySourceActionAlwaysInstallsCommitViewWitness ==
+  [] [FinalitySourceActionInstallsCommitViewWitnessStep]_vars
+
+FinalitySourceActionNeverCarriesNewViewHandoff ==
+  [] [FinalitySourceActionNeverCarriesNewViewHandoffStep]_vars
 
 FinalityLatchChangeAlwaysMatchesCertifiedSourceStack ==
   [] [FinalityLatchChangeMatchesCertifiedSourceStackStep]_vars

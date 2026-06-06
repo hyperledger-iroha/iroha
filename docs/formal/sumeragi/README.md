@@ -8814,6 +8814,15 @@ Temporal properties:
   that flips the finality latch also completes the delivered committed state
   through the certified exact-source artifact, certificate, commit-view, latch,
   and committed-phase proof chain.
+- `FinalitySourceActionAlwaysMatchesCertifiedSourceStack` proves that those
+  exact finality-source actions also satisfy the certified source-stack
+  classifier covering complete-stack installation, committed-phase entry,
+  live commit-gate crossing, commit witnesses, NewView isolation, exact
+  source effects, and quorum gates.
+- `FinalitySourceActionQuorumGatesAlwaysHold` proves that those exact
+  finality-source actions are backed directly by their finalizing
+  `CanCommit(...)` gate, prepare quorum, honest-support threshold, stake quorum,
+  active-view evidence, and RBC delivery evidence.
 - `FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery` proves
   that those exact finality-source actions also leave the post-state with every
   proposal, vote, view-change, RBC, timeout, Byzantine-fault, and post-GST
@@ -8821,6 +8830,12 @@ Temporal properties:
 - `FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses` proves that
   those exact finality-source actions install the latched commit-certificate
   vote and stake witnesses from the post-state live counters.
+- `FinalitySourceActionAlwaysInstallsCommitViewWitness` proves that those
+  exact finality-source actions install the commit-view witness as the active
+  finality view, including the view-zero value-preserving case.
+- `FinalitySourceActionNeverCarriesNewViewHandoff` proves that those exact
+  finality-source actions are not NewView handoffs, carry no live NewView votes,
+  and preserve existing view-quorum evidence.
 - `FinalityLatchChangeAlwaysMatchesCertifiedSourceStack` proves that every
   finality-latch transition is simultaneously classified by the commit-artifact
   installation/source, committed-phase entry, live commit-gate crossing,

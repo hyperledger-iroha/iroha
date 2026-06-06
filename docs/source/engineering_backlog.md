@@ -50,11 +50,16 @@ track detailed unfinished engineering work.
   domain-separated digest over the parameter set, public key, evaluation-key
   digest, and transcript metadata, giving governance/admission code a
   canonical value to bind before the final proof-carrying bootstrap key format
-  lands. Soracloud transcript digesting now also preflights the advertised BFV
-  public-key shape before evaluation-key bundle validation, so malformed
-  transcript key material cannot be masked by unrelated bundle-shape errors.
-  The lower-level crypto bundle validator now enforces the same public
-  metadata preflight for direct callers, and standalone refresh-key transcript
+  lands. Direct crypto refresh-transcript validation/digesting and Soracloud
+  transcript digesting now also preflight the advertised BFV public-key shape
+  before evaluation-key bundle validation, so malformed transcript key material
+  cannot be masked by unrelated bundle-shape errors. The lower-level crypto
+  bundle validator now enforces the same public metadata preflight for direct
+  callers, and relinearized multiply execution now rejects malformed public
+  relinearization digit inventories before malformed ciphertext operands
+  across exact, RNS, bounded-noise, and bounded basis-extension paths while
+  keeping full entry-polynomial validation after operand-shape checks.
+  Standalone refresh-key transcript
   generators/validators reject the same empty or oversized public seed
   metadata before deriving or recomputing encrypted-zero masks. Soracloud FHE
   execution policies now carry that digest,
@@ -257,27 +262,75 @@ track detailed unfinished engineering work.
   rejects non-BFV schemes and unregistered BFV backend labels at the shared
   data-model layer, and execution-policy admission now rejects unsupported
   deterministic rounding modes, so first-release BFV manifests cannot carry
-  ignored scheme, backend, or rounding metadata. Exact and bounded add bound
-  propagation now validates supplied public input bounds before enforcing the
-  minimum two-input shape, so oversized bound metadata cannot be hidden by an
-  undersized input list. Exact and bounded plaintext-polynomial bound
-  propagation now rejects oversized public input bounds before validating
+  ignored scheme, backend, or rounding metadata. Exact and bounded Galois
+  keygen now rejects invalid public automorphism powers and deterministic seed
+  metadata before malformed secret-key shapes, and exact/bounded public-key
+  consistency diagnostics reject malformed public keys before malformed secret
+  keys. Bounded relinearization/Galois consistency diagnostics now also reject
+  malformed public evaluation keys before malformed owner secrets, and bounded
+  decrypt/profile/ciphertext diagnostics plus rotation, bootstrap, and bundle
+  zero-refresh owner diagnostics reject too-narrow public rounded BFV profiles
+  and oversized public rounded-noise bounds before malformed owner secrets.
+  Exact and bounded add bound propagation now
+  validates supplied public input bounds before enforcing the minimum two-input
+  shape, so oversized bound metadata
+  cannot be hidden by an undersized input list. Exact residual-bound owner
+  diagnostics now also reject oversized public residual bounds before malformed
+  owner secrets while keeping ciphertext-shape preflight first. Exact
+  bundle/rotation/bootstrap zero-refresh owner diagnostics now reject too-narrow
+  public seeded-refresh residual profiles before malformed owner secrets while
+  keeping refresh ciphertext-shape preflight first. Registered exact and bounded
+  bootstrap refresh wrappers now also have round-index/count preflight coverage
+  before malformed bootstrap-key or ciphertext shapes, and exact scalar/RNS
+  bootstrap execution rejects too-narrow public seeded-refresh profiles before
+  applying refresh masks. Exact and bounded direct and bundle refresh-transcript
+  admission now preflights public capacity before malformed public-key,
+  bundle-key, or refresh-ciphertext entry shapes. Scalar bounded bootstrap
+  execution now rejects invalid public key-id and refresh-round requests before
+  rounded-capacity failures. Bounded rotation/bootstrap refresh-key generation
+  now rejects public step, key-id, round-count, and transcript seed metadata
+  before rounded-capacity failures. Exact and bounded seeded keygen/encryption
+  now reject public seed and plaintext metadata before exact residual or rounded
+  capacity failures. Exact and
+  bounded plaintext-polynomial bound propagation now rejects oversized public
+  input bounds before validating
   caller-supplied plaintext polynomial shape. Exact and bounded Galois
   key-switch bound propagation now also rejects oversized public input bounds
   before Galois-key shape checks, and exact/bounded packed `RotateLeft` bound
   propagation rejects oversized public input bounds or invalid rotation
-  schedules before validating caller-supplied Galois key sets. Exact/bounded
+  schedules before validating caller-supplied Galois key sets. Packed
+  `RotateLeft` execution helpers now also preflight Galois key-set public
+  metadata before ciphertext shape while keeping full key-switch entry
+  validation after ciphertext shape. Evaluation-key bundle validation and
+  digest admission now preflight public rotation, Galois, and bootstrap
+  inventory metadata before malformed relinearization or refresh/key-switch
+  entry shapes. Exact/bounded
   outer-slot `RotateLeft` bound propagation now rejects oversized public input
   bounds or full-cycle rotations before validating caller-supplied rotation-key
   refresh ciphertexts, and exact/bounded public affine bound propagation now
   rejects oversized public input bounds before validating caller-supplied
-  circuit row and coefficient shape. Exact/bounded plaintext-scalar bound
-  propagation now rejects oversized public input bounds before validating the
-  public scalar range. Bootstrap
+  circuit row and coefficient shape; exact, registered RNS, bounded RNS, and
+  registered bounded affine execution helpers now validate public circuit rows
+  and coefficients before parsing malformed input ciphertext shapes. Exact,
+  registered RNS, bounded-noise, direct RNS, and bounded basis-extension Galois
+  key-switch execution helpers now validate public automorphism metadata before
+  parsing malformed ciphertext shapes. Exact,
+  registered RNS, bounded-noise, direct RNS, and registered bounded public
+  scalar/plaintext-polynomial execution helpers now validate scalar ranges and
+  plaintext coefficient metadata before parsing malformed ciphertext shapes.
+  Exact and bounded-noise seeded encryption, plus identifier envelope
+  encryption, now validate public plaintext/input, deterministic seed, and
+  identifier envelope metadata before malformed public-key shapes.
+  Exact/bounded plaintext-scalar bound propagation now rejects oversized public
+  input bounds before validating the public scalar range. Bootstrap
   refresh execution now also validates public key metadata plus requested round
   index/count before full refresh-key ciphertext shape across scalar,
   bounded-noise, direct RNS, and registered RNS paths, so malformed
   `round_refreshes` vectors cannot mask out-of-capacity refresh requests.
+  Owner-side decrypt/profile/residual and bounded-noise diagnostics now validate
+  ciphertext shape before secret-key shape, and exact/bounded rotation and
+  bootstrap refresh-key generators validate public metadata, deterministic
+  seeds, and public-key shape before deriving encrypted-zero refresh masks.
   Soracloud BFV
   refresh-transcript admission now also
   derives its deterministic seed, bootstrap key-id, rotation-transcript, and

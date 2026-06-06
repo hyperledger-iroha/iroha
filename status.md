@@ -2,6 +2,499 @@
 
 Last updated: 2026-06-06
 
+## 2026-06-06 Sumeragi finality-source certified source-stack proof
+
+- Added `FinalitySourceActionMatchesCertifiedSourceStackStep` and
+  `FinalitySourceActionAlwaysMatchesCertifiedSourceStack` to prove that any
+  honest commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality satisfies the certified source-stack classifier.
+- The property is intentionally scoped to
+  `FinalityLatchChangeMatchesCertifiedSourceStackStep`, keeping the
+  source-action obligation tied directly to complete-stack installation,
+  committed-phase entry, live commit-gate crossing, commit witnesses, NewView
+  isolation, exact source effects, and quorum gates.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesCertifiedSourceStackStep|FinalitySourceActionAlwaysMatchesCertifiedSourceStack|finality-source certified-source stack classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`191`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV relinearization entry-count preflight
+
+- Split BFV key-switch entry validation into a public digit-count pass and a
+  full entry-polynomial pass, then routed relinearization validation through
+  that split.
+- Exact, RNS exact, bounded-noise, bounded RNS, and bounded basis-extension
+  ciphertext multiplication now reject malformed relinearization-key inventory
+  before malformed ciphertext operands while still validating entry polynomial
+  shapes only after operand shapes pass.
+- Added a crypto regression combining truncated relinearization keys,
+  correctly-sized but malformed entry polynomials, malformed ciphertexts, and
+  valid zero ciphertexts across exact, RNS, bounded-noise, and
+  basis-extension multiply paths.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiply_preflights_relinearization_entry_count_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto key_switch --lib -- --nocapture`
+    (`14` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiplication --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiply_residual --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_exact_ciphertext_evaluator --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_rns_chain_bounded_noise_basis_extension_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-relin-entry-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 Sumeragi finality-source NewView handoff isolation proof
+
+- Added `FinalitySourceActionNeverCarriesNewViewHandoffStep` and
+  `FinalitySourceActionNeverCarriesNewViewHandoff` to prove that any honest
+  commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality is not a NewView handoff, carries no live NewView votes, and
+  preserves existing view-quorum evidence.
+- The property is intentionally scoped to
+  `FinalityLatchNeverCarriesNewViewHandoffStep`, keeping source-action
+  handoff isolation as a direct obligation without expanding the full
+  exact-source aggregate.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionNeverCarriesNewViewHandoffStep|FinalitySourceActionNeverCarriesNewViewHandoff|finality-source NewView handoff isolation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`190`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 Sumeragi finality-source commit-view witness proof
+
+- Added `FinalitySourceActionInstallsCommitViewWitnessStep` and
+  `FinalitySourceActionAlwaysInstallsCommitViewWitness` to prove that any
+  honest commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality installs the commit-view witness as the active finality view.
+- The property is intentionally scoped to
+  `CommitViewWitnessInstallsWithFinalityLatchStep`, including the view-zero
+  value-preserving case, so finality-source actions are tied directly to the
+  durable commit-view witness without expanding the full exact-source aggregate.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionInstallsCommitViewWitnessStep|FinalitySourceActionAlwaysInstallsCommitViewWitness|finality-source commit-view witness installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`189`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV refresh transcript public-key preflight
+
+- Hardened direct exact and bounded-noise BFV refresh-transcript validation so
+  transcript metadata is still checked first, then advertised public-key shape,
+  then evaluation-key bundle validation and transcript-to-bundle matching.
+- Kept exact and bounded refresh-transcript digest admission on the same path,
+  so malformed public keys cannot be hidden behind malformed bundle key
+  material before a governance-bound digest is computed.
+- Added a crypto regression combining malformed public keys, malformed bundle
+  key material, and invalid transcript seed metadata across validation and
+  digest paths.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-public-key-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_refresh_transcripts_preflight_public_key_before_bundle_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-public-key-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_transcripts --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-public-key-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV evaluation-key bundle metadata preflight
+
+- Split BFV evaluation-key bundle validation into a public metadata pass and a
+  key-material shape pass, so rotation inventory metadata, Galois key-set
+  metadata, and bootstrap key-id/round-count metadata are rejected before
+  malformed relinearization or refresh/key-switch ciphertext entries.
+- Kept digest admission on the same preflight path, so malformed public bundle
+  metadata cannot receive an evaluation-key digest by being hidden behind
+  malformed key material.
+- Added a crypto regression combining malformed relinearization material with
+  duplicate rotation metadata, zero-step rotations, duplicate Galois metadata,
+  malformed bootstrap key ids, and missing bootstrap round-refresh inventory.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-metadata-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle_preflights_public_metadata_before_key_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-metadata-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto evaluation_key_bundle --lib -- --nocapture`
+    (`10` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bundle-metadata-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV Galois key-set metadata preflight
+
+- Split BFV Galois key-set validation into a public metadata pass and a
+  key-switch entry-shape pass, so bundle caps, automorphism powers, and
+  duplicate-key metadata are rejected before malformed key ciphertext entries.
+- Hardened exact, RNS, bounded-noise, bounded RNS, and bounded basis-extension
+  packed `RotateLeft` execution helpers so Galois key-set metadata is checked
+  before ciphertext shape, while full key-switch entry validation still runs
+  after ciphertext shape.
+- Added a crypto regression combining duplicate Galois automorphism metadata,
+  malformed Galois key entries, and malformed ciphertexts across exact, RNS,
+  bounded-noise, bounded RNS, basis-extension, and bound-propagation surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-set-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_preflights_galois_key_set_metadata_before_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-set-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left --lib -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-set-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV owner diagnostic and refresh-key preflight
+
+- Hardened shared BFV owner decrypt/profile/bound diagnostics so malformed
+  public ciphertext shapes are rejected before malformed secret-key shapes
+  across exact and bounded-noise diagnostics.
+- Hardened exact and bounded-noise rotation/bootstrap refresh-key generators so
+  public metadata and deterministic seed checks run first, public-key shape is
+  validated once, and no encrypted-zero refresh masks are derived from
+  malformed public keys.
+- Added crypto regressions that combine malformed ciphertexts with malformed
+  owner secrets, plus malformed public keys with rotation/bootstrap metadata and
+  seed errors across exact and bounded refresh-key generator surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto decrypt_diagnostics_preflight_ciphertext_shape_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key_generators_preflight_metadata_and_public_key_before_masks --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto "decrypt" --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-owner-diagnostic-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV Galois key-switch execution preflight
+
+- Hardened exact, registered RNS, bounded-noise, direct RNS, and bounded
+  basis-extension Galois key-switch execution helpers so invalid public
+  automorphism metadata is rejected before malformed ciphertext shapes, while
+  full key-switch entry validation still runs after ciphertext shape checks.
+- Added a crypto regression that combines malformed ciphertexts and malformed
+  Galois key entries with invalid public automorphism metadata across the direct
+  and registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_key_switch_execution_preflights_public_metadata_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois --lib -- --nocapture`
+    (`15` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-execution-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV key-owner public metadata preflight
+
+- Hardened exact and bounded-noise Galois key generation so invalid public
+  automorphism powers and deterministic seed metadata are rejected before
+  malformed secret-key shapes.
+- Hardened exact and bounded public-key consistency diagnostics so malformed
+  public-key shapes are rejected before malformed secret-key shapes.
+- Hardened bounded relinearization and Galois consistency diagnostics so
+  malformed public evaluation keys are rejected before malformed owner-secret
+  shapes.
+- Hardened bounded decrypt/profile/ciphertext diagnostics plus rotation,
+  bootstrap, and bundle zero-refresh owner diagnostics so too-narrow public
+  rounded BFV profiles and oversized public rounded-noise bounds are rejected
+  before malformed owner-secret shapes.
+- Hardened exact residual-bound owner diagnostics so oversized public residual
+  bounds are rejected before malformed owner-secret shapes while ciphertext-shape
+  preflight remains first.
+- Hardened exact bundle, rotation, and bootstrap zero-refresh owner diagnostics
+  so too-narrow public seeded-refresh residual profiles are rejected before
+  malformed owner-secret shapes while refresh ciphertext-shape preflight remains
+  first.
+- Restored the exact encrypt/decrypt roundtrip fixture to the general BFV test
+  profile so its `42`/`99` plaintext coefficients stay within the configured
+  plaintext modulus.
+- Extended bootstrap round-request preflight regressions through the registered
+  exact and registered bounded refresh wrappers so production entry points reject
+  invalid round indices/counts before malformed bootstrap-key or ciphertext
+  shapes.
+- Hardened exact scalar and RNS bootstrap execution so too-narrow public
+  seeded-refresh profiles are rejected before refresh masks are applied.
+- Hardened exact and bounded direct plus bundle refresh-transcript admission so
+  transcript metadata stays first, public BFV capacity is checked next, and
+  malformed public-key, bundle-key, or refresh-ciphertext entry shapes cannot
+  mask too-narrow profiles.
+- Hardened scalar bounded bootstrap execution so invalid public bootstrap key-id
+  metadata and indexed/multi-round refresh requests are rejected before
+  too-narrow rounded-capacity failures.
+- Hardened bounded rotation/bootstrap refresh-key generation so public step,
+  key-id, round-count, and transcript seed metadata are rejected before
+  too-narrow rounded-capacity failures.
+- Hardened exact and bounded seeded keygen/encryption so public seed and
+  plaintext metadata are rejected before exact residual-capacity or rounded
+  capacity failures.
+- Added crypto regressions that combine malformed secret keys with invalid
+  automorphism/seed metadata, malformed public keys, and malformed public
+  evaluation keys across exact and bounded paths, too-narrow bounded profiles,
+  oversized bounded noise bounds, oversized exact residual bounds, and
+  too-narrow exact seeded-refresh residual profiles, with exact refresh
+  transcript, exact/bootstrap bounded execution, seeded keygen/encryption,
+  bounded refresh-key generation, and registered wrapper coverage for bootstrap
+  round metadata.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_keygen_preflights_public_metadata_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto deterministic_bfv_seeded_helpers_reject_empty_or_oversized_seeds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_key_consistency_preflights_public_key_shape_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_key_secret_consistency_rejects_tampered_key_material --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto consistency --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto preflights --lib -- --nocapture`
+    (`10` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto decrypt --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto residual_bound --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_preflights_public_input_and_seed_before_public_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key_generators_preflight_metadata_and_public_key_before_masks --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto transcript --lib -- --nocapture`
+    (`17` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bootstrap-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh --lib -- --nocapture`
+    (`21` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bootstrap-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+    (no output)
+
+## 2026-06-06 BFV seeded encryption input preflight
+
+- Hardened exact and bounded-noise seeded BFV encryption so invalid public
+  plaintext coefficients and deterministic seed metadata are rejected before
+  malformed public-key shapes.
+- Split identifier public-parameter metadata validation from public-key shape
+  validation, then reused that preflight in identifier key derivation and
+  identifier encryption so registered-profile/envelope-capacity, input length,
+  and encryption seed metadata are rejected before malformed public keys.
+- Added a crypto regression that combines malformed public keys with
+  out-of-range plaintexts, empty seeds, too-long identifier input, and invalid
+  identifier envelope capacity.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_preflights_public_input_and_seed_before_public_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto identifier --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV public-term execution preflight
+
+- Hardened exact, registered RNS, bounded-noise, direct RNS, and registered
+  bounded public scalar/plaintext-polynomial execution helpers so invalid
+  public scalar ranges or plaintext coefficient metadata are rejected before
+  malformed ciphertext shapes.
+- Added a crypto regression that combines malformed ciphertexts with
+  out-of-range public scalar and plaintext-polynomial inputs across direct and
+  registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-term-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_term_execution_preflights_plaintext_metadata_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-term-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto "plain" --lib -- --nocapture`
+    (`20` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-public-term-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 BFV affine execution public preflight
+
+- Hardened exact, registered RNS, bounded RNS, and registered bounded affine
+  execution helpers so invalid public circuit row/coefficient metadata is
+  rejected before malformed input ciphertext shapes.
+- Added a crypto regression that combines malformed ciphertexts with invalid
+  public affine weights across the direct and registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto affine_execution_preflights_public_circuit_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-execution-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto affine --lib -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-affine-execution-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-06 Sumeragi finality-source certificate-witness proof
+
+- Added `FinalitySourceActionInstallsCommitCertificateWitnessesStep` and
+  `FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses` to prove that
+  any honest commit vote, Byzantine commit vote, or RBC delivery action that
+  flips finality installs the latched commit-certificate vote and stake
+  witnesses from the post-state live counters.
+- The property is intentionally scoped to
+  `CommitCertificateWitnessesInstallWithFinalityLatchStep`, avoiding redundant
+  expansion of the full exact-source committed-delivery aggregate while still
+  tying finality-source actions directly to durable certificate witnesses.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionInstallsCommitCertificateWitnessesStep|FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses|finality-source commit-certificate witness installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`188`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV packed rotation execution preflight
+
+- Hardened exact, registered RNS, bounded-noise, bounded RNS, and bounded
+  basis-extension packed `RotateLeft` execution helpers so invalid public
+  rotation schedules are rejected before malformed ciphertext or Galois-key
+  shapes.
+- Added a crypto regression that combines malformed packed ciphertext and
+  Galois-key material with zero/full-cycle packed rotations across the direct
+  and registered helper surfaces.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-rotate-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_execution_preflights_rotation_metadata_before_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-rotate-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left --lib -- --nocapture`
+    (`8` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-packed-rotate-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
 ## 2026-06-06 BFV outer-slot rotation execution preflight
 
 - Hardened exact, registered RNS, bounded-noise, and bounded RNS outer
@@ -42,16 +535,17 @@ Last updated: 2026-06-06
 
 ## 2026-06-06 Soracloud FHE manifest admission
 
-- Hardened Soracloud FHE parameter-set validation so non-BFV schemes are
-  rejected in shared data-model admission, matching the first-release BFV-only
-  runtime surface.
+- Hardened Soracloud FHE parameter-set validation so non-BFV schemes and
+  unregistered BFV backend labels are rejected in shared data-model admission,
+  matching the first-release BFV-only runtime surface.
 - Hardened Soracloud FHE execution-policy validation so unsupported
   deterministic rounding modes are rejected during manifest admission. First
   release BFV metadata now fails closed instead of accepting modes the
   evaluator does not implement.
-- Added data-model regressions for `Ckks` parameter-set metadata and `Floor`
-  policy metadata while preserving the existing BFV governance happy path and
-  exact-evaluator depth/bootstrap budget rejections.
+- Added data-model regressions for `Ckks` parameter-set metadata, unregistered
+  `fhe/bfv-rns/v2` backend metadata, and `Floor` policy metadata while
+  preserving the existing BFV governance happy path and exact-evaluator
+  depth/bootstrap budget rejections.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_execution_policy_validate_rejects_unsupported_rounding_mode --lib -- --nocapture`
@@ -59,6 +553,8 @@ Last updated: 2026-06-06
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_execution_policy_validate_rejects_exact_evaluator_budget_overflow --lib -- --nocapture`
     (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_param_set_validate_rejects_unsupported_scheme --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_param_set_validate_rejects_unregistered_backend --lib -- --nocapture`
     (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-policy-rounding-mode CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_governance_bundle_validate_accepts_consistent_payload --lib -- --nocapture`
     (`1` test passed)

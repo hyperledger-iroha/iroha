@@ -544,6 +544,11 @@ async function main() {
   const verifierCodeHash = await contractCodeHash(provider, verifierAddress);
   const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);
   const bscMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(56), 32);
+  const bscTestnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(97), 32);
+  const unsupportedBscNetworkId = ethers.zeroPadValue(
+    ethers.toBeHex(31337),
+    32
+  );
   const bridgeConstructorArgs = ({
     bridgeVerifierAddress = verifierAddress,
     bridgeVerifierCodeHash = verifierCodeHash,
@@ -654,12 +659,41 @@ async function main() {
         bridgeArtifact.abi,
         bridgeArtifact.bytecode,
         bridgeConstructorArgs({
+          networkId: bscTestnetNetworkId,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be ETH mainnet")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
           networkId: ethMainnetNetworkId,
           targetDomain: 2,
         })
       );
     },
-    callExceptionWithReason("Network id must be BSC mainnet")
+    callExceptionWithReason("Network id must be BSC mainnet or testnet")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        bridgeConstructorArgs({
+          networkId: unsupportedBscNetworkId,
+          targetDomain: 2,
+        })
+      );
+    },
+    callExceptionWithReason("Network id must be BSC mainnet or testnet")
   );
 
   await assert.rejects(
@@ -1220,6 +1254,42 @@ async function main() {
   );
   assert.equal(await groth16Bridge.verifierCodeHash(), groth16VerifierCodeHash);
   assert.equal(await groth16Bridge.verifierKeyHash(), groth16VerifierKeyHash);
+  const bscTestnetGroth16Bridge = await deploy(
+    signer,
+    bridgeArtifact.abi,
+    bridgeArtifact.bytecode,
+    [
+      groth16VerifierAddress,
+      groth16VerifierCodeHash,
+      groth16VerifierKeyHash,
+      "evm-groth16-bn254-v1",
+      "stark-fri-v1",
+      bscTestnetNetworkId,
+      0,
+      2,
+    ]
+  );
+  const bscTestnetGroth16BridgeAddress =
+    await bscTestnetGroth16Bridge.getAddress();
+  const bscTestnetDestinationBindingHash = computeDestinationBindingHash(abi, {
+    verifierBackendHash: ethers.keccak256(
+      ethers.toUtf8Bytes("evm-groth16-bn254-v1")
+    ),
+    proofFamilyHash: ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1")),
+    networkId: bscTestnetNetworkId,
+    sourceDomain: 0,
+    targetDomain: 2,
+    verifierAddress: groth16VerifierAddress,
+    wrapperAddress: bscTestnetGroth16BridgeAddress,
+    verifierCodeHash: groth16VerifierCodeHash,
+    verifierKeyHash: groth16VerifierKeyHash,
+  });
+  assert.equal(await bscTestnetGroth16Bridge.networkId(), bscTestnetNetworkId);
+  assert.equal(await bscTestnetGroth16Bridge.expectedTargetDomain(), 2n);
+  assert.equal(
+    await bscTestnetGroth16Bridge.destinationBindingHash(),
+    bscTestnetDestinationBindingHash
+  );
   const invalidGroth16ProofBytes = abi.encode(
     [
       "uint256",

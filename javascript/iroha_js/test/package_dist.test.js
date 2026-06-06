@@ -18,6 +18,8 @@ import {
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+  SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
   SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
@@ -128,11 +130,18 @@ import {
   verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
   BscMainnetSccp,
   BscMainnetSccpProver,
+  BscTestnetSccp,
+  BscTestnetSccpProver,
   bscMainnetSccpDestinationBinding,
+  bscTestnetSccpDestinationBinding,
   buildBscMainnetSccpDestinationProofRequest,
   buildBscMainnetSccpDestinationSubmission,
+  buildBscTestnetSccpDestinationProofRequest,
+  buildBscTestnetSccpDestinationSubmission,
+  buildBscTestnetSccpLocalAdmissionSubmission,
   evmSccpDestinationBinding,
   wrapBscMainnetSccpDestinationProofResult,
+  wrapBscTestnetSccpDestinationProofResult,
   wrapEvmSccpProofResult,
   buildSolanaSccpAccountsLtHashProofRequest,
   buildSolanaSccpFullLightClientAuditProofRequest,
@@ -2821,7 +2830,7 @@ test("package declarations do not advertise privacy production metadata inputs",
 test("package declarations mark SCCP FastPQ proof requests readonly", () => {
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface SolanaSccpAccountsLtHashProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<SolanaSccpAccountsLtHashFastpqTransition>>;/,
+    /export interface SolanaSccpAccountsLtHashProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<[\s\S]*Readonly<SolanaSccpAccountsLtHashFastpqTransition>[\s\S]*>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -2857,7 +2866,7 @@ test("package declarations mark SCCP FastPQ proof requests readonly", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface TonShardStateProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<TonShardStateFastpqTransition>>;/,
+    /export interface TonShardStateProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<[\s\S]*Readonly<TonShardStateFastpqTransition>[\s\S]*>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -2877,7 +2886,7 @@ test("package declarations mark SCCP FastPQ proof requests readonly", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface SubstrateSccpRuntimeStorageProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<Readonly<SubstrateSccpRuntimeStorageFastpqTransition>>;/,
+    /export interface SubstrateSccpRuntimeStorageProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<[\s\S]*Readonly<SubstrateSccpRuntimeStorageFastpqTransition>[\s\S]*>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3073,7 +3082,7 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type EthereumMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\): EthereumMainnetBeaconFinalityEvidenceInput \| Promise<EthereumMainnetBeaconFinalityEvidenceInput>;/,
+    /export type EthereumMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\):[\s\S]*EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*Promise<EthereumMainnetBeaconFinalityEvidenceInput>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3081,7 +3090,7 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\(options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*beaconBlockId\?: string \| number \| bigint;[\s\S]*targetBeaconBlockRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
+    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\([\s\S]*options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL,[\s\S]*\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*beaconBlockId\?: string \| number \| bigint;[\s\S]*targetBeaconBlockRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3122,7 +3131,7 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
   );
   assert.match(
     declaration,
-    /buildOutboundProofRequest\(input: EvmSccpProofRequestInput\): EvmSccpProofRequest;/u,
+    /buildOutboundProofRequest\([\s\S]*input: EvmSccpProofRequestInput,[\s\S]*\): EvmSccpProofRequest;/u,
   );
   assert.match(
     declaration,
@@ -3142,7 +3151,7 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
   );
   assert.match(
     declaration,
-    /buildEthereumCalldata\(input: EthereumMainnetSccpSubmissionInput\): EvmSccpSubmission;/u,
+    /buildEthereumCalldata\([\s\S]*input: EthereumMainnetSccpSubmissionInput,[\s\S]*\): EvmSccpSubmission;/u,
   );
   assert.match(
     declaration,
@@ -3252,7 +3261,7 @@ test("package declarations expose BSC mainnet Parlia finality evidence hooks", (
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export type BscMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: BscMainnetConsensusProviderInput,[\s\S]*\): BscMainnetParliaFinalityEvidenceInput \| Promise<BscMainnetParliaFinalityEvidenceInput>;/,
+    /export type BscMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: BscMainnetConsensusProviderInput,[\s\S]*\):[\s\S]*BscMainnetParliaFinalityEvidenceInput[\s\S]*Promise<BscMainnetParliaFinalityEvidenceInput>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -3306,7 +3315,7 @@ test("package declarations separate TON proof-request and submission inputs", ()
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export function buildTonSccpProofRequest\(input: TonSccpProofRequestInput\): TonSccpProofRequest;/,
+    /export function buildTonSccpProofRequest\([\s\S]*input: TonSccpProofRequestInput,[\s\S]*\): TonSccpProofRequest;/,
   );
 });
 
@@ -3326,7 +3335,7 @@ test("package declarations require wrapped Solana submission proof results", () 
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export function buildSolanaSccpSubmission\(input: SolanaSccpSubmissionInput\): SolanaSccpSubmission;/,
+    /export function buildSolanaSccpSubmission\([\s\S]*input: SolanaSccpSubmissionInput,[\s\S]*\): SolanaSccpSubmission;/,
   );
 });
 
@@ -3545,7 +3554,7 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /wrapSolanaSccpSourceStateVerificationProof\(\s+proofBytes: BinaryLike \| number\[\],[\s\S]*request: SolanaSccpAccountsLtHashProofRequest \| SolanaSccpFullLightClientAuditProofRequest,/,
+    /wrapSolanaSccpSourceStateVerificationProof\(\s+proofBytes: BinaryLike \| number\[\],[\s\S]*request:[\s\S]*SolanaSccpAccountsLtHashProofRequest[\s\S]*SolanaSccpFullLightClientAuditProofRequest,/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -4535,6 +4544,53 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   })).targetDomain, SCCP_DOMAIN_BSC);
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccp/u);
   assert.match(DECLARATIONS_TEXT, /export class BscMainnetSccpProver/u);
+  const bscTestnetBinding = bscTestnetSccpDestinationBinding({
+    verifierAddress: `0x${"33".repeat(20)}`,
+    bridgeAddress: `0x${"44".repeat(20)}`,
+    verifierCodeHash: `0x${"dd".repeat(32)}`,
+    verifierKeyHash: `0x${"ee".repeat(32)}`,
+  });
+  assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
+  assert.equal(SCCP_BSC_TESTNET_NETWORK_ID, bscTestnetBinding.networkId);
+  const bscTestnetRequest = buildBscTestnetSccpDestinationProofRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscTestnetBinding,
+  });
+  const bscTestnetProofResult = wrapBscTestnetSccpDestinationProofResult(proofBytes, bscTestnetRequest);
+  assert.equal(
+    buildBscTestnetSccpDestinationSubmission({ proofResult: bscTestnetProofResult }).targetDomain,
+    SCCP_DOMAIN_BSC,
+  );
+  assert.equal(new BscTestnetSccp().buildBscCalldata({
+    proofResult: bscTestnetProofResult,
+  }).destinationBindingHash, bscTestnetRequest.destinationBindingHash);
+  assert.equal((await new BscTestnetSccpProver().buildRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscTestnetBinding,
+  })).destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+  assert.equal(buildBscTestnetSccpLocalAdmissionSubmission({
+    source_domain: SCCP_DOMAIN_BSC,
+    target_domain: SCCP_DOMAIN_SORA,
+    proof_bytes: new Uint8Array([1, 2, 3]),
+    public_inputs_bytes: new Uint8Array([4, 5, 6]),
+    bundle_bytes: new Uint8Array([7, 8, 9]),
+    envelope_bytes: new Uint8Array([10, 11, 12]),
+    statement_hash: `0x${"66".repeat(32)}`,
+    source_verifier_material_hash: `0x${"77".repeat(32)}`,
+    source_adapter_engine_deployment_hash: `0x${"88".repeat(32)}`,
+  }).sourceDomain, SCCP_DOMAIN_BSC);
+  assert.match(DECLARATIONS_TEXT, /export type BscTestnetSccpProofRequest/u);
+  assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccp/u);
+  assert.match(DECLARATIONS_TEXT, /export class BscTestnetSccpProver/u);
+  assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpDestinationSubmission/u);
+  assert.match(DECLARATIONS_TEXT, /buildBscTestnetSccpLocalAdmissionSubmission/u);
   const request = buildEvmSccpProofRequest({
     public_inputs: publicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),

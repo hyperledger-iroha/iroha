@@ -7000,7 +7000,7 @@ def test_release_bundle_verifier_rejects_crypto_evidence_inventory_drift(
     )
     assert (
         "readiness report cryptographic_evidence chain mismatch for domain 2: "
-        "expected bsc, got 'eth'"
+        "expected bsc or bsc-testnet, got 'eth'"
     ) in verified.stdout
     assert "readiness report cryptographic_evidence missing required domain: 1" in (
         verified.stdout
@@ -7164,11 +7164,11 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
-        "evm_source_rpc_chain_id must be BSC mainnet chain id 56"
+        "evm_source_rpc_chain_id must be BSC chain id 56 for bsc"
     ) in verified.stdout
     assert (
         "readiness report cryptographic evidence row "
-        "evm_source_block_tag must be non-empty for BSC mainnet"
+        "evm_source_block_tag must be non-empty for BSC EVM evidence"
     ) in verified.stdout
     for field in (
         "source_verifier_material_hash",
@@ -7240,6 +7240,67 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
         "source_adapter_gate_audit_hashes operator_override must be a canonical "
         "bytes32 hex string"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_accepts_bsc_testnet_crypto_profile() -> None:
+    """BSC testnet crypto rows must bind chain id 97 and testnet route IDs."""
+
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    row = {
+        "domain": verifier.SCCP_DOMAIN_BSC,
+        "chain": "bsc-testnet",
+        "evm_source_rpc_chain_id": "97",
+        "evm_source_block_tag": "latest",
+        "evm_destination_rpc_chain_id": "97",
+        "evm_destination_block_tag": "latest",
+        "source_verifier_material_hash": hex32("11"),
+        "source_adapter_engine_deployment_hash": hex32("22"),
+        "destination_binding_hash": hex32("33"),
+        "route_allowlist_hash": hex32("44"),
+        "route_canary_evidence_hash": hex32("55"),
+        "route_canary_evidence_source": "evm_message_proof_accepted_transaction",
+        "route_canary_evidence_bound": True,
+        "route_canary_transaction_hash": hex32("66"),
+        "route_canary_receipt_block_number": 4660,
+        "route_canary_receipt_block_hash": hex32("77"),
+        "route_canary_receipt_block_finalized": True,
+        "route_canary_block_receipts_root": hex32("88"),
+        "route_canary_message_id": hex32("99"),
+        "route_canary_block_number": None,
+        "route_canary_block_timestamp": None,
+        "source_adapter_gate_required": False,
+        "source_adapter_gate_hash": "",
+        "source_adapter_gate_audit_hashes": {},
+    }
+
+    assert verifier._cryptographic_evidence_row_schema_errors(row) == []
+    assert not any(
+        "chain mismatch for domain 2" in error
+        for error in verifier._cryptographic_evidence_inventory_errors([row])
+    )
+
+    wrong_chain_id = {**row, "evm_source_rpc_chain_id": "56"}
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_rpc_chain_id must be BSC chain id 97 for bsc-testnet"
+    ) in verifier._cryptographic_evidence_row_schema_errors(wrong_chain_id)
+
+    mainnet_hash = verifier._canonical_route_allowlist_hash(
+        domain=verifier.SCCP_DOMAIN_BSC,
+        chain="bsc",
+        source_verifier_material_hash=bytes.fromhex("11" * 32),
+        source_adapter_engine_deployment_hash=bytes.fromhex("22" * 32),
+        destination_binding_hash=bytes.fromhex("33" * 32),
+    )
+    testnet_hash = verifier._canonical_route_allowlist_hash(
+        domain=verifier.SCCP_DOMAIN_BSC,
+        chain="bsc-testnet",
+        source_verifier_material_hash=bytes.fromhex("11" * 32),
+        source_adapter_engine_deployment_hash=bytes.fromhex("22" * 32),
+        destination_binding_hash=bytes.fromhex("33" * 32),
+    )
+    assert mainnet_hash != testnet_hash
 
 
 def test_release_bundle_verifier_rejects_crypto_evidence_unknown_fields(
@@ -9040,7 +9101,7 @@ def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
                 "networkId = ethMainnetNetworkId",
                 "const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);",
                 'callExceptionWithReason("Network id must be ETH mainnet")',
-                'callExceptionWithReason("Network id must be BSC mainnet")',
+                'callExceptionWithReason("Network id must be BSC mainnet or testnet")',
             ),
         ),
     )
@@ -9065,7 +9126,10 @@ def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
     )
     assert any(
         "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
-        and 'missing marker: callExceptionWithReason("Network id must be BSC mainnet")'
+        and (
+            'missing marker: callExceptionWithReason("Network id must be '
+            'BSC mainnet or testnet")'
+        )
         in error
         for error in verified["errors"]
     )

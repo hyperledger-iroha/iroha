@@ -3,7 +3,7 @@
 
 This helper is offline by design. Operators pass the live ETH or BSC
 destination verifier deployment material and bridge wrapper address; the
-script defaults the EVM network id to the selected domain's canonical mainnet
+script defaults the EVM network id to the selected domain/profile's canonical
 EIP-155 chain id and rejects mismatched overrides while recomputing the EVM
 Groth16 destination binding hash. With independently pinned destination binding
 and source record hashes, the script also validates the governed route
@@ -42,24 +42,40 @@ SCCP_ROUTE_ALLOWLIST_LABEL = b"sccp:route-allowlist:lane-evidence:v1"
 EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v4"
 ETH_MAINNET_NETWORK_ID = (1).to_bytes(32, "big")
 BSC_MAINNET_NETWORK_ID = (56).to_bytes(32, "big")
+BSC_TESTNET_NETWORK_ID = (97).to_bytes(32, "big")
 
-DOMAIN_PROFILES = {
-    SCCP_DOMAIN_ETH: {
-        "chain": "eth",
-        "rpc_chain_id": "1",
-        "block_tag": "finalized",
-        "network_id": ETH_MAINNET_NETWORK_ID,
-        "anchor_id": "sccp:eth:destination-anchor:ethereum-mainnet:v1",
-        "route_allowlist_id": "sccp:eth:route-allowlist:ethereum-mainnet:v1",
-    },
-    SCCP_DOMAIN_BSC: {
+BSC_NETWORK_PROFILES = {
+    "mainnet": {
         "chain": "bsc",
+        "network_label": "BSC mainnet",
         "rpc_chain_id": "56",
         "block_tag": "latest",
         "network_id": BSC_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:bsc:destination-anchor:bsc-mainnet:v1",
         "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-mainnet:v1",
     },
+    "testnet": {
+        "chain": "bsc-testnet",
+        "network_label": "BSC testnet",
+        "rpc_chain_id": "97",
+        "block_tag": "latest",
+        "network_id": BSC_TESTNET_NETWORK_ID,
+        "anchor_id": "sccp:bsc:destination-anchor:bsc-testnet:v1",
+        "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-testnet:v1",
+    },
+}
+
+DOMAIN_PROFILES = {
+    SCCP_DOMAIN_ETH: {
+        "chain": "eth",
+        "network_label": "ETH mainnet",
+        "rpc_chain_id": "1",
+        "block_tag": "finalized",
+        "network_id": ETH_MAINNET_NETWORK_ID,
+        "anchor_id": "sccp:eth:destination-anchor:ethereum-mainnet:v1",
+        "route_allowlist_id": "sccp:eth:route-allowlist:ethereum-mainnet:v1",
+    },
+    SCCP_DOMAIN_BSC: BSC_NETWORK_PROFILES["mainnet"],
 }
 EVM_BLOCK_TAGS = ("finalized", "safe", "latest")
 
@@ -152,25 +168,75 @@ def parse_destination_domain(value: str) -> int:
         raise argparse.ArgumentTypeError("domain must be eth or bsc") from exc
 
 
-def evm_mainnet_network_id_for_domain(domain: int) -> bytes:
-    """Return the canonical bytes32 EIP-155 network id for an EVM SCCP domain."""
+def parse_bsc_network(value: str) -> str:
+    """Parse the BSC network profile selector."""
 
+    if value != value.strip():
+        raise argparse.ArgumentTypeError("BSC network must be mainnet or testnet")
+    normalized = value.lower().replace("_", "-")
+    aliases = {
+        "mainnet": "mainnet",
+        "bsc-mainnet": "mainnet",
+        "56": "mainnet",
+        "testnet": "testnet",
+        "bsc-testnet": "testnet",
+        "chapel": "testnet",
+        "97": "testnet",
+    }
     try:
-        return bytes(DOMAIN_PROFILES[domain]["network_id"])
+        return aliases[normalized]
+    except KeyError as exc:
+        raise argparse.ArgumentTypeError(
+            "BSC network must be mainnet or testnet"
+        ) from exc
+
+
+def _bsc_network_from_value(value: str | None) -> str:
+    if value is None:
+        return "mainnet"
+    return parse_bsc_network(value)
+
+
+def profile_for_domain(domain: int, *, bsc_network: str | None = None) -> dict[str, str]:
+    """Return the destination profile for an EVM SCCP domain."""
+
+    domain = _require_exact_u32(domain, "domain")
+    if domain == SCCP_DOMAIN_BSC:
+        return BSC_NETWORK_PROFILES[_bsc_network_from_value(bsc_network)]
+    try:
+        return DOMAIN_PROFILES[domain]
     except KeyError as exc:
         raise ValueError("domain must be ETH or BSC") from exc
 
 
-def _require_domain_network_id(domain: int, network_id: bytes | None) -> bytes:
+def evm_network_id_for_domain(domain: int, *, bsc_network: str | None = None) -> bytes:
+    """Return the canonical bytes32 EIP-155 network id for an EVM SCCP profile."""
+
+    try:
+        return bytes(profile_for_domain(domain, bsc_network=bsc_network)["network_id"])
+    except KeyError as exc:  # pragma: no cover - profile validation is above.
+        raise ValueError("domain must be ETH or BSC") from exc
+
+
+def evm_mainnet_network_id_for_domain(domain: int) -> bytes:
+    """Return the canonical mainnet bytes32 EIP-155 network id for an EVM SCCP domain."""
+
+    return evm_network_id_for_domain(domain, bsc_network="mainnet")
+
+
+def _require_domain_network_id(
+    domain: int,
+    network_id: bytes | None,
+    *,
+    bsc_network: str | None = None,
+) -> bytes:
     network_id = _require_fixed_bytes(network_id, label="network_id", byte_length=32)
-    profile = DOMAIN_PROFILES.get(domain)
-    if profile is None:
-        raise ValueError("domain must be ETH or BSC")
+    profile = profile_for_domain(domain, bsc_network=bsc_network)
     expected = bytes(profile["network_id"])
     if network_id != expected:
         raise ValueError(
             "network_id must match "
-            f"{profile['chain'].upper()} mainnet EIP-155 chain id "
+            f"{profile['network_label']} EIP-155 chain id "
             f"{profile['rpc_chain_id']}: expected {_hex(expected)}, got {_hex(network_id)}"
         )
     return network_id
@@ -454,6 +520,7 @@ def evm_destination_binding_hash(
     verifier_key_hash: bytes,
     verifier_backend: str = SCCP_EVM_GROTH16_BACKEND,
     proof_family: str = SCCP_PROOF_FAMILY_STARK_FRI,
+    bsc_network: str | None = None,
 ) -> bytes:
     """Compute the EVM destination binding used by the SCCP bridge wrapper."""
 
@@ -461,8 +528,10 @@ def evm_destination_binding_hash(
     target_domain = _require_exact_u32(target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_SORA:
         raise ValueError("source_domain must be SORA for EVM destination evidence")
-    if target_domain not in DOMAIN_PROFILES:
-        raise ValueError("target_domain must be ETH or BSC")
+    try:
+        profile_for_domain(target_domain, bsc_network=bsc_network)
+    except ValueError as exc:
+        raise ValueError("target_domain must be ETH or BSC") from exc
     if source_domain == target_domain:
         raise ValueError("source_domain and target_domain must differ")
     if verifier_backend != SCCP_EVM_GROTH16_BACKEND:
@@ -470,7 +539,11 @@ def evm_destination_binding_hash(
     if proof_family != SCCP_PROOF_FAMILY_STARK_FRI:
         raise ValueError(f"proof_family must be {SCCP_PROOF_FAMILY_STARK_FRI}")
 
-    network_id = _require_domain_network_id(target_domain, network_id)
+    network_id = _require_domain_network_id(
+        target_domain,
+        network_id,
+        bsc_network=bsc_network,
+    )
     verifier_address = _require_fixed_bytes(
         verifier_address,
         label="verifier_address",
@@ -522,6 +595,7 @@ def evm_destination_binding_key(
     verifier_key_hash: bytes,
     verifier_backend: str = SCCP_EVM_GROTH16_BACKEND,
     proof_family: str = SCCP_PROOF_FAMILY_STARK_FRI,
+    bsc_network: str | None = None,
 ) -> str:
     """Return the canonical Rust `SccpDestinationBindingV1.key` value."""
 
@@ -529,8 +603,10 @@ def evm_destination_binding_key(
     target_domain = _require_exact_u32(target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_SORA:
         raise ValueError("source_domain must be SORA for EVM destination evidence")
-    if target_domain not in DOMAIN_PROFILES:
-        raise ValueError("target_domain must be ETH or BSC")
+    try:
+        profile_for_domain(target_domain, bsc_network=bsc_network)
+    except ValueError as exc:
+        raise ValueError("target_domain must be ETH or BSC") from exc
     if source_domain == target_domain:
         raise ValueError("source_domain and target_domain must differ")
     if verifier_backend != SCCP_EVM_GROTH16_BACKEND:
@@ -538,7 +614,11 @@ def evm_destination_binding_key(
     if proof_family != SCCP_PROOF_FAMILY_STARK_FRI:
         raise ValueError(f"proof_family must be {SCCP_PROOF_FAMILY_STARK_FRI}")
 
-    network_id = _require_domain_network_id(target_domain, network_id)
+    network_id = _require_domain_network_id(
+        target_domain,
+        network_id,
+        bsc_network=bsc_network,
+    )
     verifier_address = _require_fixed_bytes(
         verifier_address,
         label="verifier_address",
@@ -574,13 +654,12 @@ def evm_route_allowlist_hash(
     source_verifier_material_hash: bytes,
     source_adapter_engine_deployment_hash: bytes,
     destination_binding_hash: bytes,
+    bsc_network: str | None = None,
 ) -> bytes:
     """Compute Rust's canonical EVM route allowlist hash."""
 
     domain = _require_exact_u32(domain, "domain")
-    profile = DOMAIN_PROFILES.get(domain)
-    if profile is None:
-        raise ValueError("domain must be ETH or BSC")
+    profile = profile_for_domain(domain, bsc_network=bsc_network)
     source_verifier_material_hash = _require_fixed_bytes(
         source_verifier_material_hash,
         label="source_verifier_material_hash",
@@ -634,6 +713,7 @@ def evm_route_canary_transaction_evidence_hash(
     network_id: bytes,
     used_message_proof: bool,
     receipt_block_finalized: bool,
+    bsc_network: str | None = None,
 ) -> bytes:
     """Compute the EVM MessageProofAccepted route canary evidence hash."""
 
@@ -641,8 +721,10 @@ def evm_route_canary_transaction_evidence_hash(
     if source_domain != SCCP_DOMAIN_SORA:
         raise ValueError("source_domain must be SORA for EVM route canaries")
     target_domain = _require_exact_u32(target_domain, "target_domain")
-    if target_domain not in DOMAIN_PROFILES:
-        raise ValueError("target_domain must be ETH or BSC for EVM route canaries")
+    try:
+        profile_for_domain(target_domain, bsc_network=bsc_network)
+    except ValueError as exc:
+        raise ValueError("target_domain must be ETH or BSC for EVM route canaries") from exc
     if source_domain == target_domain:
         raise ValueError("source_domain and target_domain must differ")
     proof_version = _require_exact_u32(proof_version, "proof_version")
@@ -742,7 +824,11 @@ def evm_route_canary_transaction_evidence_hash(
         label="proof_family_hash",
         byte_length=32,
     )
-    network_id = _require_domain_network_id(target_domain, network_id)
+    network_id = _require_domain_network_id(
+        target_domain,
+        network_id,
+        bsc_network=bsc_network,
+    )
     _require_distinct_hash_roles(
         (
             ("transaction_hash", transaction_hash),
@@ -790,10 +876,10 @@ def evm_route_canary_transaction_evidence_hash(
 
 def _profile(args: argparse.Namespace) -> dict[str, str]:
     args.domain = _require_exact_u32(args.domain, "domain")
-    try:
-        return DOMAIN_PROFILES[args.domain]
-    except KeyError as exc:
-        raise ValueError("domain must be ETH or BSC") from exc
+    return profile_for_domain(
+        args.domain,
+        bsc_network=getattr(args, "bsc_network", None),
+    )
 
 
 def _block_tag_from_args(args: argparse.Namespace) -> str:
@@ -1174,6 +1260,7 @@ def _route_canary_transaction_evidence_hash(
         network_id=args.network_id,
         used_message_proof=values["used_message_proof"],
         receipt_block_finalized=values["receipt_block_finalized"],
+        bsc_network=getattr(args, "bsc_network", None),
     )
 
 
@@ -1359,6 +1446,7 @@ def _destination_binding_hash_from_args(args: argparse.Namespace) -> bytes:
         bridge_address=args.bridge_address,
         verifier_code_hash=args.verifier_code_hash,
         verifier_key_hash=args.verifier_key_hash,
+        bsc_network=getattr(args, "bsc_network", None),
     )
 
 
@@ -1371,16 +1459,32 @@ def _destination_binding_key_from_args(args: argparse.Namespace) -> str:
         bridge_address=args.bridge_address,
         verifier_code_hash=args.verifier_code_hash,
         verifier_key_hash=args.verifier_key_hash,
+        bsc_network=getattr(args, "bsc_network", None),
     )
 
 
 def apply_canonical_network_id(args: argparse.Namespace) -> None:
-    """Default or validate the EVM mainnet network id for the selected domain."""
+    """Default or validate the EVM network id for the selected domain profile."""
 
     if getattr(args, "network_id", None) is None:
-        args.network_id = evm_mainnet_network_id_for_domain(args.domain)
+        args.network_id = evm_network_id_for_domain(
+            args.domain,
+            bsc_network=getattr(args, "bsc_network", None),
+        )
         return
-    args.network_id = _require_domain_network_id(args.domain, args.network_id)
+    args.network_id = _require_domain_network_id(
+        args.domain,
+        args.network_id,
+        bsc_network=getattr(args, "bsc_network", None),
+    )
+
+
+def validate_bsc_network_scope(args: argparse.Namespace) -> None:
+    """Reject BSC-specific profile selection for non-BSC domains."""
+
+    bsc_network = getattr(args, "bsc_network", "mainnet")
+    if args.domain != SCCP_DOMAIN_BSC and bsc_network != "mainnet":
+        raise ValueError("--bsc-network only applies when --domain bsc")
 
 
 def _route_allowlist_hash_from_args(
@@ -1398,6 +1502,7 @@ def _route_allowlist_hash_from_args(
             getattr(args, "source_adapter_engine_deployment_hash", None)
         ),
         destination_binding_hash=destination_binding_hash,
+        bsc_network=getattr(args, "bsc_network", None),
     )
 
 
@@ -1664,11 +1769,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Destination domain to render: eth or bsc.",
     )
     parser.add_argument(
+        "--bsc-network",
+        default="mainnet",
+        type=parse_bsc_network,
+        help=(
+            "BSC network profile when --domain bsc: mainnet or testnet. "
+            "Defaults to mainnet."
+        ),
+    )
+    parser.add_argument(
         "--network-id",
         type=lambda value: parse_hex_bytes(value, label="network id", byte_length=32),
         help=(
             "Optional EVM chain/network id override as a non-zero bytes32 hex "
-            "value. Defaults to the selected domain's canonical mainnet EIP-155 "
+            "value. Defaults to the selected domain/profile's canonical EIP-155 "
             "chain id and rejects any mismatch."
         ),
     )
@@ -2007,6 +2121,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        validate_bsc_network_scope(args)
         apply_canonical_network_id(args)
         apply_runtime_bytecode_hash(args)
         apply_bridge_runtime_bytecode_hash(args)

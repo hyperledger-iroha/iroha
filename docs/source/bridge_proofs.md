@@ -1145,6 +1145,10 @@ quantity, so padded values such as `0x01` cannot alias the Ethereum mainnet
 launch lane. The JavaScript `BscMainnetSccp` facade is also exported from the
 package root, validates canonical `eth_chainId == 0x38`, and exposes the same
 easy inbound receipt-collection and outbound calldata paths for BSC mainnet.
+The package root also exports `BscTestnetSccp` and `BscTestnetSccpProver` for
+BSC testnet rollout; those helpers validate canonical `eth_chainId == 0x61`,
+bind outbound proofs to network id `97`, and reuse the BSC-family Parlia
+receipt-proof corridor for BSC -> SORA admission.
 Both browser receipt collectors reject failed receipts, non-canonical
 transaction/block hashes, missing or zero `receipt.blockNumber`, missing or
 zero `block.number`, receipt transaction-hash drift, block hash/number drift,
@@ -1287,6 +1291,13 @@ EVM chain id to `56`, require the deployment-bound SORA -> BSC destination
 binding before request, prebuilt-result wrapping, proof-job, or submission
 packaging, and require wrapped proof results to carry the same binding before
 calldata is built.
+The JavaScript BSC testnet facade mirrors those binding checks for EVM chain id
+`97`, rejects mainnet proof results on the testnet calldata path, and includes
+`chainId: "0x61"` when it falls back to an EIP-1193 `eth_sendTransaction`
+submission. JavaScript BSC mainnet and testnet outbound submit paths also
+validate any configured execution provider before invoking app-owned submit
+callbacks, so a wrong-chain provider cannot be silently bypassed by a custom
+transaction hook.
 The Python package exposes the same easy `BscMainnetSccp` facade shape as the
 native SDKs, with static BSC chain-id and destination-binding guards,
 `build_outbound_proof_request`, `prove_outbound_to_bsc`, `build_bsc_calldata`,

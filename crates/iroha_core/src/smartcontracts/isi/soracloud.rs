@@ -1190,9 +1190,6 @@ fn verify_soracloud_fhe_input_admission_proof(
     let Some(proof) = proof else {
         return Ok(None);
     };
-    proof
-        .validate()
-        .map_err(|err| invalid_parameter(format!("invalid FHE input admission proof: {err}")))?;
     if operation != SoraStateMutationOperationV1::Upsert {
         return Err(invalid_parameter(
             "FHE input admission proofs are only valid for upsert mutations",
@@ -1224,6 +1221,9 @@ fn verify_soracloud_fhe_input_admission_proof(
             "FHE input admission payload commitment mismatch",
         ));
     }
+    proof
+        .validate()
+        .map_err(|err| invalid_parameter(format!("invalid FHE input admission proof: {err}")))?;
 
     let params = ram_lfe_bfv_parameters_v1();
     match proof.bound_mode {
@@ -13305,6 +13305,44 @@ mod tests {
         .expect_err("FHE input proof must bind the commitment to the actual payload");
         assert_invalid_parameter_contains(err, "payload commitment mismatch");
 
+        let mut malformed_proof = admission_proof.clone();
+        malformed_proof.proof.proof.bytes = vec![0xA5];
+        malformed_proof.proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &malformed_proof.proof.proof.bytes,
+        )));
+
+        let err = verify_soracloud_fhe_input_admission_proof(
+            &mut stx,
+            &service_name,
+            &binding_name,
+            state_key,
+            SoraStateMutationOperationV1::Upsert,
+            Some(payload_size + 1),
+            Some(&payload),
+            Some(payload_commitment),
+            SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            Some(&malformed_proof),
+        )
+        .expect_err("payload size drift must reject before malformed proof bytes");
+        assert_invalid_parameter_contains(err, "value_size_bytes");
+
+        let err = verify_soracloud_fhe_input_admission_proof(
+            &mut stx,
+            &service_name,
+            &binding_name,
+            state_key,
+            SoraStateMutationOperationV1::Upsert,
+            Some(payload_size),
+            Some(&payload),
+            Some(Hash::new(b"forged-payload-commitment")),
+            SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            Some(&malformed_proof),
+        )
+        .expect_err("payload commitment drift must reject before malformed proof bytes");
+        assert_invalid_parameter_contains(err, "payload commitment mismatch");
+
         Ok(())
     }
 
@@ -13412,7 +13450,7 @@ mod tests {
         assert_invalid_parameter_contains(err, "public-input schema mismatch");
 
         let mut wrong_circuit = envelope.clone();
-        wrong_circuit.circuit_id = "soracloud_fhe_input_admission_shadow_v1".to_owned();
+        wrong_circuit.circuit_id = "soracloud_fhe_input_admission_v2".to_owned();
         let wrong_circuit_attachment = sample_fhe_input_admission_attachment_with_envelope(
             &admission_proof.proof,
             &wrong_circuit,

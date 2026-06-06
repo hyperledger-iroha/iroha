@@ -7,11 +7,20 @@ from types import SimpleNamespace
 BSC_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR = (
     "12536f25748a6520f10ebd42a7bcccd6ec181b9d53129795c8e186dc6e8b18cc"
 )
+BSC_TESTNET_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR = (
+    "8b4240a5a0cdd4b237f9237a3ec12ca20a9386d71f506addbcb50587f8ee2e88"
+)
 BSC_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
     "1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a"
 )
+BSC_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
+    "92f820f9d79f36916f94b3b35bf07ca199b1b9b716cc35293d08a3a88d1a5581"
+)
 BSC_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR = (
     "7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d"
+)
+BSC_TESTNET_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR = (
+    "5327093f2f34daa6efa791b43a87593eccf7ef8395b6ee41ed2fb6c254c3299a"
 )
 
 
@@ -28,8 +37,24 @@ def load_evidence_module():
     return module
 
 
-def bsc_args(module):
+def bsc_args(module, *, bsc_network="mainnet"):
+    adapter_verifier_vk_hash = (
+        BSC_TESTNET_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
+        if bsc_network == "testnet"
+        else BSC_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
+    )
+    expected_material_hash = (
+        BSC_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+        if bsc_network == "testnet"
+        else BSC_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+    )
+    expected_deployment_hash = (
+        BSC_TESTNET_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+        if bsc_network == "testnet"
+        else BSC_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+    )
     return SimpleNamespace(
+        bsc_network=bsc_network,
         source_domain=2,
         target_domain=0,
         bridge_address=bytes.fromhex("11" * 20),
@@ -38,9 +63,7 @@ def bsc_args(module):
         message_inclusion_verifier_hash=bytes.fromhex("66" * 32),
         source_bridge_emitter_code_hash=bytes.fromhex("77" * 32),
         finality_policy_hash=bytes.fromhex("88" * 32),
-        adapter_verifier_vk_hash=bytes.fromhex(
-            BSC_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
-        ),
+        adapter_verifier_vk_hash=bytes.fromhex(adapter_verifier_vk_hash),
         deployment_receipt_hash=bytes.fromhex("aa" * 32),
         deployment_transaction_hash=bytes.fromhex("bd" * 32),
         deployment_transaction_block_hash=bytes.fromhex("bb" * 32),
@@ -50,11 +73,9 @@ def bsc_args(module):
         deployment_receipt_block_hash=bytes.fromhex("bb" * 32),
         deployment_receipt_block_number=4660,
         deployment_receipt_block_receipts_root=bytes.fromhex("bc" * 32),
-        expected_source_verifier_material_hash=bytes.fromhex(
-            BSC_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
-        ),
+        expected_source_verifier_material_hash=bytes.fromhex(expected_material_hash),
         expected_source_adapter_engine_deployment_hash=bytes.fromhex(
-            BSC_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+            expected_deployment_hash
         ),
     )
 
@@ -187,6 +208,13 @@ def test_bsc_source_numeric_parsers_require_canonical_ascii_decimal():
 
     assert module.parse_u32("2", label="source domain") == 2
     assert module.parse_positive_u64("4660", label="deployment block number") == 4660
+    assert module.parse_bsc_network("mainnet") == "mainnet"
+    assert module.parse_bsc_network("bsc-mainnet") == "mainnet"
+    assert module.parse_bsc_network("56") == "mainnet"
+    assert module.parse_bsc_network("testnet") == "testnet"
+    assert module.parse_bsc_network("bsc-testnet") == "testnet"
+    assert module.parse_bsc_network("chapel") == "testnet"
+    assert module.parse_bsc_network("97") == "testnet"
 
     for value in ("02", "0x2", "+2", " 2 ", "٢"):
         try:
@@ -203,6 +231,14 @@ def test_bsc_source_numeric_parsers_require_canonical_ascii_decimal():
             assert "must be a positive u64" in str(exc)
         else:
             raise AssertionError(f"noncanonical BSC block number {value!r} was accepted")
+
+    for value in (" testnet ", "nile", "bnb-testnet"):
+        try:
+            module.parse_bsc_network(value)
+        except module.argparse.ArgumentTypeError as exc:
+            assert "BSC network must be mainnet or testnet" in str(exc)
+        else:
+            raise AssertionError(f"noncanonical BSC network {value!r} was accepted")
 
 
 def test_bsc_runtime_bytecode_derives_source_bridge_code_hash():
@@ -427,6 +463,73 @@ def test_bsc_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     assert "source_bridge_owner_address" not in rendered
     assert "source_bridge_config_hash" not in rendered
 
+    testnet_args = bsc_args(module, bsc_network="testnet")
+    testnet_runtime_bytecode = bytes.fromhex("6080604052")
+    testnet_source_bridge_code_hash = module.runtime_bytecode_hash(
+        testnet_runtime_bytecode
+    )
+    testnet_args.source_bridge_emitter_code_hash = testnet_source_bridge_code_hash
+    testnet_args.source_bridge_runtime_bytecode_hex = testnet_runtime_bytecode
+    testnet_args.source_bridge_runtime_bytecode_file = None
+    testnet_args.expected_source_verifier_material_hash = (
+        module.bsc_source_verifier_material_record_hash(testnet_args)
+    )
+    testnet_args.expected_source_adapter_engine_deployment_hash = (
+        module.bsc_source_adapter_engine_deployment_record_hash(testnet_args)
+    )
+
+    testnet_rendered = module.render_toml(testnet_args)
+    assert '# sccp_evm_source_rpc_chain_id = "97"' in testnet_rendered
+    assert 'source_chain = "bsc-testnet"' in testnet_rendered
+    assert (
+        'source_trust_anchor_id = "sccp:bsc:source-trust-anchor:'
+        'bsc-testnet-validator-set:v1"'
+        in testnet_rendered
+    )
+    assert (
+        'consensus_verifier_id = "sccp:bsc:consensus-verifier:'
+        'validator-set-seal-testnet:v1"'
+        in testnet_rendered
+    )
+    assert (
+        'message_inclusion_verifier_id = "sccp:bsc:message-inclusion-verifier:'
+        'receipt-trie-branch-testnet:v1"'
+        in testnet_rendered
+    )
+    assert (
+        'source_bridge_emitter_id = "sccp:bsc:source-bridge-emitter:'
+        'bsc-testnet:v1"'
+        in testnet_rendered
+    )
+    assert (
+        'finality_policy_id = "sccp:bsc:finality-policy:'
+        'validator-set-finality-testnet:v1"'
+        in testnet_rendered
+    )
+    assert (
+        'adapter_verifier_vk_hash = "0x'
+        + BSC_TESTNET_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
+        + '"'
+        in testnet_rendered
+    )
+
+    testnet_summary = module._json_summary(testnet_args)
+    assert testnet_summary["source_chain"] == "bsc-testnet"
+    assert testnet_summary["rpc_chain_id"] == 97
+    assert testnet_summary["source_bridge_emitter_id"] == (
+        "sccp:bsc:source-bridge-emitter:bsc-testnet:v1"
+    )
+    assert testnet_summary["adapter_verifier_vk_hash"] == (
+        "0x" + BSC_TESTNET_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
+    )
+    assert testnet_summary["source_verifier_material_hash"] == (
+        "0x" + testnet_args.expected_source_verifier_material_hash.hex()
+    )
+    assert testnet_summary["source_adapter_engine_deployment_hash"] == (
+        "0x" + testnet_args.expected_source_adapter_engine_deployment_hash.hex()
+    )
+    assert testnet_summary["toml_ready"] is True
+
 
 def test_bsc_source_evidence_rejects_boolean_receipt_block_number():
     module = load_evidence_module()
@@ -553,6 +656,7 @@ def test_bsc_direct_record_hashes_reject_reused_role_hashes():
 def test_bsc_source_record_hashes_match_rust_vectors():
     module = load_evidence_module()
     args = bsc_args(module)
+    testnet_args = bsc_args(module, bsc_network="testnet")
 
     assert (
         module.bsc_source_verifier_material_record_hash(args).hex()
@@ -562,6 +666,33 @@ def test_bsc_source_record_hashes_match_rust_vectors():
         module.bsc_source_adapter_engine_deployment_record_hash(args).hex()
         == BSC_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
     )
+    assert (
+        module.bsc_source_adapter_verifier_vk_hash(bsc_network="testnet").hex()
+        == BSC_TESTNET_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
+    )
+    assert (
+        module.bsc_source_verifier_material_record_hash(testnet_args).hex()
+        == BSC_TESTNET_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+    )
+    assert (
+        module.bsc_source_adapter_engine_deployment_record_hash(testnet_args).hex()
+        == BSC_TESTNET_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+    )
+    assert (
+        module.bsc_source_verifier_material_record_hash(args)
+        != module.bsc_source_verifier_material_record_hash(testnet_args)
+    )
+
+    forged_testnet = bsc_args(module, bsc_network="testnet")
+    forged_testnet.adapter_verifier_vk_hash = bytes.fromhex(
+        BSC_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
+    )
+    try:
+        module.bsc_source_adapter_engine_deployment_record_hash(forged_testnet)
+    except ValueError as exc:
+        assert "canonical BSC source-adapter verifier profile" in str(exc)
+    else:
+        raise AssertionError("BSC testnet source evidence accepted mainnet vk hash")
 
 
 def test_bsc_direct_record_hashes_reject_zero_production_inputs():
@@ -603,34 +734,38 @@ def test_bsc_direct_record_hashes_reject_zero_production_inputs():
 
 def test_bsc_direct_record_hashes_reject_template_component_hashes():
     module = load_evidence_module()
-    for field, (component_id, component_kind) in module.BSC_TEMPLATE_COMPONENTS.items():
-        template_hash = module._evm_family_template_component_hash(
-            component_id,
-            component_kind,
-        )
-        label = field.replace("_", " ")
-
-        material_args = bsc_args(module)
-        setattr(material_args, field, template_hash)
-        try:
-            module.bsc_source_verifier_material_record_hash(material_args)
-        except ValueError as exc:
-            assert f"template-derived {label}" in str(exc)
-        else:
-            raise AssertionError(
-                f"BSC material hash accepted template {label}"
+    for bsc_network in ("mainnet", "testnet"):
+        for field, (component_id, component_kind) in module.bsc_template_components(
+            bsc_network
+        ).items():
+            template_hash = module._evm_family_template_component_hash(
+                component_id,
+                component_kind,
+                bsc_network=bsc_network,
             )
+            label = field.replace("_", " ")
 
-        deployment_args = bsc_args(module)
-        setattr(deployment_args, field, template_hash)
-        try:
-            module.bsc_source_adapter_engine_deployment_record_hash(deployment_args)
-        except ValueError as exc:
-            assert f"template-derived {label}" in str(exc)
-        else:
-            raise AssertionError(
-                f"BSC deployment hash accepted template {label}"
-            )
+            material_args = bsc_args(module, bsc_network=bsc_network)
+            setattr(material_args, field, template_hash)
+            try:
+                module.bsc_source_verifier_material_record_hash(material_args)
+            except ValueError as exc:
+                assert f"template-derived {label}" in str(exc)
+            else:
+                raise AssertionError(
+                    f"BSC {bsc_network} material hash accepted template {label}"
+                )
+
+            deployment_args = bsc_args(module, bsc_network=bsc_network)
+            setattr(deployment_args, field, template_hash)
+            try:
+                module.bsc_source_adapter_engine_deployment_record_hash(deployment_args)
+            except ValueError as exc:
+                assert f"template-derived {label}" in str(exc)
+            else:
+                raise AssertionError(
+                    f"BSC {bsc_network} deployment hash accepted template {label}"
+                )
 
 
 def test_bsc_source_deployment_hash_rejects_noncanonical_adapter_vk_hash():
@@ -648,24 +783,30 @@ def test_bsc_source_deployment_hash_rejects_noncanonical_adapter_vk_hash():
 
 def test_bsc_source_evidence_rejects_template_component_hashes():
     module = load_evidence_module()
-    for field, (component_id, component_kind) in module.BSC_TEMPLATE_COMPONENTS.items():
-        args = bsc_args(module)
-        setattr(
-            args,
-            field,
-            module._evm_family_template_component_hash(
-                component_id,
-                component_kind,
-            ),
-        )
-        label = field.replace("_", " ")
+    for bsc_network in ("mainnet", "testnet"):
+        for field, (component_id, component_kind) in module.bsc_template_components(
+            bsc_network
+        ).items():
+            args = bsc_args(module, bsc_network=bsc_network)
+            setattr(
+                args,
+                field,
+                module._evm_family_template_component_hash(
+                    component_id,
+                    component_kind,
+                    bsc_network=bsc_network,
+                ),
+            )
+            label = field.replace("_", " ")
 
-        try:
-            module.render_toml(args)
-        except ValueError as exc:
-            assert f"template-derived {label}" in str(exc)
-        else:
-            raise AssertionError(f"template BSC {label} was accepted")
+            try:
+                module.render_toml(args)
+            except ValueError as exc:
+                assert f"template-derived {label}" in str(exc)
+            else:
+                raise AssertionError(
+                    f"template BSC {bsc_network} {label} was accepted"
+                )
 
 
 def test_bsc_cli_json_summary_and_toml_output(capsys):
@@ -829,6 +970,86 @@ def test_bsc_cli_json_summary_and_toml_output(capsys):
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert "[[zk.sccp_source_verifier_materials]]" in rendered
     assert "[[zk.sccp_source_adapter_engine_deployments]]" in rendered
+
+    testnet_expected = bsc_args(module, bsc_network="testnet")
+    testnet_expected.source_bridge_emitter_code_hash = module.runtime_bytecode_hash(
+        runtime_bytecode
+    )
+    testnet_material_hash = module.bsc_source_verifier_material_record_hash(
+        testnet_expected
+    )
+    testnet_deployment_hash = module.bsc_source_adapter_engine_deployment_record_hash(
+        testnet_expected
+    )
+    testnet_args = [
+        "--bsc-network",
+        "testnet",
+        "--bridge-address",
+        "0x" + "11" * 20,
+        "--source-trust-anchor-hash",
+        "0x" + "44" * 32,
+        "--consensus-verifier-hash",
+        "0x" + "55" * 32,
+        "--message-inclusion-verifier-hash",
+        "0x" + "66" * 32,
+        "--source-bridge-runtime-bytecode-hex",
+        "0x" + runtime_bytecode.hex(),
+        "--finality-policy-hash",
+        "0x" + "88" * 32,
+        "--adapter-verifier-vk-hash",
+        "0x" + BSC_TESTNET_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR,
+        "--deployment-receipt-hash",
+        "0x" + "aa" * 32,
+        "--deployment-transaction-hash",
+        "0x" + "bd" * 32,
+        "--deployment-transaction-block-hash",
+        "0x" + "bb" * 32,
+        "--deployment-transaction-block-number",
+        "4660",
+        "--deployment-transaction-input-sha256",
+        "0x" + "cd" * 32,
+        "--deployment-receipt-contract-address",
+        "0x" + "11" * 20,
+        "--deployment-receipt-block-hash",
+        "0x" + "bb" * 32,
+        "--deployment-receipt-block-number",
+        "4660",
+        "--deployment-receipt-block-receipts-root",
+        "0x" + "bc" * 32,
+        "--expected-source-verifier-material-hash",
+        "0x" + testnet_material_hash.hex(),
+        "--expected-source-adapter-engine-deployment-hash",
+        "0x" + testnet_deployment_hash.hex(),
+    ]
+
+    assert module.main(testnet_args) == 0
+    testnet_output = json.loads(capsys.readouterr().out)
+    assert testnet_output["source_chain"] == "bsc-testnet"
+    assert testnet_output["rpc_chain_id"] == 97
+    assert testnet_output["source_bridge_emitter_id"] == (
+        "sccp:bsc:source-bridge-emitter:bsc-testnet:v1"
+    )
+    assert testnet_output["source_verifier_material_hash"] == (
+        "0x" + testnet_material_hash.hex()
+    )
+    assert testnet_output["source_adapter_engine_deployment_hash"] == (
+        "0x" + testnet_deployment_hash.hex()
+    )
+    assert testnet_output["toml_ready"] is True
+
+    try:
+        module.main(
+            [
+                value
+                if value != "0x" + testnet_material_hash.hex()
+                else "0x" + BSC_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+                for value in testnet_args
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("BSC testnet CLI accepted mainnet expected material hash")
 
 
 def test_bsc_cli_rejects_expected_record_hash_mismatch():
