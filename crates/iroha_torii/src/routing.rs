@@ -6714,10 +6714,18 @@ pub struct SccpRouteManifestPostDeployEvidenceDto {
     pub source_bridge_config_hash: String,
     /// Hex-encoded source event transaction id.
     pub source_event_transaction_id: String,
+    /// Canonical BSC testnet explorer URL for the source event transaction.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_event_explorer_url: Option<String>,
     /// Hex-encoded route canary evidence hash.
     pub route_canary_evidence_hash: String,
     /// Hex-encoded route canary transaction id.
     pub route_canary_transaction_id: String,
+    /// Canonical BSC testnet explorer URL for the route canary transaction.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub route_canary_explorer_url: Option<String>,
     /// Optional hex-encoded offline full TOML SHA-256 digest.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6958,8 +6966,10 @@ fn sccp_route_manifest_post_deploy_evidence(
         full_toml_ready: manifest.post_deploy_full_toml_ready?,
         source_bridge_config_hash: manifest.post_deploy_source_bridge_config_hash.clone()?,
         source_event_transaction_id: manifest.post_deploy_source_event_transaction_id.clone()?,
+        source_event_explorer_url: manifest.post_deploy_source_event_explorer_url.clone(),
         route_canary_evidence_hash: manifest.post_deploy_route_canary_evidence_hash.clone()?,
         route_canary_transaction_id: manifest.post_deploy_route_canary_transaction_id.clone()?,
+        route_canary_explorer_url: manifest.post_deploy_route_canary_explorer_url.clone(),
         offline_full_toml_sha256: manifest.post_deploy_offline_full_toml_sha256.clone(),
     })
 }
@@ -12152,8 +12162,16 @@ mod sccp_message_backend_tests {
             post_deploy_full_toml_ready: Some(false),
             post_deploy_source_bridge_config_hash: Some(format!("0x{}", "4a".repeat(32))),
             post_deploy_source_event_transaction_id: Some(format!("0x{}", "4b".repeat(32))),
+            post_deploy_source_event_explorer_url: Some(format!(
+                "https://testnet.bscscan.com/tx/0x{}",
+                "4b".repeat(32)
+            )),
             post_deploy_route_canary_evidence_hash: Some(format!("0x{}", "4c".repeat(32))),
             post_deploy_route_canary_transaction_id: Some(format!("0x{}", "4d".repeat(32))),
+            post_deploy_route_canary_explorer_url: Some(format!(
+                "https://testnet.bscscan.com/tx/0x{}",
+                "4d".repeat(32)
+            )),
             post_deploy_offline_full_toml_sha256: None,
         }
     }
@@ -12234,6 +12252,22 @@ mod sccp_message_backend_tests {
         assert_eq!(
             dto.destination_rollout.proving_key_hash.as_deref(),
             Some(proving_key_hash.as_str())
+        );
+        let post_deploy = dto
+            .post_deploy_live_evidence
+            .as_ref()
+            .expect("BSC test route carries post-deploy evidence");
+        let source_event_explorer_url =
+            format!("https://testnet.bscscan.com/tx/0x{}", "4b".repeat(32));
+        let route_canary_explorer_url =
+            format!("https://testnet.bscscan.com/tx/0x{}", "4d".repeat(32));
+        assert_eq!(
+            post_deploy.source_event_explorer_url.as_deref(),
+            Some(source_event_explorer_url.as_str())
+        );
+        assert_eq!(
+            post_deploy.route_canary_explorer_url.as_deref(),
+            Some(route_canary_explorer_url.as_str())
         );
     }
 

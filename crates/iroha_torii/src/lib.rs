@@ -49430,8 +49430,10 @@ pub(crate) mod tests_runtime_handlers {
             post_deploy_full_toml_ready: None,
             post_deploy_source_bridge_config_hash: None,
             post_deploy_source_event_transaction_id: None,
+            post_deploy_source_event_explorer_url: None,
             post_deploy_route_canary_evidence_hash: None,
             post_deploy_route_canary_transaction_id: None,
+            post_deploy_route_canary_explorer_url: None,
             post_deploy_offline_full_toml_sha256: None,
         }
     }

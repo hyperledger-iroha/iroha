@@ -8259,10 +8259,14 @@ pub struct SccpRouteManifest {
     pub post_deploy_source_bridge_config_hash: Option<String>,
     /// Hex-encoded source event transaction id.
     pub post_deploy_source_event_transaction_id: Option<String>,
+    /// Canonical BSC testnet explorer URL for the source event transaction.
+    pub post_deploy_source_event_explorer_url: Option<String>,
     /// Hex-encoded route canary evidence hash.
     pub post_deploy_route_canary_evidence_hash: Option<String>,
     /// Hex-encoded route canary transaction id.
     pub post_deploy_route_canary_transaction_id: Option<String>,
+    /// Canonical BSC testnet explorer URL for the route canary transaction.
+    pub post_deploy_route_canary_explorer_url: Option<String>,
     /// Hex-encoded offline full TOML SHA-256 digest.
     pub post_deploy_offline_full_toml_sha256: Option<String>,
 }
