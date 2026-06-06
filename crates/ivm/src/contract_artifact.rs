@@ -300,7 +300,9 @@ fn validate_contract_interface(
                 )));
             }
             validate_entrypoint_name(&trigger.callback.entrypoint)?;
-            if !entrypoint_names.contains(&trigger.callback.entrypoint) {
+            if trigger.callback.namespace.is_none()
+                && !entrypoint_names.contains(&trigger.callback.entrypoint)
+            {
                 return Err(ContractArtifactError::invalid(format!(
                     "trigger `{}` callback target `{}` is not a declared entrypoint",
                     trigger.id, trigger.callback.entrypoint

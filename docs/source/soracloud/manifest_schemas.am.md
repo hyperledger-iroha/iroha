@@ -166,6 +166,8 @@ translator: machine-google-reviewed
 - የFHE አፈጻጸም ፖሊሲ፡-
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - የመለኪያ ስብስብ ማሰሪያ በ`(param_set, version)` መዛመድ አለበት።
   - `max_multiplication_depth` ከመለኪያ-ስብስብ ጥልቀት መብለጥ የለበትም።
   - የፖሊሲ መግቢያ `Proposed` ወይም `Withdrawn` በመለኪያ የተቀመጠውን የህይወት ዑደት ውድቅ ያደርጋል።

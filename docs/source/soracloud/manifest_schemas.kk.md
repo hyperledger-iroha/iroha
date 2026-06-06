@@ -166,6 +166,8 @@ Rust анықтамалары `crates/iroha_data_model/src/soracloud.rs` іші�
 - FHE орындау саясаты:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - параметр жиынын байланыстыру `(param_set, version)` сәйкес келуі керек.
   - `max_multiplication_depth` параметр орнатылған тереңдіктен аспауы керек.
   - саясатты қабылдау `Proposed` немесе `Withdrawn` параметр жиынының өмірлік циклін қабылдамайды.

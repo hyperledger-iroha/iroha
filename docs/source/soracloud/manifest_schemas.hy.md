@@ -166,6 +166,8 @@ Rust-ի սահմանումները գործում են `crates/iroha_data_model/
 - FHE կատարման քաղաքականություն.
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - պարամետրերի հավաքածուի կապը պետք է համապատասխանի `(param_set, version)`-ին:
   - `max_multiplication_depth`-ը չպետք է գերազանցի պարամետրերի սահմանած խորությունը:
   - Քաղաքականության ընդունումը մերժում է `Proposed` կամ `Withdrawn` պարամետրերի սահմանած կյանքի ցիկլը:

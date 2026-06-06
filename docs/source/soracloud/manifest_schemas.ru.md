@@ -166,6 +166,8 @@ translator: machine-google-reviewed
 - Политика исполнения FHE:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - привязка набора параметров должна соответствовать `(param_set, version)`.
   - `max_multiplication_depth` не должен превышать глубину набора параметров.
   - допуск политики отклоняет жизненный цикл набора параметров `Proposed` или `Withdrawn`.

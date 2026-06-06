@@ -2218,6 +2218,28 @@ CommitArtifactsChangeMatchesCertifiedFinalityStackStep ==
     /\ FinalityLatchAndArtifactsCoupledStep
     /\ FinalityLatchChangeMatchesCertifiedSourceStackStep
 
+CommitArtifactsChangeCommitsCurrentViewStep ==
+  (\/ commitView' # commitView
+   \/ commitEvidenceVotes' # commitEvidenceVotes
+   \/ commitEvidenceStake' # commitEvidenceStake) =>
+    /\ ~committed
+    /\ committed'
+    /\ committed' # committed
+    /\ phase = "CommitVote"
+    /\ phase' = "Committed"
+    /\ view' = view
+    /\ commitView = 0
+    /\ commitView' = view
+    /\ commitView' = view'
+    /\ viewEvidenceVotes' = viewEvidenceVotes
+    /\ newViewVotes = 0
+    /\ newViewVotes' = 0
+    /\ (view = 0 \/ viewEvidenceVotes >= ViewQuorum)
+    /\ (commitView' = 0 \/ viewEvidenceVotes' >= ViewQuorum)
+    /\ CommitArtifactsChangeMatchesCertifiedFinalityStackStep
+    /\ CommitViewWitnessInstallsWithFinalityLatchStep
+    /\ FinalityLatchNeverCarriesNewViewHandoffStep
+
 CommitCertificateWitnessChangeMatchesCertifiedFinalityStackStep ==
   (\/ commitEvidenceVotes' # commitEvidenceVotes
    \/ commitEvidenceStake' # commitEvidenceStake) =>
@@ -2349,6 +2371,24 @@ CommittedPhaseEntryNeverCarriesNewViewHandoffStep ==
     /\ newViewVotes = 0
     /\ newViewVotes' = 0
     /\ viewEvidenceVotes' = viewEvidenceVotes
+
+CommittedPhaseEntryCommitsCurrentViewStep ==
+  (/\ phase # "Committed"
+   /\ phase' = "Committed") =>
+    /\ phase = "CommitVote"
+    /\ ~committed
+    /\ committed'
+    /\ view' = view
+    /\ commitView = 0
+    /\ commitView' = view
+    /\ commitView' = view'
+    /\ viewEvidenceVotes' = viewEvidenceVotes
+    /\ newViewVotes = 0
+    /\ newViewVotes' = 0
+    /\ (view = 0 \/ viewEvidenceVotes >= ViewQuorum)
+    /\ (commitView' = 0 \/ viewEvidenceVotes' >= ViewQuorum)
+    /\ CommittedPhaseEntryInstallsCommitViewWitnessStep
+    /\ CommittedPhaseEntryNeverCarriesNewViewHandoffStep
 
 CommittedPhaseEntryDisablesProgressActionsStep ==
   (/\ phase # "Committed"
@@ -4447,7 +4487,8 @@ CommittedPhaseEntryMatchesCommitViewWitnessChangeStep ==
   (/\ phase # "Committed"
    /\ phase' = "Committed"
    /\ commitView' # commitView) =>
-    CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
+    /\ CommitViewWitnessChangeMatchesCertifiedFinalityStackStep
+    /\ CommitViewWitnessChangeInstallsCommitCertificateWitnessesStep
 
 FinalitySourceActionCompletesCommittedDeliveryFromExactSourceStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
@@ -4466,6 +4507,36 @@ FinalitySourceActionMatchesCertifiedSourceStackStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
    ~committed /\ committed') =>
     FinalityLatchChangeMatchesCertifiedSourceStackStep
+
+FinalitySourceActionMatchesFinalityLatchChangeStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    /\ FinalityLatchSetInstallsCompleteStackStep
+    /\ FinalityLatchAndArtifactsCoupledStep
+    /\ FinalityLatchChangeEntersCommittedPhaseStep
+    /\ FinalityLatchChangeMatchesLiveCommitGateCrossingStep
+    /\ FinalityLatchChangeMatchesCertifiedSourceStackStep
+
+FinalitySourceActionMatchesCommittedPhaseEntryStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    /\ FinalityLatchChangeEntersCommittedPhaseStep
+    /\ CommittedPhaseEntryMatchesFinalityLatchStep
+    /\ CommittedPhaseEntryInstallsCompleteStackStep
+    /\ CommittedPhaseEntryOnlyByFinalitySourceStep
+    /\ CommittedPhaseEntryMatchesCertifiedFinalityStackStep
+
+FinalitySourceActionInstallsFinalityCertificateStackStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    /\ FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ CommittedPhaseMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ CommitViewMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
 
 FinalitySourceActionSourceIsCommitOrDeliveryStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
@@ -4529,6 +4600,22 @@ FinalitySourceActionNeverCarriesNewViewHandoffStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
    ~committed /\ committed') =>
     FinalityLatchNeverCarriesNewViewHandoffStep
+
+FinalitySourceActionCommitsCurrentViewStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    /\ phase = "CommitVote"
+    /\ phase' = "Committed"
+    /\ view' = view
+    /\ commitView = 0
+    /\ commitView' = view
+    /\ commitView' = view'
+    /\ viewEvidenceVotes' = viewEvidenceVotes
+    /\ newViewVotes = 0
+    /\ newViewVotes' = 0
+    /\ (view = 0 \/ viewEvidenceVotes >= ViewQuorum)
+    /\ (commitView' = 0 \/ viewEvidenceVotes' >= ViewQuorum)
+    /\ FinalitySourceActionNeverCarriesNewViewHandoffStep
 
 RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence ==
   (RbcDeliverGoodEnabled /\ ~CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, "Delivered")) <=>
@@ -4848,6 +4935,9 @@ CommitArtifactsChangeAlwaysMatchesCertifiedFinalityStack ==
 CommitArtifactsChangeAlwaysCompletesCommittedDeliveryFromExactSource ==
   [] [CommitArtifactsChangeCompletesCommittedDeliveryFromExactSourceStep]_vars
 
+CommitArtifactsChangeAlwaysCommitsCurrentView ==
+  [] [CommitArtifactsChangeCommitsCurrentViewStep]_vars
+
 FinalityLatchOnlySetsCompleteStack ==
   [] [FinalityLatchSetInstallsCompleteStackStep]_vars
 
@@ -4914,6 +5004,15 @@ FinalitySourceActionAlwaysCompletesCommittedDeliveryFromExactSource ==
 FinalitySourceActionAlwaysMatchesCertifiedSourceStack ==
   [] [FinalitySourceActionMatchesCertifiedSourceStackStep]_vars
 
+FinalitySourceActionAlwaysMatchesFinalityLatchChange ==
+  [] [FinalitySourceActionMatchesFinalityLatchChangeStep]_vars
+
+FinalitySourceActionAlwaysMatchesCommittedPhaseEntry ==
+  [] [FinalitySourceActionMatchesCommittedPhaseEntryStep]_vars
+
+FinalitySourceActionAlwaysInstallsFinalityCertificateStack ==
+  [] [FinalitySourceActionInstallsFinalityCertificateStackStep]_vars
+
 FinalitySourceActionSourceAlwaysIsCommitOrDelivery ==
   [] [FinalitySourceActionSourceIsCommitOrDeliveryStep]_vars
 
@@ -4946,6 +5045,9 @@ FinalitySourceActionAlwaysInstallsCommitViewWitness ==
 
 FinalitySourceActionNeverCarriesNewViewHandoff ==
   [] [FinalitySourceActionNeverCarriesNewViewHandoffStep]_vars
+
+FinalitySourceActionAlwaysCommitsCurrentView ==
+  [] [FinalitySourceActionCommitsCurrentViewStep]_vars
 
 FinalityLatchChangeAlwaysMatchesCertifiedSourceStack ==
   [] [FinalityLatchChangeMatchesCertifiedSourceStackStep]_vars
@@ -5063,6 +5165,9 @@ CommittedPhaseEntryAlwaysMatchesExactFinalitySourceEffects ==
 
 CommittedPhaseEntryNeverCarriesNewViewHandoff ==
   [] [CommittedPhaseEntryNeverCarriesNewViewHandoffStep]_vars
+
+CommittedPhaseEntryAlwaysCommitsCurrentView ==
+  [] [CommittedPhaseEntryCommitsCurrentViewStep]_vars
 
 CommittedPhaseEntryAlwaysDisablesProgressActions ==
   [] [CommittedPhaseEntryDisablesProgressActionsStep]_vars

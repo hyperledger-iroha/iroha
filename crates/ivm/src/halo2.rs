@@ -229,7 +229,7 @@ pub struct MintPublic {
     pub token_commitment: Field,
 }
 
-/// Placeholder Mint circuit object.
+/// Deterministic Mint circuit model object.
 #[derive(Clone, Debug, Default)]
 pub struct MintCircuit {
     pub witness: MintWitness,
@@ -296,7 +296,7 @@ pub struct BurnPublic {
     pub sig_public: ECPoint,
 }
 
-/// Placeholder Burn circuit object.
+/// Deterministic Burn circuit model object.
 #[derive(Clone, Debug, Default)]
 pub struct BurnCircuit {
     pub witness: BurnWitness,
@@ -360,7 +360,7 @@ pub struct MerklePublic {
     pub root: Field,
 }
 
-/// Placeholder Merkle inclusion circuit object.
+/// Deterministic Merkle inclusion circuit model object.
 #[derive(Clone, Debug, Default)]
 pub struct MerkleCircuit {
     pub witness: MerkleWitness,

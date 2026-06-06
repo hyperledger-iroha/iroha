@@ -397,6 +397,7 @@ impl DefaultHost {
             syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => Some(LABEL_UNSHIELD),
             syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => Some(LABEL_VOTE_BALLOT),
             syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => Some(LABEL_VOTE_TALLY),
+            syscalls::SYSCALL_ZK_VERIFY_BATCH => Some(LABEL_BATCH),
             _ => None,
         }
     }
@@ -534,6 +535,43 @@ impl DefaultHost {
             Err(iroha_zkp_halo2::Error::VerificationFailed) => Ok(false),
             Err(error) => Err(Self::map_zk_open_error(&error)),
         }
+    }
+
+    fn verify_zk_open_batch(&self, payload: &[u8]) -> Result<(Vec<u8>, Option<u64>), u64> {
+        if !self.zk_cfg.enabled {
+            return Err(ERR_DISABLED);
+        }
+        if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
+            return Err(ERR_BACKEND);
+        }
+
+        let envs: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            decode_from_bytes(payload).map_err(|_| ERR_DECODE)?;
+        if envs.is_empty() {
+            return Err(ERR_DECODE);
+        }
+        if u32::try_from(envs.len()).unwrap_or(u32::MAX) > self.zk_cfg.verifier_max_batch {
+            return Err(ERR_BATCH);
+        }
+
+        let mut statuses = Vec::with_capacity(envs.len());
+        let mut first_error = None;
+        for env in envs {
+            let env_payload = norito::to_bytes(&env).map_err(|_| ERR_DECODE)?;
+            match self.verify_zk_open_envelope(syscalls::SYSCALL_ZK_VERIFY_BATCH, &env_payload) {
+                Ok(true) => statuses.push(1),
+                Ok(false) => {
+                    first_error.get_or_insert(ERR_VERIFY);
+                    statuses.push(0);
+                }
+                Err(status) => {
+                    first_error.get_or_insert(status);
+                    statuses.push(0);
+                }
+            }
+        }
+
+        Ok((statuses, first_error))
     }
 
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
@@ -2718,7 +2756,7 @@ impl IVMHost for DefaultHost {
                 vm.set_register(10, depth as u64);
                 Ok(Self::merkle_path_gas(depth))
             }
-            // --- ZK verify/state-read stubs ---
+            // --- ZK verify/state-read helpers ---
             crate::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
             | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
@@ -2749,8 +2787,9 @@ impl IVMHost for DefaultHost {
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_ZK_ROOTS_GET | crate::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
-                // Expect a NoritoBytes TLV pointer in r10 (request). Stub returns no data and
-                // writes a Norito TLV response into INPUT and returns a pointer.
+                // Expect a NoritoBytes TLV pointer in r10 (request). DefaultHost has
+                // no ledger state, so it writes an empty deterministic response into
+                // INPUT and returns a pointer.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
@@ -2762,7 +2801,7 @@ impl IVMHost for DefaultHost {
                     let _req: crate::zk_verify::RootsGetRequest =
                         norito::decode_from_bytes(tlv.payload)
                             .map_err(|_| VMError::NoritoInvalid)?;
-                    // Stubbed response (empty roots)
+                    // DefaultHost response (empty roots)
                     let resp = crate::zk_verify::RootsGetResponse {
                         latest: [0u8; 32],
                         roots: Vec::new(),
@@ -2803,16 +2842,34 @@ impl IVMHost for DefaultHost {
                 }
             }
             crate::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                // Batch verification is implemented by the node host (CoreHost). The standalone
-                // IVM host reports the syscall as disabled.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
                 let gas = Self::verify_gas(tlv.payload.len());
-                vm.set_register(10, 0);
-                vm.set_register(11, ERR_DISABLED);
+                match self.verify_zk_open_batch(tlv.payload) {
+                    Ok((statuses, first_error)) => {
+                        let body =
+                            norito::to_bytes(&statuses).map_err(|_| VMError::NoritoInvalid)?;
+                        let ptr = Self::alloc_norito_bytes_tlv(vm, &body)?;
+                        vm.set_register(10, ptr);
+                        vm.set_register(11, first_error.unwrap_or(0));
+                        if let Some((idx, _)) = statuses
+                            .iter()
+                            .enumerate()
+                            .find(|(_, status)| **status == 0)
+                        {
+                            vm.set_register(12, idx as u64);
+                        } else {
+                            vm.set_register(12, u64::MAX);
+                        }
+                    }
+                    Err(status) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, status);
+                    }
+                }
                 Ok(gas)
             }
             syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
@@ -2898,7 +2955,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_verify_label_mapping_covers_single_envelope_syscalls() {
+    fn zk_verify_label_mapping_covers_envelope_syscalls() {
         assert_eq!(
             DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_TRANSFER),
             Some(LABEL_TRANSFER)
@@ -2917,7 +2974,7 @@ mod tests {
         );
         assert_eq!(
             DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_BATCH),
-            None
+            Some(LABEL_BATCH)
         );
     }
 

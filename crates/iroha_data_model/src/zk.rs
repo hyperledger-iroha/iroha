@@ -987,15 +987,19 @@ mod tests {
             (BackendTag::ZkX509, 18),
             (BackendTag::SisWithHints, 19),
         ] {
-            let encoded = norito::to_bytes(&backend).expect("encode backend tag");
+            let encoded = backend.encode();
             assert_eq!(
                 encoded.as_slice(),
                 expected_tag.to_le_bytes().as_slice(),
                 "{} must keep its Norito enum discriminant",
                 backend.canonical_label()
             );
+            let decoded = BackendTag::decode(&mut encoded.as_slice()).expect("decode backend tag");
+            assert_eq!(decoded, backend);
+
+            let framed = norito::to_bytes(&backend).expect("encode framed backend tag");
             let decoded: BackendTag =
-                norito::decode_from_bytes(&encoded).expect("decode backend tag");
+                norito::decode_from_bytes(&framed).expect("decode framed backend tag");
             assert_eq!(decoded, backend);
         }
     }

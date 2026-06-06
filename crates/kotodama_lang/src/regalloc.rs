@@ -73,7 +73,9 @@ pub fn allocate(func: &Function) -> Allocation {
                 add_def(&mut intervals, *dest_key, position);
                 add_def(&mut intervals, *dest_val, position);
             }
-            if let Instr::CallMulti { dests, .. } = instr {
+            if let Instr::CallMulti { dests, .. } | Instr::InvokeEntrypointAsMulti { dests, .. } =
+                instr
+            {
                 for dest in dests {
                     add_def(&mut intervals, *dest, position);
                 }
@@ -287,7 +289,7 @@ fn block_uses_defs(block: &BasicBlock) -> (HashSet<Temp>, HashSet<Temp>) {
                 defs.insert(*dest_key);
                 defs.insert(*dest_val);
             }
-            Instr::CallMulti { dests, .. } => {
+            Instr::CallMulti { dests, .. } | Instr::InvokeEntrypointAsMulti { dests, .. } => {
                 for dest in dests {
                     defs.insert(*dest);
                 }
@@ -416,6 +418,12 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*payload);
         }
         InvokeEntrypointAs {
+            actor,
+            entrypoint,
+            payload,
+            ..
+        }
+        | InvokeEntrypointAsMulti {
             actor,
             entrypoint,
             payload,
@@ -1143,7 +1151,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::CommitOutput
         | Instr::SmartContractLifecycle { .. }
         | Instr::ExpectRejectAs { .. } => None,
-        Instr::CallMulti { .. } | Instr::MapLoadPair { .. } => None,
+        Instr::CallMulti { .. }
+        | Instr::InvokeEntrypointAsMulti { .. }
+        | Instr::MapLoadPair { .. } => None,
     }
 }
 

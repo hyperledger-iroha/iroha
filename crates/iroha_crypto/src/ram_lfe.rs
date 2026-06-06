@@ -26,6 +26,7 @@ use norito::derive::{JsonDeserialize, JsonSerialize};
 use norito::json;
 use sha3::Sha3_512;
 use thiserror::Error;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
@@ -661,26 +662,26 @@ fn evaluate_hkdf_prf(
     let hkdf_salt = [HKDF_SALT_DOMAIN, expected.policy_hash.as_ref()].concat();
     let hkdf = Hkdf::<Sha3_512>::new(Some(&hkdf_salt), secret);
 
-    let mut opaque_material = [0_u8; Hash::LENGTH];
+    let mut opaque_material = Zeroizing::new([0_u8; Hash::LENGTH]);
     let opaque_info = [HKDF_OPAQUE_INFO_DOMAIN, transcript.as_slice()].concat();
-    hkdf.expand(&opaque_info, &mut opaque_material)
+    hkdf.expand(&opaque_info, opaque_material.as_mut())
         .map_err(|_| RamLfeError::DerivationFailed)?;
 
-    let opaque_id = Hash::new_from_chunks(&[OPAQUE_HASH_DOMAIN, opaque_material.as_slice()]);
+    let opaque_id = Hash::new_from_chunks(&[OPAQUE_HASH_DOMAIN, &opaque_material[..]]);
 
-    let mut receipt_material = [0_u8; Hash::LENGTH];
+    let mut receipt_material = Zeroizing::new([0_u8; Hash::LENGTH]);
     let receipt_info = [
         HKDF_RECEIPT_INFO_DOMAIN,
         transcript.as_slice(),
         opaque_id.as_ref(),
     ]
     .concat();
-    hkdf.expand(&receipt_info, &mut receipt_material)
+    hkdf.expand(&receipt_info, receipt_material.as_mut())
         .map_err(|_| RamLfeError::DerivationFailed)?;
 
     let receipt_hash = Hash::new_from_chunks(&[
         RECEIPT_HASH_DOMAIN,
-        receipt_material.as_slice(),
+        &receipt_material[..],
         opaque_id.as_ref(),
     ]);
     Ok(EvalResponse {
@@ -1036,7 +1037,7 @@ fn derive_program_rng(
     domain: &[u8],
 ) -> ChaCha20Rng {
     let step_bytes = step.to_le_bytes();
-    let seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+    let mut seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
         domain,
         secret,
         commitment.policy_hash.as_ref(),
@@ -1044,7 +1045,9 @@ fn derive_program_rng(
         &step_bytes,
     ])
     .into();
-    ChaCha20Rng::from_seed(seed)
+    let rng = ChaCha20Rng::from_seed(seed);
+    seed.zeroize();
+    rng
 }
 
 fn execute_hidden_program(
@@ -1529,7 +1532,7 @@ fn derive_secret_affine_circuit(
     request: &ClientRequest,
 ) -> Result<BfvAffineCircuit, RamLfeError> {
     let input_count = usize::from(public_parameters.max_input_bytes).saturating_add(1);
-    let seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+    let mut seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
         BFV_AFFINE_CIRCUIT_DOMAIN,
         secret,
         commitment.policy_hash.as_ref(),
@@ -1537,6 +1540,7 @@ fn derive_secret_affine_circuit(
     ])
     .into();
     let mut rng = ChaCha20Rng::from_seed(seed);
+    seed.zeroize();
     let mut weights = Vec::with_capacity(BFV_AFFINE_OUTPUT_BYTES);
     let mut bias = Vec::with_capacity(BFV_AFFINE_OUTPUT_BYTES);
     for _ in 0..BFV_AFFINE_OUTPUT_BYTES {

@@ -53,6 +53,78 @@ struct StateMapSpec {
     value: Type,
 }
 
+#[derive(Clone, Debug)]
+struct LoweredParamSpec {
+    name: String,
+    ty: Type,
+    is_state: bool,
+}
+
+fn collect_state_handle_specs(name: &str, ty: &Type, out: &mut Vec<(String, Type)>) {
+    let resolved = semantic::resolve_struct_type(ty);
+    out.push((name.to_string(), resolved.clone()));
+    match &resolved {
+        Type::Struct { fields, .. } => {
+            for (index, (_, field_ty)) in fields.iter().enumerate() {
+                collect_state_handle_specs(&format!("{name}#{index}"), field_ty, out);
+            }
+        }
+        Type::Tuple(items) => {
+            for (index, item_ty) in items.iter().enumerate() {
+                collect_state_handle_specs(&format!("{name}#{index}"), item_ty, out);
+            }
+        }
+        Type::Map(_, value_ty) => {
+            collect_state_map_value_handle_specs(name, value_ty, out);
+        }
+        _ => {}
+    }
+}
+
+fn collect_state_map_value_handle_specs(name: &str, ty: &Type, out: &mut Vec<(String, Type)>) {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => {
+            for (index, (_, field_ty)) in fields.iter().enumerate() {
+                let child = format!("{name}#{index}");
+                let resolved = semantic::resolve_struct_type(field_ty);
+                out.push((child.clone(), resolved.clone()));
+                collect_state_map_value_handle_specs(&child, &resolved, out);
+            }
+        }
+        Type::Tuple(items) => {
+            for (index, item_ty) in items.iter().enumerate() {
+                let child = format!("{name}#{index}");
+                let resolved = semantic::resolve_struct_type(item_ty);
+                out.push((child.clone(), resolved.clone()));
+                collect_state_map_value_handle_specs(&child, &resolved, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn lowered_function_params(params: &[TypedParam]) -> Vec<LoweredParamSpec> {
+    let mut lowered = Vec::new();
+    for param in params {
+        if param.is_state {
+            let mut handles = Vec::new();
+            collect_state_handle_specs(&param.name, &param.ty, &mut handles);
+            lowered.extend(handles.into_iter().map(|(name, ty)| LoweredParamSpec {
+                name,
+                ty,
+                is_state: true,
+            }));
+        } else {
+            lowered.push(LoweredParamSpec {
+                name: param.name.clone(),
+                ty: param.ty.clone(),
+                is_state: false,
+            });
+        }
+    }
+    lowered
+}
+
 /// A virtual register or temporary value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Temp(pub usize);
@@ -677,6 +749,15 @@ pub enum Instr {
         entrypoint: Temp,
         payload: Temp,
         returns_pointer: bool,
+    },
+    /// Test-only nested runtime entrypoint call as a named fixture actor with
+    /// multiple return values.
+    InvokeEntrypointAsMulti {
+        dests: Vec<Temp>,
+        actor: Temp,
+        entrypoint: Temp,
+        payload: Temp,
+        return_pointer_mask: u64,
     },
     /// Test-only assertion that a named actor's runtime entrypoint call rejects.
     ExpectRejectAs {
@@ -1443,7 +1524,8 @@ fn lower_function_named(
     // Ephemeral state allocation for contract-level `state` declarations.
     let mut vars = HashMap::new();
     let mut param_temps = Vec::new();
-    for param in &func.param_types {
+    let lowered_params = lowered_function_params(&func.param_types);
+    for param in &lowered_params {
         let tmp = ctx.new_temp();
         param_temps.push((param.clone(), tmp));
         ctx.current_instr(Instr::LoadVar {
@@ -1479,7 +1561,7 @@ fn lower_function_named(
 
     let function = Function {
         name: symbol_name.to_string(),
-        params: func.params.clone(),
+        params: lowered_params.into_iter().map(|param| param.name).collect(),
         blocks: ctx.blocks,
         entry,
         location: func.location,
@@ -5173,8 +5255,30 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             ctx.current_instr(Instr::Const { dest: t, value: 0 });
                             t
                         }
-                        semantic::Type::Tuple(_) => {
-                            panic!("invoke_entrypoint_as does not support tuple returns")
+                        semantic::Type::Tuple(items) => {
+                            let dests: Vec<Temp> = items.iter().map(|_| ctx.new_temp()).collect();
+                            let mut return_pointer_mask = 0u64;
+                            for (idx, item_ty) in items.iter().enumerate() {
+                                if semantic::is_pointer_type(item_ty)
+                                    || semantic::is_blob_like(item_ty)
+                                    || *item_ty == semantic::Type::Json
+                                {
+                                    return_pointer_mask |= 1u64 << idx;
+                                }
+                            }
+                            ctx.current_instr(Instr::InvokeEntrypointAsMulti {
+                                dests: dests.clone(),
+                                actor,
+                                entrypoint,
+                                payload,
+                                return_pointer_mask,
+                            });
+                            let tuple = ctx.new_temp();
+                            ctx.current_instr(Instr::TuplePack {
+                                dest: tuple,
+                                items: dests,
+                            });
+                            tuple
                         }
                         _ => {
                             let dest = ctx.new_temp();
@@ -5252,7 +5356,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                             .and_then(|params| params.get(idx))
                             .is_some_and(|param| param.is_state)
                         {
-                            arg_tmps.push(lower_state_handle_arg(ctx, a, vars));
+                            let param = signature
+                                .as_ref()
+                                .and_then(|params| params.get(idx))
+                                .expect("checked state parameter");
+                            arg_tmps.extend(lower_state_handle_args(ctx, a, &param.ty, vars));
                         } else {
                             arg_tmps.push(lower_expr(ctx, a, vars));
                         }
@@ -5722,12 +5830,30 @@ fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCo
     }
 }
 
+fn lowerable_state_handle_name(ctx: &LowerCtx, expr: &semantic::TypedExpr) -> Option<String> {
+    match &expr.expr {
+        semantic::ExprKind::Ident(name) => {
+            if ctx.state_runtime_roots.contains_key(name) {
+                Some(name.clone())
+            } else {
+                semantic::typed_state_handle_name(expr)
+            }
+        }
+        semantic::ExprKind::Member { object, field } => {
+            let base = lowerable_state_handle_name(ctx, object)?;
+            let idx = field.parse::<usize>().ok()?;
+            Some(format!("{base}#{idx}"))
+        }
+        _ => None,
+    }
+}
+
 fn lower_state_handle_arg(
     ctx: &mut LowerCtx,
     expr: &semantic::TypedExpr,
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
-    if let Some(base_name) = semantic::typed_state_handle_name(expr) {
+    if let Some(base_name) = lowerable_state_handle_name(ctx, expr) {
         build_state_base(ctx, &base_name)
     } else {
         ctx.record_error("state parameter arguments must reference a durable state handle".into());
@@ -5737,6 +5863,23 @@ fn lower_state_handle_arg(
         let _ = vars;
         t
     }
+}
+
+fn lower_state_handle_args(
+    ctx: &mut LowerCtx,
+    expr: &semantic::TypedExpr,
+    param_ty: &Type,
+    vars: &mut HashMap<String, Temp>,
+) -> Vec<Temp> {
+    let Some(base_name) = lowerable_state_handle_name(ctx, expr) else {
+        return vec![lower_state_handle_arg(ctx, expr, vars)];
+    };
+    let mut handles = Vec::new();
+    collect_state_handle_specs(&base_name, param_ty, &mut handles);
+    handles
+        .into_iter()
+        .map(|(name, _)| build_state_base(ctx, &name))
+        .collect()
 }
 
 fn encode_scalar_state_value(ctx: &mut LowerCtx, value: Temp, ty: &Type) -> Option<Temp> {
@@ -6090,6 +6233,55 @@ mod tests {
 
         assert!(saw_invoke, "expected InvokeEntrypointAs in lowered test");
         assert!(saw_expect_reject, "expected ExpectRejectAs in lowered test");
+    }
+
+    #[test]
+    fn invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic() {
+        let src = r#"
+            seiyaku Demo {
+                kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
+
+                #[test]
+                fn drive_run() {
+                    let pair = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
+                    assert_eq(pair.0, 7);
+                    assert_eq(pair.1, 8);
+                }
+            }
+        "#;
+        let prog = parse(src).expect("parse tuple invoke_entrypoint_as");
+        let typed = analyze(&prog).expect("analyze tuple invoke_entrypoint_as");
+        let ir = lower_with_cap_and_test_mode(&typed, 2, true)
+            .expect("lower tuple invoke_entrypoint_as");
+        let test_fn = ir
+            .functions
+            .iter()
+            .find(|function| function.name == "drive_run")
+            .expect("test function");
+
+        let mut saw_multi = false;
+        let mut saw_tuple_pack = false;
+        for block in &test_fn.blocks {
+            for instr in &block.instrs {
+                match instr {
+                    Instr::InvokeEntrypointAsMulti { dests, .. } => {
+                        saw_multi = true;
+                        assert_eq!(dests.len(), 2);
+                    }
+                    Instr::TuplePack { items, .. } if items.len() == 2 => saw_tuple_pack = true,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            saw_multi,
+            "tuple invoke_entrypoint_as should use multi-return test intrinsic"
+        );
+        assert!(
+            saw_tuple_pack,
+            "tuple invoke_entrypoint_as should pack returned values"
+        );
     }
 
     #[test]
@@ -7176,6 +7368,278 @@ mod tests {
         assert!(
             helper_reads_runtime_root,
             "expected scalar helper to read durable state through its runtime state handle"
+        );
+    }
+
+    #[test]
+    fn lower_state_struct_helper_param_expands_child_handles() {
+        let src = r#"
+            seiyaku Demo {
+                struct Ledger { counter: int; flag: bool; }
+                state Ledger ledger;
+
+                fn read_counter(state Ledger entry) -> int {
+                    return entry.counter;
+                }
+
+                fn main() -> int {
+                    return read_counter(ledger);
+                }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let main_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main function");
+        let helper_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "read_counter")
+            .expect("helper function");
+
+        assert_eq!(
+            helper_fn.params,
+            vec![
+                "entry".to_string(),
+                "entry#0".to_string(),
+                "entry#1".to_string()
+            ],
+            "aggregate state parameters should lower to root plus flattened children"
+        );
+
+        let mut ledger_handle_temps = Vec::new();
+        let mut counter_handle_temps = Vec::new();
+        let mut flag_handle_temps = Vec::new();
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Name,
+                    value,
+                } = instr
+                {
+                    match value.as_str() {
+                        "ledger" => ledger_handle_temps.push(*dest),
+                        "ledger_counter" => counter_handle_temps.push(*dest),
+                        "ledger_flag" => flag_handle_temps.push(*dest),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let mut main_passes_flattened_handles = false;
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::Call { callee, args, .. } = instr
+                    && callee == "read_counter"
+                    && args.len() == 3
+                    && ledger_handle_temps.contains(&args[0])
+                    && counter_handle_temps.contains(&args[1])
+                    && flag_handle_temps.contains(&args[2])
+                {
+                    main_passes_flattened_handles = true;
+                }
+            }
+        }
+        assert!(
+            main_passes_flattened_handles,
+            "expected caller to pass root and flattened state child handles"
+        );
+
+        let mut helper_reads_counter_child = false;
+        for bb in &helper_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::StateGet { path, .. } = instr
+                    && helper_fn
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.instrs.iter())
+                        .any(|candidate| {
+                            matches!(
+                                candidate,
+                                Instr::LoadVar { dest, name } if *dest == *path && name == "entry#0"
+                            )
+                        })
+                {
+                    helper_reads_counter_child = true;
+                }
+            }
+        }
+        assert!(
+            helper_reads_counter_child,
+            "expected helper member access to read through the flattened child handle"
+        );
+    }
+
+    #[test]
+    fn lower_state_struct_helper_param_forwards_runtime_handles() {
+        let src = r#"
+            seiyaku Demo {
+                struct Ledger { counter: int; flag: bool; }
+                state Ledger ledger;
+
+                fn read_counter(state Ledger entry) -> int {
+                    return entry.counter;
+                }
+
+                fn forward(state Ledger entry) -> int {
+                    return read_counter(entry);
+                }
+
+                fn main() -> int {
+                    return forward(ledger);
+                }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let forward_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "forward")
+            .expect("forward function");
+
+        let mut entry_handle = None;
+        let mut counter_handle = None;
+        let mut flag_handle = None;
+        for bb in &forward_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::LoadVar { dest, name } = instr {
+                    match name.as_str() {
+                        "entry" => entry_handle = Some(*dest),
+                        "entry#0" => counter_handle = Some(*dest),
+                        "entry#1" => flag_handle = Some(*dest),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let mut forwards_flattened_handles = false;
+        for bb in &forward_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::Call { callee, args, .. } = instr
+                    && callee == "read_counter"
+                    && args.len() == 3
+                    && Some(args[0]) == entry_handle
+                    && Some(args[1]) == counter_handle
+                    && Some(args[2]) == flag_handle
+                {
+                    forwards_flattened_handles = true;
+                }
+            }
+        }
+        assert!(
+            forwards_flattened_handles,
+            "expected forwarded state parameter to pass the current runtime handles"
+        );
+    }
+
+    #[test]
+    fn lower_state_map_struct_value_helper_param_expands_value_handles() {
+        let src = r#"
+            seiyaku Demo {
+                struct Entry { amount: int; }
+                state Entries: Map<Name, Entry>;
+
+                fn read_amount(state Map<Name, Entry> entries, key: Name) -> int {
+                    return entries[key].amount;
+                }
+
+                fn main() -> int {
+                    return read_amount(Entries, name("alice"));
+                }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let main_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main function");
+        let helper_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "read_amount")
+            .expect("helper function");
+
+        assert_eq!(
+            helper_fn.params,
+            vec![
+                "entries".to_string(),
+                "entries#0".to_string(),
+                "key".to_string()
+            ],
+            "state maps with aggregate values should lower value-field handles"
+        );
+
+        let mut entries_handle_temps = Vec::new();
+        let mut amount_handle_temps = Vec::new();
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Name,
+                    value,
+                } = instr
+                {
+                    match value.as_str() {
+                        "Entries" => entries_handle_temps.push(*dest),
+                        "Entries_amount" => amount_handle_temps.push(*dest),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let mut main_passes_map_value_handles = false;
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::Call { callee, args, .. } = instr
+                    && callee == "read_amount"
+                    && args.len() == 3
+                    && entries_handle_temps.contains(&args[0])
+                    && amount_handle_temps.contains(&args[1])
+                {
+                    main_passes_map_value_handles = true;
+                }
+            }
+        }
+        assert!(
+            main_passes_map_value_handles,
+            "expected caller to pass map root and aggregate value child handles"
+        );
+
+        let mut helper_builds_amount_path_from_runtime_root = false;
+        for bb in &helper_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::PathMapKeyNorito { base, .. } = instr
+                    && helper_fn
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.instrs.iter())
+                        .any(|candidate| {
+                            matches!(
+                                candidate,
+                                Instr::LoadVar { dest, name } if *dest == *base && name == "entries#0"
+                            )
+                        })
+                {
+                    helper_builds_amount_path_from_runtime_root = true;
+                }
+            }
+        }
+        assert!(
+            helper_builds_amount_path_from_runtime_root,
+            "expected helper map value field access to use the flattened value child handle"
         );
     }
 

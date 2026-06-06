@@ -166,6 +166,8 @@ Doğrulama dəstəklənməyən versiyaları rədd edir
 - FHE icra siyasəti:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - parametr dəsti bağlaması `(param_set, version)` ilə uyğun olmalıdır.
   - `max_multiplication_depth` parametr təyin edilmiş dərinliyi keçməməlidir.
   - siyasət qəbulu `Proposed` və ya `Withdrawn` parametr setinin həyat dövrünü rədd edir.

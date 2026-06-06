@@ -1440,6 +1440,46 @@ FuturePromotionResetsActiveProgress ==
      /\ recoveryLastRotationView = view
      /\ ~staleRecoveryUnlocked
 
+FuturePromotionInstallsFreshSecondSlot ==
+  promotionFresh
+  => /\ PromotedSecondSlotPending
+     /\ dropReason = "None"
+     /\ futurePromoted
+     /\ futureEvidenceObserved
+     /\ ~futurePresent
+     /\ ~futureContiguous
+     /\ futureCommitVotes = 0
+     /\ futureQueuedVotes = 0
+     /\ futurePayloadState = "Missing"
+     /\ futureRecoveryOwner = "None"
+     /\ ~futurePromotionReady
+     /\ FuturePromotionResetsActiveProgress
+
+TerminalFrontierOutcomesAreExclusive ==
+  /\ committed =>
+       /\ ~pending
+       /\ ~dropped
+       /\ dropReason = "None"
+       /\ ~rotated
+       /\ ~quorumRescheduleArmed
+       /\ quorumWindowAge = 0
+       /\ ValidationReady
+       /\ FullQuorum
+       /\ PayloadAvailable
+  /\ dropped =>
+       /\ ~pending
+       /\ ~committed
+       /\ dropReason # "None"
+       /\ ~quorumRescheduleArmed
+       /\ quorumWindowAge = 0
+  /\ dropReason # "None" => dropped
+  /\ rotated /\ ~dropped =>
+       /\ ~pending
+       /\ ~committed
+       /\ dropReason = "None"
+       /\ ~quorumRescheduleArmed
+       /\ quorumWindowAge = 0
+
 PendingProgressEventsTouchAge ==
   lastProgressKind # "None" => progressAge = 0
 

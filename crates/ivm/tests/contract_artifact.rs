@@ -233,6 +233,32 @@ fn verify_rejects_invalid_trigger_callback_target() {
 }
 
 #[test]
+fn verify_accepts_namespaced_trigger_callback_target() {
+    let mut main = entrypoint("main", EntryPointKind::Public, 0);
+    main.triggers.push(
+        iroha_data_model::smart_contract::manifest::TriggerDescriptor {
+            id: TriggerId::new("wake".parse().expect("trigger id")),
+            repeats: Repeats::Indefinitely,
+            filter: iroha_data_model::events::EventFilterBox::Time(
+                iroha_data_model::events::time::TimeEventFilter(
+                    iroha_data_model::events::time::ExecutionTime::PreCommit,
+                ),
+            ),
+            authority: None,
+            metadata: iroha_data_model::metadata::Metadata::default(),
+            callback: iroha_data_model::smart_contract::manifest::TriggerCallback {
+                namespace: Some("callee".to_owned()),
+                entrypoint: "run".to_owned(),
+            },
+        },
+    );
+    let bytes = contract_artifact(1, vec![main]);
+
+    ivm::verify_contract_artifact(&bytes)
+        .expect("namespaced trigger callback target is resolved at activation");
+}
+
+#[test]
 fn verify_accepts_global_access_wildcard_hints() {
     let hints = AccessSetHints {
         read_keys: vec!["*".to_owned()],

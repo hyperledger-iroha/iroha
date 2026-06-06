@@ -33,6 +33,7 @@ const TEST_SYSCALL_ACTOR_SIGN: u32 = ivm::syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN
 const TEST_SYSCALL_INVOKE_ENTRYPOINT_AS: u32 =
     ivm::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
 const TEST_SYSCALL_EXPECT_REJECT_AS: u32 = ivm::syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS;
+const TEST_MAX_RETURN_VALUES: usize = 13;
 
 #[derive(Clone)]
 struct FixtureActor {
@@ -963,7 +964,16 @@ impl KotoTestHost {
         let entrypoint = Self::decode_alias_arg(vm, 11, "entrypoint")
             .map_err(|_| ivm::VMError::NoritoInvalid)?;
         let payload = Self::decode_json_arg(vm, 12)?;
-        let returns_pointer = vm.register(13) != 0;
+        let return_pointer_mask = vm.register(13);
+        let return_arity = match vm.register(14) {
+            0 => 1,
+            raw => usize::try_from(raw).unwrap_or(TEST_MAX_RETURN_VALUES + 1),
+        };
+        if return_arity == 0 || return_arity > TEST_MAX_RETURN_VALUES {
+            return self.fail_test(format!(
+                "actor `{actor_alias}` calling `{entrypoint}` requested unsupported return arity {return_arity}"
+            ));
+        }
         let actor = match self.actors.get(&actor_alias).cloned() {
             Some(actor) => actor,
             None => {
@@ -1025,13 +1035,16 @@ impl KotoTestHost {
             Ok(()) => {
                 self.inner.set_caller_subject(previous_caller);
                 self.restore_public_inputs();
-                let value = nested_vm.register(10);
-                if returns_pointer && value != 0 {
-                    let tlv = nested_vm.clone_tlv(value)?;
-                    let ptr = vm.alloc_input_tlv(&tlv)?;
-                    vm.set_register(10, ptr);
-                } else {
-                    vm.set_register(10, value);
+                for idx in 0..return_arity {
+                    let value = nested_vm.register(10 + idx);
+                    let out_reg = 10 + idx;
+                    if ((return_pointer_mask >> idx) & 1) != 0 && value != 0 {
+                        let tlv = nested_vm.clone_tlv(value)?;
+                        let ptr = vm.alloc_input_tlv(&tlv)?;
+                        vm.set_register(out_reg, ptr);
+                    } else {
+                        vm.set_register(out_reg, value);
+                    }
                 }
                 Ok(0)
             }
@@ -1977,6 +1990,10 @@ mod tests {
                     last_actor = authority();
                 }
 
+                kotoage fn pair() -> (int, int) {
+                    return (2, 3);
+                }
+
                 kotoage fn reject_me() {
                     assert_eq(1, 2);
                 }
@@ -2082,6 +2099,7 @@ mod tests {
         put_blob(&mut vm, 11, "hajimari");
         put_json(&mut vm, 12, "{}");
         vm.set_register(13, 0);
+        vm.set_register(14, 1);
         host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
             .expect("invoke hajimari");
 
@@ -2089,6 +2107,7 @@ mod tests {
         put_blob(&mut vm, 11, "increment");
         put_json(&mut vm, 12, "{}");
         vm.set_register(13, 0);
+        vm.set_register(14, 1);
         host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
             .expect("invoke increment");
         let counter_state = host.inner.wsv.sc_get("counter").expect("counter state");
@@ -2103,6 +2122,7 @@ mod tests {
         put_blob(&mut vm, 11, "remember_caller");
         put_json(&mut vm, 12, "{}");
         vm.set_register(13, 0);
+        vm.set_register(14, 1);
         host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
             .expect("invoke remember_caller");
         let remembered_state = host
@@ -2126,9 +2146,20 @@ mod tests {
         );
 
         put_blob(&mut vm, 10, "issuer");
+        put_blob(&mut vm, 11, "pair");
+        put_json(&mut vm, 12, "{}");
+        vm.set_register(13, 0);
+        vm.set_register(14, 2);
+        host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
+            .expect("invoke pair");
+        assert_eq!(vm.register(10), 2);
+        assert_eq!(vm.register(11), 3);
+
+        put_blob(&mut vm, 10, "issuer");
         put_blob(&mut vm, 11, "reject_me");
         put_json(&mut vm, 12, "{}");
         vm.set_register(13, 0);
+        vm.set_register(14, 1);
         host.syscall(TEST_SYSCALL_EXPECT_REJECT_AS, &mut vm)
             .expect("expect reject");
 
@@ -2171,6 +2202,10 @@ mod tests {
                     last_actor = authority();
                 }
 
+                kotoage fn pair() -> (int, int) {
+                    return (2, 3);
+                }
+
                 kotoage fn reject_me() {
                     assert_eq(1, 2);
                 }
@@ -2206,6 +2241,10 @@ mod tests {
 
                     invoke_entrypoint_as("issuer", "remember_caller", json("{{}}"));
                     assert(last_actor == account_id("{actor_account}"));
+
+                    let pair = invoke_entrypoint_as("issuer", "pair", json("{{}}"));
+                    assert_eq(pair.0, 2);
+                    assert_eq(pair.1, 3);
                 }}
 
                 #[test(fixture="actors")]

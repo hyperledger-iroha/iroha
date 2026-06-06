@@ -68,6 +68,10 @@ const BFV_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.bootstrap_key_zero_refresh_proof_statement.v1";
 const BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_zero_refresh_proof_statement.v1";
+const BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bootstrap_key_transcript_zero_refresh_proof_statement.v1";
+const BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.bounded_noise_bootstrap_key_transcript_zero_refresh_proof_statement.v1";
 const BFV_RNS_MODULUS_CHAIN_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.rns_modulus_chain_digest.v1";
 const BFV_RNS_KEY_SWITCH_DECOMPOSITION_CHAIN_DIGEST_DOMAIN: &[u8] =
@@ -1176,6 +1180,18 @@ pub struct BfvRotationKey {
     pub zero_refresh: BfvCiphertext,
 }
 
+/// Execution mode advertised by a BFV bootstrap key.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+pub enum BfvBootstrapKeyMode {
+    /// First-release public encrypted-zero refresh masks.
+    #[default]
+    RefreshOnlyV1,
+    /// Reserved for full BFV bootstrapping circuit/key material.
+    FullBootstrapV1,
+}
+
 /// Public bootstrap key admitted for deterministic ciphertext refresh.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1198,6 +1214,13 @@ pub struct BfvBootstrapKey {
     /// holding the secret key or observing the plaintext.
     #[norito(default)]
     pub round_refreshes: Vec<BfvCiphertext>,
+    /// Bootstrap key execution mode.
+    ///
+    /// The first-release key format only carries public encrypted-zero refresh
+    /// masks. `FullBootstrapV1` is reserved and must not validate until the
+    /// full BFV bootstrapping circuit material is represented in this type.
+    #[norito(default)]
+    pub mode: BfvBootstrapKeyMode,
 }
 
 /// Evaluation keys required by public BFV evaluators.
@@ -1266,6 +1289,16 @@ struct BfvBootstrapKeyProofStatementMaterial {
     bootstrap_key: BfvBootstrapKey,
 }
 
+#[derive(Encode)]
+struct BfvBootstrapKeyTranscriptProofStatementMaterial {
+    params: BfvParameters,
+    public_key: BfvPublicKey,
+    evaluation_key_digest: Hash,
+    refresh_transcript_digest: Hash,
+    bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial,
+    bootstrap_key: BfvBootstrapKey,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BfvRefreshTranscriptMode {
     Exact,
@@ -1302,6 +1335,15 @@ impl BfvRefreshTranscriptMode {
             }
         }
     }
+
+    fn bootstrap_key_transcript_proof_statement_domain(self) -> &'static [u8] {
+        match self {
+            Self::Exact => BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+            Self::BoundedNoise => {
+                BFV_BOUNDED_NOISE_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN
+            }
+        }
+    }
 }
 
 impl BfvEvaluationKeyBundle {
@@ -1316,7 +1358,7 @@ impl BfvEvaluationKeyBundle {
         validate_rotation_key_set_entries(params, &self.rotation_keys)?;
         validate_galois_key_set_entries(params, &self.galois_keys)?;
         if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
-            validate_bootstrap_key_entries(params, bootstrap_key)?;
+            validate_bootstrap_key(params, bootstrap_key)?;
         }
         Ok(())
     }
@@ -1546,6 +1588,60 @@ impl BfvEvaluationKeyBundle {
         )
     }
 
+    /// Return the proof statement digest for a transcript-bound exact bootstrap key.
+    ///
+    /// This is the governance-facing statement hash for the current
+    /// proof-carrying bootstrap-key admission path. It validates the complete
+    /// refresh transcript inventory, then binds the parameter set, public key,
+    /// evaluation-key digest, refresh-transcript digest, bootstrap transcript
+    /// metadata, and public bootstrap refresh ciphertexts. The returned
+    /// statement is `None` when the bundle has no bootstrap key.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when transcript validation fails or canonical
+    /// encoding of the statement material fails.
+    pub fn bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+    ) -> Result<Option<Hash>, BfvError> {
+        self.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript_mode(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+            BfvRefreshTranscriptMode::Exact,
+        )
+    }
+
+    /// Return the proof statement digest for a transcript-bound bounded bootstrap key.
+    ///
+    /// This is the bounded-noise counterpart of
+    /// [`Self::bootstrap_key_zero_refresh_proof_statement_digest_for_transcript`].
+    /// It uses a separate domain so exact-lift and bounded-noise proof
+    /// statements cannot collide.
+    ///
+    /// # Errors
+    /// Returns [`BfvError`] when bounded transcript validation fails or
+    /// canonical encoding of the statement material fails.
+    pub fn bounded_noise_bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+    ) -> Result<Option<Hash>, BfvError> {
+        self.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript_mode(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+            BfvRefreshTranscriptMode::BoundedNoise,
+        )
+    }
+
     fn refresh_transcript_digest_for_mode(
         &self,
         params: &BfvParameters,
@@ -1601,6 +1697,54 @@ impl BfvEvaluationKeyBundle {
             mode.digest_domain(),
             bytes.as_slice(),
         ]))
+    }
+
+    fn bootstrap_key_zero_refresh_proof_statement_digest_for_transcript_mode(
+        &self,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        rotation_transcripts: &[BfvRotationKeyTranscriptSeed<'_>],
+        bootstrap_transcript: Option<BfvBootstrapKeyTranscriptSeed<'_>>,
+        mode: BfvRefreshTranscriptMode,
+    ) -> Result<Option<Hash>, BfvError> {
+        let refresh_transcript_digest = self.refresh_transcript_digest_for_mode(
+            params,
+            public_key,
+            rotation_transcripts,
+            bootstrap_transcript,
+            mode,
+        )?;
+        let Some(bootstrap_key) = self.bootstrap_key.as_ref() else {
+            return Ok(None);
+        };
+        let Some(bootstrap_transcript) = bootstrap_transcript else {
+            return Err(BfvError::ShapeMismatch(format!(
+                "missing deterministic transcript seed for bootstrap key {}",
+                bootstrap_key.key_id
+            )));
+        };
+        let evaluation_key_digest = self.digest(params)?;
+        let material = BfvBootstrapKeyTranscriptProofStatementMaterial {
+            params: *params,
+            public_key: public_key.clone(),
+            evaluation_key_digest,
+            refresh_transcript_digest,
+            bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial {
+                key_id: bootstrap_transcript.key_id.to_owned(),
+                max_refresh_rounds: bootstrap_transcript.max_refresh_rounds,
+                seed: bootstrap_transcript.seed.to_vec(),
+            },
+            bootstrap_key: bootstrap_key.clone(),
+        };
+        let bytes = norito::to_bytes(&material).map_err(|err| {
+            BfvError::InvalidParameters(format!(
+                "bootstrap key transcript proof statement encoding failed: {err}"
+            ))
+        })?;
+        Ok(Some(Hash::new_from_chunks(&[
+            mode.bootstrap_key_transcript_proof_statement_domain(),
+            bytes.as_slice(),
+        ])))
     }
 
     /// Verify that all public refresh ciphertexts decrypt to zero.
@@ -3446,6 +3590,7 @@ pub fn bootstrap_key_with_max_refresh_rounds_from_seed(
         ));
     };
     let bootstrap_key = BfvBootstrapKey {
+        mode: BfvBootstrapKeyMode::RefreshOnlyV1,
         key_id,
         max_refresh_rounds,
         zero_refresh,
@@ -3515,6 +3660,7 @@ pub fn bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
         ));
     };
     let bootstrap_key = BfvBootstrapKey {
+        mode: BfvBootstrapKeyMode::RefreshOnlyV1,
         key_id,
         max_refresh_rounds,
         zero_refresh,
@@ -7807,6 +7953,7 @@ fn validate_bootstrap_key(
 }
 
 fn validate_bootstrap_key_shape_metadata(bootstrap_key: &BfvBootstrapKey) -> Result<(), BfvError> {
+    validate_bootstrap_key_mode(bootstrap_key.mode)?;
     validate_bootstrap_key_metadata(&bootstrap_key.key_id, bootstrap_key.max_refresh_rounds)?;
     let expected_rounds = usize::from(bootstrap_key.max_refresh_rounds);
     if bootstrap_key.round_refreshes.len() != expected_rounds {
@@ -7816,6 +7963,15 @@ fn validate_bootstrap_key_shape_metadata(bootstrap_key: &BfvBootstrapKey) -> Res
         )));
     }
     Ok(())
+}
+
+fn validate_bootstrap_key_mode(mode: BfvBootstrapKeyMode) -> Result<(), BfvError> {
+    match mode {
+        BfvBootstrapKeyMode::RefreshOnlyV1 => Ok(()),
+        BfvBootstrapKeyMode::FullBootstrapV1 => Err(BfvError::InvalidParameters(
+            "full BFV bootstrap key mode requires bootstrapping circuit material".to_owned(),
+        )),
+    }
 }
 
 fn validate_bootstrap_key_entries(
@@ -9733,6 +9889,7 @@ fn rotation_steps_mod_slot_count(
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_lines)]
 mod tests {
     use super::*;
 
@@ -9758,6 +9915,37 @@ mod tests {
         BfvRnsModulusChain {
             moduli: vec![4_292_018_177, 4_292_149_249, 4_292_804_609],
         }
+    }
+
+    fn assert_fresh_capacity_error<T>(result: Result<T, BfvError>, context: &str) {
+        let Err(err) = result else {
+            panic!("{context}");
+        };
+        assert!(
+            err.to_string().contains("fresh encryption noise bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn assert_seeded_capacity_error<T>(result: Result<T, BfvError>, context: &str) {
+        let Err(err) = result else {
+            panic!("{context}");
+        };
+        assert!(
+            err.to_string()
+                .contains("seeded BFV encryption residual bound"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
+        let Err(err) = result else {
+            panic!("{context}");
+        };
+        assert!(
+            err.to_string().contains(expected),
+            "expected `{expected}` in `{err}`"
+        );
     }
 
     fn bounded_noise_packed_params() -> BfvParameters {
@@ -9846,6 +10034,7 @@ mod tests {
         round_refreshes: Vec<BfvCiphertext>,
     ) -> BfvBootstrapKey {
         BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: key_id.to_owned(),
             max_refresh_rounds,
             zero_refresh: zero_refresh.clone(),
@@ -10125,26 +10314,6 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        fn assert_fresh_capacity_error<T>(result: Result<T, BfvError>, context: &str) {
-            let Err(err) = result else {
-                panic!("{context}");
-            };
-            assert!(
-                err.to_string().contains("fresh encryption noise bound"),
-                "unexpected error: {err}"
-            );
-        }
-
-        fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-            let Err(err) = result else {
-                panic!("{context}");
-            };
-            assert!(
-                err.to_string().contains(expected),
-                "expected `{expected}` in `{err}`"
-            );
-        }
-
         let malformed_public_key = BfvPublicKey {
             b: Vec::new(),
             a: Vec::new(),
@@ -10244,12 +10413,14 @@ mod tests {
             zero_refresh: malformed_ciphertext.clone(),
         };
         let malformed_bootstrap_transcript_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: "bounded-noise-capacity-malformed-bootstrap".to_string(),
             max_refresh_rounds: 1,
             zero_refresh: malformed_ciphertext.clone(),
             round_refreshes: vec![malformed_ciphertext.clone()],
         };
         let invalid_key_id_bootstrap = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: String::new(),
             max_refresh_rounds: 1,
             zero_refresh: zero_refresh.clone(),
@@ -10266,6 +10437,7 @@ mod tests {
             "bounded bootstrap execution must reject key-id metadata before rounded capacity",
         );
         let round_request_bootstrap = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: "bounded-noise-capacity-bootstrap-rounds".to_string(),
             max_refresh_rounds: 1,
             zero_refresh: zero_refresh.clone(),
@@ -10605,7 +10777,7 @@ mod tests {
             rotate_ciphertext_slots_left_bounded_noise(
                 &insufficient,
                 &rotation_key,
-                &[malformed_ciphertext.clone()],
+                std::slice::from_ref(&malformed_ciphertext),
             ),
             "full slot cycle",
             "bounded outer RotateLeft must reject public rotation metadata before rounded capacity",
@@ -10615,7 +10787,7 @@ mod tests {
                 &insufficient,
                 &malformed_rns_chain,
                 &rotation_key,
-                &[malformed_ciphertext.clone()],
+                std::slice::from_ref(&malformed_ciphertext),
             ),
             "full slot cycle",
             "bounded RNS outer RotateLeft must reject public rotation metadata before rounded capacity",
@@ -10634,6 +10806,7 @@ mod tests {
             "bounded outer RotateLeft must reject too-narrow profiles before key or ciphertext shapes",
         );
         let bootstrap_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: "bounded-noise-capacity-bootstrap".to_string(),
             max_refresh_rounds: 1,
             zero_refresh: zero_refresh.clone(),
@@ -10762,6 +10935,7 @@ mod tests {
             "key-authorized bounded bootstrap bounds must reject too-narrow profiles",
         );
         let malformed_bootstrap_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: "malformed-bounded-noise-capacity-bootstrap".to_string(),
             max_refresh_rounds: 1,
             zero_refresh: BfvCiphertext {
@@ -10992,7 +11166,7 @@ mod tests {
 
         let narrow_params = BfvParameters {
             ciphertext_modulus: params.plaintext_modulus * 3,
-            ..params.clone()
+            ..params
         };
         let narrow_ciphertext = BfvCiphertext {
             c0: vec![0; narrow_params.degree()],
@@ -12226,27 +12400,6 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        fn assert_seeded_capacity_error<T>(result: Result<T, BfvError>, context: &str) {
-            let Err(err) = result else {
-                panic!("{context}");
-            };
-            assert!(
-                err.to_string()
-                    .contains("seeded BFV encryption residual bound"),
-                "unexpected error: {err}"
-            );
-        }
-
-        fn assert_error_contains<T>(result: Result<T, BfvError>, expected: &str, context: &str) {
-            let Err(err) = result else {
-                panic!("{context}");
-            };
-            assert!(
-                err.to_string().contains(expected),
-                "expected `{expected}` in `{err}`"
-            );
-        }
-
         assert_error_contains(
             keygen_from_seed(&insufficient, b""),
             "must not be empty",
@@ -12297,6 +12450,7 @@ mod tests {
             "exact rotation refresh transcript validation must reject too-narrow profiles before public-key or refresh-key entry shapes",
         );
         let malformed_bootstrap_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: "seeded-capacity-malformed-bootstrap".to_string(),
             max_refresh_rounds: 1,
             zero_refresh: malformed_refresh.clone(),
@@ -12361,6 +12515,7 @@ mod tests {
         );
 
         let bootstrap_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: "seeded-capacity-bootstrap".to_string(),
             max_refresh_rounds: 1,
             zero_refresh: zero_refresh.clone(),
@@ -13137,6 +13292,134 @@ mod tests {
         assert_ne!(
             digest, tampered_digest,
             "proof statement digest must bind every refresh ciphertext"
+        );
+    }
+
+    #[test]
+    fn bootstrap_key_transcript_proof_statement_digest_binds_governance_inventory() {
+        let material = evaluation_key_adversarial_material();
+        let bootstrap_seed = b"bfv-bootstrap-transcript-proof-statement";
+        let bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-transcript-proof-key",
+            2,
+            bootstrap_seed,
+        )
+        .expect("bootstrap key");
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![material.rotation_key.clone()],
+            galois_keys: vec![material.galois_key.clone()],
+            bootstrap_key: Some(bootstrap_key.clone()),
+        };
+        let rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: 1,
+            seed: b"bfv-eval-key-rotation",
+        }];
+        let bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-transcript-proof-key",
+            max_refresh_rounds: 2,
+            seed: bootstrap_seed,
+        });
+
+        let digest = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("transcript-bound proof statement")
+            .expect("bootstrap key is present");
+        assert_eq!(
+            digest,
+            bundle
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                    &material.params,
+                    &material.public_key,
+                    &rotation_transcripts,
+                    bootstrap_transcript,
+                )
+                .expect("repeat transcript-bound proof statement")
+                .expect("bootstrap key is present")
+        );
+
+        let evaluation_key_digest = bundle.digest(&material.params).expect("bundle digest");
+        let refresh_transcript_digest = bundle
+            .refresh_transcript_digest(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("refresh transcript digest");
+        let statement_material = BfvBootstrapKeyTranscriptProofStatementMaterial {
+            params: material.params,
+            public_key: material.public_key.clone(),
+            evaluation_key_digest,
+            refresh_transcript_digest,
+            bootstrap_transcript: BfvBootstrapKeyTranscriptDigestMaterial {
+                key_id: "bootstrap-transcript-proof-key".to_string(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            },
+            bootstrap_key: bootstrap_key.clone(),
+        };
+        let statement_bytes = norito::to_bytes(&statement_material)
+            .expect("encode transcript-bound bootstrap statement material");
+        assert_eq!(
+            digest,
+            Hash::new_from_chunks(&[
+                BFV_BOOTSTRAP_KEY_TRANSCRIPT_ZERO_REFRESH_PROOF_STATEMENT_DOMAIN,
+                statement_bytes.as_slice(),
+            ])
+        );
+
+        let raw_digest = bootstrap_key_zero_refresh_proof_statement_digest(
+            &material.params,
+            &material.public_key,
+            &bootstrap_key,
+        )
+        .expect("raw bootstrap-key statement");
+        assert_ne!(
+            digest, raw_digest,
+            "policy proof statements must bind transcript inventory, not only bootstrap key material"
+        );
+
+        let wrong_bootstrap_seed = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-transcript-proof-key",
+            max_refresh_rounds: 2,
+            seed: b"bfv-bootstrap-transcript-proof-wrong-seed",
+        });
+        let err = bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                wrong_bootstrap_seed,
+            )
+            .expect_err("wrong bootstrap transcript seed must be rejected");
+        assert!(
+            err.to_string()
+                .contains("deterministic encrypted-zero transcript"),
+            "unexpected error: {err}"
+        );
+
+        let mut drifted_bundle = bundle;
+        drifted_bundle.galois_keys.clear();
+        let drifted_digest = drifted_bundle
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            )
+            .expect("drifted but shape-valid bundle statement")
+            .expect("bootstrap key is present");
+        assert_ne!(
+            digest, drifted_digest,
+            "proof statement digest must bind the full evaluation-key bundle digest"
         );
     }
 
@@ -15083,7 +15366,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let mut unregistered_params = params.clone();
+        let mut unregistered_params = params;
         unregistered_params.decomposition_base_log =
             unregistered_params.decomposition_base_log.saturating_add(1);
         let malformed_input = BfvCiphertext {
@@ -15261,6 +15544,7 @@ mod tests {
         )
         .expect("bootstrap key");
 
+        assert_eq!(bootstrap_key.mode, BfvBootstrapKeyMode::RefreshOnlyV1);
         assert_eq!(bootstrap_key.round_refreshes.len(), 2);
         assert_eq!(bootstrap_key.zero_refresh, bootstrap_key.round_refreshes[0]);
         assert_ne!(
@@ -15297,6 +15581,94 @@ mod tests {
         assert_eq!(
             decrypt(&params, &secret_key, &second).expect("decrypt second refresh")[0],
             91
+        );
+    }
+
+    #[test]
+    fn bootstrap_full_mode_requires_circuit_material() {
+        let params = params();
+        let (_, public_key, _) =
+            keygen_from_seed(&params, b"bfv-bootstrap-mode-keygen").expect("keygen");
+        let mut bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "bootstrap-mode-key",
+            1,
+            b"bfv-bootstrap-mode-refresh",
+        )
+        .expect("bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        let malformed_ciphertext = BfvCiphertext {
+            c0: Vec::new(),
+            c1: Vec::new(),
+        };
+
+        let err = bootstrap_ciphertext_round(&params, &bootstrap_key, &malformed_ciphertext, 0)
+            .expect_err("full bootstrap mode must not run the refresh bridge");
+        assert!(
+            err.to_string()
+                .contains("full BFV bootstrap key mode requires bootstrapping circuit material"),
+            "unexpected error: {err}"
+        );
+        let err =
+            bootstrap_key_zero_refresh_proof_statement_digest(&params, &public_key, &bootstrap_key)
+                .expect_err("full bootstrap mode must not produce a refresh proof statement");
+        assert!(
+            err.to_string()
+                .contains("full BFV bootstrap key mode requires bootstrapping circuit material"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn evaluation_key_bundle_rejects_full_bootstrap_mode() {
+        let material = evaluation_key_adversarial_material();
+        let bootstrap_seed = b"bfv-bootstrap-mode-bundle-refresh";
+        let mut bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &material.params,
+            &material.public_key,
+            "bootstrap-mode-bundle-key",
+            1,
+            bootstrap_seed,
+        )
+        .expect("bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        let bundle = BfvEvaluationKeyBundle {
+            relinearization_key: material.relinearization_key.clone(),
+            rotation_keys: vec![material.rotation_key.clone()],
+            galois_keys: vec![material.galois_key.clone()],
+            bootstrap_key: Some(bootstrap_key),
+        };
+        let expected = "full BFV bootstrap key mode requires bootstrapping circuit material";
+
+        assert_error_contains(
+            bundle.validate(&material.params),
+            expected,
+            "bundle validation must reject reserved full bootstrap mode",
+        );
+        assert_error_contains(
+            bundle.digest(&material.params),
+            expected,
+            "bundle digest must reject reserved full bootstrap mode",
+        );
+        let rotation_transcripts = [BfvRotationKeyTranscriptSeed {
+            rotation_steps: 1,
+            seed: b"bfv-eval-key-rotation",
+        }];
+        let bootstrap_transcript = Some(BfvBootstrapKeyTranscriptSeed {
+            key_id: "bootstrap-mode-bundle-key",
+            max_refresh_rounds: 1,
+            seed: bootstrap_seed,
+        });
+        assert_error_contains(
+            bundle.bootstrap_key_zero_refresh_proof_statement_digest_for_transcript(
+                &material.params,
+                &material.public_key,
+                &rotation_transcripts,
+                bootstrap_transcript,
+            ),
+            expected,
+            "transcript-bound bootstrap proof statement must reject reserved full bootstrap mode",
         );
     }
 
@@ -19786,6 +20158,7 @@ mod tests {
             c1: Vec::new(),
         };
         let malformed_bootstrap_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: String::new(),
             max_refresh_rounds: 0,
             zero_refresh: malformed_ciphertext.clone(),
@@ -20704,6 +21077,7 @@ mod tests {
             zero_refresh: dummy_ciphertext.clone(),
         };
         let dummy_bootstrap_key = BfvBootstrapKey {
+            mode: BfvBootstrapKeyMode::RefreshOnlyV1,
             key_id: "bootstrap-refresh-key".to_string(),
             max_refresh_rounds: 1,
             zero_refresh: dummy_ciphertext.clone(),
@@ -20744,7 +21118,7 @@ mod tests {
         let err = rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact(
             &capacity_too_narrow_unregistered,
             &dummy_rotation_key,
-            &[dummy_ciphertext.clone()],
+            std::slice::from_ref(&dummy_ciphertext),
         )
         .expect_err(
             "registered bounded outer rotation must reject unregistered narrow parameters first",
@@ -20836,7 +21210,7 @@ mod tests {
         let err = evaluate_affine_circuit_registered_rns_exact(
             &params,
             &dummy_affine_circuit,
-            &[dummy_ciphertext.clone()],
+            std::slice::from_ref(&dummy_ciphertext),
         )
         .expect_err("registered affine circuit must reject unregistered parameters");
         assert!(err.to_string().contains("not registered"));
@@ -20844,7 +21218,7 @@ mod tests {
         let err = evaluate_affine_circuit_bounded_noise_registered_rns_exact(
             &params,
             &dummy_affine_circuit,
-            &[dummy_ciphertext.clone()],
+            std::slice::from_ref(&dummy_ciphertext),
         )
         .expect_err("registered bounded affine circuit must reject unregistered parameters");
         assert!(err.to_string().contains("not registered"));
@@ -20907,7 +21281,7 @@ mod tests {
 
         let err = rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact(
             &params,
-            &[dummy_galois_key.clone()],
+            std::slice::from_ref(&dummy_galois_key),
             &dummy_ciphertext,
             1,
         )
@@ -20917,7 +21291,7 @@ mod tests {
         let err =
             rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_exact(
                 &params,
-                &[dummy_galois_key.clone()],
+                std::slice::from_ref(&dummy_galois_key),
                 &dummy_ciphertext,
                 1,
             )
@@ -20927,7 +21301,7 @@ mod tests {
         let err =
             rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact(
                 &params,
-                &[dummy_galois_key.clone()],
+                std::slice::from_ref(&dummy_galois_key),
                 &dummy_ciphertext,
                 1,
             )
@@ -20937,7 +21311,7 @@ mod tests {
         let err = rotate_ciphertext_slots_left_registered_rns_exact(
             &params,
             &dummy_rotation_key,
-            &[dummy_ciphertext.clone()],
+            std::slice::from_ref(&dummy_ciphertext),
         )
         .expect_err("registered outer rotation must reject unregistered parameters");
         assert!(err.to_string().contains("not registered"));
@@ -20945,7 +21319,7 @@ mod tests {
         let err = rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact(
             &params,
             &dummy_rotation_key,
-            &[dummy_ciphertext.clone()],
+            std::slice::from_ref(&dummy_ciphertext),
         )
         .expect_err("registered bounded outer rotation must reject unregistered parameters");
         assert!(err.to_string().contains("not registered"));

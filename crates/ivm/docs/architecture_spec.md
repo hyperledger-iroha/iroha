@@ -75,7 +75,7 @@ The IVM instruction set covers general arithmetic, logic, control flow, memory a
   * Hash functions: e.g. `SHA256BLOCK` (compress one 512-bit block with SHA-256), `BLAKE2s` or a Poseidon hash instruction for hashing field elements.
   * Signature primitives: e.g. an opcode to verify an Ed25519 signature or ECDSA signature given public key and message (this would consume a lot of gas but provides a native way to verify within the VM).
   * Encryption: e.g. `AESENC` for a round of AES encryption (if needed for certain applications, though full symmetric encryption can also be done by contracts).
-  * The current Rust implementation supports `SHA256BLOCK`, `SHA3BLOCK` (deterministic minimal form), `POSEIDON2`, `POSEIDON6`, `ECADD`, `ECMUL_VAR`, `PUBKGEN`, `VALCOM`, `AESENC`, `AESDEC`, `BLAKE2S` (deterministic minimal form), `ED25519VERIFY`, `ED25519BATCHVERIFY`, and `PAIRING`. Opcodes such as `PARBEGIN` and `PAREND` are reserved and not yet implemented; `SETVL` is supported for logical vector-length selection.
+  * The current Rust implementation supports `SHA256BLOCK`, `SHA3BLOCK` (deterministic minimal form), `POSEIDON2`, `POSEIDON6`, `ECADD`, `ECMUL_VAR`, `PUBKGEN`, `VALCOM`, `AESENC`, `AESDEC`, `BLAKE2S` (deterministic minimal form), `ED25519VERIFY`, `ED25519BATCHVERIFY`, and `PAIRING`. `PARBEGIN` and `PAREND` are public no-op markers with zero gas, and `SETVL` is supported for logical vector-length selection.
 
   These instructions are typically implemented to take advantage of hardware accelerators when available (for instance, `SHA256BLOCK` might use Intel SHA extensions if present, or a software routine if not). They are considered optional in the sense that not all contracts will use them, but they are part of the standard VM arsenal to support privacy and authentication use cases. Gas costs for these are set high relative to basic operations, reflecting their complexity. Note that while these are provided, higher-level protocols (like a full shielded transfer circuit) will use a combination of these primitives and ZK-oriented logic.
 
@@ -235,7 +235,8 @@ on keeping those accelerators directly tested and extending them carefully.
 1. **Live-hardware validation**
    - Keep rerunning CUDA parity, self-tests, and benchmark crossover measurements on real GPU hosts so operator guidance tracks actual hardware behavior.
 2. **Metal parity expansion**
-   - Continue mirroring the applicable CUDA helper surface on Metal where those kernels are not yet present, preserving the same deterministic fallback contract.
+   - Mirror applicable CUDA helper additions on Metal as new kernels land,
+     preserving the same deterministic fallback contract.
 3. **Documentation & bindings cadence**
    - Regenerate bindings and update the status/roadmap/docs as the accelerator surface grows, so downstream SDKs and operator docs stay aligned with the shipped behavior.
 

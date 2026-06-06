@@ -3599,8 +3599,8 @@ mod test {
                 "transaction_gossip_resend_ticks": 3,
                 "soranet_handshake": {
                   "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
-                  "client_capabilities_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
-                  "relay_capabilities_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+                  "client_capabilities_hex": "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
+                  "relay_capabilities_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
                   "kem_id": 1,
                   "sig_id": 1,
                   "resume_hash_hex": null,

@@ -5,7 +5,10 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    smartcontracts::triggers::set::SetReadOnly,
+    smartcontracts::triggers::{
+        set::{ExecutableRef, SetReadOnly},
+        specialized::LoadedActionTrait,
+    },
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::KeyPair;
@@ -17,9 +20,12 @@ use iroha_data_model::{
     },
     events::pipeline::{BlockEventFilter, BlockStatus, PipelineEventFilterBox},
     events::time::{ExecutionTime, TimeEventFilter},
-    isi::smart_contract_code::{
-        ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
-        RegisterSmartContractCode,
+    isi::{
+        contract_alias::SetContractAlias,
+        smart_contract_code::{
+            ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
+            RegisterSmartContractCode,
+        },
     },
     name::Name,
     permission,
@@ -431,6 +437,216 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
             .ids()
             .get(&pipeline_trigger_id)
             .is_none()
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn activate_registers_cross_contract_manifest_trigger_callback() {
+    let (state, authority, kp) = setup_state();
+    let target_address = contract_address(&authority, 0);
+    let source_address = contract_address(&authority, 1);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let register_perm: permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(register_perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant CanRegisterSmartContractCode");
+    let enact_perm: permission::Permission =
+        iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
+    Grant::account_permission(enact_perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant CanEnactGovernance");
+
+    let target_entrypoint = EntrypointDescriptor {
+        name: "run".to_string(),
+        kind: EntryPointKind::Public,
+        params: Vec::new(),
+        return_type: None,
+        permission: None,
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        access_hints_complete: None,
+        access_hints_skipped: Vec::new(),
+        triggers: Vec::new(),
+    };
+    let (target_program, target_manifest) = contract_artifact(vec![target_entrypoint]);
+    let target_code_hash = target_manifest.code_hash.expect("target code hash");
+    RegisterSmartContractBytes {
+        code_hash: target_code_hash,
+        code: target_program.clone(),
+    }
+    .execute(&authority, &mut stx)
+    .expect("register target bytes");
+    RegisterSmartContractCode {
+        manifest: target_manifest.signed(&kp),
+    }
+    .execute(&authority, &mut stx)
+    .expect("register target manifest");
+    ActivateContractInstance {
+        contract_address: target_address.clone(),
+        code_hash: target_code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect("activate target");
+    let target_alias: iroha_data_model::smart_contract::ContractAlias =
+        "callee::universal".parse().expect("contract alias");
+    SetContractAlias::bind(target_address.clone(), target_alias.clone(), None)
+        .execute(&authority, &mut stx)
+        .expect("bind target alias");
+
+    let trigger_id: TriggerId = "wake".parse().expect("trigger id");
+    let mut descriptor_metadata = Metadata::default();
+    descriptor_metadata.insert(
+        "tag".parse::<Name>().expect("tag key"),
+        Json::from("remote"),
+    );
+    let trigger = TriggerDescriptor {
+        id: trigger_id.clone(),
+        repeats: Repeats::Indefinitely,
+        filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+        authority: None,
+        metadata: descriptor_metadata,
+        callback: TriggerCallback {
+            namespace: Some("callee".to_string()),
+            entrypoint: "run".to_string(),
+        },
+    };
+    let source_entrypoint = EntrypointDescriptor {
+        name: "arm".to_string(),
+        kind: EntryPointKind::Public,
+        params: Vec::new(),
+        return_type: None,
+        permission: None,
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        access_hints_complete: None,
+        access_hints_skipped: Vec::new(),
+        triggers: vec![trigger],
+    };
+    let (source_program, source_manifest) = contract_artifact(vec![source_entrypoint]);
+    let source_code_hash = source_manifest.code_hash.expect("source code hash");
+    RegisterSmartContractBytes {
+        code_hash: source_code_hash,
+        code: source_program,
+    }
+    .execute(&authority, &mut stx)
+    .expect("register source bytes");
+    RegisterSmartContractCode {
+        manifest: source_manifest.signed(&kp),
+    }
+    .execute(&authority, &mut stx)
+    .expect("register source manifest");
+
+    ActivateContractInstance {
+        contract_address: source_address,
+        code_hash: source_code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect("activate source");
+
+    let action = stx
+        .world
+        .triggers()
+        .time_triggers()
+        .get(&trigger_id)
+        .expect("trigger registered");
+    assert_contract_trigger_metadata(
+        &action.metadata,
+        &target_address,
+        "run",
+        target_code_hash,
+        &trigger_id,
+        "tag",
+        "remote",
+    );
+    let alias_key: Name = "contract_alias".parse().expect("contract alias key");
+    assert_eq!(
+        action.metadata.get(&alias_key),
+        Some(&Json::from(target_alias.to_string().as_str()))
+    );
+    let namespace_key: Name = "contract_callback_namespace"
+        .parse()
+        .expect("callback namespace key");
+    assert_eq!(
+        action.metadata.get(&namespace_key),
+        Some(&Json::from("callee"))
+    );
+    let expected_bytecode_hash = HashOf::new(&IvmBytecode::from_compiled(target_program));
+    match action.executable() {
+        ExecutableRef::Ivm(hash) => assert_eq!(*hash, expected_bytecode_hash),
+        other => panic!("unexpected trigger executable: {other:?}"),
+    }
+}
+
+#[test]
+fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
+    let (state, authority, kp) = setup_state();
+    let source_address = contract_address(&authority, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let register_perm: permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(register_perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant CanRegisterSmartContractCode");
+    let enact_perm: permission::Permission =
+        iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
+    Grant::account_permission(enact_perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant CanEnactGovernance");
+
+    let trigger = TriggerDescriptor {
+        id: "wake".parse().expect("trigger id"),
+        repeats: Repeats::Indefinitely,
+        filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+        authority: None,
+        metadata: Metadata::default(),
+        callback: TriggerCallback {
+            namespace: Some("missing".to_string()),
+            entrypoint: "run".to_string(),
+        },
+    };
+    let source_entrypoint = EntrypointDescriptor {
+        name: "arm".to_string(),
+        kind: EntryPointKind::Public,
+        params: Vec::new(),
+        return_type: None,
+        permission: None,
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        access_hints_complete: None,
+        access_hints_skipped: Vec::new(),
+        triggers: vec![trigger],
+    };
+    let (source_program, source_manifest) = contract_artifact(vec![source_entrypoint]);
+    let source_code_hash = source_manifest.code_hash.expect("source code hash");
+    RegisterSmartContractBytes {
+        code_hash: source_code_hash,
+        code: source_program,
+    }
+    .execute(&authority, &mut stx)
+    .expect("register source bytes");
+    RegisterSmartContractCode {
+        manifest: source_manifest.signed(&kp),
+    }
+    .execute(&authority, &mut stx)
+    .expect("register source manifest");
+
+    let err = ActivateContractInstance {
+        contract_address: source_address,
+        code_hash: source_code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect_err("unresolved cross-contract trigger namespace must fail activation");
+    assert!(
+        format!("{err:?}").contains("does not resolve"),
+        "unexpected error: {err:?}"
     );
 }
 

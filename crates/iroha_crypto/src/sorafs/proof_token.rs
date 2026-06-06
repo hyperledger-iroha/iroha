@@ -16,6 +16,7 @@ use blake3::Hasher;
 use ed25519_dalek::{SIGNATURE_LENGTH, Signature, Signer, SigningKey, VerifyingKey};
 use rand_core::TryCryptoRng;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 const FRAME_MAGIC: &[u8; 4] = b"SFGT";
 const DIGEST_DOMAIN: &[u8] = b"sorafs.proof_token.digest.v1";
@@ -25,18 +26,18 @@ const MAX_ENTRY_LEN: usize = 255;
 const FLAG_HAS_EXPIRY: u8 = 0x01;
 
 /// Secret used to derive the blinded digest portion of a token body.
-#[derive(Clone, Copy)]
-pub struct ProofTokenDigestKey([u8; 32]);
+#[derive(Clone)]
+pub struct ProofTokenDigestKey(Zeroizing<[u8; 32]>);
 
 impl ProofTokenDigestKey {
     /// Construct a new digest key from raw bytes.
     #[must_use]
-    pub const fn new(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+    pub fn new(bytes: [u8; 32]) -> Self {
+        Self(Zeroizing::new(bytes))
     }
 
     #[must_use]
-    const fn as_bytes(&self) -> &[u8; 32] {
+    fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -767,6 +768,22 @@ mod tests {
         decoded
             .verify_blinded_digest(&digest_key, &evidence)
             .unwrap();
+    }
+
+    #[test]
+    fn digest_key_clone_preserves_blinded_digest() {
+        let digest_key = ProofTokenDigestKey::new([0x13; 32]);
+        let cloned = digest_key.clone();
+        let token_id = [0x24; 16];
+        let evidence = [0x42; 32];
+        let entries = vec!["denylist/global".to_string(), "manual/guardian".to_string()];
+
+        let original_digest = compute_blinded_digest(&digest_key, &token_id, &evidence, &entries)
+            .expect("original digest");
+        let cloned_digest =
+            compute_blinded_digest(&cloned, &token_id, &evidence, &entries).expect("cloned digest");
+
+        assert_eq!(original_digest, cloned_digest);
     }
 
     #[test]

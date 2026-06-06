@@ -166,6 +166,8 @@ Iroha 3 پر تعیناتی:
 - FHE عملدرآمد کی پالیسی:
   - `max_plaintext_bytes <= max_ciphertext_bytes`۔
   - `max_output_ciphertexts <= max_input_ciphertexts`۔
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - پیرامیٹر سیٹ بائنڈنگ `(param_set, version)` سے مماثل ہونی چاہیے۔
   - `max_multiplication_depth` پیرامیٹر سیٹ کی گہرائی سے زیادہ نہیں ہونا چاہیے۔
   - پالیسی داخلہ `Proposed` یا `Withdrawn` پیرامیٹر سیٹ لائف سائیکل کو مسترد کرتا ہے۔

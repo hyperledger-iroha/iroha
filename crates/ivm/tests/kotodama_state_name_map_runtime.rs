@@ -144,6 +144,32 @@ fn durable_name_map_roundtrip_through_state_parameter() {
 }
 
 #[test]
+fn durable_name_map_struct_value_roundtrip_through_state_parameter() {
+    let src = r#"
+        seiyaku C {
+            struct Entry { amount: int; active: bool; }
+            state Entries: Map<Name, Entry>;
+
+            fn read_score(state Map<Name, Entry> entries, key: Name) -> int {
+                let value = entries[key].amount;
+                if (entries[key].active) {
+                    value = value + 1;
+                }
+                return value;
+            }
+
+            fn main() -> int {
+                Entries[name("alice")] = Entry(41, true);
+                return read_score(Entries, name("alice"));
+            }
+        }
+    "#;
+
+    let vm = run_program(src);
+    assert_eq!(vm.register(10), 42);
+}
+
+#[test]
 fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
     let src = r#"
         seiyaku C {

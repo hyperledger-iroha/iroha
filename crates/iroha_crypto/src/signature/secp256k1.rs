@@ -220,7 +220,6 @@ mod ecdsa_secp256k1 {
     use rand_core::TryRngCore;
     use sha2::Digest as _;
     use sha3::Keccak256;
-    #[cfg(feature = "rand")]
     use zeroize::Zeroizing;
 
     use super::{PrivateKey, PublicKey};
@@ -360,7 +359,8 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
-            PrivateKey::from_slice(payload).map_err(|err| ParseError(err.to_string()))
+            let bytes = Zeroizing::new(payload.to_vec());
+            PrivateKey::from_slice(bytes.as_ref()).map_err(|err| ParseError(err.to_string()))
         }
     }
 }
@@ -404,6 +404,17 @@ mod test {
     fn public_key() -> PublicKey {
         let payload = hex::decode(PUBLIC_KEY).unwrap();
         EcdsaSecp256k1Sha256::parse_public_key(&payload).unwrap()
+    }
+
+    #[test]
+    fn parse_private_key_accepts_valid_scalar_and_signs() {
+        let payload = hex::decode(PRIVATE_KEY).unwrap();
+        let secret = EcdsaSecp256k1Sha256::parse_private_key(&payload).unwrap();
+        let (public, private) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
+        let message = b"secp256k1 parsed private key";
+        let signature = EcdsaSecp256k1Sha256::sign(message, &private);
+
+        EcdsaSecp256k1Sha256::verify(message, &signature, &public).expect("signature verifies");
     }
 
     #[cfg(feature = "crypto-parity-tests")]

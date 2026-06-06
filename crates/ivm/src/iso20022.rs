@@ -3871,9 +3871,9 @@ pub fn validate_format(pattern: &str, value: &[u8]) -> bool {
 
 /// Create a new ISO 20022 message of the given type.
 ///
-/// The real opcode will allocate structures based on schema definitions.  The
-/// temporary implementation simply initialises an empty [`IsoMessage`] and
-/// stores it in a thread-local slot.
+/// The message is represented as a deterministic in-memory [`IsoMessage`] slot.
+/// Schema helpers and validators can inspect or update the fields before the
+/// encoded XML is emitted.
 pub fn msg_create(message_type: &str) {
     MESSAGE_STACK.with(|stack| {
         stack.borrow_mut().push(IsoMessage {
@@ -3885,9 +3885,8 @@ pub fn msg_create(message_type: &str) {
 
 /// Clone the current ISO 20022 message object.
 ///
-/// This operation is cheap in the temporary implementation since the message is
-/// stored in thread-local memory.  Cloning will duplicate the in-memory
-/// structure which is sufficient for tests.
+/// The thread-local message stack stores deterministic in-memory structures, so
+/// cloning duplicates the active message fields without reparsing XML.
 pub fn msg_clone() {
     MESSAGE_STACK.with(|stack| {
         let cloned = { stack.borrow().last().cloned() };

@@ -20,10 +20,10 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-const SUITE_KDF_SALT_V1: &[u8] = b"sorafs.hybrid.kem.hkdf:v1";
-const SUITE_KDF_INFO_V1: &[u8] = b"sorafs.hybrid.kem.material:v1";
-const SUITE_REKEY_INFO_V1: &[u8] = b"sorafs.hybrid.kem.rekey:v1";
-const SUITE_TRANSCRIPT_DOMAIN_V1: &[u8] = b"sorafs.hybrid.kem.transcript:v1";
+const SUITE_KDF_SALT_V1: &[u8] = b"sorafs.hybrid.kem.hkdf:transcript-v1";
+const SUITE_KDF_INFO_V1: &[u8] = b"sorafs.hybrid.kem.material:transcript-v1";
+const SUITE_REKEY_INFO_V1: &[u8] = b"sorafs.hybrid.kem.rekey:transcript-v1";
+const SUITE_TRANSCRIPT_DOMAIN_V1: &[u8] = b"sorafs.hybrid.kem.transcript:transcript-v1";
 const HYBRID_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
 const X25519_LOW_ORDER_CHECK_SECRET: [u8; 32] = [1_u8; 32];
 
@@ -59,7 +59,9 @@ impl HybridSuite {
     #[must_use]
     fn description(self) -> &'static str {
         match self {
-            HybridSuite::X25519MlKem768ChaCha20Poly1305 => "x25519-mlkem768-chacha20poly1305",
+            HybridSuite::X25519MlKem768ChaCha20Poly1305 => {
+                "x25519-mlkem768-chacha20poly1305-transcript-v1"
+            }
         }
     }
 }
@@ -75,7 +77,9 @@ impl FromStr for HybridSuite {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "x25519-mlkem768-chacha20poly1305" => Ok(Self::X25519MlKem768ChaCha20Poly1305),
+            "x25519-mlkem768-chacha20poly1305-transcript-v1" => {
+                Ok(Self::X25519MlKem768ChaCha20Poly1305)
+            }
             _ => Err(()),
         }
     }
@@ -361,8 +365,11 @@ impl HybridKeyPair {
         );
         let kem_pair = try_generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng)
             .map_err(|_| HybridError::InvalidKyberSecretKey)?;
-        let secret =
-            HybridSecretKey::from_bytes(x25519_secret.to_bytes(), kem_pair.secret_key.as_slice())?;
+        let x25519_secret_bytes = Zeroizing::new(x25519_secret.to_bytes());
+        let secret = HybridSecretKey::from_bytes(
+            x25519_secret_bytes.as_ref(),
+            kem_pair.secret_key.as_slice(),
+        )?;
         let public = secret.public().clone();
 
         Ok(Self { public, secret })
@@ -469,10 +476,10 @@ pub struct DerivedSecret {
 
 impl DerivedSecret {
     /// Construct a new [`DerivedSecret`] from component arrays.
-    fn new(encryption_key: [u8; 32], rekey_secret: [u8; 32]) -> Self {
+    fn new(encryption_key: Zeroizing<[u8; 32]>, rekey_secret: Zeroizing<[u8; 32]>) -> Self {
         Self {
-            encryption_key: Zeroizing::new(encryption_key),
-            rekey_secret: Zeroizing::new(rekey_secret),
+            encryption_key,
+            rekey_secret,
         }
     }
 
@@ -491,7 +498,10 @@ impl DerivedSecret {
 
 impl Clone for DerivedSecret {
     fn clone(&self) -> Self {
-        Self::new(self.encryption_key(), self.rekey_secret())
+        Self::new(
+            Zeroizing::new(*self.encryption_key),
+            Zeroizing::new(*self.rekey_secret),
+        )
     }
 }
 
@@ -686,14 +696,12 @@ fn derive_material(
     hkdf.expand(suite.hkdf_info(), okm.as_mut())
         .map_err(|_| HybridError::InvalidHkdfLength)?;
 
-    let mut encryption_key = [0_u8; 32];
+    let mut encryption_key = Zeroizing::new([0_u8; 32]);
     encryption_key.copy_from_slice(&okm[..32]);
 
-    let mut rekey_buf = Zeroizing::new([0_u8; 32]);
-    hkdf.expand(suite.rekey_info(), rekey_buf.as_mut())
+    let mut rekey_secret = Zeroizing::new([0_u8; 32]);
+    hkdf.expand(suite.rekey_info(), rekey_secret.as_mut())
         .map_err(|_| HybridError::InvalidHkdfLength)?;
-    let mut rekey_secret = [0_u8; 32];
-    rekey_secret.copy_from_slice(rekey_buf.as_ref());
 
     Ok(DerivedSecret::new(encryption_key, rekey_secret))
 }
@@ -730,6 +738,7 @@ mod tests {
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
     use rand_core::{TryCryptoRng, TryRngCore};
+    use zeroize::Zeroize as _;
 
     use super::*;
 
@@ -765,6 +774,29 @@ mod tests {
     fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
         bytes[0] = 0xFF;
         bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+    }
+
+    #[test]
+    fn hybrid_suite_string_is_first_release_transcript_label() {
+        let suite = HybridSuite::X25519MlKem768ChaCha20Poly1305;
+
+        assert_eq!(
+            suite.to_string(),
+            "x25519-mlkem768-chacha20poly1305-transcript-v1"
+        );
+        assert_eq!(HybridSuite::from_str(&suite.to_string()), Ok(suite));
+        assert_eq!(
+            HybridSuite::from_str("x25519-mlkem768-chacha20poly1305"),
+            Err(())
+        );
+        for rejected in [
+            "x25519-mlkem768-chacha20poly1305-transcript-v2",
+            "x25519-mlkem768-chacha20poly1305-transcript-v1 ",
+            " X25519-mlkem768-chacha20poly1305-transcript-v1",
+            "x25519-mlkem768-chacha20poly1305:transcript-v1",
+        ] {
+            assert_eq!(HybridSuite::from_str(rejected), Err(()));
+        }
     }
 
     #[test]
@@ -848,6 +880,44 @@ mod tests {
             &changed_ciphertext,
         );
         assert_ne!(baseline.encryption_key(), changed.encryption_key());
+    }
+
+    #[test]
+    fn derived_secret_clone_preserves_material() {
+        let ecdh = [0x10_u8; 32];
+        let kyber = [0x20_u8; 32];
+        let recipient_x25519 = [0x30_u8; 32];
+        let recipient_kyber = vec![0x40_u8; 96];
+        let ephemeral_x25519 = [0x50_u8; 32];
+        let kyber_ciphertext = vec![0x60_u8; 128];
+
+        let baseline = derive_material(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            &ecdh,
+            &kyber,
+            HybridTranscript {
+                recipient_x25519: &recipient_x25519,
+                recipient_kyber: &recipient_kyber,
+                ephemeral_x25519: &ephemeral_x25519,
+                kyber_ciphertext: &kyber_ciphertext,
+            },
+        )
+        .expect("fixed HKDF inputs derive");
+        let duplicate = baseline.clone();
+
+        assert_eq!(baseline.encryption_key(), duplicate.encryption_key());
+        assert_eq!(baseline.rekey_secret(), duplicate.rekey_secret());
+    }
+
+    #[test]
+    fn x25519_shared_secret_zeroizes_explicitly() {
+        let secret = StaticSecret::from([0x7D; 32]);
+        let peer = X25519PublicKey::from(&StaticSecret::from([0xA5; 32]));
+        let mut shared = secret.diffie_hellman(&peer);
+
+        assert!(shared.as_bytes().iter().any(|byte| *byte != 0));
+        shared.zeroize();
+        assert_eq!(shared.as_bytes(), &[0u8; 32]);
     }
 
     #[test]

@@ -255,9 +255,9 @@ mod compliance {
             token
                 .verify_signature(&self.verifying_key)
                 .map_err(|_| ProofTokenError::Signature)?;
-            if let Some(digest_key) = self.digest_key {
+            if let Some(digest_key) = self.digest_key.as_ref() {
                 token
-                    .verify_blinded_digest(&digest_key, binding_digest)
+                    .verify_blinded_digest(digest_key, binding_digest)
                     .map_err(|_| ProofTokenError::Digest)?;
             }
             Ok(ValidatedProofToken {

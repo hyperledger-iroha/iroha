@@ -776,6 +776,393 @@ def test_release_bundle_requires_hashed_phase_evidence(tmp_path: Path) -> None:
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_duplicate_phase_evidence_assignment_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject explicit phase evidence overwrites."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    first_log = tmp_path / "corridor-first.log"
+    second_log = tmp_path / "corridor-second.log"
+    first_log.write_text(complete_corridor_log(), encoding="utf-8")
+    second_log.write_text(complete_corridor_log(), encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"all={first_log}",
+            "--phase-evidence",
+            f"rust-sccp={second_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "duplicate SCCP corridor phase evidence for rust-sccp"
+    ) in completed.stderr
+    assert "already set by --phase-evidence all=" in completed.stderr
+    assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_phase_evidence_dir_override_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject explicit overrides of downloaded logs."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    write_phase_artifacts(tmp_path)
+    override_log = tmp_path / "rust-sccp-override.log"
+    override_log.write_text(complete_corridor_log(), encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--phase-evidence",
+            f"rust-sccp={override_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "duplicate SCCP corridor phase evidence for rust-sccp"
+    ) in completed.stderr
+    assert "already set by --phase-evidence-dir" in completed.stderr
+    assert "cannot set from --phase-evidence rust-sccp=" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_evidence_input_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject symlinked evidence before publishing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    evidence_link = tmp_path / "evidence-link.toml"
+    evidence_link.symlink_to(evidence)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            str(evidence_link),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle source path must not be a symlink" in completed.stderr
+    assert str(evidence_link) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_evidence_ancestor_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject evidence reached through a symlinked dir."""
+
+    _, evidence_payload = write_complete_evidence(tmp_path)
+    real_dir = tmp_path / "real-evidence"
+    real_dir.mkdir()
+    real_evidence = real_dir / "complete.toml"
+    real_evidence.write_text(evidence_payload, encoding="utf-8")
+    evidence_alias = tmp_path / "evidence-alias"
+    evidence_alias.symlink_to(real_dir, target_is_directory=True)
+    evidence_via_alias = evidence_alias / "complete.toml"
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence_via_alias),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle source path ancestor must not be a symlink"
+    ) in completed.stderr
+    assert str(evidence_alias) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_control_character_evidence_input_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe copied evidence source paths."""
+
+    _, evidence_payload = write_complete_evidence(tmp_path)
+    evidence_with_control = tmp_path / "complete\noperator.toml"
+    evidence_with_control.write_text(evidence_payload, encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence_with_control),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle source path contains control character '\\n'" in (
+        completed.stderr
+    )
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_markdown_unsafe_evidence_input_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject table-breaking evidence filenames."""
+
+    _, evidence_payload = write_complete_evidence(tmp_path)
+    evidence_with_pipe = tmp_path / "complete|operator.toml"
+    evidence_with_pipe.write_text(evidence_payload, encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence_with_pipe),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle source filename contains Markdown-unsafe character "
+        "'|'"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_phase_evidence_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject symlinked corridor phase evidence."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
+    corridor_link = tmp_path / "rust-sccp-link.log"
+    corridor_link.symlink_to(corridor_log)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_link}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle source path must not be a symlink" in completed.stderr
+    assert str(corridor_link) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_phase_evidence_ancestor_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject phase evidence under a symlinked dir."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    real_dir = tmp_path / "real-phase-logs"
+    real_dir.mkdir()
+    corridor_log = real_dir / "rust-sccp.log"
+    corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
+    phase_alias = tmp_path / "phase-log-alias"
+    phase_alias.symlink_to(real_dir, target_is_directory=True)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={phase_alias / 'rust-sccp.log'}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle source path ancestor must not be a symlink"
+    ) in completed.stderr
+    assert str(phase_alias) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_control_character_phase_evidence_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe phase evidence source paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp\noperator.log"
+    corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle source path contains control character '\\n'" in (
+        completed.stderr
+    )
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_markdown_unsafe_phase_evidence_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject table-breaking phase evidence filenames."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "rust-sccp|operator.log"
+    corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle source filename contains Markdown-unsafe character "
+        "'|'"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
 def test_release_bundle_requires_native_evm_prover_bundle(tmp_path: Path) -> None:
     """The production bundle must not pass without native no-WASM prover evidence."""
 
@@ -998,10 +1385,375 @@ def test_release_bundle_rejects_duplicate_native_evm_prover_json_keys(
         text=True,
     )
 
-    assert completed.returncode == 1
-    assert "SCCP release bundle is not production ready" in completed.stderr
+    assert completed.returncode == 2
     assert (
         "native EVM Groth16 prover bundle JSON contains duplicate key: bundle_id"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_duplicate_native_evm_prover_payload_paths_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject native prover path reuse before copying."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proving_key"] = payload["proof_artifact"]
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "native EVM Groth16 prover bundle proving_key path must not reuse "
+        "proof_artifact: native-prover-artifacts/proof-artifact.bin"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_native_evm_prover_manifest_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject a symlinked native prover manifest input."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    native_link = tmp_path / "native-prover-link.json"
+    native_link.symlink_to(native_bundle)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_link),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle source path must not be a symlink" in completed.stderr
+    assert str(native_link) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_native_evm_manifest_ancestor_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject native manifests under symlinked dirs."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    real_dir = tmp_path / "native-manifest-real"
+    real_dir.mkdir()
+    manifest_copy = real_dir / "native-prover.json"
+    manifest_copy.write_text(native_bundle.read_text(encoding="utf-8"), encoding="utf-8")
+    native_alias = tmp_path / "native-manifest-alias"
+    native_alias.symlink_to(real_dir, target_is_directory=True)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_alias / "native-prover.json"),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle source path ancestor must not be a symlink"
+    ) in completed.stderr
+    assert str(native_alias) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_control_character_native_evm_manifest_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe native prover manifest paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    native_control = tmp_path / "native-prover\noperator.json"
+    native_control.write_text(native_bundle.read_text(encoding="utf-8"), encoding="utf-8")
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_control),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle source path contains control character '\\n'" in (
+        completed.stderr
+    )
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_native_evm_prover_payload_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject symlinked native prover payload files."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_target = tmp_path / "native-prover-artifacts" / "proof-artifact-real.bin"
+    proof_path.rename(proof_target)
+    proof_path.symlink_to(proof_target)
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle source path must not be a symlink" in completed.stderr
+    assert str(proof_path) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_symlinked_native_evm_payload_ancestor_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject native payloads under symlinked dirs."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload_alias = tmp_path / "native-prover-artifacts-alias"
+    payload_alias.symlink_to(
+        tmp_path / "native-prover-artifacts",
+        target_is_directory=True,
+    )
+    payload["proof_artifact"] = (
+        "native-prover-artifacts-alias/proof-artifact.bin"
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle source path ancestor must not be a symlink"
+    ) in completed.stderr
+    assert str(payload_alias) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_control_character_native_evm_payload_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject unsafe native prover payload paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_control = (
+        tmp_path / "native-prover-artifacts" / "proof-artifact\noperator.bin"
+    )
+    proof_path.rename(proof_control)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact"] = (
+        "native-prover-artifacts/proof-artifact\noperator.bin"
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact path contains "
+        "control character '\\n'"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_markdown_unsafe_native_evm_payload_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject table-breaking native payload paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    proof_unsafe = (
+        tmp_path / "native-prover-artifacts" / "proof-artifact|operator.bin"
+    )
+    proof_path.rename(proof_unsafe)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact"] = (
+        "native-prover-artifacts/proof-artifact|operator.bin"
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact path contains "
+        "Markdown-unsafe character '|'"
     ) in completed.stderr
     assert not output_dir.exists()
 
@@ -1044,6 +1796,113 @@ def test_release_bundle_force_rejects_output_containing_inputs(
         / "sccp-production-corridor-contract-smoke"
         / "contract-smoke.log"
     ).is_file()
+
+
+def test_release_bundle_rejects_symlinked_output_directory_before_force(
+    tmp_path: Path,
+) -> None:
+    """Forced output replacement must not target a symlinked bundle dir."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    real_output = tmp_path / "real-output"
+    real_output.mkdir()
+    output_link = tmp_path / "bundle-link"
+    output_link.symlink_to(real_output, target_is_directory=True)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--force",
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_link),
+            "--phase-result",
+            "all=missing",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release bundle output directory must not be a symlink" in (
+        completed.stderr
+    )
+    assert str(output_link) in completed.stderr
+    assert real_output.is_dir()
+    assert output_link.is_symlink()
+
+
+def test_release_bundle_rejects_symlinked_output_ancestor_before_create(
+    tmp_path: Path,
+) -> None:
+    """Bundle output creation must not route through a symlinked parent."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    real_parent = tmp_path / "real-output-parent"
+    real_parent.mkdir()
+    parent_link = tmp_path / "output-parent-link"
+    parent_link.symlink_to(real_parent, target_is_directory=True)
+    output_dir = parent_link / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle output directory ancestor must not be a symlink"
+    ) in completed.stderr
+    assert str(parent_link) in completed.stderr
+    assert not (real_parent / "bundle").exists()
+
+
+def test_release_bundle_rejects_control_character_output_directory_before_create(
+    tmp_path: Path,
+) -> None:
+    """Bundle output creation must reject unsafe output path text."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    output_dir = tmp_path / "bundle\noperator"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--allow-not-ready",
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=missing",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release bundle output directory contains control character '\\n'"
+    ) in completed.stderr
+    assert not output_dir.exists()
 
 
 def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> None:
@@ -1657,6 +2516,84 @@ def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_payload_paths(
+    tmp_path: Path,
+) -> None:
+    """Published native prover bundle paths must not reuse another role's file."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["proving_key"] = payload["proof_artifact"]
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proving_key path must not reuse proof_artifact: "
+        "native-prover-artifacts/proof-artifact.bin"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_report_paths(
+    tmp_path: Path,
+) -> None:
+    """Readiness report native prover artifact paths must be role-unique."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    native_bundle = report["native_evm_prover_bundle"]
+    native_bundle["proving_key"] = dict(native_bundle["proof_artifact"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report native_evm_prover_bundle proving_key path must not "
+        "reuse proof_artifact: "
+        "native-prover/native-prover-artifacts/proof-artifact.bin"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash(
     tmp_path: Path,
 ) -> None:
@@ -2076,6 +3013,36 @@ def test_release_bundle_verifier_rejects_manifest_root_self_listing(
     )
 
 
+def test_release_bundle_verifier_rejects_duplicate_manifest_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Manifest artifact rows must name each bundle path exactly once."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    duplicate = dict(manifest["artifacts"][0])
+    manifest["artifacts"].append(duplicate)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        f"duplicate manifest artifact path: {duplicate['path']}"
+        in verified.stdout
+    )
+
+
 def test_release_bundle_verifier_rejects_symlinked_manifest(
     tmp_path: Path,
 ) -> None:
@@ -2209,6 +3176,30 @@ def test_release_bundle_rejects_control_character_artifact_paths(
     ) in message
 
 
+def test_release_bundle_rejects_markdown_unsafe_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Generated public artifact paths must not break Markdown review tables."""
+
+    module = load_bundle_module()
+    output_dir = tmp_path / "bundle"
+    artifact = output_dir / "evidence" / "00-complete|operator.toml"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("release evidence\n", encoding="utf-8")
+
+    try:
+        module._artifact(artifact, output_dir)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Markdown-unsafe artifact path was accepted")
+
+    assert (
+        "release artifact path contains Markdown-unsafe character '|': "
+        "'evidence/00-complete|operator.toml'"
+    ) in message
+
+
 def test_release_bundle_verifier_rejects_control_character_manifest_paths(
     tmp_path: Path,
 ) -> None:
@@ -2235,6 +3226,35 @@ def test_release_bundle_verifier_rejects_control_character_manifest_paths(
     assert (
         "manifest artifact path contains control character '\\n': "
         "'sccp-release-readiness\\n.md'"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths(
+    tmp_path: Path,
+) -> None:
+    """Manifest artifact paths must not break public Markdown tables."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"][0]["path"] = "sccp-release|readiness.md"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "manifest artifact path contains Markdown-unsafe character '|': "
+        "'sccp-release|readiness.md'"
     ) in verified.stdout
 
 
@@ -2273,6 +3293,41 @@ def test_release_bundle_verifier_rejects_control_character_report_paths(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_markdown_unsafe_report_paths(
+    tmp_path: Path,
+) -> None:
+    """Readiness report paths must not break public Markdown tables."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["inputs"][0] = "evidence/00-complete|operator.toml"
+    report["input_artifacts"][0]["path"] = "evidence/00-complete|operator.toml"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report inputs path contains Markdown-unsafe character '|': "
+        "'evidence/00-complete|operator.toml'"
+    ) in verified.stdout
+    assert (
+        "readiness report input artifact path contains Markdown-unsafe "
+        "character '|': 'evidence/00-complete|operator.toml'"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_control_character_filesystem_entries(
     tmp_path: Path,
 ) -> None:
@@ -2296,6 +3351,32 @@ def test_release_bundle_verifier_rejects_control_character_filesystem_entries(
     assert (
         "bundle contains entry path with control character '\\n': "
         "'operator\\nnotes.txt'"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_markdown_unsafe_filesystem_entries(
+    tmp_path: Path,
+) -> None:
+    """Extracted bundle entries must not break public Markdown tables."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    (output_dir / "operator|notes.txt").write_text(
+        "unreviewed operator note\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundle contains entry path with Markdown-unsafe character '|': "
+        "'operator|notes.txt'"
     ) in verified.stdout
 
 
@@ -3228,6 +4309,54 @@ def test_release_bundle_verifier_rejects_release_checklist_unknown_fields(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_release_checklist_duplicate_item_ids(
+    tmp_path: Path,
+) -> None:
+    """Release checklist gate ids must remain unique in every public checklist."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    duplicate_id = report["release_checklist"]["items"][0]["id"]
+    report["release_checklist"]["items"][1]["id"] = duplicate_id
+    report["evidence"]["release_checklist"]["items"][1]["id"] = duplicate_id
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["release_checklist"]["items"][1]["id"] = duplicate_id
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report",
+        "readiness report embedded evidence",
+        "all-lanes summary",
+    ):
+        assert (
+            f"{label} release_checklist contains duplicate item id: "
+            f"{duplicate_id}"
+        ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_release_checklist_field_type_drift(
     tmp_path: Path,
 ) -> None:
@@ -3920,6 +5049,85 @@ def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift(
     assert any(
         "all-lanes summary lane domain " in line
         and "blockers must be a list of non-empty strings" in line
+        for line in verified.stdout.splitlines()
+    )
+
+
+def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings(
+    tmp_path: Path,
+) -> None:
+    """Public blocker lists must not repeat the same operator-facing blocker."""
+
+    def duplicate_blockers(summary: dict, blocker: str) -> None:
+        summary["blockers"] = [blocker, blocker]
+        summary["lanes"][0]["blockers"] = [blocker, blocker]
+        summary["release_checklist"]["items"][0]["blockers"] = [blocker, blocker]
+
+    output_dir = build_ready_bundle(tmp_path)
+    blocker = "manual duplicate blocker"
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["blockers"] = [blocker, blocker]
+    report["corridor"]["blockers"] = [blocker, blocker]
+    report["release_checklist"]["items"][0]["blockers"] = [blocker, blocker]
+    duplicate_blockers(report["evidence"], blocker)
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    duplicate_blockers(summary, blocker)
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["blockers"] = [blocker, blocker]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    expected_fragments = (
+        "manifest blockers must not contain duplicate strings",
+        "readiness report blockers must not contain duplicate strings",
+        "readiness report corridor blockers must not contain duplicate strings",
+        "readiness report release_checklist item all_required_lane_records "
+        "blockers must not contain duplicate strings",
+        "readiness report embedded evidence blockers must not contain duplicate strings",
+        "readiness report embedded evidence release_checklist item "
+        "all_required_lane_records blockers must not contain duplicate strings",
+        "all-lanes summary blockers must not contain duplicate strings",
+        "all-lanes summary release_checklist item all_required_lane_records "
+        "blockers must not contain duplicate strings",
+    )
+    for fragment in expected_fragments:
+        assert fragment in verified.stdout
+    assert any(
+        "readiness report embedded evidence lane domain " in line
+        and "blockers must not contain duplicate strings" in line
+        for line in verified.stdout.splitlines()
+    )
+    assert any(
+        "all-lanes summary lane domain " in line
+        and "blockers must not contain duplicate strings" in line
         for line in verified.stdout.splitlines()
     )
 
@@ -7933,6 +9141,45 @@ def test_release_bundle_verifier_rejects_submission_surface_unknown_lanes(
     assert (
         "readiness report user_prover_submission_surfaces missing required "
         "lanes row: eth,bsc"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_unsupported_substrate_submission_surface(
+    tmp_path: Path,
+) -> None:
+    """Public submission rows must not re-advertise unsupported Substrate lanes."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    substrate_row = dict(report["user_prover_submission_surfaces"][0])
+    substrate_row["lanes"] = "substrate"
+    substrate_row["proof_backend"] = "substrate-runtime-v1"
+    substrate_row["on_chain_submission"] = "Substrate runtime call envelope"
+    report["user_prover_submission_surfaces"].append(substrate_row)
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report user_prover_submission_surfaces contains unknown "
+        "lanes row: substrate"
+    ) in verified.stdout
+    assert (
+        "readiness report user_prover_submission_surfaces does not match "
+        "corridor phases"
     ) in verified.stdout
 
 

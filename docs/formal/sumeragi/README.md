@@ -8734,6 +8734,10 @@ Temporal properties:
   completes the delivered committed state through the same certified
   exact-source chain used by finality-latch and committed-phase entry
   transitions.
+- `CommitArtifactsChangeAlwaysCommitsCurrentView` proves that any durable
+  commit-view or commit-certificate witness change commits the current active
+  view without advancing the view counter, installs `commitView'` as that same
+  view, preserves view-quorum evidence, and excludes NewView handoff state.
 - `FinalityLatchOnlySetsCompleteStack` proves that any transition setting the
   abstract finality latch enters `Committed` with the complete finality stack:
   prepare quorum, live commit quorum, stake quorum, commit-certificate witness,
@@ -8819,6 +8823,18 @@ Temporal properties:
   classifier covering complete-stack installation, committed-phase entry,
   live commit-gate crossing, commit witnesses, NewView isolation, exact
   source effects, and quorum gates.
+- `FinalitySourceActionAlwaysMatchesFinalityLatchChange` proves that those
+  exact finality-source actions install the finality-latch complete stack,
+  couple latch and commit artifacts, enter the committed phase, and match the
+  live commit-gate crossing before the committed-entry bridge is applied.
+- `FinalitySourceActionAlwaysMatchesCommittedPhaseEntry` proves that those
+  exact finality-source actions enter the committed phase through the finality
+  latch, install the committed-phase complete stack, and match the committed
+  entry to the certified finality stack.
+- `FinalitySourceActionAlwaysInstallsFinalityCertificateStack` proves that
+  those exact finality-source actions leave the post-state with the complete
+  finality-certificate stack present and aligned with the committed phase,
+  commit certificate, commit view, and live commit/RBC evidence predicates.
 - `FinalitySourceActionSourceAlwaysIsCommitOrDelivery` proves that those exact
   finality-source actions are classified as commit/RBC delivery sources and
   exclude timeout, NewView, RBC setup/progress, proposal/prepare, Byzantine
@@ -8862,6 +8878,10 @@ Temporal properties:
 - `FinalitySourceActionNeverCarriesNewViewHandoff` proves that those exact
   finality-source actions are not NewView handoffs, carry no live NewView votes,
   and preserve existing view-quorum evidence.
+- `FinalitySourceActionAlwaysCommitsCurrentView` proves that those exact
+  finality-source actions commit the current active view without advancing the
+  view counter, install `commitView'` as that same view, preserve view-quorum
+  evidence, and keep NewView handoff state out of the commit.
 - `FinalityLatchChangeAlwaysMatchesCertifiedSourceStack` proves that every
   finality-latch transition is simultaneously classified by the commit-artifact
   installation/source, committed-phase entry, live commit-gate crossing,
@@ -9004,7 +9024,8 @@ Temporal properties:
   including the view-zero case where installation is value preserving.
 - `CommittedPhaseEntryAlwaysMatchesCommitViewWitnessChange` proves that any
   first entry into `Committed` which changes the nonzero commit-view witness
-  also completes the certified commit-view witness-change proof chain.
+  also carries the certified commit-view witness-change stack and installs the
+  corresponding commit-certificate witnesses.
 - `CommittedPhaseEntryAlwaysMatchesLiveCommitGateCrossing` proves that every
   first entry into `Committed` is exactly the transition where the live
   `CanCommit(...)` gate crosses from false to true.
@@ -9019,6 +9040,10 @@ Temporal properties:
   `Committed` cannot carry transient NewView handoff state: the transition is
   outside `NewView`, the NewView vote counter is clear on both sides, and
   latched view evidence is unchanged by finality entry.
+- `CommittedPhaseEntryAlwaysCommitsCurrentView` proves that first entry into
+  `Committed` commits the current active view without advancing the view
+  counter, installs `commitView'` as that same view, preserves view-quorum
+  evidence, and excludes NewView handoff state from the commit.
 - `CommittedPhaseEntryAlwaysDisablesProgressActions` proves that the post-state
   of first entry into `Committed` already disables proposal, vote, timeout,
   Byzantine fault, and RBC progress gates.
@@ -9461,6 +9486,13 @@ Frontier recovery invariants:
 - `FuturePromotionResetsActiveProgress`, which requires a freshly promoted
   second slot to start with cleared active progress, validation, vote, QC,
   recovery, quorum-window, and view flags.
+- `FuturePromotionInstallsFreshSecondSlot`, which requires a freshly promoted
+  second slot to be active, vote-backed, non-dropped, backed by consumed future
+  evidence, and reset through the active-progress cleanup invariant.
+- `TerminalFrontierOutcomesAreExclusive`, which requires committed, dropped,
+  and rotated frontier terminal outcomes to stay mutually exclusive, clear
+  quorum-reschedule timers, and keep drop labels exactly aligned with dropped
+  states.
 - `PendingProgressEventsTouchAge`, which requires every modeled pending
   progress event to reset the abstract progress age.
 - `StaleRecoveryUnlockIsViewScoped`, which requires any stale recovery unlock

@@ -32,6 +32,7 @@ use blake2::Digest;
 use group::{Curve, prime::PrimeCurveAffine};
 #[allow(unused_imports)]
 use w3f_bls::SerializableToBytes as _;
+use zeroize::Zeroizing;
 
 use crate::{
     Blake2b256,
@@ -128,7 +129,8 @@ pub fn prove_normal_with_chain(
 ) -> Result<(VrfOutput, VrfProof), VrfProofError> {
     use blstrs::G2Projective;
     let msg = prehash_input_with_chain(chain_id, input);
-    let x = scalar_from_secret_key_bytes(&sk.to_bytes())?;
+    let sk_bytes = Zeroizing::new(sk.to_bytes());
+    let x = scalar_from_secret_key_bytes(sk_bytes.as_ref())?;
     let h = G2Projective::hash_to_curve(&msg, DST_G2, &[]);
     let sig = (h * x).to_affine().to_compressed();
     let y = output_from_sigma(&sig);
@@ -164,7 +166,8 @@ pub fn prove_small_with_chain(
 ) -> Result<(VrfOutput, VrfProof), VrfProofError> {
     use blstrs::G1Projective;
     let msg = prehash_input_with_chain(chain_id, input);
-    let x = scalar_from_secret_key_bytes(&sk.to_bytes())?;
+    let sk_bytes = Zeroizing::new(sk.to_bytes());
+    let x = scalar_from_secret_key_bytes(sk_bytes.as_ref())?;
     let h = G1Projective::hash_to_curve(&msg, DST_G1, &[]);
     let sig = (h * x).to_affine().to_compressed();
     let y = output_from_sigma(&sig);
