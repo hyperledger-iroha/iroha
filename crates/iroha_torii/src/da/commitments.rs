@@ -279,11 +279,11 @@ fn verify_against_store(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::{num::NonZeroU32, sync::Arc};
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder},
         da::{
@@ -381,6 +381,7 @@ mod tests {
         }
 
         let bundle = DaCommitmentBundle::new(records);
+        let bundle_for_store = bundle.clone();
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
@@ -394,6 +395,7 @@ mod tests {
         builder.set_da_commitments(Some(bundle));
         let block = builder.build_with_signature(0, keypair.private_key());
         let header = block.header();
+        let block_height = header.height().get();
         let block_hash = block.hash();
 
         app.kura
@@ -403,7 +405,51 @@ mod tests {
         block_hashes.push_for_tests(block_hash);
         block_hashes.commit_for_tests();
         app.state.update_latest_block_header_cache_for_tests(header);
+        drop(app.state.da_commitments());
+        {
+            let mut store = app.state.da_commitments.write();
+            store.insert_bundle(block_height, bundle_for_store);
+            assert!(
+                store.bundle_at(block_height).is_some(),
+                "DA commitment fixture must seed handler store"
+            );
+        }
         app
+    }
+
+    async fn prove_for_manifest(
+        app: crate::SharedAppState,
+        manifest: ManifestDigest,
+    ) -> DaCommitmentProof {
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        response.expect("proof should be returned").proof
+    }
+
+    async fn verify_invalid(
+        app: crate::SharedAppState,
+        proof: DaCommitmentProof,
+        expected_error: &str,
+    ) {
+        let JsonBody(verification) =
+            super::handler_verify_commitment(State(app), NoritoJson(proof))
+                .await
+                .expect("verify handler should succeed");
+        assert!(!verification.valid);
+        assert!(
+            verification
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains(expected_error)),
+            "unexpected verification error: {verification:?}"
+        );
     }
 
     #[test]
@@ -437,6 +483,39 @@ mod tests {
     }
 
     #[test]
+    fn list_manifest_filter_takes_precedence_over_conflicting_lane_tuple() {
+        let store = store_with_records();
+        let manifest = ManifestDigest::new([2; 32]);
+        let request = DaCommitmentProofRequest {
+            manifest_hash: Some(manifest),
+            lane_id: Some(2),
+            epoch: Some(1),
+            sequence: Some(5),
+            ..DaCommitmentProofRequest::default()
+        };
+
+        let items = list_from_store(&store, &request);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].commitment.manifest_hash, manifest);
+        assert_eq!(items[0].commitment.lane_id, LaneId::new(1));
+        assert_eq!(items[0].commitment.epoch, 2);
+        assert_eq!(items[0].commitment.sequence, 0);
+    }
+
+    #[test]
+    fn list_targeted_record_respects_offset_as_empty_page() {
+        let store = store_with_records();
+        let request = DaCommitmentProofRequest {
+            manifest_hash: Some(ManifestDigest::new([2; 32])),
+            pagination: Some(pagination(Some(1), 1)),
+            ..DaCommitmentProofRequest::default()
+        };
+
+        let items = list_from_store(&store, &request);
+        assert!(items.is_empty());
+    }
+
+    #[test]
     fn prove_builds_merkle_proof() {
         let store = store_with_records();
         let request = DaCommitmentProofRequest {
@@ -466,6 +545,32 @@ mod tests {
         ]);
 
         assert!(verify_da_commitment_proof(&proof, bundle, &header, &config).is_ok());
+    }
+
+    #[test]
+    fn prove_returns_none_for_absent_and_partial_lookup_keys() {
+        let store = store_with_records();
+        let absent_manifest = DaCommitmentProofRequest {
+            manifest_hash: Some(ManifestDigest::new([0x99; 32])),
+            ..DaCommitmentProofRequest::default()
+        };
+        assert!(build_proof_from_store(&store, &absent_manifest).is_none());
+
+        let partial_lane_tuple = DaCommitmentProofRequest {
+            lane_id: Some(1),
+            epoch: Some(1),
+            sequence: None,
+            ..DaCommitmentProofRequest::default()
+        };
+        assert!(build_proof_from_store(&store, &partial_lane_tuple).is_none());
+
+        let wrong_sequence = DaCommitmentProofRequest {
+            lane_id: Some(1),
+            epoch: Some(1),
+            sequence: Some(999),
+            ..DaCommitmentProofRequest::default()
+        };
+        assert!(build_proof_from_store(&store, &wrong_sequence).is_none());
     }
 
     #[tokio::test]
@@ -556,6 +661,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prove_handler_returns_none_for_unknown_commitment_keys() {
+        let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 0)];
+        let app = app_with_da_commitment_bundle(records);
+
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app.clone()),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(ManifestDigest::new([0xFA; 32])),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        assert!(response.is_none());
+
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app),
+            NoritoJson(DaCommitmentProofRequest {
+                lane_id: Some(1),
+                epoch: Some(1),
+                sequence: Some(999),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        assert!(response.is_none());
+    }
+
+    #[tokio::test]
     async fn verify_handler_rejects_tampered_merkle_root() {
         let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
         let manifest = records[1].manifest_hash;
@@ -585,6 +720,66 @@ mod tests {
                 .is_some_and(|message| message.contains("Merkle path")),
             "unexpected verification error: {verification:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_missing_bundle_reference() {
+        let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
+        let manifest = records[1].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        let mut proof = prove_for_manifest(app.clone(), manifest).await;
+        proof.location.block_height = 2;
+
+        verify_invalid(app, proof, "no DA commitment bundle stored for block 2").await;
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_bundle_without_backing_kura_block() {
+        let app = app_with_da_commitment_bundle(vec![sample_record(1, 1, 1)]);
+        let missing_block_bundle =
+            DaCommitmentBundle::new(vec![sample_record(1, 2, 2), sample_record(1, 3, 3)]);
+        let proof = build_da_commitment_proof(&missing_block_bundle, 2, 1)
+            .expect("proof for bundle without Kura block");
+        app.state
+            .da_commitments
+            .write()
+            .insert_bundle(2, missing_block_bundle);
+
+        verify_invalid(app, proof, "block 2 not available in Kura").await;
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_out_of_bounds_index() {
+        let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
+        let manifest = records[1].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        let mut proof = prove_for_manifest(app.clone(), manifest).await;
+        proof.location.index_in_bundle = u32::MAX;
+
+        verify_invalid(app, proof, "out of bounds").await;
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_commitment_payload_mismatch() {
+        let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
+        let manifest = records[1].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        let mut proof = prove_for_manifest(app.clone(), manifest).await;
+        proof.commitment = sample_record(1, 9, 9);
+
+        verify_invalid(app, proof, "commitment payload differs").await;
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_tampered_bundle_hash() {
+        let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
+        let manifest = records[1].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        let mut proof = prove_for_manifest(app.clone(), manifest).await;
+        proof.bundle_hash =
+            HashOf::<DaCommitmentBundle>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
+
+        verify_invalid(app, proof, "DA commitment bundle hash mismatch").await;
     }
 
     #[tokio::test]

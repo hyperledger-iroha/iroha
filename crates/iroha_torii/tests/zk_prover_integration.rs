@@ -20,6 +20,10 @@ use iroha_data_model::{
 use iroha_torii::zk_attachments::AttachmentTenant;
 use tower::ServiceExt as _;
 
+const FIXTURE_BACKEND: &str = "halo2/ipa";
+const FIXTURE_CIRCUIT_ID: &str = "tiny-add-public";
+const FIXTURE_ENVELOPE_CIRCUIT_ID: &str = "halo2/ipa:tiny-add-public";
+
 fn ensure_quota_config() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
@@ -53,32 +57,33 @@ fn ensure_quota_config() {
 }
 
 fn fixture_attachment_bytes() -> Vec<u8> {
-    let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
+    let seed = halo2_fixture_envelope(FIXTURE_ENVELOPE_CIRCUIT_ID, [0u8; 32]);
+    let vk = seed.vk_box(FIXTURE_BACKEND).expect("fixture vk bytes");
     let vk_commitment = hash_vk(&vk);
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", vk_commitment);
+    let fixture = halo2_fixture_envelope(FIXTURE_ENVELOPE_CIRCUIT_ID, vk_commitment);
     let mut attachment = ProofAttachment::new_ref(
-        "halo2/ipa".into(),
-        fixture.proof_box("halo2/ipa"),
-        VerifyingKeyId::new("halo2/ipa", "tiny-add"),
+        FIXTURE_BACKEND.into(),
+        fixture.proof_box(FIXTURE_BACKEND),
+        VerifyingKeyId::new(FIXTURE_BACKEND, FIXTURE_CIRCUIT_ID),
     );
     attachment.vk_commitment = Some(vk_commitment);
     norito::to_bytes(&attachment).expect("proof attachment bytes")
 }
 
 fn fixture_state() -> Arc<iroha_core::state::State> {
-    let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
-    let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
+    let seed = halo2_fixture_envelope(FIXTURE_ENVELOPE_CIRCUIT_ID, [0u8; 32]);
+    let vk = seed.vk_box(FIXTURE_BACKEND).expect("fixture vk bytes");
     let vk_commitment = hash_vk(&vk);
-    let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+    let fixture = halo2_fixture_envelope(FIXTURE_ENVELOPE_CIRCUIT_ID, vk_commitment);
+    let vk_id = VerifyingKeyId::new(FIXTURE_BACKEND, FIXTURE_CIRCUIT_ID);
     let mut record = VerifyingKeyRecord::new_with_owner(
         1,
-        "tiny-add",
+        FIXTURE_CIRCUIT_ID,
         None,
         "test",
         BackendTag::Halo2IpaPasta,
         "pasta",
-        [0; 32],
+        fixture.schema_hash,
         vk_commitment,
     );
     record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
@@ -92,7 +97,7 @@ fn fixture_state() -> Arc<iroha_core::state::State> {
         .insert(vk_id.clone(), record);
     world
         .verifying_keys_by_circuit_mut_for_testing()
-        .insert(("tiny-add".into(), 1), vk_id);
+        .insert((FIXTURE_CIRCUIT_ID.into(), 1), vk_id);
     let mut state = iroha_core::state::State::new_for_testing(
         world,
         iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -608,6 +613,58 @@ async fn prover_reports_invalid_query_id_is_rejected() {
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         let text = std::str::from_utf8(&body).unwrap();
         assert!(text.contains("invalid report id"));
+    }
+}
+
+#[tokio::test]
+async fn prover_reports_invalid_tag_filter_is_rejected() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    ensure_quota_config();
+
+    let app = Router::new()
+        .route(
+            "/v1/zk/prover/reports",
+            get(
+                |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                    iroha_torii::zk_prover::handle_list_reports(q).await
+                },
+            ),
+        )
+        .route(
+            "/v1/zk/prover/reports",
+            delete(
+                |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                    iroha_torii::zk_prover::handle_delete_reports(q).await
+                },
+            ),
+        )
+        .route(
+            "/v1/zk/prover/reports/count",
+            get(
+                |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
+                    iroha_torii::zk_prover::handle_count_reports(q).await
+                },
+            ),
+        );
+
+    for (method, uri) in [
+        ("GET", "/v1/zk/prover/reports?has_tag=ABCDE"),
+        ("GET", "/v1/zk/prover/reports/count?has_tag=AB%20C"),
+        (
+            "DELETE",
+            "/v1/zk/prover/reports?has_tag=%C3%A9%C3%A9%C3%A9%C3%A9",
+        ),
+    ] {
+        let req = http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.contains("invalid ZK1 tag filter"));
     }
 }
 

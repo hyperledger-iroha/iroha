@@ -8,6 +8,7 @@ public enum OfflineNoteV2Constants {
     public static let recursiveBackend = "halo2/ipa"
     public static let recursiveVerifierName = "offline-note-v2-recursive-v1"
     public static let recursivePublicInputsSchemaV1 = #"{"schema":"offline_note_recursive","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#
+    public static let keyCertificateVersion: UInt16 = 1
 
     public static var recursivePublicInputsSchemaHash: Data {
         IrohaHash.hash(Data(recursivePublicInputsSchemaV1.utf8))
@@ -38,7 +39,7 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
         case let .invalidHash(field):
             return "\(field) must be a canonical Iroha hash."
         case let .invalidCertificateVersion(version):
-            return "Offline V2 key certificate version must be 2 (found \(version))."
+            return "Offline V2 key certificate version must be \(OfflineNoteV2Constants.keyCertificateVersion) (found \(version))."
         case .certificateMustBeOneUse:
             return "Offline V2 key certificate must be marked one-use."
         case let .invalidNotePublicKeyLength(expected, actual):
@@ -177,7 +178,7 @@ public struct OfflineNoteKeyCertificateV2: Equatable, Sendable {
     public let oneUse: Bool
     public let issuerSignature: Data
 
-    public init(version: UInt16 = 2,
+    public init(version: UInt16 = OfflineNoteV2Constants.keyCertificateVersion,
                 platform: String,
                 keyId: String,
                 deviceId: String,
@@ -743,7 +744,7 @@ enum OfflineNoteV2Validation {
                                         accountId: String,
                                         publicKey: Data,
                                         oneUse: Bool) throws {
-        guard version == 2 else {
+        guard version == OfflineNoteV2Constants.keyCertificateVersion else {
             throw OfflineNoteV2Error.invalidCertificateVersion(version)
         }
         guard oneUse else {

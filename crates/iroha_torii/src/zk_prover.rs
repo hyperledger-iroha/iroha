@@ -513,6 +513,18 @@ fn filter_report_summary(
     }
 }
 
+#[cfg(feature = "app_api")]
+fn validate_zk1_tag_filter(q: &ProverListQuery) -> Result<(), &'static str> {
+    let Some(tag) = q.has_tag.as_deref() else {
+        return Ok(());
+    };
+    if tag.len() == 4 && tag.as_bytes().iter().all(u8::is_ascii_graphic) {
+        Ok(())
+    } else {
+        Err("invalid ZK1 tag filter (expected exactly four printable ASCII characters)")
+    }
+}
+
 fn list_attachment_locations() -> Vec<AttachmentLocation> {
     let mut locs = Vec::new();
     if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
@@ -1049,7 +1061,7 @@ fn zk1_minimal_validate(bytes: &[u8]) -> Result<(), String> {
         if pos + len > bytes.len() {
             return Err("truncated TLV payload".into());
         }
-        // Optionally note recognized tags (no-op in stub)
+        // Known tags are advisory; future well-formed TLVs remain admissible.
         let _recognized = matches!(tag, b"PROF" | b"IPAK" | b"H2VK" | b"I10P");
         pos += len;
     }
@@ -1406,7 +1418,7 @@ pub struct ProverListQuery {
     pub id: Option<String>,
     /// Substring match on content type.
     pub content_type: Option<String>,
-    /// Require a ZK1 tag to be present (e.g., "PROF").
+    /// Require a ZK1 TLV tag to be present. Must be exactly four printable ASCII bytes (e.g., "PROF").
     pub has_tag: Option<String>,
     /// Maximum number of results to return.
     pub limit: Option<u32>,
@@ -1437,6 +1449,9 @@ pub async fn handle_list_reports(
     let failed_req = q.failed_only.unwrap_or(false)
         || q.errors_only.unwrap_or(false)
         || q.messages_only.unwrap_or(false);
+    if let Err(message) = validate_zk1_tag_filter(&q) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
     let requested_id = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_report_id(id) else {
             return (
@@ -1528,6 +1543,9 @@ pub async fn handle_count_reports(
 ) -> impl IntoResponse {
     let ok_req = q.ok_only.unwrap_or(false);
     let failed_req = q.failed_only.unwrap_or(false) || q.errors_only.unwrap_or(false);
+    if let Err(message) = validate_zk1_tag_filter(&q) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
     let requested_id = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_report_id(id) else {
             return (
@@ -1562,6 +1580,9 @@ pub async fn handle_delete_reports(
 ) -> impl IntoResponse {
     let ok_req = q.ok_only.unwrap_or(false);
     let failed_req = q.failed_only.unwrap_or(false) || q.errors_only.unwrap_or(false);
+    if let Err(message) = validate_zk1_tag_filter(&q) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
     let requested_id = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_report_id(id) else {
             return (
@@ -2600,6 +2621,25 @@ mod tests {
             false,
             false,
         ));
+    }
+
+    #[test]
+    fn validate_zk1_tag_filter_rejects_malformed_tags() {
+        assert!(
+            validate_zk1_tag_filter(&ProverListQuery {
+                has_tag: Some("PROF".to_string()),
+                ..Default::default()
+            })
+            .is_ok()
+        );
+        for malformed in ["", "ABC", "ABCDE", "AB C", "A\nBC", "éééé"] {
+            let err = validate_zk1_tag_filter(&ProverListQuery {
+                has_tag: Some(malformed.to_string()),
+                ..Default::default()
+            })
+            .expect_err("malformed tag filter should fail closed");
+            assert!(err.contains("invalid ZK1 tag filter"));
+        }
     }
 
     #[test]

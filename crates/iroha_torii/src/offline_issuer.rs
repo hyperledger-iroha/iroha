@@ -32,12 +32,8 @@ use crate::{AppState, Error, SharedAppState, app_auth, json_ok, routing};
 
 const ENDPOINT_KEYS_REFILL: &str = "v1/offline/keys/refill";
 const ENDPOINT_NOTES_ISSUE: &str = "v1/offline/notes/issue";
-const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/notes/redeem";
-const ENDPOINT_AUDIT: &str = "v1/offline/audit";
 const PATH_KEYS_REFILL: &str = "/v1/offline/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/notes/issue";
-const PATH_NOTES_REDEEM: &str = "/v1/offline/notes/redeem";
-const PATH_AUDIT: &str = "/v1/offline/audit";
 const OFFLINE_REVOCATION_BUNDLE_TTL_MS: u64 = 5 * 60 * 1_000;
 
 #[derive(Debug, Clone)]
@@ -348,81 +344,6 @@ pub(crate) async fn handle_notes_issue(
         ),
         ("key_certificate", certificate.clone()),
         ("key_certificates", Value::Array(vec![certificate])),
-    ]))
-}
-
-pub(crate) async fn handle_notes_redeem(
-    app: SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    headers: &HeaderMap,
-    body: Bytes,
-) -> Result<AxResponse, Error> {
-    let _issuer = require_issuer(&app)?;
-    let parsed = parse_and_authorize(
-        app.as_ref(),
-        method,
-        uri,
-        headers,
-        body.as_ref(),
-        ENDPOINT_NOTES_REDEEM,
-    )?;
-    if parsed.value.get("redemption").is_none() {
-        return Err(validation(
-            "OFFLINE_REDEMPTION_PROOF_REQUIRED",
-            "Offline Notes redemption requires a recursive proof payload.",
-        ));
-    }
-    Err(validation(
-        "OFFLINE_REDEMPTION_TORII_ISSUER_UNAVAILABLE",
-        "Offline Notes redemption proof submission is not implemented by this Torii issuer.",
-    ))
-}
-
-pub(crate) async fn handle_audit(
-    app: SharedAppState,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    headers: &HeaderMap,
-    body: Bytes,
-) -> Result<AxResponse, Error> {
-    let _issuer = require_issuer(&app)?;
-    let parsed = parse_and_authorize(
-        app.as_ref(),
-        method,
-        uri,
-        headers,
-        body.as_ref(),
-        ENDPOINT_AUDIT,
-    )?;
-    if parsed
-        .value
-        .get("payment_tokens")
-        .and_then(Value::as_array)
-        .is_some_and(|tokens| !tokens.is_empty())
-    {
-        return Err(validation(
-            "OFFLINE_AUDIT_TORII_ISSUER_UNAVAILABLE",
-            "Offline Notes audit payment-token submission is not implemented by this Torii issuer; route audit mutations through the Core API issuer.",
-        ));
-    }
-    let accepted_receipt_ids = parsed
-        .value
-        .get("receipts")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    optional_string(item, "id").or_else(|| optional_string(item, "receipt_id"))
-                })
-                .map(string_value)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    json_ok(json_object(vec![
-        ("operation_id", string_value(parsed.operation_id)),
-        ("accepted_receipt_ids", Value::Array(accepted_receipt_ids)),
     ]))
 }
 
@@ -2324,12 +2245,10 @@ mod tests {
         }
     }
 
-    fn endpoint_cases() -> [(&'static str, &'static str); 4] {
+    fn endpoint_cases() -> [(&'static str, &'static str); 2] {
         [
             (PATH_KEYS_REFILL, ENDPOINT_KEYS_REFILL),
             (PATH_NOTES_ISSUE, ENDPOINT_NOTES_ISSUE),
-            (PATH_NOTES_REDEEM, ENDPOINT_NOTES_REDEEM),
-            (PATH_AUDIT, ENDPOINT_AUDIT),
         ]
     }
 
@@ -2539,7 +2458,7 @@ mod tests {
         let asset_literal = asset_definition_id.to_string();
         let app = app_with_account_and_asset(&account, &asset_definition_id);
         let method = Method::POST;
-        let uri: Uri = PATH_AUDIT.parse().expect("uri");
+        let uri: Uri = PATH_KEYS_REFILL.parse().expect("uri");
         let body = multisig_witness_body_value(
             &method,
             &uri,
@@ -2557,7 +2476,7 @@ mod tests {
             &uri,
             &HeaderMap::new(),
             &body,
-            ENDPOINT_AUDIT,
+            ENDPOINT_KEYS_REFILL,
         )
         .expect("valid multisig body auth");
         assert_eq!(parsed.account_id, account);
@@ -2702,7 +2621,7 @@ mod tests {
         let asset_literal = asset_definition_id.to_string();
         let app = app_with_account_and_asset(&account, &asset_definition_id);
         let method = Method::POST;
-        let uri: Uri = PATH_NOTES_REDEEM.parse().expect("uri");
+        let uri: Uri = PATH_NOTES_ISSUE.parse().expect("uri");
         let body = sign_body_value(
             &method,
             &uri,
@@ -2722,7 +2641,7 @@ mod tests {
                 &uri,
                 &headers,
                 &body,
-                ENDPOINT_NOTES_REDEEM,
+                ENDPOINT_NOTES_ISSUE,
             )),
             "OFFLINE_HEADER_AUTH_REJECTED"
         );

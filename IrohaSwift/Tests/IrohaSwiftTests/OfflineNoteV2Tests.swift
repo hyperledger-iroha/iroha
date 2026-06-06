@@ -172,7 +172,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         let issuerSignature = try Self.base64(cert.issuerSignatureBase64)
 
         XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
-            version: 1,
+            version: OfflineNoteV2Constants.keyCertificateVersion + 1,
             platform: cert.platform,
             keyId: cert.keyId,
             deviceId: cert.deviceId,
@@ -185,7 +185,10 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true,
             issuerSignature: issuerSignature
         )) { error in
-            XCTAssertEqual(error as? OfflineNoteV2Error, .invalidCertificateVersion(1))
+            XCTAssertEqual(
+                error as? OfflineNoteV2Error,
+                .invalidCertificateVersion(OfflineNoteV2Constants.keyCertificateVersion + 1)
+            )
         }
         XCTAssertThrowsError(try OfflineNoteKeyCertificateV2(
             platform: cert.platform,
@@ -550,7 +553,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertNotEqual(try payload.noritoEncoded(), try certificate.noritoEncoded())
 
         let noLimitPayload = try OfflineNoteKeyCertificatePayloadV2(
-            version: 2,
+            version: OfflineNoteV2Constants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -563,7 +566,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true
         )
         let limitedPayload = try OfflineNoteKeyCertificatePayloadV2(
-            version: 2,
+            version: OfflineNoteV2Constants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -580,7 +583,7 @@ final class OfflineNoteV2Tests: XCTestCase {
         XCTAssertNotEqual(try noLimitPayload.noritoEncoded(), try limitedPayload.noritoEncoded())
 
         XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: 2,
+            version: OfflineNoteV2Constants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,
@@ -593,7 +596,7 @@ final class OfflineNoteV2Tests: XCTestCase {
             oneUse: true
         ))
         XCTAssertThrowsError(try OfflineNoteKeyCertificatePayloadV2(
-            version: 2,
+            version: OfflineNoteV2Constants.keyCertificateVersion,
             platform: certificate.platform,
             keyId: certificate.keyId,
             deviceId: certificate.deviceId,

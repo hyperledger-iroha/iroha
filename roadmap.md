@@ -37,10 +37,11 @@ and completed history lives in [`status.md`](./status.md).
   must not advertise SORA2, SORA Kusama, SORA Polkadot, or generic
   Substrate/Polkadot lanes while they remain outside launch scope. Optional
   runtime SCALE capability fields must also stay absent from public discovery
-  until that launch scope is explicitly re-opened. Torii configured all-lanes
-  launch readiness must also iterate only that supported-domain set, so
-  Substrate-family diagnostic records cannot satisfy or block production launch
-  checks while they remain out of scope.
+  until that launch scope is explicitly re-opened. Torii configured-launch
+  gates must use the supported launch-domain set instead of the full diagnostic
+  domain list, and configured all-lanes launch readiness must also iterate only
+  that supported-domain set, so Substrate-family diagnostic records cannot
+  satisfy or block production launch checks while they remain out of scope.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
@@ -595,9 +596,28 @@ and completed history lives in [`status.md`](./status.md).
   the same workload set. Caller-scoped account reads now also require canonical
   request signatures or witnesses for private dataspace visibility, so bare
   `X-Iroha-Account` headers no longer create caller identity, and the Torii
-  library suite is green after aligning stale SCCP, SoraFS, ISO20022, and ZK
-  fixtures with current production admission rules. The
-  `iroha_cli --all-targets` strict clippy gate now
+	  library suite is green after aligning stale SCCP, SoraFS, ISO20022, and ZK
+	  fixtures with current production admission rules. Torii API-token-gated
+	  Sumeragi/SCCP/bridge endpoints now also emit bounded endpoint/token-state
+	  telemetry counters without exporting raw token material, and Torii ZK prover
+	  report list/count/bulk-delete filters now reject malformed `has_tag` values
+	  unless they are exactly four printable ASCII ZK1 TLV tag characters. Default
+	  Torii builds now omit disabled telemetry, schema, profiling, and ZK
+	  batch-verify routes instead of exposing placeholder `501 Not Implemented`
+	  handlers, and account-alias resolution returns a documented `409 Conflict`
+	  for stored non-account alias-service targets instead of a `501` fallback.
+	  Routed-query unsupported-shape responses now also use `409 Conflict`, while
+	  no-`app_api` inbound Torii proxy read/fanout/hosted-HTTP requests report
+	  `503 route_unavailable`; the feature-minimal connect corridor now passes
+	  check, library tests, and all-target strict clippy with app-only proof,
+	  hosted-proxy, integration-test, binary, and bench targets gated behind
+	  their owning features. SoraFS proof streaming rejects reserved
+	  `proof_kind=pdp` as `400 Bad Request` until the SF-13 provider protocol
+	  lands. The code-only placeholder/TODO sweep now leaves only intentional
+	  negative tests, fail-closed placeholder-material guards, fallback skeleton
+	  naming, manifest-derived source rendering, and telemetry peer compatibility
+	  handling. The
+	  `iroha_cli --all-targets` strict clippy gate now
   covers the governance-instruction, IVM contract deploy, and Taikai helper
   targets with checked length/time arithmetic in the previously failing paths.
   The `iroha_crypto --all-targets` strict clippy gate is also green, covering
@@ -2792,12 +2812,20 @@ and completed history lives in [`status.md`](./status.md).
 - Complete the first-release Offline Bearer Cash pilot over the ZK note and
   nullifier engine. Swift, Kotlin, and Java Android now expose the Bearer Cash
   v1 wallet, note, receive-request, payment-token, ACK, text-codec, and policy
-  names; QR/NFC/Nearby app payloads use only the
-  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
-  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
-  QR/stream payload limits, and Android one-use-key pool sizing. Torii no
-  longer carries legacy offline transfer/revocation compatibility routes or
-  MCP aliases.
+	  names; QR/NFC/Nearby app payloads use only the
+	  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
+	  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
+	  QR/stream payload limits, and Android one-use-key pool sizing. Torii no
+	  longer publishes the legacy offline transfer/revocation HTTP compatibility
+	  routes or the v1 redeem/audit issuer-unavailable stubs, and the versioned
+	  Offline V2 route surface now exposes readiness, key refill, note issue, note
+	  redeem, and audit handlers under `/v1/offline/v2/*`. Governance council
+	  persist/replace/derive-vrf mutation helpers are no longer advertised in
+	  default Torii builds unless `gov_vrf` is compiled, avoiding mounted
+	  not-implemented fallbacks in the production route/tool surface. The shared
+	  Offline V2 interop fixture now uses the chain-admissible key-certificate
+	  version directly, and Swift, Kotlin/JVM, and Java Android SDK constructors
+	  mirror that version for wallet-side fixture parity.
   Shared chain-side `OpenVerifyEnvelope` admission now requires exact active
   verifier-key commitment binding and canonical empty auxiliary bytes for
   generic `VerifyProof`, governance voting proofs, STARK shielded

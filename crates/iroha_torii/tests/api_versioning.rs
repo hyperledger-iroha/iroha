@@ -1,5 +1,6 @@
-#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for Torii API version negotiation.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![cfg(feature = "app_api")]
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},

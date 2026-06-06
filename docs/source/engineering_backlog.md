@@ -1575,6 +1575,32 @@ track detailed unfinished engineering work.
   asset-holder, and contract-activity predicates need additional indexes or
   materialized views.
 
+## Offline V2 Torii follow-ups
+
+- Completed 2026-06-06: Torii now mounts the versioned Offline V2 issuer
+  routes under `/v1/offline/v2/*`, including readiness, key refill, note issue,
+  note redeem, and audit. The redeem route submits `RedeemOfflineNoteV2` after
+  binding the redemption to the authenticated account/asset, validating the
+  chain-admissible key certificate, recomputing recursive public inputs, and
+  rejecting malformed nullifier/amount shapes.
+- Completed 2026-06-06: removed the stale legacy Offline policy/revocation HTTP
+  route registrations from Torii and the source/generated OpenAPI surfaces; the
+  Offline readiness smokes now assert `/v1/offline/revocations*` is absent.
+- Completed 2026-06-06: removed the v1 Offline redeem/audit HTTP stubs that only
+  returned issuer-unavailable errors. The smokes now assert
+  `/v1/offline/notes/redeem` and `/v1/offline/audit` remain absent while the
+  production redemption/audit surface lives under `/v1/offline/v2/*`.
+- Completed 2026-06-06: removed the default governance council derive-vrf
+  not-implemented fallback and aligned HTTP route registration, OpenAPI paths,
+  and MCP tools behind `gov_vrf` for council persist/replace/derive-vrf
+  mutation helpers.
+- Completed 2026-06-06: refreshed `fixtures/offline/interop_contract_v2.json`
+  and its generator so the published redeem vector uses
+  `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` directly. Torii now consumes the
+  committed fixture without normalization and keeps a separate stale-version
+  rejection regression, while Swift, Kotlin/JVM, and Java Android SDK
+  constructors mirror the same key-certificate version.
+
 ## SoraFS paid pin validation follow-ups
 
 - Completed 2026-06-04: reran the SoraFS paid-pin validation corridor across
@@ -1627,6 +1653,13 @@ track detailed unfinished engineering work.
 
 ## ZK audit validation follow-ups
 
+- Completed 2026-06-06: Torii ZK prover report list/count/bulk-delete filters
+  now reject malformed `has_tag` filters unless they are exactly four printable
+  ASCII ZK1 TLV tag characters, with unit and router-level coverage for the
+  fail-closed query contract.
+- Completed 2026-06-06: Torii's prover-report success fixture now uses the
+  public `halo2/ipa:tiny-add-public` envelope and matching registry schema
+  hash, clearing the full `zk_prover_integration` target under `app_api`.
 - Fold the now-green focused ZK cleanup and adversarial negative corridor into
   the next long `cargo test --workspace` / CI validation budget.
 
@@ -3074,6 +3107,10 @@ track detailed unfinished engineering work.
     and ZK prover fixtures that no longer matched production admission rules;
     `cargo test -p iroha_torii --lib -- --nocapture` is green with `2275`
     passed and `2` ignored.
+  - Completed 2026-06-06: Torii's API-token-gated Sumeragi/SCCP/bridge
+    telemetry hook now records bounded endpoint/token-state counters without
+    exporting raw token material; the feature-enabled Torii clippy corridor is
+    green after the SCCP route-manifest alias resolver lint cleanup.
 - Carry the Torii first-release API cleanup through the remaining release
   corridor.
   - The route/API/error-envelope implementation, focused Rust sidecar/client
@@ -3082,6 +3119,51 @@ track detailed unfinished engineering work.
     2026-05-17. Static OpenAPI JSON snapshots and latest/current unsigned
     manifests are refreshed and verified; the remaining broad release work is
     the next full workspace test/clippy corridor.
+  - Completed 2026-06-06: default Torii builds no longer mount placeholder
+    `501 Not Implemented` handlers for `/status`, `/metrics`,
+    `/v1/debug/axt/cache`, `/v1/debug/witness`, `/v1/schema`,
+    `/debug/pprof/profile`, or `/v1/zk/verify-batch`; these paths are
+    feature-owned and absent unless `telemetry`, `schema`, `profiling`, or
+    `zk-verify-batch` is compiled. The default OpenAPI snapshots now omit the
+    disabled telemetry, schema, and profiling paths as well.
+  - Completed 2026-06-06: account-alias resolver service fallbacks no longer
+    return `501 Not Implemented` for non-account `AliasTarget` records.
+    `/v1/aliases/resolve` and `/v1/aliases/resolve_index` now return a
+    documented `409 Conflict` when a stored alias-service record targets an
+    asset, peer, or custom payload instead of an account.
+  - Completed 2026-06-06: routed-query `query_unsupported` responses now use
+    `409 Conflict`, and inbound Torii proxy `Read`, `ReadFanout`, and
+    `HostedHttp` requests compiled without `app_api` use `503 route_unavailable`
+    instead of `501 Not Implemented`.
+  - Completed 2026-06-06: SoraFS proof streaming now rejects
+    `proof_kind=pdp` as `400 Bad Request` because the live endpoint accepts only
+    PoR/PoTR until the SF-13 PDP provider protocol ships.
+  - Completed 2026-06-06: code-only placeholder/TODO sweep removed stale
+    governance deploy-proposal and ZK1 validator wording; remaining matches are
+    intentional negative tests, placeholder-material fail-closed guards,
+    OpenAPI fallback skeleton naming, manifest-derived contract source
+    rendering, and telemetry peer compatibility handling.
+  - Completed 2026-06-06: Torii's configured SCCP all-lanes launch diagnostic
+    now uses the shared supported launch-domain set (ETH, BSC, Solana, TON,
+    TRON) instead of the full core diagnostic-domain list. Substrate/SORA2
+    configured material remains explicitly tested as out of launch scope, and
+    `cargo test -p iroha_torii --lib --features app_api -- --nocapture` is
+    green with `2309` passed and `2` ignored.
+  - Completed 2026-06-06: the same Torii cleanup slice is now green under
+    `cargo test -p iroha_torii --tests --features app_api -- --nocapture`.
+    The broad run covers the updated governance council stake-asset fallback
+    fixture, feature-gated MCP governance tool dispatch, valid ZK roots
+    confidential payload fixtures, and the current Norito error-envelope
+    contract for signed ZK attachment failures.
+  - Completed 2026-06-06: the feature-minimal Torii connect corridor is now
+    green under `cargo check -p iroha_torii --no-default-features --features connect`,
+    `cargo test -p iroha_torii --no-default-features --features connect --lib -- --nocapture`,
+    and `cargo clippy -p iroha_torii --no-default-features --features connect --all-targets -- -D warnings`.
+    App-only route helpers, proof-record reads, hosted HTTP proxy fallbacks,
+    integration tests, the attachment sanitizer binary, and hot-path bench now
+    sit behind `app_api`/required-feature gates, while core ZK roots, verify,
+    submit-proof, and vote-tally DTOs and handlers remain exported without
+    `app_api`.
 - Carry the Iroha Connect hardening through the remaining SDK and workspace
   validation corridor.
   - P2P session claims, hashed token storage, focused Rust checks, JavaScript

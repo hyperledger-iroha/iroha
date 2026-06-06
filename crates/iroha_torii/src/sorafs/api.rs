@@ -1512,9 +1512,9 @@ pub struct ProofStreamRequestDto {
     pub manifest_digest_hex: String,
     /// Hex-encoded provider identifier (32 bytes).
     pub provider_id_hex: String,
-    /// Proof kind requested (`por`, `pdp`, `potr`).
+    /// Proof kind requested (`por` or `potr`; `pdp` is reserved for future SF-13 work).
     pub proof_kind: String,
-    /// Optional sample count (required for PoR/PDP).
+    /// Optional sample count (required for PoR).
     pub sample_count: Option<u32>,
     /// Optional deadline in milliseconds (required for PoTR).
     pub deadline_ms: Option<u32>,
@@ -7494,15 +7494,15 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
         None => {
             return json_error(
                 StatusCode::BAD_REQUEST,
-                "unsupported proof_kind; expected `por`, `pdp`, or `potr`",
+                "unsupported proof_kind; expected `por` or `potr`",
             );
         }
     };
 
     if matches!(proof_kind, ProofStreamKind::Pdp) {
         return json_error(
-            StatusCode::NOT_IMPLEMENTED,
-            "proof_kind is not available yet; only `por` and `potr` are supported",
+            StatusCode::BAD_REQUEST,
+            "unsupported proof_kind; expected `por` or `potr`",
         );
     }
 
@@ -7857,8 +7857,8 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 .unwrap()
         }
         ProofStreamKind::Pdp => json_error(
-            StatusCode::NOT_IMPLEMENTED,
-            "proof_kind is not available yet; only `por` and `potr` are supported",
+            StatusCode::BAD_REQUEST,
+            "unsupported proof_kind; expected `por` or `potr`",
         ),
     }
 }
@@ -9942,6 +9942,37 @@ mod advert_tests {
             urls.first().and_then(Value::as_str),
             Some("https://taira-validator-1.sora.org")
         );
+    }
+
+    #[tokio::test]
+    async fn proof_stream_rejects_pdp_as_bad_request() {
+        let mut state = mk_app_state_for_tests();
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        Arc::get_mut(&mut state)
+            .expect("unique app state required")
+            .sorafs_node = node;
+
+        let request = ProofStreamRequestDto {
+            manifest_digest_hex: "aa".to_string(),
+            provider_id_hex: "bb".to_string(),
+            proof_kind: "pdp".to_string(),
+            sample_count: Some(1),
+            deadline_ms: None,
+            sample_seed: None,
+            nonce_b64: String::new(),
+            orchestrator_job_id_hex: None,
+            tier: None,
+        };
+
+        let response = handle_post_sorafs_proof_stream(State(state), JsonOnly(request)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = BodyExt::collect(response.into_body())
+            .await
+            .expect("collect response body")
+            .to_bytes();
+        let body_text = String::from_utf8(body_bytes.to_vec()).expect("utf8");
+        assert!(body_text.contains("unsupported proof_kind"));
+        assert!(body_text.contains("`por` or `potr`"));
     }
 
     #[tokio::test]

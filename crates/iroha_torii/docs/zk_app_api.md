@@ -18,7 +18,9 @@ Attachments (store sanitized bytes with metadata):
 
 Background prover reports (non‑consensus verification):
 - `GET    /v1/zk/prover/reports` — list reports (JSON array)
+- `GET    /v1/zk/prover/reports/count` — count reports matching the same list filters
 - `GET    /v1/zk/prover/reports/{id}` — fetch one report (JSON)
+- `DELETE /v1/zk/prover/reports` — bulk delete reports matching the same list filters
 - `DELETE /v1/zk/prover/reports/{id}` — delete a report
 
 IVM prove helper (non-consensus proof generation):
@@ -117,6 +119,9 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - GC cadence: attachment GC runs every minute and removes entries older than `attachments_ttl_secs`.
 - Storage hygiene: deleting an attachment removes both `.bin` and `.json`; deleting a report removes the corresponding `.json` under `zk_prover/reports`.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads.
+- Report filters: `has_tag` matches a ZK1 TLV tag and must be exactly four
+  printable ASCII characters, for example `PROF`; malformed tag filters are
+  rejected with `400 Bad Request`.
 - Key bytes: when a registry entry omits stored VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
 - VK commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`
   domain plus length-prefixed backend and VK bytes. Generic ledger
