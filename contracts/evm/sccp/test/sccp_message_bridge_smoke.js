@@ -83,6 +83,24 @@ function compileContracts() {
         "sccp",
         "TairaXorSccpBridge.sol"
       ),
+      "contracts/bsc/sccp/SccpBscSourceBridge.sol": loadRepoSource(
+        "contracts",
+        "bsc",
+        "sccp",
+        "SccpBscSourceBridge.sol"
+      ),
+      "contracts/bsc/sccp/TairaXOR.sol": loadRepoSource(
+        "contracts",
+        "bsc",
+        "sccp",
+        "TairaXOR.sol"
+      ),
+      "contracts/bsc/sccp/TairaXorBscSccpBridge.sol": loadRepoSource(
+        "contracts",
+        "bsc",
+        "sccp",
+        "TairaXorBscSccpBridge.sol"
+      ),
     },
     settings: {
       optimizer: { enabled: true, runs: 200 },
@@ -190,6 +208,27 @@ function computeTronSourceBridgeConfigHash(
   );
 }
 
+function computeBscSourceBridgeConfigHash(
+  abi,
+  { bridgeAddress, networkId, sourceDomain, targetDomain, owner }
+) {
+  return ethers.keccak256(
+    abi.encode(
+      ["bytes32", "address", "bytes32", "uint32", "uint32", "address"],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:bsc-source-bridge-config:v1")
+        ),
+        bridgeAddress,
+        networkId,
+        sourceDomain,
+        targetDomain,
+        owner,
+      ]
+    )
+  );
+}
+
 function computeTronDestinationBindingHash(
   abi,
   {
@@ -238,6 +277,38 @@ function tronAddressWord(address) {
 }
 
 function computeTairaXorBurnSourceEventDigest(
+  abi,
+  { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
+) {
+  return ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "address",
+        "address",
+        "bytes32",
+        "uint256",
+        "uint256",
+      ],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:taira-xor:burn-source-event:v1")
+        ),
+        routeIdHash,
+        assetKeyHash,
+        bridgeAddress,
+        burner,
+        tairaRecipientHash,
+        amount,
+        nonce,
+      ]
+    )
+  );
+}
+
+function computeTairaXorBscBurnSourceEventDigest(
   abi,
   { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
 ) {
@@ -439,6 +510,8 @@ function callExceptionWithReason(reason) {
 async function main() {
   const {
     sccpPayloadHash,
+    tairaXorBscCanonicalTransferPayloadBytes,
+    tairaXorBscTransferMessageId,
     tairaXorCanonicalTransferPayloadBytes,
     tairaXorTransferMessageId,
   } = await import(
@@ -515,6 +588,21 @@ async function main() {
     contracts,
     "contracts/tron/sccp/TairaXorSccpBridge.sol",
     "TairaXorSccpBridge"
+  );
+  const bscSourceBridgeArtifact = artifact(
+    contracts,
+    "contracts/bsc/sccp/SccpBscSourceBridge.sol",
+    "SccpBscSourceBridge"
+  );
+  const bscTairaXorArtifact = artifact(
+    contracts,
+    "contracts/bsc/sccp/TairaXOR.sol",
+    "TairaXOR"
+  );
+  const bscTairaXorBridgeArtifact = artifact(
+    contracts,
+    "contracts/bsc/sccp/TairaXorBscSccpBridge.sol",
+    "TairaXorBscSccpBridge"
   );
   const tronAcceptedEvent = tronGroth16VerifierArtifact.abi.find(
     (entry) => entry.type === "event" && entry.name === "MessageProofAccepted"
@@ -3586,6 +3674,281 @@ async function main() {
     expectedBurnDigest,
   ]);
   assert.equal(bridgeSourceEventLogs[0].data, "0x");
+
+  const bscRouteIdHash = ethers.keccak256(ethers.toUtf8Bytes("taira_bsc_xor"));
+  await assert.rejects(
+    async () => {
+      await deploy(signer, bscSourceBridgeArtifact.abi, bscSourceBridgeArtifact.bytecode, [
+        bscTestnetNetworkId,
+        5,
+        0,
+      ]);
+    },
+    callExceptionWithReason("Source domain must be BSC")
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(signer, bscSourceBridgeArtifact.abi, bscSourceBridgeArtifact.bytecode, [
+        bscTestnetNetworkId,
+        2,
+        5,
+      ]);
+    },
+    callExceptionWithReason("Target domain must be SORA")
+  );
+  const bscSourceBridge = await deploy(
+    signer,
+    bscSourceBridgeArtifact.abi,
+    bscSourceBridgeArtifact.bytecode,
+    [bscTestnetNetworkId, 2, 0]
+  );
+  const bscSourceBridgeAddress = await bscSourceBridge.getAddress();
+  const expectedBscSourceBridgeConfigHash = computeBscSourceBridgeConfigHash(abi, {
+    bridgeAddress: bscSourceBridgeAddress,
+    networkId: bscTestnetNetworkId,
+    sourceDomain: 2,
+    targetDomain: 0,
+    owner: await signer.getAddress(),
+  });
+  assert.equal(await bscSourceBridge.sourceDomain(), 2n);
+  assert.equal(await bscSourceBridge.targetDomain(), 0n);
+  assert.equal(
+    await bscSourceBridge.sourceBridgeConfigHash(),
+    expectedBscSourceBridgeConfigHash
+  );
+
+  const bscToken = await deploy(
+    signer,
+    bscTairaXorArtifact.abi,
+    bscTairaXorArtifact.bytecode
+  );
+  const bscTokenAddress = await bscToken.getAddress();
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bscTairaXorBridgeArtifact.abi,
+        bscTairaXorBridgeArtifact.bytecode,
+        [
+          bscTokenAddress,
+          groth16VerifierAddress,
+          bscSourceBridgeAddress,
+          groth16VerifierCodeHash,
+          groth16VerifierKeyHash,
+          "evm-groth16-bn254-v1",
+          "stark-fri-v1",
+          bscTestnetNetworkId,
+          0,
+          5,
+          bscRouteIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Target domain must be BSC")
+  );
+  const bscRouteBridge = await deploy(
+    signer,
+    bscTairaXorBridgeArtifact.abi,
+    bscTairaXorBridgeArtifact.bytecode,
+    [
+      bscTokenAddress,
+      groth16VerifierAddress,
+      bscSourceBridgeAddress,
+      groth16VerifierCodeHash,
+      groth16VerifierKeyHash,
+      "evm-groth16-bn254-v1",
+      "stark-fri-v1",
+      bscTestnetNetworkId,
+      0,
+      2,
+      bscRouteIdHash,
+      assetKeyHash,
+    ]
+  );
+  const bscRouteBridgeAddress = await bscRouteBridge.getAddress();
+  const bscRouteDestinationBindingHash = computeDestinationBindingHash(abi, {
+    verifierBackendHash: ethers.keccak256(
+      ethers.toUtf8Bytes("evm-groth16-bn254-v1")
+    ),
+    proofFamilyHash: ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1")),
+    networkId: bscTestnetNetworkId,
+    sourceDomain: 0,
+    targetDomain: 2,
+    verifierAddress: groth16VerifierAddress,
+    wrapperAddress: bscRouteBridgeAddress,
+    verifierCodeHash: groth16VerifierCodeHash,
+    verifierKeyHash: groth16VerifierKeyHash,
+  });
+  assert.equal(await bscRouteBridge.networkId(), bscTestnetNetworkId);
+  assert.equal(await bscRouteBridge.expectedSourceDomain(), 0n);
+  assert.equal(await bscRouteBridge.expectedTargetDomain(), 2n);
+  assert.equal(await bscRouteBridge.verifierCodeHash(), groth16VerifierCodeHash);
+  assert.equal(await bscRouteBridge.verifierKeyHash(), groth16VerifierKeyHash);
+  assert.equal(
+    await bscRouteBridge.destinationBindingHash(),
+    bscRouteDestinationBindingHash
+  );
+  await (await bscToken.setBridge(bscRouteBridgeAddress)).wait();
+  await (await bscToken.lockBridge()).wait();
+  await (await bscSourceBridge.transferOwnership(bscRouteBridgeAddress)).wait();
+  assert.equal(await bscSourceBridge.owner(), bscRouteBridgeAddress);
+
+  const bscRecipient = ethers.getAddress(await outsider.getAddress());
+  const bscMintAmount = 45_678n;
+  const bscPayloadInput = {
+    tairaAccountId,
+    bscRecipient,
+    amount: bscMintAmount,
+    nonce: 99n,
+  };
+  const bscCanonicalPayload =
+    tairaXorBscCanonicalTransferPayloadBytes(bscPayloadInput);
+  const bscPayloadHash = sccpPayloadHash(bscCanonicalPayload);
+  const bscMessageId = tairaXorBscTransferMessageId(bscPayloadInput);
+  const bscInputs = [
+    bscMessageId,
+    bscPayloadHash,
+    ethers.zeroPadValue(ethers.toBeHex(2), 32),
+    ethers.keccak256(ethers.toUtf8Bytes("taira-bsc-xor-commitment-root")),
+    ethers.zeroPadValue(ethers.toBeHex(97), 32),
+    ethers.keccak256(ethers.toUtf8Bytes("taira-bsc-xor-finality-block")),
+  ];
+  const bscStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("taira-bsc-xor-statement")
+  );
+  const bscProofBytes = await buildAcceptingGroth16ProofBytes(provider, abi, {
+    publicInputs: bscInputs,
+    sourceDomain: 0,
+    statementHash: bscStatementHash,
+    destinationBindingHash: bscRouteDestinationBindingHash,
+    g1,
+    g2,
+  });
+  assert.equal(
+    await bscRouteBridge.tairaXorTransferMessageId.staticCall(bscCanonicalPayload),
+    bscMessageId
+  );
+  assert.equal(
+    await bscRouteBridge.finalizeFromTaira.staticCall(
+      bscProofBytes,
+      bscInputs,
+      bscStatementHash,
+      bscCanonicalPayload
+    ),
+    bscMessageId
+  );
+  const bscRecipientCodecOffset = recipientCodecOffset;
+  const wrongBscRecipientCodecPayload = Uint8Array.from(bscCanonicalPayload);
+  wrongBscRecipientCodecPayload[bscRecipientCodecOffset] = 5;
+  await assert.rejects(
+    async () => {
+      await bscRouteBridge.finalizeFromTaira.staticCall(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        wrongBscRecipientCodecPayload
+      );
+    },
+    callExceptionWithReason("Unexpected recipient codec")
+  );
+  const bscRecipientOffset = bscRecipientCodecOffset + 1 + 4;
+  const zeroBscRecipientPayload = Uint8Array.from(bscCanonicalPayload);
+  zeroBscRecipientPayload.fill(
+    "0".charCodeAt(0),
+    bscRecipientOffset + 2,
+    bscRecipientOffset + 42
+  );
+  await assert.rejects(
+    async () => {
+      await bscRouteBridge.finalizeFromTaira.staticCall(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        zeroBscRecipientPayload
+      );
+    },
+    callExceptionWithReason("Recipient address is required")
+  );
+  const wrongBscRoutePayload = Uint8Array.from(bscCanonicalPayload);
+  wrongBscRoutePayload[wrongBscRoutePayload.length - 1] ^= 1;
+  await assert.rejects(
+    async () => {
+      await bscRouteBridge.finalizeFromTaira.staticCall(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        wrongBscRoutePayload
+      );
+    },
+    callExceptionWithReason("Unexpected route")
+  );
+
+  const bscMintTx = await bscRouteBridge.finalizeFromTaira(
+    bscProofBytes,
+    bscInputs,
+    bscStatementHash,
+    bscCanonicalPayload
+  );
+  await bscMintTx.wait();
+  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintAmount);
+  assert.equal(await bscToken.totalSupply(), bscMintAmount);
+  await assert.rejects(
+    async () => {
+      const replayBscMintTx = await bscRouteBridge.finalizeFromTaira(
+        bscProofBytes,
+        bscInputs,
+        bscStatementHash,
+        bscCanonicalPayload
+      );
+      await replayBscMintTx.wait();
+    },
+    callExceptionWithReason("Message proof already used")
+  );
+
+  const bscBurnRecipient = ethers.toUtf8Bytes("testu-bsc@taira");
+  const bscBurnRecipientHash = ethers.keccak256(bscBurnRecipient);
+  const bscBurnAmount = 333n;
+  const expectedBscBurnDigest = computeTairaXorBscBurnSourceEventDigest(abi, {
+    routeIdHash: bscRouteIdHash,
+    assetKeyHash,
+    bridgeAddress: bscRouteBridgeAddress,
+    burner: bscRecipient,
+    tairaRecipientHash: bscBurnRecipientHash,
+    amount: bscBurnAmount,
+    nonce: 0n,
+  });
+  assert.equal(
+    await bscRouteBridge.tairaXorBurnSourceEventDigest.staticCall(
+      bscRouteIdHash,
+      assetKeyHash,
+      bscRecipient,
+      bscBurnRecipientHash,
+      bscBurnAmount,
+      0
+    ),
+    expectedBscBurnDigest
+  );
+  const bscBurnTx = await bscRouteBridge
+    .connect(outsider)
+    .burnToTaira(bscRouteIdHash, assetKeyHash, bscBurnRecipient, bscBurnAmount);
+  const bscBurnReceipt = await bscBurnTx.wait();
+  assert.equal(await bscRouteBridge.burnNonce(), 1n);
+  assert.equal(await bscSourceBridge.submittedSourceEvents(expectedBscBurnDigest), true);
+  assert.equal(await bscToken.balanceOf(bscRecipient), bscMintAmount - bscBurnAmount);
+  assert.equal(await bscToken.totalSupply(), bscMintAmount - bscBurnAmount);
+  const bscSourceEventLogs = bscBurnReceipt.logs
+    .filter(
+      (log) =>
+        log.address.toLowerCase() === bscSourceBridgeAddress.toLowerCase() &&
+        log.topics[0] === sourceEventTopic
+    );
+  assert.equal(bscSourceEventLogs.length, 1);
+  assert.deepEqual(bscSourceEventLogs[0].topics, [
+    sourceEventTopic,
+    expectedBscBurnDigest,
+  ]);
+  assert.equal(bscSourceEventLogs[0].data, "0x");
 
   console.log("sccp_message_bridge_smoke: ok");
 }

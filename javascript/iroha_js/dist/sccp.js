@@ -1979,6 +1979,25 @@ const validateCanonicalEvmHexAddress = (text, label) => {
   }
 };
 
+const canonicalEip55HexAddress = (value, label) => {
+  const bytes = nonZeroHexBytes(value, label, 20);
+  const lowercasePayload = bytesToHex(bytes, false);
+  const checksum = keccak_256(textEncoder.encode(lowercasePayload));
+  let output = "0x";
+  for (let index = 0; index < lowercasePayload.length; index += 1) {
+    const char = lowercasePayload[index];
+    if (/[0-9]/u.test(char)) {
+      output += char;
+      continue;
+    }
+    const checksumByte = checksum[Math.floor(index / 2)];
+    const checksumNibble =
+      index % 2 === 0 ? checksumByte >> 4 : checksumByte & 0x0f;
+    output += checksumNibble >= 8 ? char.toUpperCase() : char;
+  }
+  return output;
+};
+
 const decodeSolanaBase58FixedAllowZero = (value, label, byteLength) => {
   const text = normalizeNonEmptyString(value, label);
   if (text.length < 32 || text.length > 44) {
@@ -2736,7 +2755,7 @@ export const buildTairaXorBscToTairaTransferPayload = (input) => {
   }
   const routeId = normalizeTairaBscXorRouteIdInput(input);
   const assetKey = normalizeTairaXorAssetKeyInput(input);
-  const sender = nonZeroHex(
+  const sender = canonicalEip55HexAddress(
     strictResultField(
       input,
       "bscSender",
@@ -2824,7 +2843,7 @@ export const buildTairaXorBscTransferPayload = (input) => {
     ),
     "sender",
   );
-  const recipient = nonZeroHex(
+  const recipient = canonicalEip55HexAddress(
     strictResultField(
       input,
       "recipientAddress",

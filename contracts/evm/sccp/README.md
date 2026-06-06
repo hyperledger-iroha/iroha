@@ -26,8 +26,8 @@ Files:
   secp256k1 attestation quorum with `keccak256` and `ecrecover`; it is not a
   production SCCP verifier.
 - `test/sccp_message_bridge_smoke.js`: focused Ganache smoke test for the EVM
-  wrapper plus the TRON/TVM destination-verifier and governed source-bridge
-  entrypoint paths.
+  wrapper plus the TRON/TVM and BSC route bridge, destination-verifier, and
+  governed source-bridge entrypoint paths.
 
 Quick verification:
 
@@ -36,9 +36,9 @@ scripts/sccp_evm_contract_smoke.sh
 ```
 
 The smoke installs pinned `solc`, `ganache`, and `ethers` versions into a
-temporary directory, compiles the EVM and TRON SCCP contracts, and runs the
-deterministic BN254 acceptance/replay checks without relying on repository-local
-Node dependencies.
+temporary directory, compiles the EVM, TRON, and BSC SCCP contracts, and runs
+the deterministic BN254 acceptance/replay checks without relying on
+repository-local Node dependencies.
 
 The current reference path keeps the native SCCP proof artifact as a canonical
 `OpenVerifyEnvelope` that wraps the FASTPQ proof and bound public inputs, while
