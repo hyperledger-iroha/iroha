@@ -35,7 +35,7 @@ CORRIDOR_PHASES = (
 PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
     "evidence-scripts": (
-        "python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+        "-m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
         "pytests/scripts/sccp_release_bundle_test.py",
         "pytests/scripts/sccp_release_readiness_report_test.py",
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -391,6 +391,7 @@ NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (
     b"proverendpoint",
     b"prover endpoint",
 )
+NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = 256
 NATIVE_EVM_PROVER_BUNDLE_SUMMARY_KEYS = {
     "required",
     "schema",
@@ -2941,6 +2942,9 @@ CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
             'callExceptionWithReason("Verifier code hash mismatch")',
             'callExceptionWithReason("Verifier key hash is required")',
             'callExceptionWithReason("Verifier key hash mismatch")',
+            'callExceptionWithReason("Verifier key hash unavailable")',
+            "nonVerifierContract",
+            "nonVerifierContractCodeHash",
             "assert.equal(await groth16Bridge.verifierCodeHash(), groth16VerifierCodeHash);",
             "assert.equal(await groth16Bridge.verifierKeyHash(), groth16VerifierKeyHash);",
             'callExceptionWithReason("Destination binding hash is required")',
@@ -2964,7 +2968,15 @@ CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
             "acceptedGroth16Logs[0].args.proofFamilyHash,",
             "assert.equal(acceptedGroth16Logs[0].args.networkId, networkId);",
             "assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);",
+            "duplicateInvalidGroth16Tx",
             'callExceptionWithReason("Message proof already used")',
+        ),
+    ),
+    (
+        "contracts/evm/sccp/SccpMessageBridge.sol",
+        (
+            "!usedMessageProofs[publicInputs[0]]",
+            '"Message proof already used"',
         ),
     ),
 )
@@ -2973,6 +2985,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
         "scripts/sccp_release_readiness_report.py",
         (
             "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (",
+            "NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES",
             "NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA",
             "NATIVE_EVM_PROVER_SELF_TEST_SCHEMA",
             "class DuplicateJsonKeyError",
@@ -2988,6 +3001,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "sdk_results missing sdk",
             "def _native_evm_prover_hash_role_blockers(",
             "must not be empty",
+            "must be at least",
             "must not duplicate",
             "must not reuse",
             "canonical non-zero 32-byte hex value",
@@ -3043,12 +3057,26 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "BuildEthereumCalldataUnchecked",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
             "requireEthereumMainnetNativeProverSelfTest",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
+            "RunNativeProverSelfTestAsync",
             "NativeProverSelfTestFunction",
             "EthereumMainnetNativeProverSelfTest",
             "NativeProverSelfTest",
             "IEthereumMainnetNativeProverSelfTest",
             "nativeProverSelfTest runner",
             "nativeProverSelfTest result",
+            "requireGroth16Bn254ProofTuple",
+            "sccpGroth16Bn254ProofTupleInvalidField",
+            "RequireGroth16Bn254ProofTuple",
+            "BN254 base-field",
+            "BN254 G1",
+            "BN254 G2",
+            "proofBytes.sourceDomain",
+            "testRejectsMalformedEvmGroth16ProofTuple",
+            "rejectsMalformedGroth16ProofTuple",
+            "rejects malformed Ethereum Groth16 proof tuples",
+            "OutboundProofPathRejectsCrossLaneAndMalformedProofs",
             '"javascript/iroha_js/dist/sccp.js"',
             '"javascript/iroha_js/dist/index.js"',
             '"javascript/iroha_js/index.d.ts"',
@@ -3059,6 +3087,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_json_keys",
             "def test_release_readiness_report_blocks_empty_native_evm_prover_payload",
+            "def test_release_readiness_report_blocks_tiny_native_evm_prover_payload",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
@@ -3066,6 +3095,10 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
             "def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
             "def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker",
+            "def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_keys",
+            "def test_release_readiness_report_blocks_duplicate_native_evm_self_test_keys",
+            "cross_sdk_fixture_parity_artifact JSON contains duplicate key",
+            "native_prover_self_test_artifact JSON contains duplicate key",
             "def test_release_readiness_native_local_prover_guard_covers_identifier_variants",
             '"remoteProver"',
             '"remote prover"',
@@ -3094,6 +3127,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
             "parseEthereumMainnetNativeEvmProverBundleManifest(JSON.stringify(nativeProverBundle)",
             "verifyEthereumMainnetNativeEvmProverArtifacts",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "EthereumMainnetNativeProverSelfTestFn",
             "nativeProverSelfTestBytes",
             "nativeProverSelfTest(context)",
@@ -3108,8 +3143,10 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "def test_release_bundle_rejects_empty_native_evm_prover_payload",
+            "def test_release_bundle_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker",
             "def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload",
+            "def test_release_bundle_verifier_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
@@ -3117,6 +3154,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
             "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
             "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker",
+            "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_keys",
+            "def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys",
             "native proof artifact imports proof.wasm",
         ),
     ),
@@ -3354,6 +3393,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "buildBscMainnetSccpDestinationProofRequest",
             "wrapBscMainnetSccpDestinationProofResult",
             "EthereumMainnetSccp",
+            "EthereumMainnetSccp.runNativeProverSelfTest",
             "EthereumMainnetSccp.buildOutboundProofRequest",
             "EthereumMainnetSccp.proveOutboundToEthereum",
             "EthereumMainnetSccp.buildEthereumCalldata",
@@ -3363,6 +3403,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.submitInboundToIroha",
             "EthereumMainnetSccp.buildLocalAdmissionSubmission",
             "buildEthereumMainnetSccpLocalAdmissionSubmission",
+            "runEthereumMainnetNativeProverSelfTest",
             "consensusProvider",
             "BscMainnetSccpProver",
             "BscMainnetSccp",
@@ -3424,6 +3465,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "buildBscMainnetSccpDestinationProofRequest",
             "wrapBscMainnetSccpDestinationProofResult",
             "EthereumMainnetSccp",
+            "EthereumMainnetSccp.runNativeProverSelfTest",
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
@@ -3466,6 +3508,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "SccpSourceProofs.bscReceiptProofHash",
             "SccpBsc.buildProofRequest",
             "EthereumMainnetSccp",
+            "EthereumMainnetSccp.runNativeProverSelfTest",
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
@@ -3509,6 +3552,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "SourceSccpProofs.bscReceiptProofHash",
             "BscSccpProver.buildProofRequest",
             "EthereumMainnetSccp",
+            "EthereumMainnetSccp.runNativeProverSelfTest",
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
@@ -3550,6 +3594,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync",
             "EthereumMainnetSccp.ProveInboundToSoraAsync",
             "EthereumMainnetSccp.SubmitInboundToIrohaAsync",
+            "EthereumMainnetSccp.RunNativeProverSelfTestAsync",
             "EthereumMainnetSccp.BuildOutboundProofRequest",
             "EthereumMainnetSccp.ProveOutboundToEthereumAsync",
             "EthereumMainnetSccp.BuildEthereumCalldata",
@@ -5382,6 +5427,11 @@ def _native_evm_prover_payload_artifact(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
+    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES:
+        blockers.append(
+            f"{prefix} must be at least "
+            f"{NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES} bytes"
+        )
 
     if isinstance(manifest_artifact, dict):
         manifest_artifact_path = manifest_artifact.get("path")

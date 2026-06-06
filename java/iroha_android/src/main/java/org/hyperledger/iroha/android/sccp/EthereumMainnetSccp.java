@@ -839,6 +839,18 @@ public final class EthereumMainnetSccp {
         proofEngine.prove(EvmSccpProver.callbackRequestSnapshot(request)), request);
   }
 
+  public EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult
+      runNativeProverSelfTest() {
+    return runNativeProverSelfTest(nativeProverArtifacts, nativeProverSelfTest);
+  }
+
+  public EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult
+      runNativeProverSelfTest(
+          final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
+          final NativeProverSelfTest nativeProverSelfTest) {
+    return requireNativeProverSelfTest(artifacts, nativeProverSelfTest);
+  }
+
   private static void requireVerifiedNativeProverArtifacts(
       final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
       final EvmSccpProver.ProofRequest request) {
@@ -907,7 +919,8 @@ public final class EthereumMainnetSccp {
     }
   }
 
-  private static void requireNativeProverSelfTest(
+  private static EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult
+      requireNativeProverSelfTest(
       final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts artifacts,
       final NativeProverSelfTest nativeProverSelfTest) {
     Objects.requireNonNull(artifacts, "nativeProverArtifacts");
@@ -929,6 +942,7 @@ public final class EthereumMainnetSccp {
       throw new IllegalArgumentException(
           "nativeProverSelfTest result must match nativeProverBundle fixture");
     }
+    return result;
   }
 
   private static void requireVerifiedNativeProverArtifacts(

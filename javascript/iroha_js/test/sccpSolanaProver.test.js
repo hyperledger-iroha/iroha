@@ -18149,12 +18149,13 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
   const proofBytes = Uint8Array.from([1, 2, 3, 4, 5]);
   const recipientAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const amount = 1000n;
-  const canonicalPayloadBytes = tairaXorCanonicalTransferPayloadBytes({
+  const canonicalPayload = buildTairaXorTransferPayload({
     sender: TAIRA_ACCOUNT_ID,
     recipientAddress,
     amount,
     nonce: 42n,
   });
+  const canonicalPayloadBytes = canonicalSccpTransferPayloadBytes(canonicalPayload);
   const publicInputs = {
     messageId: tairaXorTransferMessageId({
       sender: TAIRA_ACCOUNT_ID,
@@ -18165,12 +18166,7 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
     payloadHash: sccpPayloadHash(
       canonicalSccpPayloadEnvelopeBytes({
         kind: "Transfer",
-        value: buildTairaXorTransferPayload({
-          sender: TAIRA_ACCOUNT_ID,
-          recipientAddress,
-          amount,
-          nonce: 42n,
-        }),
+        value: canonicalPayload,
       }),
     ),
     targetDomain: SCCP_DOMAIN_TRON,

@@ -541,20 +541,32 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
+            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "assertNativeEvmProverArtifactHasProductionSize",
+            "must be at least",
             "contains forbidden prover dependency marker",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
             "requireEthereumMainnetNativeProverSelfTest",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTestFn",
             "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
             "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
             "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
             "submission requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
+            "SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16Bn254ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
         ),
         ROOT / "javascript" / "iroha_js" / "src" / "index.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
             "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "runEthereumMainnetNativeProverSelfTest",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
         ),
         ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js": (
@@ -578,19 +590,31 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
+            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "assertNativeEvmProverArtifactHasProductionSize",
+            "must be at least",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult",
             "requireEthereumMainnetNativeProverSelfTest",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTestFn",
             "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
             "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
             "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
             "submission requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
+            "SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16Bn254ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
         ),
         ROOT / "javascript" / "iroha_js" / "dist" / "index.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
             "verifyEthereumMainnetNativeEvmProverArtifactsFromBundle",
+            "runEthereumMainnetNativeProverSelfTest",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
         ),
         ROOT / "javascript" / "iroha_js" / "index.d.ts": (
@@ -613,6 +637,8 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "readonly crossSdkFixtureParityArtifact: string",
             "EthereumMainnetNativeProverSelfTestContext",
             "EthereumMainnetNativeProverSelfTestFn",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn",
         ),
         ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
@@ -634,14 +660,29 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "implementationArtifact:",
             "crossSdkFixtureParityArtifact:",
             "flaggedArtifactBytes",
+            "tinyProofArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
             "proofArtifactBytes contains forbidden prover dependency marker",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata({ proofResult })",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTest(context)",
             "missingSelfTestProverCalled",
             "tamperedSelfTestProverCalled",
             "native prover self-test hook",
             "sdkResults.javascript.proofHash must match proofHash",
+            "rejects malformed Ethereum Groth16 proof tuples",
+            "proofBytes\\.version",
+            "BN254 base-field",
+            "proofBytes\\.b",
+            "proofBytes\\.c",
+            "messageId must match",
+            "sourceDomain must match",
+            "commitmentRoot must match",
+            "validates native prover self-test fixtures",
+            "nativeProverParityFixture contains duplicate JSON key",
+            "nativeProverSelfTestFixture contains duplicate JSON key",
         ),
         ROOT / "javascript" / "iroha_js" / "test" / "package_dist.test.js": (
             "verifyEthereumMainnetNativeEvmProverArtifacts",
@@ -654,9 +695,12 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityHash",
             "EthereumMainnetNativeProverSelfTestFn",
             "EthereumMainnetNativeProverSelfTestContext",
+            "runEthereumMainnetNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTestBytes",
             "nativeProverSelfTestHash",
             "nativeProverSelfTest",
+            "proofArtifactBytes must be at least 256 bytes",
         ),
     },
     "swift-sdk": {
@@ -672,6 +716,9 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "fromNativeProverBundle",
             "nativeProverBundle.verifiedArtifacts",
             "sccpNativeEvmProverArtifactSha256Hex",
+            "sccpNativeEvmProverMinArtifactBytesV1",
+            "sccpNativeEvmProverRequireProductionArtifactSize",
+            ".minBytes",
             "implementationBytes",
             "invalidPublicInputs(\"implementationBytes\")",
             "nativeProverArtifacts.implementationHash",
@@ -688,10 +735,27 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "requireVerifiedNativeProverArtifacts",
             "NativeProverSelfTestFunction",
             "requireNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTestFunction",
             "nativeProverSelfTestResult",
             "proofResult: EvmSccpProofResult",
             "nativeProverArtifacts",
+            "requireEvmGroth16ProofTuple",
+            "sccpGroth16Bn254ProofTupleInvalidField",
+            "evmBn254BaseFieldModulus",
+            "proofBytes.sourceDomain",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpGroth16Bn254.swift": (
+            "func sccpGroth16Bn254ProofTupleInvalidField",
+            "proofBytes.version",
+            "proofBytes.b",
+            "proofBytes.c",
+            "proofBytes.sourceDomain",
+            "sccpGroth16Bn254BaseFieldModulus",
         ),
         ROOT
         / "IrohaSwift"
@@ -712,15 +776,28 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "swiftImplementationArtifact",
             "Data(\"{}\".utf8)",
             "nativeProverBundle.verifierKeyHash",
+            "nativeEvmProverArtifactBytes",
+            "proofArtifactBytes.minBytes",
+            "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes.forbiddenMarker",
             "Ethereum outbound prover must require verified native artifacts",
             ".invalidPublicInputs(\"nativeProverArtifacts\")",
+            "runNativeProverSelfTest",
             "artifactBoundSelfTestCalled",
             "missingSelfTestHookProverCalled",
             "driftingSelfTestHookProverCalled",
             ".invalidPublicInputs(\"nativeProverSelfTestFunction\")",
             ".invalidPublicInputs(\"nativeProverSelfTestResult\")",
+            "testRejectsMalformedEvmGroth16ProofTuple",
+            "proofBytes.version",
+            "proofBytes.a.x",
+            "proofBytes.b",
+            "proofBytes.c",
+            "proofBytes.sourceDomain",
+            "proofBytes.commitmentRoot",
+            "nativeProverParityFixture.duplicateJsonKey",
+            "nativeProverSelfTestFixture.duplicateJsonKey",
         ),
     },
     "kotlin-sdk": {
@@ -743,6 +820,9 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "fun fromNativeProverBundle(",
             "nativeProverBundle.verifiedArtifacts",
             'MessageDigest.getInstance("SHA-256")',
+            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "requireNativeEvmProverProductionArtifactSize",
+            "must be at least",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
@@ -759,11 +839,18 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "requireVerifiedNativeProverArtifacts",
             "EthereumMainnetNativeProverSelfTest",
             "requireNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTest runner",
             "nativeProverSelfTest result",
             "verified native EVM prover artifacts",
             "submission requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
+            "GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
         ),
         ROOT
         / "kotlin"
@@ -792,15 +879,29 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "kotlinImplementationPath",
             "\"{}\".toByteArray()",
             "nativeProverBundle.verifierKeyHash",
+            "nativeEvmProverArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
+            "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata(EvmSccpSubmissionInput(result))",
+            "runNativeProverSelfTest",
             "artifactBoundSelfTestCalled",
             "missingSelfTestHookProverCalled",
             "driftingSelfTestHookProverCalled",
             "nativeProverSelfTest runner",
             "nativeProverSelfTest result",
+            "rejectsMalformedGroth16ProofTuple",
+            "proofBytes.version",
+            "BN254 base-field",
+            "proofBytes.b",
+            "proofBytes.c",
+            "messageId must match",
+            "sourceDomain must match",
+            "commitmentRoot must match",
+            "EthereumMainnetNativeEvmProverSelfTestFixture.fromJson",
+            "Duplicate JSON object key: schema",
         ),
     },
     "java-android": {
@@ -821,6 +922,9 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "NativeEvmProverArtifactResolver",
             "artifactResolver.resolveArtifact",
             'MessageDigest.getInstance("SHA-256")',
+            "NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "requireNativeEvmProverProductionArtifactSize",
+            "must be at least",
             "implementationBytes sha256",
             "implementationBytes are required",
             "crossSdkFixtureParityBytes",
@@ -832,6 +936,12 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "nativeProverBundle.verifierKeyHash must match destinationBinding",
             "NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
             "contains forbidden prover dependency marker",
+            "GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1",
+            "requireGroth16ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            "proofBytes.sourceDomain",
         ),
         ROOT
         / "java"
@@ -850,6 +960,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "requireVerifiedNativeProverArtifacts",
             "NativeProverSelfTest",
             "requireNativeProverSelfTest",
+            "runNativeProverSelfTest",
             "nativeProverSelfTest runner",
             "nativeProverSelfTest result",
             "verified native EVM prover artifacts",
@@ -888,15 +999,29 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "artifactBytesByPath",
             "\"{}\".getBytes(StandardCharsets.UTF_8)",
             "nativeProverBundle.verifierKeyHash",
+            "nativeEvmProverArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
+            "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata(new EvmSccpProver.SubmissionInput(result))",
+            "runNativeProverSelfTest",
             "artifactBoundSelfTestCalled",
             "missingSelfTestHookProverCalled",
             "driftingSelfTestHookProverCalled",
             "nativeProverSelfTest runner",
             "nativeProverSelfTest result",
+            "rejectsMalformedGroth16ProofTuple",
+            "proofBytes.version",
+            "BN254 base-field",
+            "proofBytes.b",
+            "proofBytes.c",
+            "messageId must match",
+            "sourceDomain must match",
+            "commitmentRoot must match",
+            "EthereumMainnetNativeEvmProverSelfTestFixture.fromJson",
+            "Duplicate JSON object key: schema",
         ),
     },
     "dotnet-sdk": {
@@ -915,6 +1040,9 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "Func<string, byte[]> artifactResolver",
             "artifactResolver(ProofArtifact)",
             "SHA256.HashData",
+            "NativeEvmProverMinArtifactBytesV1",
+            "RequireNativeEvmProverProductionArtifactSize",
+            "must be at least",
             "implementationBytes sha256",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
@@ -931,6 +1059,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "RequireVerifiedNativeProverArtifacts",
             "IEthereumMainnetNativeProverSelfTest",
             "RequireNativeProverSelfTestAsync",
+            "RunNativeProverSelfTestAsync",
             "NativeProverSelfTestResultEquals",
             "nativeProverSelfTest runner",
             "nativeProverSelfTest result",
@@ -938,6 +1067,11 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "BuildEthereumCalldataUnchecked",
             "Ethereum mainnet calldata requires verified native EVM prover artifacts",
             "nativeProverArtifacts artifact hashes must match proofResult",
+            "RequireGroth16Bn254ProofTuple",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
+            ".sourceDomain must match",
         ),
         ROOT
         / "csharp"
@@ -962,16 +1096,26 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "CrossSdkFixtureParityHash",
             "Encoding.UTF8.GetBytes(\"{}\")",
             "nativeProverBundle.verifierKeyHash",
+            "NativeEvmProverArtifactBytes",
+            "proofArtifactBytes must be at least 256 bytes",
+            "proof.wasm",
             "flaggedArtifactBytes",
             "proofArtifactBytes contains forbidden",
             "artifactBoundProver",
             "verified native EVM prover artifacts",
             "NativeProverSelfTestStub",
+            "RunNativeProverSelfTestAsync",
             "artifactBoundSelfTest",
             "missingSelfTestHookProver",
             "driftingSelfTestHookProver",
             "nativeProverSelfTest runner",
             "nativeProverSelfTest result",
+            "OutboundProofPathRejectsCrossLaneAndMalformedProofs",
+            "wrongMessageId",
+            "wrongSourceDomain",
+            "badG1Point",
+            "EthereumMainnetNativeEvmProverSelfTestFixture.FromJson",
+            "duplicate JSON key: schema",
         ),
     },
 }
@@ -1001,7 +1145,7 @@ def corridor_evidence_script_tests() -> tuple[str, ...]:
         r"\s+local tests=\(\n"
         r"(?P<body>.*?)"
         r"\n\s+\)\n"
-        r"\s+run_cmd python3 -m pytest -q \"\$\{tests\[@\]\}\"",
+        r"(?P<runner>\s+run_cmd .*\bpytest -q \"\$\{tests\[@\]\}\")",
         script,
         re.DOTALL,
     )
@@ -1152,17 +1296,22 @@ def write_native_evm_prover_bundle(
             "0x" + hashlib.sha256(content).hexdigest(),
         )
 
+    def native_payload(label: str) -> bytes:
+        content = (f"{label}\n").encode("utf-8")
+        repeats = report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES // len(content) + 1
+        return (content * repeats)[: report.NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES]
+
     proof_artifact, proof_artifact_hash = write_artifact(
         "proof-artifact.bin",
-        b"ethereum mainnet sccp proof artifact v1",
+        native_payload("ethereum mainnet sccp proof artifact v1"),
     )
     proving_key, proving_key_hash = write_artifact(
         "proving-key.bin",
-        b"ethereum mainnet sccp proving key v1",
+        native_payload("ethereum mainnet sccp proving key v1"),
     )
     verifier_key, verifier_key_hash = write_artifact(
         "verifier-key.bin",
-        b"ethereum mainnet sccp verifier key v1",
+        native_payload("ethereum mainnet sccp verifier key v1"),
     )
     sdk_artifacts = []
     for sdk, implementation in sorted(
@@ -1170,10 +1319,10 @@ def write_native_evm_prover_bundle(
     ):
         implementation_artifact, implementation_hash = write_artifact(
             f"{sdk}-implementation.bin",
-            (
+            native_payload(
                 "ethereum mainnet sccp "
                 f"{sdk} {implementation} implementation v1"
-            ).encode("utf-8"),
+            ),
         )
         sdk_artifacts.append(
             {
@@ -2304,6 +2453,10 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "route-canary proofBytes must not be all zero",
             "route-canary proof version must be 1",
             "route-canary proof sourceDomain does not match expectedSourceDomain()",
+            "def _require_route_canary_groth16_bn254_proof_tuple(",
+            "BN254 base-field element",
+            "BN254 G1 point",
+            "BN254 G2 point",
             "usedMessageProofs(bytes32) is false",
             'and transaction.get("message_proof_used") is True',
         ),
@@ -2323,6 +2476,10 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "proofBytes must not be all zero",
             "proof version must be 1",
             "proof sourceDomain does not match expectedSourceDomain()",
+            "proofBytes.a.x must be a BN254 base-field element",
+            "proofBytes.a must be a BN254 G1 point",
+            "proofBytes.b must be a BN254 G2 point",
+            "proofBytes.c must be a BN254 G1 point",
             "usedMessageProofs(bytes32) is false",
         ),
     }
@@ -2765,6 +2922,14 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         == surfaces["eth,bsc"]["sdk_helper_symbols"]
     )
     assert (
+        "EthereumMainnetSccp.runNativeProverSelfTest"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["js-sdk"]
+    )
+    assert (
+        "runEthereumMainnetNativeProverSelfTest"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["js-sdk"]
+    )
+    assert (
         "build_evm_sccp_proof_request"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
     )
@@ -2826,6 +2991,7 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     for symbol in (
         "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.runNativeProverSelfTest",
         "EthereumMainnetSccp.proveOutboundToEthereum",
         "EthereumMainnetSccp.buildEthereumCalldata",
     ):
@@ -2888,6 +3054,7 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     for symbol in (
         "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.runNativeProverSelfTest",
         "EthereumMainnetSccp.proveOutboundToEthereum",
         "EthereumMainnetSccp.buildEthereumCalldata",
     ):
@@ -2950,6 +3117,7 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     for symbol in (
         "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.runNativeProverSelfTest",
         "EthereumMainnetSccp.proveOutboundToEthereum",
         "EthereumMainnetSccp.buildEthereumCalldata",
     ):
@@ -3000,6 +3168,10 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     )
     assert (
         "EthereumMainnetSccp.SubmitOutboundToEthereumAsync"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.RunNativeProverSelfTestAsync"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
     )
     assert (
@@ -3655,6 +3827,54 @@ def test_release_readiness_report_blocks_empty_native_evm_prover_payload(
     assert payload["release_checklist"]["ready"] is False
 
 
+def test_release_readiness_report_blocks_tiny_native_evm_prover_payload(
+    tmp_path: Path,
+) -> None:
+    """Native prover payload files must not be hash-consistent tiny placeholders."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    proof_path = tmp_path / "native-prover-artifacts" / "proof-artifact.bin"
+    tiny_payload = b"tiny native proof artifact\n"
+    proof_path.write_bytes(tiny_payload)
+    proof_hash = "0x" + hashlib.sha256(tiny_payload).hexdigest()
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    payload["proof_artifact_hash"] = proof_hash
+    for artifact in payload["native_sdk_artifacts"]:
+        artifact["prover_artifact_hash"] = proof_hash
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact must be at least "
+        "256 bytes"
+    ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
 def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash(
     tmp_path: Path,
 ) -> None:
@@ -3934,6 +4154,112 @@ def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash
         "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
         "sha256 must match audit_hashes.cross_sdk_fixture_parity"
     ) in blockers
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_keys(
+    tmp_path: Path,
+) -> None:
+    """The cross-SDK parity fixture must reject duplicate JSON fields."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    parity_bytes = (
+        b'{"schema":"forged","schema":"'
+        + payload["schema"].encode("utf-8")
+        + b'"}\n'
+    )
+    parity_path.write_bytes(parity_bytes)
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    duplicate_marker = "cross_sdk_fixture_parity_artifact JSON contains duplicate key"
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "JSON contains duplicate key: schema"
+    ) in blockers
+    assert any(duplicate_marker in blocker for blocker in blockers)
+    assert payload["release_checklist"]["ready"] is False
+
+
+def test_release_readiness_report_blocks_duplicate_native_evm_self_test_keys(
+    tmp_path: Path,
+) -> None:
+    """The native prover self-test fixture must reject duplicate JSON fields."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    self_test_path = tmp_path / payload["native_prover_self_test_artifact"]
+    self_test_bytes = (
+        b'{"schema":"forged","schema":"'
+        + payload["schema"].encode("utf-8")
+        + b'"}\n'
+    )
+    self_test_path.write_bytes(self_test_bytes)
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    duplicate_marker = "native_prover_self_test_artifact JSON contains duplicate key"
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "JSON contains duplicate key: schema"
+    ) in blockers
+    assert any(duplicate_marker in blocker for blocker in blockers)
     assert payload["release_checklist"]["ready"] is False
 
 

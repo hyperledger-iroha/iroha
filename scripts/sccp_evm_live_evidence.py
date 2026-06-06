@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import hashlib
 import json
 import sys
@@ -52,6 +53,25 @@ EVM_SUBMIT_MESSAGE_PROOF_SELECTOR = evidence._keccak_256(
 )[:4]
 EVM_GROTH16_PROOF_VERSION = 1
 EVM_GROTH16_PROOF_ABI_BYTE_LENGTH = 32 * 12
+BN254_BASE_FIELD_MODULUS = int(
+    "30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47",
+    16,
+)
+BN254_SCALAR_FIELD_MODULUS = int(
+    "30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001",
+    16,
+)
+BN254_G2_B_C0 = int(
+    "2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5",
+    16,
+)
+BN254_G2_B_C1 = int(
+    "009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2",
+    16,
+)
+BN254_SCALAR_FIELD_BITS = tuple(
+    1 if symbol == "1" else 0 for symbol in bin(BN254_SCALAR_FIELD_MODULUS)[2:]
+)
 
 
 def _strip_0x(value: str) -> str:
@@ -411,6 +431,230 @@ def _word_u32(word: bytes, *, label: str) -> int:
     if value > 0xFFFFFFFF:
         raise RuntimeError(f"{label} does not fit u32")
     return value
+
+
+def _bn254_fq(value: int) -> int:
+    return value % BN254_BASE_FIELD_MODULUS
+
+
+def _bn254_fq2_add(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return (_bn254_fq(left[0] + right[0]), _bn254_fq(left[1] + right[1]))
+
+
+def _bn254_fq2_sub(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return (_bn254_fq(left[0] - right[0]), _bn254_fq(left[1] - right[1]))
+
+
+def _bn254_fq2_scale(left: tuple[int, int], scalar: int) -> tuple[int, int]:
+    return (_bn254_fq(left[0] * scalar), _bn254_fq(left[1] * scalar))
+
+
+def _bn254_fq2_mul(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return (
+        _bn254_fq(left[0] * right[0] - left[1] * right[1]),
+        _bn254_fq(left[0] * right[1] + left[1] * right[0]),
+    )
+
+
+def _bn254_fq2_is_zero(value: tuple[int, int]) -> bool:
+    return value == (0, 0)
+
+
+def _bn254_g2_infinity() -> tuple[
+    tuple[int, int],
+    tuple[int, int],
+    tuple[int, int],
+    bool,
+]:
+    return ((0, 0), (1, 0), (0, 0), True)
+
+
+def _bn254_g2_projective_is_infinity(
+    point: tuple[tuple[int, int], tuple[int, int], tuple[int, int], bool],
+) -> bool:
+    return point[3] or _bn254_fq2_is_zero(point[2])
+
+
+def _bn254_g2_affine_projective(
+    x: tuple[int, int],
+    y: tuple[int, int],
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int], bool]:
+    return (x, y, (1, 0), False)
+
+
+def _bn254_g2_projective_double(
+    point: tuple[tuple[int, int], tuple[int, int], tuple[int, int], bool],
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int], bool]:
+    if _bn254_g2_projective_is_infinity(point) or _bn254_fq2_is_zero(point[1]):
+        return _bn254_g2_infinity()
+    x, y, z, _ = point
+    xx = _bn254_fq2_mul(x, x)
+    yy = _bn254_fq2_mul(y, y)
+    yyyy = _bn254_fq2_mul(yy, yy)
+    s = _bn254_fq2_scale(
+        _bn254_fq2_sub(
+            _bn254_fq2_sub(
+                _bn254_fq2_mul(_bn254_fq2_add(x, yy), _bn254_fq2_add(x, yy)),
+                xx,
+            ),
+            yyyy,
+        ),
+        2,
+    )
+    m = _bn254_fq2_scale(xx, 3)
+    x3 = _bn254_fq2_sub(_bn254_fq2_mul(m, m), _bn254_fq2_scale(s, 2))
+    y3 = _bn254_fq2_sub(
+        _bn254_fq2_mul(m, _bn254_fq2_sub(s, x3)),
+        _bn254_fq2_scale(yyyy, 8),
+    )
+    z3 = _bn254_fq2_scale(_bn254_fq2_mul(y, z), 2)
+    return (x3, y3, z3, False)
+
+
+def _bn254_g2_projective_add_affine(
+    point: tuple[tuple[int, int], tuple[int, int], tuple[int, int], bool],
+    affine_x: tuple[int, int],
+    affine_y: tuple[int, int],
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int], bool]:
+    if _bn254_g2_projective_is_infinity(point):
+        return _bn254_g2_affine_projective(affine_x, affine_y)
+    x, y, z, _ = point
+    z1z1 = _bn254_fq2_mul(z, z)
+    u2 = _bn254_fq2_mul(affine_x, z1z1)
+    s2 = _bn254_fq2_mul(affine_y, _bn254_fq2_mul(z, z1z1))
+    h = _bn254_fq2_sub(u2, x)
+    if _bn254_fq2_is_zero(h):
+        if s2 == y:
+            return _bn254_g2_projective_double(point)
+        return _bn254_g2_infinity()
+    hh = _bn254_fq2_mul(h, h)
+    i = _bn254_fq2_scale(hh, 4)
+    j = _bn254_fq2_mul(h, i)
+    r = _bn254_fq2_scale(_bn254_fq2_sub(s2, y), 2)
+    v = _bn254_fq2_mul(x, i)
+    x3 = _bn254_fq2_sub(
+        _bn254_fq2_sub(_bn254_fq2_mul(r, r), j),
+        _bn254_fq2_scale(v, 2),
+    )
+    y3 = _bn254_fq2_sub(
+        _bn254_fq2_mul(r, _bn254_fq2_sub(v, x3)),
+        _bn254_fq2_scale(_bn254_fq2_mul(y, j), 2),
+    )
+    z3 = _bn254_fq2_sub(
+        _bn254_fq2_sub(
+            _bn254_fq2_mul(_bn254_fq2_add(z, h), _bn254_fq2_add(z, h)),
+            z1z1,
+        ),
+        hh,
+    )
+    return (x3, y3, z3, False)
+
+
+@lru_cache(maxsize=32)
+def _bn254_g2_point_is_in_prime_subgroup(x0: int, x1: int, y0: int, y1: int) -> bool:
+    x = (x0, x1)
+    y = (y0, y1)
+    acc = _bn254_g2_infinity()
+    for bit in BN254_SCALAR_FIELD_BITS:
+        acc = _bn254_g2_projective_double(acc)
+        if bit:
+            acc = _bn254_g2_projective_add_affine(acc, x, y)
+    return _bn254_g2_projective_is_infinity(acc)
+
+
+def _proof_word_u256(proof_words: tuple[bytes, ...], index: int) -> int:
+    return int.from_bytes(proof_words[index], "big")
+
+
+def _proof_word_is_zero(proof_words: tuple[bytes, ...], index: int) -> bool:
+    return not any(proof_words[index])
+
+
+def _require_route_canary_bn254_base_field_word(
+    proof_words: tuple[bytes, ...],
+    index: int,
+    *,
+    label: str,
+) -> None:
+    if _proof_word_u256(proof_words, index) >= BN254_BASE_FIELD_MODULUS:
+        raise RuntimeError(
+            f"route-canary {label} must be a BN254 base-field element"
+        )
+
+
+def _require_route_canary_bn254_nonzero_point(
+    proof_words: tuple[bytes, ...],
+    indexes: tuple[int, ...],
+    *,
+    label: str,
+) -> None:
+    if all(_proof_word_is_zero(proof_words, index) for index in indexes):
+        raise RuntimeError(f"route-canary {label} must not be zero")
+
+
+def _require_route_canary_bn254_g1_point(
+    proof_words: tuple[bytes, ...],
+    indexes: tuple[int, int],
+    *,
+    label: str,
+) -> None:
+    _require_route_canary_bn254_nonzero_point(
+        proof_words,
+        indexes,
+        label=label,
+    )
+    x = _proof_word_u256(proof_words, indexes[0])
+    y = _proof_word_u256(proof_words, indexes[1])
+    left = _bn254_fq(y * y)
+    right = _bn254_fq(x * x * x + 3)
+    if left != right:
+        raise RuntimeError(f"route-canary {label} must be a BN254 G1 point")
+
+
+def _require_route_canary_bn254_g2_point(
+    proof_words: tuple[bytes, ...],
+    indexes: tuple[int, int, int, int],
+    *,
+    label: str,
+) -> None:
+    _require_route_canary_bn254_nonzero_point(
+        proof_words,
+        indexes,
+        label=label,
+    )
+    x = (
+        _proof_word_u256(proof_words, indexes[0]),
+        _proof_word_u256(proof_words, indexes[1]),
+    )
+    y = (
+        _proof_word_u256(proof_words, indexes[2]),
+        _proof_word_u256(proof_words, indexes[3]),
+    )
+    left = _bn254_fq2_mul(y, y)
+    x2 = _bn254_fq2_mul(x, x)
+    right = _bn254_fq2_add(_bn254_fq2_mul(x2, x), (BN254_G2_B_C0, BN254_G2_B_C1))
+    if left != right or not _bn254_g2_point_is_in_prime_subgroup(*x, *y):
+        raise RuntimeError(f"route-canary {label} must be a BN254 G2 point")
+
+
+def _require_route_canary_groth16_bn254_proof_tuple(
+    proof_words: tuple[bytes, ...],
+) -> None:
+    for offset, field in enumerate(
+        ("a.x", "a.y", "b.x0", "b.x1", "b.y0", "b.y1", "c.x", "c.y")
+    ):
+        _require_route_canary_bn254_base_field_word(
+            proof_words,
+            4 + offset,
+            label=f"proofBytes.{field}",
+        )
+    _require_route_canary_bn254_g1_point(proof_words, (4, 5), label="proofBytes.a")
+    _require_route_canary_bn254_g2_point(
+        proof_words,
+        (6, 7, 8, 9),
+        label="proofBytes.b",
+    )
+    _require_route_canary_bn254_g1_point(proof_words, (10, 11), label="proofBytes.c")
 
 
 def _word_address(word: bytes, *, label: str) -> str:
@@ -876,6 +1120,7 @@ def _route_canary_submit_call_data_summary(
         raise RuntimeError(
             "route-canary proof commitmentRoot must match accepted event"
         )
+    _require_route_canary_groth16_bn254_proof_tuple(proof_words)
     return {
         "function_selector": "submitSccpMessageProof(bytes,bytes32[6],bytes32)",
         "call_data": _hex(call_data),

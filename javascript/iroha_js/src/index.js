@@ -826,6 +826,7 @@ export {
   parseEthereumMainnetNativeEvmProverSelfTestFixture,
   verifyEthereumMainnetNativeEvmProverArtifacts,
   verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
+  runEthereumMainnetNativeProverSelfTest,
   tronSccpDestinationBinding,
   tronSccpDestinationBindingHash,
   tairaXorRouteIdHash,

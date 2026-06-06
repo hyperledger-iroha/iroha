@@ -4635,6 +4635,29 @@ export type EthereumMainnetNativeProverSelfTestFn = (
   | EthereumMainnetNativeEvmProverSelfTestSdkResultInput
   | Promise<EthereumMainnetNativeEvmProverSelfTestSdkResultInput>;
 
+export interface EthereumMainnetNativeProverSelfTestRunInput {
+  nativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts;
+  native_prover_artifacts?: EthereumMainnetNativeEvmProverArtifacts;
+  verifiedNativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts;
+  verified_native_prover_artifacts?: EthereumMainnetNativeEvmProverArtifacts;
+  destinationBinding?: EvmSccpDestinationBindingInput;
+  destination_binding?: EvmSccpDestinationBindingInput;
+  nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn;
+  native_prover_self_test?: EthereumMainnetNativeProverSelfTestFn;
+  selfTestNativeProver?: EthereumMainnetNativeProverSelfTestFn;
+  self_test_native_prover?: EthereumMainnetNativeProverSelfTestFn;
+}
+
+export function runEthereumMainnetNativeProverSelfTest(
+  input: EthereumMainnetNativeProverSelfTestRunInput,
+  options?: {
+    nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn;
+    native_prover_self_test?: EthereumMainnetNativeProverSelfTestFn;
+    selfTestNativeProver?: EthereumMainnetNativeProverSelfTestFn;
+    self_test_native_prover?: EthereumMainnetNativeProverSelfTestFn;
+  } & Record<string, unknown>,
+): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;
+
 export interface EthereumMainnetNativeEvmProverArtifactsInput {
   nativeProverBundle?: EthereumMainnetNativeEvmProverBundleInput | string;
   native_prover_bundle?: EthereumMainnetNativeEvmProverBundleInput | string;
@@ -5839,6 +5862,18 @@ export class EthereumMainnetSccp {
   buildOutboundProofRequest(
     input: EvmSccpProofRequestInput,
   ): EvmSccpProofRequest;
+  runNativeProverSelfTest(
+    options?: {
+      nativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts;
+      native_prover_artifacts?: EthereumMainnetNativeEvmProverArtifacts;
+      verifiedNativeProverArtifacts?: EthereumMainnetNativeEvmProverArtifacts;
+      verified_native_prover_artifacts?: EthereumMainnetNativeEvmProverArtifacts;
+      nativeProverSelfTest?: EthereumMainnetNativeProverSelfTestFn;
+      native_prover_self_test?: EthereumMainnetNativeProverSelfTestFn;
+      selfTestNativeProver?: EthereumMainnetNativeProverSelfTestFn;
+      self_test_native_prover?: EthereumMainnetNativeProverSelfTestFn;
+    } & Record<string, unknown>,
+  ): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;
   proveOutboundToEthereum(
     input: EvmSccpProofRequestInput,
     options?: {

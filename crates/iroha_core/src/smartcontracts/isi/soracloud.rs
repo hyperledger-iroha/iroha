@@ -10,8 +10,8 @@ use iroha_crypto::{
     fhe_bfv::{
         BfvCiphertext, BfvEvaluationBudget, BfvEvaluationKeyBundle, BfvEvaluationPlan,
         BfvIdentifierCiphertext, BfvParameters, RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT,
-        add_ciphertexts_rns_exact, bfv_add_bounded_noise_output_bound,
-        bfv_add_output_residual_multiple_bound,
+        add_ciphertexts_bounded_noise_registered_rns_exact, add_ciphertexts_registered_rns_exact,
+        bfv_add_bounded_noise_output_bound, bfv_add_output_residual_multiple_bound,
         bfv_bootstrap_key_refresh_bounded_noise_output_bound,
         bfv_bootstrap_key_refresh_output_residual_multiple_bound,
         bfv_multiply_bounded_noise_output_bound, bfv_multiply_output_residual_multiple_bound,
@@ -19,16 +19,16 @@ use iroha_crypto::{
         bfv_packed_rotate_left_output_residual_multiple_bound,
         bfv_rotate_slots_left_bounded_noise_output_bounds,
         bfv_rotate_slots_left_output_residual_multiple_bounds,
-        bootstrap_ciphertext_bounded_noise_rns_exact_rounds, bootstrap_ciphertext_rns_exact_rounds,
-        multiply_ciphertexts_bounded_noise_rns_basis_extension_exact,
-        multiply_ciphertexts_rns_exact, multiply_plain_scalar, ram_lfe_bfv_parameters_v1,
-        registered_bfv_key_switch_decomposition_chain,
-        registered_bfv_key_switch_decomposition_chain_digest, registered_bfv_parameter_digest,
-        registered_bfv_rns_modulus_chain, registered_bfv_rns_modulus_chain_digest,
-        rotate_ciphertext_slots_left_bounded_noise_rns_exact,
-        rotate_ciphertext_slots_left_rns_exact,
-        rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_basis_extension_exact,
-        rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact,
+        bootstrap_ciphertext_bounded_noise_registered_rns_exact_rounds,
+        bootstrap_ciphertext_registered_rns_exact_rounds,
+        multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact,
+        multiply_ciphertexts_registered_rns_exact, multiply_plain_scalar,
+        ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
+        registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
+        rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact,
+        rotate_ciphertext_slots_left_registered_rns_exact,
+        rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact,
+        rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact,
         validate_bfv_bounded_noise_bound, validate_bfv_exact_residual_multiple_capacity,
         validate_registered_bfv_parameters,
     },
@@ -64,6 +64,9 @@ use iroha_data_model::{
         SORA_SERVICE_SECRET_ENTRY_VERSION_V1, SORA_SERVICE_STATE_ENTRY_VERSION_V1,
         SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
         SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
+        SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
+        SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1, SecretEnvelopeV1,
         SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
         SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
@@ -120,6 +123,7 @@ use iroha_data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
+        soracloud_fhe_input_admission_open_verify_bounds,
         soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
     },
     sorafs::pin_registry::{PinStatus, StorageClass},
@@ -852,14 +856,37 @@ fn proof_attachment_envelope(
     }
     if !crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
         return Err(invalid_parameter(
-            "Soracloud FHE input admission requires a STARK/FRI proof backend",
+            "Soracloud FHE input admission requires a supported STARK/FRI v1 proof backend",
         ));
+    }
+    if let Some((field, reason)) = attachment.structural_error() {
+        return Err(invalid_parameter(format!(
+            "invalid FHE input admission proof attachment: {field} {reason}"
+        )));
+    }
+    if attachment.proof.bytes.len() > SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES {
+        return Err(invalid_parameter(format!(
+            "FHE input admission OpenVerifyEnvelope length {} exceeds maximum {}",
+            attachment.proof.bytes.len(),
+            SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES
+        )));
     }
     norito::decode_from_bytes::<OpenVerifyEnvelope>(&attachment.proof.bytes).map_err(|err| {
         invalid_parameter(format!(
             "invalid FHE input admission OpenVerifyEnvelope: {err}"
         ))
     })
+}
+
+fn validate_soracloud_fhe_input_admission_native_envelope_size(
+    len: usize,
+) -> Result<(), InstructionExecutionError> {
+    if len > SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES {
+        return Err(invalid_parameter(format!(
+            "FHE input admission STARK native envelope bytes length {len} exceeds maximum {SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_soracloud_fhe_input_admission_envelope(
@@ -877,11 +904,18 @@ fn validate_soracloud_fhe_input_admission_envelope(
             "FHE input admission proof envelope aux must be empty",
         ));
     }
-    envelope.validate_for_admission().map_err(|err| {
-        invalid_parameter(format!(
-            "invalid FHE input admission OpenVerifyEnvelope shape: {err}"
-        ))
-    })?;
+    envelope
+        .validate_with_bounds(soracloud_fhe_input_admission_open_verify_bounds())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE input admission OpenVerifyEnvelope shape: {err}"
+            ))
+        })?;
+    if envelope.circuit_id != SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE input admission proof circuit id must be canonical v1",
+        ));
+    }
     if envelope.public_inputs != SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1 {
         return Err(invalid_parameter(
             "FHE input admission proof public-input schema mismatch",
@@ -904,6 +938,20 @@ fn validate_soracloud_fhe_input_admission_envelope(
             "FHE input admission proof public inputs do not match statement hash",
         ));
     }
+    if open.envelope_bytes.is_empty() {
+        return Err(invalid_parameter(
+            "FHE input admission STARK native envelope bytes must be non-empty",
+        ));
+    }
+    validate_soracloud_fhe_input_admission_native_envelope_size(open.envelope_bytes.len())?;
+    let vk_commitment = attachment
+        .vk_commitment
+        .ok_or_else(|| invalid_parameter("FHE input admission proof requires vk_commitment"))?;
+    if vk_commitment != envelope.vk_hash {
+        return Err(invalid_parameter(
+            "FHE input admission proof vk_commitment mismatch",
+        ));
+    }
     let envelope_hash = attachment
         .envelope_hash
         .ok_or_else(|| invalid_parameter("FHE input admission proof requires envelope_hash"))?;
@@ -918,9 +966,77 @@ fn validate_soracloud_fhe_input_admission_envelope(
 
 fn verify_soracloud_fhe_input_admission_backend(
     attachment: &ProofAttachment,
-    envelope: &OpenVerifyEnvelope,
+    statement_hash: Hash,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
+    let attachment_vk_commitment = attachment
+        .vk_commitment
+        .ok_or_else(|| invalid_parameter("FHE input admission proof requires vk_commitment"))?;
+    let attachment_envelope_hash = attachment
+        .envelope_hash
+        .ok_or_else(|| invalid_parameter("FHE input admission proof requires envelope_hash"))?;
+    let expected_envelope_hash = <[u8; Hash::LENGTH]>::from(Hash::new(&attachment.proof.bytes));
+    if attachment_envelope_hash != expected_envelope_hash {
+        return Err(invalid_parameter(
+            "FHE input admission proof envelope_hash mismatch",
+        ));
+    }
+    if attachment.vk_ref.name != SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE input admission proof vk_ref must use the canonical v1 circuit id",
+        ));
+    }
+    let envelope = proof_attachment_envelope(attachment)?;
+    if envelope.backend != BackendTag::Stark {
+        return Err(invalid_parameter(
+            "FHE input admission proof envelope must declare STARK backend",
+        ));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(invalid_parameter(
+            "FHE input admission proof envelope aux must be empty",
+        ));
+    }
+    envelope
+        .validate_with_bounds(soracloud_fhe_input_admission_open_verify_bounds())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE input admission OpenVerifyEnvelope shape: {err}"
+            ))
+        })?;
+    if envelope.circuit_id != SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE input admission proof circuit id must be canonical v1",
+        ));
+    }
+    if envelope.public_inputs != SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err(invalid_parameter(
+            "FHE input admission proof public-input schema mismatch",
+        ));
+    }
+    let open =
+        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE input admission STARK public-input wrapper: {err}"
+            ))
+        })?;
+    if open.version != 1 {
+        return Err(invalid_parameter(
+            "FHE input admission STARK public-input wrapper version must be 1",
+        ));
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open.public_inputs != expected_public_inputs {
+        return Err(invalid_parameter(
+            "FHE input admission proof public inputs do not match statement hash",
+        ));
+    }
+    if open.envelope_bytes.is_empty() {
+        return Err(invalid_parameter(
+            "FHE input admission STARK native envelope bytes must be non-empty",
+        ));
+    }
+    validate_soracloud_fhe_input_admission_native_envelope_size(open.envelope_bytes.len())?;
     let record = state_transaction
         .world
         .verifying_keys
@@ -963,6 +1079,11 @@ fn verify_soracloud_fhe_input_admission_backend(
             "FHE input admission verifying key must use the canonical v1 circuit".into(),
         ));
     }
+    if record.version != u32::from(SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE input admission verifying key must use the canonical v1 circuit version".into(),
+        ));
+    }
     if record.gas_schedule_id.is_none() {
         return Err(InstructionExecutionError::InvariantViolation(
             "FHE input admission verifying key missing gas_schedule_id".into(),
@@ -991,9 +1112,7 @@ fn verify_soracloud_fhe_input_admission_backend(
             "FHE input admission proof verifying-key commitment mismatch".into(),
         ));
     }
-    if let Some(vk_commitment) = attachment.vk_commitment
-        && vk_commitment != record.commitment
-    {
+    if attachment_vk_commitment != record.commitment {
         return Err(InstructionExecutionError::InvariantViolation(
             "FHE input admission attachment verifying-key commitment mismatch".into(),
         ));
@@ -1071,9 +1190,6 @@ fn verify_soracloud_fhe_input_admission_proof(
     let Some(proof) = proof else {
         return Ok(None);
     };
-    proof
-        .validate()
-        .map_err(|err| invalid_parameter(format!("invalid FHE input admission proof: {err}")))?;
     if operation != SoraStateMutationOperationV1::Upsert {
         return Err(invalid_parameter(
             "FHE input admission proofs are only valid for upsert mutations",
@@ -1091,6 +1207,23 @@ fn verify_soracloud_fhe_input_admission_proof(
     let payload_commitment = payload_commitment.ok_or_else(|| {
         invalid_parameter("FHE input admission proof requires payload commitment")
     })?;
+    let actual_value_size = u64::try_from(value_payload.len()).map_err(|_| {
+        invalid_parameter("FHE input admission value_payload length exceeds u64 range")
+    })?;
+    if value_size_bytes != actual_value_size {
+        return Err(invalid_parameter(format!(
+            "FHE input admission value_size_bytes {value_size_bytes} does not match value_payload length {actual_value_size}"
+        )));
+    }
+    let actual_payload_commitment = Hash::new(value_payload);
+    if payload_commitment != actual_payload_commitment {
+        return Err(invalid_parameter(
+            "FHE input admission payload commitment mismatch",
+        ));
+    }
+    proof
+        .validate()
+        .map_err(|err| invalid_parameter(format!("invalid FHE input admission proof: {err}")))?;
 
     let params = ram_lfe_bfv_parameters_v1();
     match proof.bound_mode {
@@ -1145,7 +1278,11 @@ fn verify_soracloud_fhe_input_admission_proof(
         &envelope,
         expected_statement_hash,
     )?;
-    verify_soracloud_fhe_input_admission_backend(&proof.proof, &envelope, state_transaction)?;
+    verify_soracloud_fhe_input_admission_backend(
+        &proof.proof,
+        expected_statement_hash,
+        state_transaction,
+    )?;
     Ok(Some((proof.residual_multiple_bound, proof.bound_mode)))
 }
 
@@ -2053,6 +2190,33 @@ fn projected_agent_persistent_state_total_bytes(
         })
 }
 
+fn projected_binding_state_total_bytes(
+    binding_name: &str,
+    current_total_bytes: u64,
+    existing_size_bytes: u64,
+    value_size_bytes: u64,
+) -> Result<u64, InstructionExecutionError> {
+    let remaining_total_bytes = current_total_bytes
+        .checked_sub(existing_size_bytes)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "binding `{binding_name}` state accounting is inconsistent: \
+                     existing item bytes {existing_size_bytes} exceed binding total \
+                     {current_total_bytes}"
+                )
+                .into(),
+            )
+        })?;
+    remaining_total_bytes
+        .checked_add(value_size_bytes)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("binding `{binding_name}` state byte accounting overflow").into(),
+            )
+        })
+}
+
 fn autonomy_checkpoint_key(apartment_name: &str, run_id: &str) -> String {
     format!("/{apartment_name}/autonomy/{run_id}")
 }
@@ -2501,9 +2665,12 @@ pub(crate) fn apply_soracloud_state_mutation(
                     .into(),
                 ));
             }
-            let tentative_total = binding_total_bytes
-                .saturating_sub(existing_size)
-                .saturating_add(value_size_bytes);
+            let tentative_total = projected_binding_state_total_bytes(
+                binding_name.as_ref(),
+                binding_total_bytes,
+                existing_size,
+                value_size_bytes,
+            )?;
             if tentative_total > binding.max_total_bytes.get() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -5518,9 +5685,29 @@ fn validate_soracloud_fhe_evaluation_budget(
 ) -> Result<(), InstructionExecutionError> {
     let budget = BfvEvaluationBudget::exact_evaluator_v1();
     let plan = match job.operation {
-        FheJobOperationV1::Add => BfvEvaluationPlan::add(inputs.len())
-            .map_err(|err| invalid_parameter(format!("invalid FHE add plan: {err}")))?,
+        FheJobOperationV1::Add => {
+            if job.requested_multiplication_depth != 0 {
+                return Err(invalid_parameter("add operation must use depth 0"));
+            }
+            if job.rotation_steps != 0 || job.bootstrap_count != 0 {
+                return Err(invalid_parameter(
+                    "add operation cannot request rotation/bootstrap",
+                ));
+            }
+            BfvEvaluationPlan::add(inputs.len())
+                .map_err(|err| invalid_parameter(format!("invalid FHE add plan: {err}")))?
+        }
         FheJobOperationV1::Multiply => {
+            if job.requested_multiplication_depth == 0 {
+                return Err(invalid_parameter(
+                    "multiply operation requires non-zero depth",
+                ));
+            }
+            if job.rotation_steps != 0 || job.bootstrap_count != 0 {
+                return Err(invalid_parameter(
+                    "multiply operation cannot request rotation/bootstrap",
+                ));
+            }
             let plan = BfvEvaluationPlan::balanced_multiply(inputs.len())
                 .map_err(|err| invalid_parameter(format!("invalid FHE multiply plan: {err}")))?;
             if job.requested_multiplication_depth < plan.ciphertext_multiplication_depth {
@@ -5531,9 +5718,31 @@ fn validate_soracloud_fhe_evaluation_budget(
             }
             plan
         }
-        FheJobOperationV1::RotateLeft => BfvEvaluationPlan::rotate_left(inputs.len())
-            .map_err(|err| invalid_parameter(format!("invalid FHE rotate plan: {err}")))?,
+        FheJobOperationV1::RotateLeft => {
+            if job.rotation_steps == 0 {
+                return Err(invalid_parameter(
+                    "rotate operation requires non-zero rotation_steps",
+                ));
+            }
+            if job.requested_multiplication_depth != 0 || job.bootstrap_count != 0 {
+                return Err(invalid_parameter(
+                    "rotate operation cannot request depth/bootstrap",
+                ));
+            }
+            BfvEvaluationPlan::rotate_left(inputs.len())
+                .map_err(|err| invalid_parameter(format!("invalid FHE rotate plan: {err}")))?
+        }
         FheJobOperationV1::Bootstrap => {
+            if job.bootstrap_count == 0 {
+                return Err(invalid_parameter(
+                    "bootstrap operation requires non-zero bootstrap_count",
+                ));
+            }
+            if job.requested_multiplication_depth != 0 || job.rotation_steps != 0 {
+                return Err(invalid_parameter(
+                    "bootstrap operation cannot request depth/rotation",
+                ));
+            }
             BfvEvaluationPlan::bootstrap_refresh(inputs.len(), job.bootstrap_count)
                 .map_err(|err| invalid_parameter(format!("invalid FHE bootstrap plan: {err}")))?
         }
@@ -5563,6 +5772,16 @@ fn soracloud_fhe_job_output_residual_multiple_bound(
                 .map_err(|err| invalid_parameter(format!("FHE add residual bound exceeded: {err}")))
         }
         FheJobOperationV1::Multiply => {
+            for (index, &input_bound) in input_residual_bounds.iter().enumerate() {
+                validate_bfv_exact_residual_multiple_capacity(
+                    params,
+                    input_bound,
+                    &format!("FHE multiply input[{index}] residual bound"),
+                )
+                .map_err(|err| {
+                    invalid_parameter(format!("FHE multiply residual bound exceeded: {err}"))
+                })?;
+            }
             if input_residual_bounds.len() < 2 {
                 return Err(invalid_parameter(
                     "fhe multiply residual metadata requires at least two input bounds",
@@ -5674,6 +5893,16 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
                 invalid_parameter(format!("FHE add bounded-noise bound exceeded: {err}"))
             }),
         FheJobOperationV1::Multiply => {
+            for (index, &input_bound) in input_noise_bounds.iter().enumerate() {
+                validate_bfv_bounded_noise_bound(
+                    params,
+                    input_bound,
+                    &format!("FHE multiply input[{index}] bounded-noise bound"),
+                )
+                .map_err(|err| {
+                    invalid_parameter(format!("FHE multiply bounded-noise bound exceeded: {err}"))
+                })?;
+            }
             if input_noise_bounds.len() < 2 {
                 return Err(invalid_parameter(
                     "fhe multiply bounded-noise metadata requires at least two input bounds",
@@ -5813,19 +6042,16 @@ fn execute_soracloud_fhe_job(
     job: &FheJobSpecV1,
     inputs: &[BfvIdentifierCiphertext],
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
-    let rns_chain = registered_bfv_rns_modulus_chain(params)
-        .map_err(|err| invalid_parameter(format!("invalid registered BFV RNS chain: {err}")))?;
     ensure_matching_fhe_slots(inputs)?;
     validate_soracloud_fhe_evaluation_budget(job, inputs)?;
     match job.operation {
         FheJobOperationV1::Add => fold_fhe_slots(params, inputs, |lhs, rhs| {
-            add_ciphertexts_rns_exact(params, &rns_chain, lhs, rhs)
+            add_ciphertexts_registered_rns_exact(params, lhs, rhs)
                 .map_err(|err| invalid_parameter(format!("FHE add failed: {err}")))
         }),
         FheJobOperationV1::Multiply => fold_fhe_slots_balanced(params, inputs, |lhs, rhs| {
-            multiply_ciphertexts_rns_exact(
+            multiply_ciphertexts_registered_rns_exact(
                 params,
-                &rns_chain,
                 &evaluation_keys.relinearization_key,
                 lhs,
                 rhs,
@@ -5836,14 +6062,14 @@ fn execute_soracloud_fhe_job(
             ensure_matching_fhe_slots(inputs)?;
             let slots = &inputs.first().expect("input presence checked above").slots;
             if slots.len() == 1 {
-                let rotated = rotate_packed_ciphertext_slots_left_with_galois_keys_rns_exact(
-                    params,
-                    &rns_chain,
-                    &evaluation_keys.galois_keys,
-                    &slots[0],
-                    job.rotation_steps,
-                )
-                .map_err(|err| invalid_parameter(format!("FHE packed rotate failed: {err}")))?;
+                let rotated =
+                    rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact(
+                        params,
+                        &evaluation_keys.galois_keys,
+                        &slots[0],
+                        job.rotation_steps,
+                    )
+                    .map_err(|err| invalid_parameter(format!("FHE packed rotate failed: {err}")))?;
                 return Ok(BfvIdentifierCiphertext {
                     slots: vec![rotated],
                 });
@@ -5859,7 +6085,7 @@ fn execute_soracloud_fhe_job(
                     ))
                 })?;
             let slots =
-                rotate_ciphertext_slots_left_rns_exact(params, &rns_chain, rotation_key, slots)
+                rotate_ciphertext_slots_left_registered_rns_exact(params, rotation_key, slots)
                     .map_err(|err| invalid_parameter(format!("FHE rotate failed: {err}")))?;
             Ok(BfvIdentifierCiphertext { slots })
         }
@@ -5880,9 +6106,8 @@ fn execute_soracloud_fhe_job(
                 .slots
                 .iter()
                 .map(|slot| {
-                    bootstrap_ciphertext_rns_exact_rounds(
+                    bootstrap_ciphertext_registered_rns_exact_rounds(
                         params,
-                        &rns_chain,
                         bootstrap_key,
                         slot,
                         job.bootstrap_count,
@@ -5901,24 +6126,16 @@ fn execute_soracloud_fhe_job_bounded_noise(
     job: &FheJobSpecV1,
     inputs: &[BfvIdentifierCiphertext],
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
-    let rns_chain = registered_bfv_rns_modulus_chain(params)
-        .map_err(|err| invalid_parameter(format!("invalid registered BFV RNS chain: {err}")))?;
-    let decomposition_chain =
-        registered_bfv_key_switch_decomposition_chain(params).map_err(|err| {
-            invalid_parameter(format!("invalid registered BFV key-switch chain: {err}"))
-        })?;
     ensure_matching_fhe_slots(inputs)?;
     validate_soracloud_fhe_evaluation_budget(job, inputs)?;
     match job.operation {
         FheJobOperationV1::Add => fold_fhe_slots(params, inputs, |lhs, rhs| {
-            add_ciphertexts_rns_exact(params, &rns_chain, lhs, rhs)
+            add_ciphertexts_bounded_noise_registered_rns_exact(params, lhs, rhs)
                 .map_err(|err| invalid_parameter(format!("FHE bounded-noise add failed: {err}")))
         }),
         FheJobOperationV1::Multiply => fold_fhe_slots_balanced(params, inputs, |lhs, rhs| {
-            multiply_ciphertexts_bounded_noise_rns_basis_extension_exact(
+            multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact(
                 params,
-                &decomposition_chain,
-                &rns_chain,
                 &evaluation_keys.relinearization_key,
                 lhs,
                 rhs,
@@ -5930,10 +6147,8 @@ fn execute_soracloud_fhe_job_bounded_noise(
             let slots = &inputs.first().expect("input presence checked above").slots;
             if slots.len() == 1 {
                 let rotated =
-                    rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_rns_basis_extension_exact(
+                    rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact(
                         params,
-                        &decomposition_chain,
-                        &rns_chain,
                         &evaluation_keys.galois_keys,
                         &slots[0],
                         job.rotation_steps,
@@ -5955,9 +6170,8 @@ fn execute_soracloud_fhe_job_bounded_noise(
                         job.rotation_steps
                     ))
                 })?;
-            let slots = rotate_ciphertext_slots_left_bounded_noise_rns_exact(
+            let slots = rotate_ciphertext_slots_left_bounded_noise_registered_rns_exact(
                 params,
-                &rns_chain,
                 rotation_key,
                 slots,
             )
@@ -5981,9 +6195,8 @@ fn execute_soracloud_fhe_job_bounded_noise(
                 .slots
                 .iter()
                 .map(|slot| {
-                    bootstrap_ciphertext_bounded_noise_rns_exact_rounds(
+                    bootstrap_ciphertext_bounded_noise_registered_rns_exact_rounds(
                         params,
-                        &rns_chain,
                         bootstrap_key,
                         slot,
                         job.bootstrap_count,
@@ -7075,9 +7288,12 @@ impl Execute for isi::RunSoracloudFheJob {
                 .into(),
             ));
         }
-        let tentative_total = binding_total_bytes
-            .saturating_sub(existing_size)
-            .saturating_add(output_payload_bytes);
+        let tentative_total = projected_binding_state_total_bytes(
+            self.binding_name.as_ref(),
+            binding_total_bytes,
+            existing_size,
+            output_payload_bytes,
+        )?;
         if tentative_total > binding.max_total_bytes.get() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
@@ -11683,7 +11899,8 @@ mod tests {
             galois_key_bounded_noise_from_seed, galois_key_from_seed,
             keygen_bounded_noise_with_relinearization_from_seed, keygen_from_seed,
             packed_galois_slot_permutation, packed_left_rotation_galois_automorphism_power,
-            packed_left_rotation_galois_automorphism_powers, registered_bfv_rns_modulus_chain,
+            packed_left_rotation_galois_automorphism_powers,
+            registered_bfv_key_switch_decomposition_chain, registered_bfv_rns_modulus_chain,
             rotation_key_bounded_noise_from_seed, rotation_key_from_seed,
         },
     };
@@ -11706,7 +11923,8 @@ mod tests {
             FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1, FheSchemeV1,
             SECRET_ENVELOPE_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
             SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SecretEnvelopeEncryptionV1,
+            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+            SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES, SecretEnvelopeEncryptionV1,
             SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCapabilityPolicyV1,
             SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
             SoraContainerRuntimeV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
@@ -12557,7 +12775,22 @@ mod tests {
         attachment.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
             &attachment.proof.bytes,
         )));
+        let envelope =
+            proof_attachment_envelope(&attachment).expect("decode sample FHE OpenVerifyEnvelope");
+        attachment.vk_commitment = Some(envelope.vk_hash);
         attachment
+    }
+
+    fn sample_fhe_input_admission_attachment_with_envelope(
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        envelope: &OpenVerifyEnvelope,
+    ) -> iroha_data_model::proof::ProofAttachment {
+        let mut tampered = attachment.clone();
+        tampered.proof.bytes =
+            norito::to_bytes(envelope).expect("encode tampered OpenVerifyEnvelope");
+        tampered.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&tampered.proof.bytes)));
+        tampered.vk_commitment = Some(envelope.vk_hash);
+        tampered
     }
 
     fn sample_fhe_input_admission_proof(
@@ -12734,6 +12967,21 @@ mod tests {
         vk_box: iroha_data_model::proof::VerifyingKeyBox,
         record_circuit_id: &str,
     ) -> Result<iroha_data_model::proof::VerifyingKeyId, InstructionExecutionError> {
+        register_fhe_input_admission_verifier_for_circuit_and_version(
+            state_transaction,
+            vk_box,
+            record_circuit_id,
+            u32::from(SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1),
+        )
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn register_fhe_input_admission_verifier_for_circuit_and_version(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        vk_box: iroha_data_model::proof::VerifyingKeyBox,
+        record_circuit_id: &str,
+        record_version: u32,
+    ) -> Result<iroha_data_model::proof::VerifyingKeyId, InstructionExecutionError> {
         Grant::account_permission(
             Permission::new("CanManageVerifyingKeys".to_string(), Json::new(())),
             ALICE_ID.clone(),
@@ -12745,7 +12993,7 @@ mod tests {
         );
         let commitment = crate::zk::hash_vk(&vk_box);
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
-            1,
+            record_version,
             record_circuit_id,
             None,
             "soracloud",
@@ -12791,6 +13039,25 @@ mod tests {
     }
 
     #[test]
+    fn projected_binding_state_total_bytes_rejects_inconsistent_or_overflowing_totals() {
+        let binding_name: Name = "vault".parse().expect("valid binding name");
+
+        assert_eq!(
+            projected_binding_state_total_bytes(binding_name.as_ref(), 128, 32, 64)
+                .expect("project binding total"),
+            160
+        );
+
+        let err = projected_binding_state_total_bytes(binding_name.as_ref(), 16, 32, 1)
+            .expect_err("existing item bytes above total must fail");
+        assert_invariant_contains(err, "state accounting is inconsistent");
+
+        let err = projected_binding_state_total_bytes(binding_name.as_ref(), u64::MAX, 0, 1)
+            .expect_err("overflowing binding byte projection must fail");
+        assert_invariant_contains(err, "state byte accounting overflow");
+    }
+
+    #[test]
     fn fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape() {
         let service_name: Name = "portal".parse().expect("valid service name");
         let binding_name: Name = "vault".parse().expect("valid binding name");
@@ -12810,6 +13077,44 @@ mod tests {
         );
         let envelope =
             proof_attachment_envelope(&admission_proof.proof).expect("decode sample envelope");
+
+        let mut forged_helper_envelope_hash = admission_proof.proof.clone();
+        forged_helper_envelope_hash.envelope_hash =
+            Some(<[u8; Hash::LENGTH]>::from(Hash::new(b"forged-envelope")));
+        let err = proof_attachment_envelope(&forged_helper_envelope_hash)
+            .expect_err("helper must reject forged envelope hashes before decoding");
+        assert_invalid_parameter_contains(err, "envelope_hash must match proof bytes");
+
+        let mut oversized_outer = admission_proof.proof.clone();
+        oversized_outer.proof.bytes =
+            vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES + 1];
+        oversized_outer.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &oversized_outer.proof.bytes,
+        )));
+        let err = proof_attachment_envelope(&oversized_outer)
+            .expect_err("helper must reject oversized OpenVerify bytes before decoding");
+        assert_invalid_parameter_contains(err, "OpenVerifyEnvelope length");
+
+        let mut missing_vk_commitment = admission_proof.proof.clone();
+        missing_vk_commitment.vk_commitment = None;
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &missing_vk_commitment,
+            &envelope,
+            admission_proof.statement_hash,
+        )
+        .expect_err("missing vk_commitment must fail FHE input admission");
+        assert_invalid_parameter_contains(err, "requires vk_commitment");
+
+        let mut forged_vk_commitment = admission_proof.proof.clone();
+        forged_vk_commitment.vk_commitment =
+            Some(<[u8; Hash::LENGTH]>::from(Hash::new(b"forged-vk")));
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &forged_vk_commitment,
+            &envelope,
+            admission_proof.statement_hash,
+        )
+        .expect_err("forged vk_commitment must fail FHE input admission");
+        assert_invalid_parameter_contains(err, "vk_commitment mismatch");
 
         let mut missing_envelope_hash = admission_proof.proof.clone();
         missing_envelope_hash.envelope_hash = None;
@@ -12842,6 +13147,39 @@ mod tests {
         .expect_err("non-portable circuit ids must fail shared OpenVerify admission");
         assert_invalid_parameter_contains(err, "portable canonical identifier");
 
+        let mut wrong_circuit_id = envelope.clone();
+        wrong_circuit_id.circuit_id = "soracloud_fhe_input_admission_v2".to_owned();
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &wrong_circuit_id,
+            admission_proof.statement_hash,
+        )
+        .expect_err("portable but non-canonical circuit ids must fail FHE admission");
+        assert_invalid_parameter_contains(err, "circuit id must be canonical v1");
+
+        let mut oversized_circuit_id = envelope.clone();
+        oversized_circuit_id.circuit_id =
+            format!("{SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1}_x");
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &oversized_circuit_id,
+            admission_proof.statement_hash,
+        )
+        .expect_err("oversized circuit ids must fail shared OpenVerify admission");
+        assert_invalid_parameter_contains(err, "circuit id length");
+
+        let mut oversized_schema = envelope.clone();
+        oversized_schema.public_inputs =
+            SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.to_vec();
+        oversized_schema.public_inputs.push(b'x');
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &oversized_schema,
+            admission_proof.statement_hash,
+        )
+        .expect_err("oversized public-input schemas must fail shared OpenVerify admission");
+        assert_invalid_parameter_contains(err, "public inputs length");
+
         let mut zero_vk_hash = envelope.clone();
         zero_vk_hash.vk_hash = [0; Hash::LENGTH];
         let err = validate_soracloud_fhe_input_admission_envelope(
@@ -12852,6 +13190,49 @@ mod tests {
         .expect_err("zero verifier-key hashes must fail shared OpenVerify admission");
         assert_invalid_parameter_contains(err, "verifier-key hash is zero");
 
+        let mut empty_native_envelope = envelope.clone();
+        let mut empty_native_open =
+            norito::decode_from_bytes::<StarkFriOpenProofV1>(&empty_native_envelope.proof_bytes)
+                .expect("decode sample STARK wrapper");
+        empty_native_open.envelope_bytes.clear();
+        empty_native_envelope.proof_bytes =
+            norito::to_bytes(&empty_native_open).expect("encode empty-native STARK wrapper");
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &empty_native_envelope,
+            admission_proof.statement_hash,
+        )
+        .expect_err("empty native STARK envelope bytes must fail FHE admission");
+        assert_invalid_parameter_contains(err, "native envelope bytes");
+
+        let mut oversized_wrapper = envelope.clone();
+        oversized_wrapper.proof_bytes =
+            vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES + 1];
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &oversized_wrapper,
+            admission_proof.statement_hash,
+        )
+        .expect_err("oversized STARK wrapper bytes must fail FHE admission");
+        assert_invalid_parameter_contains(err, "proof bytes length");
+
+        let mut oversized_native_envelope = envelope.clone();
+        let mut oversized_native_open = norito::decode_from_bytes::<StarkFriOpenProofV1>(
+            &oversized_native_envelope.proof_bytes,
+        )
+        .expect("decode sample STARK wrapper");
+        oversized_native_open.envelope_bytes =
+            vec![0xA5; SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES + 1];
+        oversized_native_envelope.proof_bytes =
+            norito::to_bytes(&oversized_native_open).expect("encode oversized STARK wrapper");
+        let err = validate_soracloud_fhe_input_admission_envelope(
+            &admission_proof.proof,
+            &oversized_native_envelope,
+            admission_proof.statement_hash,
+        )
+        .expect_err("oversized native STARK envelope bytes must fail FHE admission");
+        assert_invalid_parameter_contains(err, "native envelope bytes length");
+
         let mut empty_inner_proof = envelope;
         empty_inner_proof.proof_bytes.clear();
         let err = validate_soracloud_fhe_input_admission_envelope(
@@ -12861,6 +13242,285 @@ mod tests {
         )
         .expect_err("empty inner proof bytes must fail shared OpenVerify admission");
         assert_invalid_parameter_contains(err, "proof bytes are empty");
+    }
+
+    #[test]
+    fn fhe_input_admission_proof_binds_actual_payload_metadata() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let service_name: Name = "portal".parse().expect("valid service name");
+        let binding_name: Name = "vault".parse().expect("valid binding name");
+        let state_key = "/state/private/input-payload-binding";
+        let payload = sample_fhe_payload(b"alice", b"seed-proof-payload-binding");
+        let payload_size = u64::try_from(payload.len()).expect("payload len");
+        let payload_commitment = Hash::new(&payload);
+        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-payload-binding");
+        let residual_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
+                .expect("fresh input residual bound");
+        let admission_proof = sample_fhe_input_admission_proof(
+            &service_name,
+            &binding_name,
+            state_key,
+            &payload,
+            governance_tx_hash,
+            residual_bound,
+        );
+
+        let err = verify_soracloud_fhe_input_admission_proof(
+            &mut stx,
+            &service_name,
+            &binding_name,
+            state_key,
+            SoraStateMutationOperationV1::Upsert,
+            Some(payload_size + 1),
+            Some(&payload),
+            Some(payload_commitment),
+            SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            Some(&admission_proof),
+        )
+        .expect_err("FHE input proof must bind declared value size to the actual payload");
+        assert_invalid_parameter_contains(err, "value_size_bytes");
+
+        let err = verify_soracloud_fhe_input_admission_proof(
+            &mut stx,
+            &service_name,
+            &binding_name,
+            state_key,
+            SoraStateMutationOperationV1::Upsert,
+            Some(payload_size),
+            Some(&payload),
+            Some(Hash::new(b"forged-payload-commitment")),
+            SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            Some(&admission_proof),
+        )
+        .expect_err("FHE input proof must bind the commitment to the actual payload");
+        assert_invalid_parameter_contains(err, "payload commitment mismatch");
+
+        let mut malformed_proof = admission_proof.clone();
+        malformed_proof.proof.proof.bytes = vec![0xA5];
+        malformed_proof.proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &malformed_proof.proof.proof.bytes,
+        )));
+
+        let err = verify_soracloud_fhe_input_admission_proof(
+            &mut stx,
+            &service_name,
+            &binding_name,
+            state_key,
+            SoraStateMutationOperationV1::Upsert,
+            Some(payload_size + 1),
+            Some(&payload),
+            Some(payload_commitment),
+            SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            Some(&malformed_proof),
+        )
+        .expect_err("payload size drift must reject before malformed proof bytes");
+        assert_invalid_parameter_contains(err, "value_size_bytes");
+
+        let err = verify_soracloud_fhe_input_admission_proof(
+            &mut stx,
+            &service_name,
+            &binding_name,
+            state_key,
+            SoraStateMutationOperationV1::Upsert,
+            Some(payload_size),
+            Some(&payload),
+            Some(Hash::new(b"forged-payload-commitment")),
+            SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            Some(&malformed_proof),
+        )
+        .expect_err("payload commitment drift must reject before malformed proof bytes");
+        assert_invalid_parameter_contains(err, "payload commitment mismatch");
+
+        Ok(())
+    }
+
+    #[test]
+    fn fhe_input_admission_backend_requires_attachment_bindings_before_verifier_lookup()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let service_name: Name = "portal".parse().expect("valid service name");
+        let binding_name: Name = "vault".parse().expect("valid binding name");
+        let state_key = "/state/private/input-backend-vk-commitment";
+        let payload = sample_fhe_payload(b"alice", b"seed-proof-backend-vk-commitment");
+        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-backend-vk-commitment");
+        let residual_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
+                .expect("fresh input residual bound");
+        let admission_proof = sample_fhe_input_admission_proof(
+            &service_name,
+            &binding_name,
+            state_key,
+            &payload,
+            governance_tx_hash,
+            residual_bound,
+        );
+        let envelope =
+            proof_attachment_envelope(&admission_proof.proof).expect("decode sample envelope");
+
+        let mut unsupported_backend = admission_proof.proof.clone();
+        unsupported_backend.backend = "stark/fri/debug-proof".into();
+        unsupported_backend.proof.backend = unsupported_backend.backend.clone();
+        unsupported_backend.vk_ref = iroha_data_model::proof::VerifyingKeyId::new(
+            unsupported_backend.backend.as_str(),
+            FHE_INPUT_ADMISSION_CIRCUIT_ID,
+        );
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &unsupported_backend,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject unsupported STARK/FRI labels before key lookup");
+        assert_invalid_parameter_contains(err, "supported STARK/FRI v1 proof backend");
+
+        let mut missing_vk_commitment = admission_proof.proof.clone();
+        missing_vk_commitment.vk_commitment = None;
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &missing_vk_commitment,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject missing vk_commitment before key lookup");
+        assert_invalid_parameter_contains(err, "requires vk_commitment");
+
+        let mut missing_envelope_hash = admission_proof.proof.clone();
+        missing_envelope_hash.envelope_hash = None;
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &missing_envelope_hash,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject missing envelope_hash before key lookup");
+        assert_invalid_parameter_contains(err, "requires envelope_hash");
+
+        let mut forged_envelope_hash = admission_proof.proof.clone();
+        forged_envelope_hash.envelope_hash =
+            Some(<[u8; Hash::LENGTH]>::from(Hash::new(b"forged-envelope")));
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &forged_envelope_hash,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject forged envelope_hash before key lookup");
+        assert_invalid_parameter_contains(err, "envelope_hash mismatch");
+
+        let mut wrong_vk_ref_name = admission_proof.proof.clone();
+        wrong_vk_ref_name.vk_ref = iroha_data_model::proof::VerifyingKeyId::new(
+            FHE_INPUT_ADMISSION_BACKEND,
+            "soracloud_fhe_input_admission_alias_v1",
+        );
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &wrong_vk_ref_name,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject non-canonical vk_ref before key lookup");
+        assert_invalid_parameter_contains(err, "canonical v1 circuit id");
+
+        let mut wrong_schema = envelope.clone();
+        wrong_schema.public_inputs = b"soracloud:fhe-input-admission:public-inputs:v2".to_vec();
+        let wrong_schema_attachment = sample_fhe_input_admission_attachment_with_envelope(
+            &admission_proof.proof,
+            &wrong_schema,
+        );
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &wrong_schema_attachment,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject envelope schema drift before key lookup");
+        assert_invalid_parameter_contains(err, "public-input schema mismatch");
+
+        let mut wrong_circuit = envelope.clone();
+        wrong_circuit.circuit_id = "soracloud_fhe_input_admission_v2".to_owned();
+        let wrong_circuit_attachment = sample_fhe_input_admission_attachment_with_envelope(
+            &admission_proof.proof,
+            &wrong_circuit,
+        );
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &wrong_circuit_attachment,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject circuit-id drift before key lookup");
+        assert_invalid_parameter_contains(err, "circuit id must be canonical v1");
+
+        let mut wrong_open_proof = envelope.clone();
+        let wrong_open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(Hash::new(
+                b"wrong-fhe-input-admission-statement",
+            ))]],
+            envelope_bytes: vec![0xA5; 32],
+        };
+        wrong_open_proof.proof_bytes =
+            norito::to_bytes(&wrong_open).expect("encode wrong public-input wrapper");
+        let wrong_open_attachment = sample_fhe_input_admission_attachment_with_envelope(
+            &admission_proof.proof,
+            &wrong_open_proof,
+        );
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &wrong_open_attachment,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject statement public-input drift before key lookup");
+        assert_invalid_parameter_contains(err, "public inputs do not match statement hash");
+
+        let mut empty_native_open_proof = envelope.clone();
+        let empty_native_open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(
+                admission_proof.statement_hash,
+            )]],
+            envelope_bytes: Vec::new(),
+        };
+        empty_native_open_proof.proof_bytes =
+            norito::to_bytes(&empty_native_open).expect("encode empty-native STARK wrapper");
+        let empty_native_attachment = sample_fhe_input_admission_attachment_with_envelope(
+            &admission_proof.proof,
+            &empty_native_open_proof,
+        );
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &empty_native_attachment,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject empty native envelope before key lookup");
+        assert_invalid_parameter_contains(err, "native envelope bytes");
+
+        let mut nonempty_aux = envelope;
+        nonempty_aux.aux = vec![0xA5];
+        let nonempty_aux_attachment = sample_fhe_input_admission_attachment_with_envelope(
+            &admission_proof.proof,
+            &nonempty_aux,
+        );
+        let err = verify_soracloud_fhe_input_admission_backend(
+            &nonempty_aux_attachment,
+            admission_proof.statement_hash,
+            &mut stx,
+        )
+        .expect_err("backend verifier must reject envelope aux before key lookup");
+        assert_invalid_parameter_contains(err, "aux must be empty");
+        Ok(())
     }
 
     fn sample_fhe_input_ref(state_key: &str, payload: &[u8]) -> FheJobInputRefV1 {
@@ -15296,10 +15956,24 @@ mod tests {
         let mut job = sample_fhe_job(Vec::new());
         job.operation = FheJobOperationV1::Multiply;
         job.requested_multiplication_depth = 1;
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
+        let expected_output_bound = bfv_multiply_bounded_noise_output_bound(
+            &params,
+            &evaluation_keys.relinearization_key,
+            input_bound,
+            input_bound,
+        )
+        .expect("multiply output noise bound");
 
-        let output =
-            execute_soracloud_fhe_job_bounded_noise(&params, &evaluation_keys, &job, &inputs)
-                .expect("execute bounded-noise multiply through target-limb bridge");
+        let (output, output_bound) = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            &inputs,
+            &[input_bound, input_bound],
+        )
+        .expect("execute bounded-noise multiply through target-limb bridge");
         let plaintext_slots = output
             .slots
             .iter()
@@ -15310,6 +15984,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(plaintext_slots, vec![15, 28]);
+        assert_eq!(output_bound, Some(expected_output_bound));
     }
 
     #[test]
@@ -15362,12 +16037,22 @@ mod tests {
         )]);
         job.operation = FheJobOperationV1::RotateLeft;
         job.rotation_steps = half_rotation;
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
+        let expected_output_bound = bfv_packed_rotate_left_bounded_noise_output_bound(
+            &params,
+            &evaluation_keys.galois_keys,
+            input_bound,
+            job.rotation_steps,
+        )
+        .expect("packed rotate output noise bound");
 
-        let output = execute_soracloud_fhe_job_bounded_noise(
+        let (output, output_bound) = execute_soracloud_fhe_job_with_bounded_noise_bounds(
             &params,
             &evaluation_keys,
             &job,
             std::slice::from_ref(&input),
+            &[input_bound],
         )
         .expect("execute bounded-noise packed rotate through target-limb bridge");
         assert_eq!(output.slots.len(), 1);
@@ -15378,6 +16063,7 @@ mod tests {
         let mut expected_slots = input_slots;
         expected_slots.rotate_left(usize::try_from(half_rotation).expect("rotation fits usize"));
         assert_eq!(output_slots, expected_slots);
+        assert_eq!(output_bound, Some(expected_output_bound));
     }
 
     #[test]
@@ -15635,6 +16321,72 @@ mod tests {
                 .expect("bootstrap output bound")
             )
         );
+
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-exact-bound-packed-keygen").expect("keygen");
+        let half_rotation = u32::from(params.polynomial_degree) / 2;
+        let automorphism_power =
+            packed_left_rotation_galois_automorphism_power(&params, half_rotation)
+                .expect("registered packed half-rotation must be one Galois automorphism");
+        let degree = usize::from(params.polynomial_degree);
+        let input_slots = (0..degree)
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &input_slots).expect("encode packed slots");
+        let packed_input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_from_seed(
+                    &params,
+                    &public_key,
+                    &packed_plaintext,
+                    b"soracloud-exact-bound-packed-input",
+                )
+                .expect("encrypt exact packed input"),
+            ],
+        };
+        let packed_evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: vec![
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    automorphism_power,
+                    b"soracloud-exact-bound-packed-galois-key",
+                )
+                .expect("exact packed Galois key"),
+            ],
+            bootstrap_key: None,
+        };
+        let mut packed_job = sample_fhe_job(Vec::new());
+        packed_job.operation = FheJobOperationV1::RotateLeft;
+        packed_job.rotation_steps = half_rotation;
+        let expected_packed_bound = bfv_packed_rotate_left_output_residual_multiple_bound(
+            &params,
+            &packed_evaluation_keys.galois_keys,
+            input_bound,
+            packed_job.rotation_steps,
+        )
+        .expect("packed rotate residual bound");
+
+        let (packed_output, packed_bound) = execute_soracloud_fhe_job_with_residual_bounds(
+            &params,
+            &packed_evaluation_keys,
+            &packed_job,
+            std::slice::from_ref(&packed_input),
+            &[input_bound],
+        )
+        .expect("exact packed rotate job with residual metadata");
+        assert_eq!(packed_output.slots.len(), 1);
+        let packed_plaintext =
+            decrypt(&params, &secret_key, &packed_output.slots[0]).expect("decrypt packed output");
+        let output_slots =
+            decode_packed_plaintext_slots(&params, &packed_plaintext).expect("decode packed slots");
+        let mut expected_slots = input_slots;
+        expected_slots.rotate_left(usize::try_from(half_rotation).expect("rotation fits usize"));
+        assert_eq!(output_slots, expected_slots);
+        assert_eq!(packed_bound, Some(expected_packed_bound));
     }
 
     #[test]
@@ -15716,6 +16468,74 @@ mod tests {
                 .expect("multiply output bound")
             )
         );
+    }
+
+    #[test]
+    fn soracloud_fhe_job_multiply_metadata_preflights_bounds_before_arity() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Multiply;
+
+        let input = sample_fhe_envelope(b"\x02", b"soracloud-fhe-mul-bound-preflight");
+        let residual_capacity =
+            u128::from(params.ciphertext_modulus / params.plaintext_modulus / 2);
+        let err = soracloud_fhe_job_output_residual_multiple_bound(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[residual_capacity + 1],
+        )
+        .expect_err("oversized residual metadata must fail before multiply arity");
+        assert_invalid_parameter_contains(err, "FHE multiply residual bound exceeded");
+
+        let input_bound = bfv_encrypted_zero_refresh_residual_multiple_bound(&params)
+            .expect("fresh input residual bound");
+        let err = soracloud_fhe_job_output_residual_multiple_bound(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+        )
+        .expect_err("valid single residual metadata must still reject multiply arity");
+        assert_invalid_parameter_contains(err, "at least two input bounds");
+
+        let (_secret_key, public_key, bounded_evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let bounded_input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[2],
+                    b"soracloud-bounded-mul-bound-preflight",
+                )
+                .expect("encrypt bounded-noise input"),
+            ],
+        };
+        let err = soracloud_fhe_job_output_bounded_noise_bound(
+            &params,
+            &bounded_evaluation_keys,
+            &job,
+            std::slice::from_ref(&bounded_input),
+            &[u128::MAX],
+        )
+        .expect_err("oversized bounded-noise metadata must fail before multiply arity");
+        assert_invalid_parameter_contains(err, "FHE multiply bounded-noise bound exceeded");
+
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let err = soracloud_fhe_job_output_bounded_noise_bound(
+            &params,
+            &bounded_evaluation_keys,
+            &job,
+            std::slice::from_ref(&bounded_input),
+            &[fresh_bound],
+        )
+        .expect_err("valid single bounded-noise metadata must still reject multiply arity");
+        assert_invalid_parameter_contains(err, "at least two input bounds");
     }
 
     #[test]
@@ -16148,6 +16968,28 @@ mod tests {
         .expect_err("single-input add plans must fail before evaluation");
         assert_invalid_parameter_contains(err, "invalid FHE add plan");
 
+        let mut add_depth_job = sample_fhe_job(Vec::new());
+        add_depth_job.requested_multiplication_depth = 1;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &add_depth_job,
+            std::slice::from_ref(&lhs),
+        )
+        .expect_err("add depth metadata must fail before add arity");
+        assert_invalid_parameter_contains(err, "add operation must use depth 0");
+
+        let mut multiply_zero_depth_job = sample_fhe_job(Vec::new());
+        multiply_zero_depth_job.operation = FheJobOperationV1::Multiply;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &multiply_zero_depth_job,
+            std::slice::from_ref(&lhs),
+        )
+        .expect_err("multiply zero-depth metadata must fail before multiply arity");
+        assert_invalid_parameter_contains(err, "multiply operation requires non-zero depth");
+
         let mut rotate_job = sample_fhe_job(Vec::new());
         rotate_job.operation = FheJobOperationV1::RotateLeft;
         rotate_job.rotation_steps = 1;
@@ -16160,6 +17002,17 @@ mod tests {
         .expect_err("multi-input rotate plans must fail before evaluation");
         assert_invalid_parameter_contains(err, "invalid FHE rotate plan");
 
+        let mut rotate_zero_steps_job = sample_fhe_job(Vec::new());
+        rotate_zero_steps_job.operation = FheJobOperationV1::RotateLeft;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &rotate_zero_steps_job,
+            &[lhs.clone(), rhs.clone()],
+        )
+        .expect_err("rotate zero-step metadata must fail before rotate input shape");
+        assert_invalid_parameter_contains(err, "rotate operation requires non-zero rotation_steps");
+
         let mut multi_input_bootstrap_job = sample_fhe_job(Vec::new());
         multi_input_bootstrap_job.operation = FheJobOperationV1::Bootstrap;
         multi_input_bootstrap_job.bootstrap_count = 1;
@@ -16167,17 +17020,48 @@ mod tests {
             &params,
             &evaluation_keys,
             &multi_input_bootstrap_job,
-            &[lhs.clone(), rhs],
+            &[lhs.clone(), rhs.clone()],
         )
         .expect_err("multi-input bootstrap plans must fail before evaluation");
         assert_invalid_parameter_contains(err, "invalid FHE bootstrap plan");
+
+        let mut bootstrap_depth_job = sample_fhe_job(Vec::new());
+        bootstrap_depth_job.operation = FheJobOperationV1::Bootstrap;
+        bootstrap_depth_job.bootstrap_count = 1;
+        bootstrap_depth_job.requested_multiplication_depth = 1;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &bootstrap_depth_job,
+            &[lhs.clone(), rhs.clone()],
+        )
+        .expect_err("bootstrap depth metadata must fail before bootstrap input shape");
+        assert_invalid_parameter_contains(err, "bootstrap operation cannot request depth/rotation");
+
+        let mut zero_round_multi_input_bootstrap_job = sample_fhe_job(Vec::new());
+        zero_round_multi_input_bootstrap_job.operation = FheJobOperationV1::Bootstrap;
+        zero_round_multi_input_bootstrap_job.bootstrap_count = 0;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &zero_round_multi_input_bootstrap_job,
+            &[lhs.clone(), rhs],
+        )
+        .expect_err("zero-round multi-input bootstrap plans must fail on round metadata");
+        assert_invalid_parameter_contains(
+            err,
+            "bootstrap operation requires non-zero bootstrap_count",
+        );
 
         let mut bootstrap_job = sample_fhe_job(Vec::new());
         bootstrap_job.operation = FheJobOperationV1::Bootstrap;
         bootstrap_job.bootstrap_count = 0;
         let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &bootstrap_job, &[lhs])
             .expect_err("zero-round bootstrap plans must fail before evaluation");
-        assert_invalid_parameter_contains(err, "invalid FHE bootstrap plan");
+        assert_invalid_parameter_contains(
+            err,
+            "bootstrap operation requires non-zero bootstrap_count",
+        );
     }
 
     #[test]
@@ -20068,6 +20952,392 @@ mod tests {
     }
 
     #[test]
+    fn run_soracloud_fhe_job_records_bounded_noise_non_add_output_state() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let bundle = sample_bundle_with_state_binding(
+            "portal",
+            "1.0.0",
+            0,
+            "vault",
+            "/state/private",
+            SoraStateEncryptionV1::FheCiphertext,
+            SoraStateMutabilityV1::ReadWrite,
+            131_072,
+            262_144,
+        );
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_bounded_noise_with_relinearization_from_seed(
+                &params,
+                b"soracloud-ledger-bounded-non-add-keygen",
+            )
+            .expect("bounded-noise keygen");
+        let bootstrap_seed = b"soracloud-ledger-bounded-non-add-bootstrap";
+        let bootstrap_key = bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "soracloud-ledger-bounded-non-add-bootstrap",
+            2,
+            bootstrap_seed,
+        )
+        .expect("bounded-noise bootstrap key");
+        let packed_rotation_steps = u32::from(params.polynomial_degree) / 2;
+        let packed_automorphism_power =
+            packed_left_rotation_galois_automorphism_power(&params, packed_rotation_steps)
+                .expect("half packed rotation is a single automorphism");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: vec![
+                galois_key_bounded_noise_from_seed(
+                    &params,
+                    &secret_key,
+                    packed_automorphism_power,
+                    b"soracloud-ledger-bounded-non-add-packed-galois",
+                )
+                .expect("bounded-noise packed Galois key"),
+            ],
+            bootstrap_key: Some(bootstrap_key),
+        };
+        let evaluation_key_refresh_transcript = BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key: public_key.clone(),
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
+                key_id: "soracloud-ledger-bounded-non-add-bootstrap".to_string(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            }),
+        };
+        let refresh_digest = evaluation_key_refresh_transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &evaluation_keys,
+                BfvRefreshTranscriptModeV1::BoundedNoise,
+            )
+            .expect("bounded-noise refresh transcript digest");
+        let fresh_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+
+        let service_name: Name = "portal".parse().expect("valid");
+        let binding_name: Name = "vault".parse().expect("valid");
+        let multiply_lhs_payload =
+            sample_bounded_noise_fhe_payload(&public_key, &[5, 7], "bounded-mul-input-1");
+        let multiply_rhs_payload =
+            sample_bounded_noise_fhe_payload(&public_key, &[3, 4], "bounded-mul-input-2");
+        let packed_input_slots = (0..usize::from(params.polynomial_degree))
+            .map(|index| u64::try_from(index + 1).expect("slot index fits u64"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &packed_input_slots).expect("encode packed");
+        let packed_input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &packed_plaintext,
+                    b"soracloud-ledger-bounded-packed-input",
+                )
+                .expect("encrypt bounded packed input"),
+            ],
+        };
+        let packed_payload = norito::to_bytes(&packed_input).expect("encode packed input");
+        let bootstrap_payload =
+            sample_bounded_noise_fhe_payload(&public_key, &[9, 11], "bounded-bootstrap-input");
+
+        for (state_key, payload) in [
+            (
+                "/state/private/bounded-mul-left",
+                multiply_lhs_payload.clone(),
+            ),
+            (
+                "/state/private/bounded-mul-right",
+                multiply_rhs_payload.clone(),
+            ),
+            ("/state/private/bounded-packed", packed_payload.clone()),
+            (
+                "/state/private/bounded-bootstrap",
+                bootstrap_payload.clone(),
+            ),
+        ] {
+            record_service_state_entry(
+                &mut stx,
+                SoraServiceStateEntryV1 {
+                    schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: "1.0.0".to_string(),
+                    binding_name: binding_name.clone(),
+                    state_key: state_key.to_string(),
+                    encryption: SoraStateEncryptionV1::FheCiphertext,
+                    payload_bytes: NonZeroU64::new(
+                        u64::try_from(payload.len()).expect("payload len"),
+                    )
+                    .expect("nonzero"),
+                    payload_commitment: Hash::new(&payload),
+                    payload,
+                    fhe_residual_multiple_bound: Some(fresh_bound),
+                    fhe_bound_mode: Some(BfvCiphertextBoundModeV1::BoundedNoise),
+                    last_update_sequence: 1,
+                    governance_tx_hash: Hash::new(b"bounded-non-add-input-state"),
+                    source_action: SoraServiceLifecycleActionV1::StateMutation,
+                },
+            )?;
+        }
+
+        let mut policy = sample_fhe_policy();
+        policy.evaluation_key_digest = evaluation_keys
+            .digest(&params)
+            .expect("bounded-noise evaluation-key digest");
+        policy.evaluation_key_refresh_transcript_digest = refresh_digest;
+        policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        policy.max_rotation_count =
+            NonZeroU32::new(u32::from(params.polynomial_degree)).expect("nonzero rotation budget");
+        policy.max_bootstrap_count = 2;
+        let param_set = sample_fhe_param_set();
+
+        let mut multiply_job = sample_fhe_job(vec![
+            sample_fhe_input_ref("/state/private/bounded-mul-left", &multiply_lhs_payload),
+            sample_fhe_input_ref("/state/private/bounded-mul-right", &multiply_rhs_payload),
+        ]);
+        multiply_job.job_id = "bounded-multiply-job".to_string();
+        multiply_job.output_state_key = "/state/private/bounded-multiply-output".to_string();
+        multiply_job.operation = FheJobOperationV1::Multiply;
+        multiply_job.requested_multiplication_depth = 1;
+
+        let mut packed_job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/bounded-packed",
+            &packed_payload,
+        )]);
+        packed_job.job_id = "bounded-packed-rotate-job".to_string();
+        packed_job.output_state_key = "/state/private/bounded-packed-output".to_string();
+        packed_job.operation = FheJobOperationV1::RotateLeft;
+        packed_job.rotation_steps = packed_rotation_steps;
+
+        let mut bootstrap_job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/bounded-bootstrap",
+            &bootstrap_payload,
+        )]);
+        bootstrap_job.job_id = "bounded-bootstrap-job".to_string();
+        bootstrap_job.output_state_key = "/state/private/bounded-bootstrap-output".to_string();
+        bootstrap_job.operation = FheJobOperationV1::Bootstrap;
+        bootstrap_job.bootstrap_count = 2;
+
+        for (job, governance_seed) in [
+            (multiply_job.clone(), b"gov-fhe-bounded-multiply".as_slice()),
+            (
+                packed_job.clone(),
+                b"gov-fhe-bounded-packed-rotate".as_slice(),
+            ),
+            (
+                bootstrap_job.clone(),
+                b"gov-fhe-bounded-bootstrap".as_slice(),
+            ),
+        ] {
+            let governance_tx_hash = Hash::new(governance_seed);
+            iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
+                service_name: service_name.clone(),
+                binding_name: binding_name.clone(),
+                job: job.clone(),
+                policy: policy.clone(),
+                param_set: param_set.clone(),
+                evaluation_keys: evaluation_keys.clone(),
+                evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+                governance_tx_hash,
+                provenance: fhe_job_provenance(
+                    &service_name,
+                    &binding_name,
+                    job,
+                    policy.clone(),
+                    param_set.clone(),
+                    evaluation_keys.clone(),
+                    evaluation_key_refresh_transcript.clone(),
+                    governance_tx_hash,
+                ),
+            })
+            .execute(&ALICE_ID, &mut stx)?;
+        }
+
+        stx.apply();
+        state_block.commit()?;
+
+        let view = state.view();
+        let world = view.world();
+        let multiply_entry = world
+            .soracloud_service_state_entries()
+            .get(&(
+                service_name.as_ref().to_owned(),
+                binding_name.as_ref().to_owned(),
+                multiply_job.output_state_key.clone(),
+            ))
+            .expect("bounded multiply output entry");
+        assert_eq!(
+            multiply_entry.encryption,
+            SoraStateEncryptionV1::FheCiphertext
+        );
+        assert_eq!(
+            multiply_entry.payload_bytes.get(),
+            u64::try_from(multiply_entry.payload.len()).expect("payload len fits u64")
+        );
+        assert_eq!(
+            multiply_entry.payload_commitment,
+            Hash::new(&multiply_entry.payload)
+        );
+        assert_eq!(
+            multiply_entry.source_action,
+            SoraServiceLifecycleActionV1::FheJobRun
+        );
+        assert_eq!(
+            multiply_entry.fhe_bound_mode,
+            Some(BfvCiphertextBoundModeV1::BoundedNoise)
+        );
+        assert_eq!(
+            multiply_entry.fhe_residual_multiple_bound,
+            Some(
+                bfv_multiply_bounded_noise_output_bound(
+                    &params,
+                    &evaluation_keys.relinearization_key,
+                    fresh_bound,
+                    fresh_bound,
+                )
+                .expect("bounded multiply output bound")
+            )
+        );
+        let multiply_output = decode_soracloud_fhe_envelope(&multiply_entry.payload)?;
+        let multiply_plaintext = multiply_output
+            .slots
+            .iter()
+            .map(|slot| {
+                decrypt_bounded_noise(&params, &secret_key, slot)
+                    .expect("decrypt bounded multiply output")[0]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(multiply_plaintext, vec![15, 28]);
+
+        let packed_entry = world
+            .soracloud_service_state_entries()
+            .get(&(
+                service_name.as_ref().to_owned(),
+                binding_name.as_ref().to_owned(),
+                packed_job.output_state_key.clone(),
+            ))
+            .expect("bounded packed output entry");
+        assert_eq!(
+            packed_entry.encryption,
+            SoraStateEncryptionV1::FheCiphertext
+        );
+        assert_eq!(
+            packed_entry.payload_bytes.get(),
+            u64::try_from(packed_entry.payload.len()).expect("payload len fits u64")
+        );
+        assert_eq!(
+            packed_entry.payload_commitment,
+            Hash::new(&packed_entry.payload)
+        );
+        assert_eq!(
+            packed_entry.source_action,
+            SoraServiceLifecycleActionV1::FheJobRun
+        );
+        assert_eq!(
+            packed_entry.fhe_bound_mode,
+            Some(BfvCiphertextBoundModeV1::BoundedNoise)
+        );
+        assert_eq!(
+            packed_entry.fhe_residual_multiple_bound,
+            Some(
+                bfv_packed_rotate_left_bounded_noise_output_bound(
+                    &params,
+                    &evaluation_keys.galois_keys,
+                    fresh_bound,
+                    packed_job.rotation_steps,
+                )
+                .expect("bounded packed rotate output bound")
+            )
+        );
+        let packed_output = decode_soracloud_fhe_envelope(&packed_entry.payload)?;
+        assert_eq!(packed_output.slots.len(), 1);
+        let packed_plaintext = decrypt_bounded_noise(&params, &secret_key, &packed_output.slots[0])
+            .expect("decrypt bounded packed output");
+        let mut expected_packed_slots = packed_input_slots;
+        expected_packed_slots
+            .rotate_left(usize::try_from(packed_rotation_steps).expect("rotation fits usize"));
+        assert_eq!(
+            decode_packed_plaintext_slots(&params, &packed_plaintext)
+                .expect("decode bounded packed output"),
+            expected_packed_slots
+        );
+
+        let bootstrap_entry = world
+            .soracloud_service_state_entries()
+            .get(&(
+                service_name.as_ref().to_owned(),
+                binding_name.as_ref().to_owned(),
+                bootstrap_job.output_state_key.clone(),
+            ))
+            .expect("bounded bootstrap output entry");
+        assert_eq!(
+            bootstrap_entry.encryption,
+            SoraStateEncryptionV1::FheCiphertext
+        );
+        assert_eq!(
+            bootstrap_entry.payload_bytes.get(),
+            u64::try_from(bootstrap_entry.payload.len()).expect("payload len fits u64")
+        );
+        assert_eq!(
+            bootstrap_entry.payload_commitment,
+            Hash::new(&bootstrap_entry.payload)
+        );
+        assert_eq!(
+            bootstrap_entry.source_action,
+            SoraServiceLifecycleActionV1::FheJobRun
+        );
+        assert_eq!(
+            bootstrap_entry.fhe_bound_mode,
+            Some(BfvCiphertextBoundModeV1::BoundedNoise)
+        );
+        assert_eq!(
+            bootstrap_entry.fhe_residual_multiple_bound,
+            Some(
+                bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+                    &params,
+                    evaluation_keys
+                        .bootstrap_key
+                        .as_ref()
+                        .expect("bounded bootstrap key"),
+                    fresh_bound,
+                    bootstrap_job.bootstrap_count,
+                )
+                .expect("bounded bootstrap output bound")
+            )
+        );
+        let bootstrap_output = decode_soracloud_fhe_envelope(&bootstrap_entry.payload)?;
+        let bootstrap_plaintext = bootstrap_output
+            .slots
+            .iter()
+            .map(|slot| {
+                decrypt_bounded_noise(&params, &secret_key, slot)
+                    .expect("decrypt bounded bootstrap output")[0]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bootstrap_plaintext, vec![9, 11]);
+        Ok(())
+    }
+
+    #[test]
     fn run_soracloud_fhe_job_rejects_client_mutated_fhe_input_without_residual_metadata()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
@@ -20950,6 +22220,111 @@ mod tests {
                 ))
                 .is_none(),
             "wrong-circuit admission must not persist FHE input state"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn mutate_soracloud_state_rejects_registered_fhe_input_admission_wrong_version()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let bundle = sample_bundle_with_state_binding(
+            "portal",
+            "1.0.0",
+            0,
+            "vault",
+            "/state/private",
+            SoraStateEncryptionV1::FheCiphertext,
+            SoraStateMutabilityV1::ReadWrite,
+            131_072,
+            262_144,
+        );
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        stx.zk.stark.enabled = true;
+
+        let vk_box = sample_fhe_input_admission_vk_box();
+        let wrong_version = u32::from(SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1) + 1;
+        let vk_id = register_fhe_input_admission_verifier_for_circuit_and_version(
+            &mut stx,
+            vk_box,
+            FHE_INPUT_ADMISSION_CIRCUIT_ID,
+            wrong_version,
+        )?;
+        assert_eq!(
+            stx.world
+                .verifying_keys_by_circuit
+                .get(&(FHE_INPUT_ADMISSION_CIRCUIT_ID.to_string(), wrong_version)),
+            Some(&vk_id),
+            "test setup must make the non-v1 verifier record active"
+        );
+
+        isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let service_name: Name = "portal".parse().expect("valid");
+        let binding_name: Name = "vault".parse().expect("valid");
+        let state_key = "/state/private/input-wrong-version";
+        let payload = sample_fhe_payload(b"alice", b"seed-proof-wrong-version");
+        let governance_tx_hash = Hash::new(b"gov-fhe-input-proof-wrong-version");
+        let residual_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
+                .expect("fresh input residual bound");
+        let admission_proof = sample_fhe_input_admission_proof(
+            &service_name,
+            &binding_name,
+            state_key,
+            &payload,
+            governance_tx_hash,
+            residual_bound,
+        );
+
+        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
+            service_name: service_name.clone(),
+            binding_name: binding_name.clone(),
+            state_key: state_key.to_string(),
+            operation: SoraStateMutationOperationV1::Upsert,
+            value_size_bytes: Some(u64::try_from(payload.len()).expect("payload len")),
+            value_payload: Some(payload.clone()),
+            encryption: SoraStateEncryptionV1::FheCiphertext,
+            governance_tx_hash,
+            fhe_input_admission_proof: Some(admission_proof.clone()),
+            provenance: state_mutation_provenance(
+                &service_name,
+                &binding_name,
+                state_key,
+                SoraStateMutationOperationV1::Upsert,
+                Some(u64::try_from(payload.len()).expect("payload len")),
+                Some(Hash::new(&payload)),
+                SoraStateEncryptionV1::FheCiphertext,
+                governance_tx_hash,
+                Some(admission_proof),
+            ),
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("wrong input-admission verifier version must fail closed");
+
+        assert_invariant_contains(err, "canonical v1 circuit version");
+        assert!(
+            stx.world
+                .soracloud_service_state_entries
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    binding_name.as_ref().to_owned(),
+                    state_key.to_string(),
+                ))
+                .is_none(),
+            "wrong-version admission must not persist FHE input state"
         );
         Ok(())
     }

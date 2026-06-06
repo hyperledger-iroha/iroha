@@ -9347,6 +9347,7 @@ const SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS = [
     0x74,
   ),
 ];
+const SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 = 256;
 
 const nativeEvmProverLowerAsciiByte = (byte) =>
   byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte;
@@ -9382,6 +9383,14 @@ function assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
         `${label} contains forbidden prover dependency marker: ${marker}`,
       );
     }
+  }
+}
+
+function assertNativeEvmProverArtifactHasProductionSize(bytes, label) {
+  if (bytes.length < SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1) {
+    throw new TypeError(
+      `${label} must be at least ${SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1} bytes`,
+    );
   }
 }
 
@@ -9495,6 +9504,18 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
       "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test",
     );
   }
+  assertNativeEvmProverArtifactHasProductionSize(
+    proofArtifactBytes,
+    "proofArtifactBytes",
+  );
+  assertNativeEvmProverArtifactHasProductionSize(
+    provingKeyBytes,
+    "provingKeyBytes",
+  );
+  assertNativeEvmProverArtifactHasProductionSize(
+    verifierKeyBytes,
+    "verifierKeyBytes",
+  );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     proofArtifactBytes,
     "proofArtifactBytes",
@@ -9561,6 +9582,10 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
       "implementationBytes sha256 must match nativeProverBundle implementationHash",
     );
   }
+  assertNativeEvmProverArtifactHasProductionSize(
+    implementationBytes,
+    "implementationBytes",
+  );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     implementationBytes,
     "implementationBytes",
@@ -10204,6 +10229,67 @@ const requireEthereumMainnetNativeProverSelfTest = async (
   );
   return normalizeEthereumMainnetNativeProverSelfTestResult(result, artifacts);
 };
+
+export async function runEthereumMainnetNativeProverSelfTest(input = {}, options = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Ethereum mainnet native prover self-test input must be an object");
+  }
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("Ethereum mainnet native prover self-test options must be an object");
+  }
+  const destinationBinding = strictOptionalConstructorOption(
+    input,
+    "EthereumMainnetSccp destinationBinding",
+    "destinationBinding",
+    "destination_binding",
+  );
+  const nativeProverArtifactsInput =
+    strictOptionalConstructorOption(
+      input,
+      "EthereumMainnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    ) ??
+    (Object.prototype.hasOwnProperty.call(input, "hashAlgorithm") &&
+    Object.prototype.hasOwnProperty.call(input, "nativeProverBundle")
+      ? input
+      : null);
+  if (nativeProverArtifactsInput == null) {
+    const error = new Error(
+      "Ethereum mainnet SCCP native prover self-test requires verified native EVM prover artifacts",
+    );
+    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    throw error;
+  }
+  const nativeProverArtifacts = normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts(
+    nativeProverArtifactsInput,
+    destinationBinding == null ? {} : { destinationBinding },
+  );
+  const nativeProverSelfTestFn =
+    strictOptionalConstructorOption(
+      input,
+      "EthereumMainnetSccp nativeProverSelfTest",
+      "nativeProverSelfTest",
+      "native_prover_self_test",
+      "selfTestNativeProver",
+      "self_test_native_prover",
+    ) ??
+    strictOptionalConstructorOption(
+      options,
+      "EthereumMainnetSccp nativeProverSelfTest",
+      "nativeProverSelfTest",
+      "native_prover_self_test",
+      "selfTestNativeProver",
+      "self_test_native_prover",
+    );
+  return requireEthereumMainnetNativeProverSelfTest(
+    nativeProverArtifacts,
+    nativeProverSelfTestFn,
+    options,
+  );
+}
 
 const prepareEthereumMainnetNativeEvmProverBundleInput = (
   input,
@@ -15652,6 +15738,52 @@ export class EthereumMainnetSccp {
     return requireEthereumMainnetOutboundRequest(request);
   }
 
+  async runNativeProverSelfTest(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("EthereumMainnetSccp native prover self-test options must be an object");
+    }
+    const nativeProverArtifactsInput = strictOptionalConstructorOption(
+      options,
+      "EthereumMainnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    const nativeProverArtifacts =
+      nativeProverArtifactsInput == null
+        ? this.nativeProverArtifacts
+        : normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts(
+            nativeProverArtifactsInput,
+            this.destinationBinding == null
+              ? {}
+              : { destinationBinding: this.destinationBinding },
+          );
+    const nativeProverSelfTestFn =
+      strictOptionalConstructorOption(
+        options,
+        "EthereumMainnetSccp nativeProverSelfTest",
+        "nativeProverSelfTest",
+        "native_prover_self_test",
+        "selfTestNativeProver",
+        "self_test_native_prover",
+      ) ??
+      this.nativeProverSelfTestFn ??
+      (typeof this.outboundProver?.nativeProverSelfTest === "function"
+        ? this.outboundProver.nativeProverSelfTest.bind(this.outboundProver)
+        : null) ??
+      (typeof this.outboundProver?.selfTest === "function"
+        ? this.outboundProver.selfTest.bind(this.outboundProver)
+        : null);
+    return runEthereumMainnetNativeProverSelfTest(
+      {
+        nativeProverArtifacts,
+        nativeProverSelfTest: nativeProverSelfTestFn,
+      },
+      options,
+    );
+  }
+
   async proveOutboundToEthereum(input, options = {}) {
     const request = this.buildOutboundProofRequest(input);
     const nativeProverArtifactsInput = strictOptionalConstructorOption(
@@ -15689,9 +15821,11 @@ export class EthereumMainnetSccp {
       (typeof this.outboundProver?.selfTest === "function"
         ? this.outboundProver.selfTest.bind(this.outboundProver)
         : null);
-    await requireEthereumMainnetNativeProverSelfTest(
-      nativeProverArtifacts,
-      nativeProverSelfTestFn,
+    await runEthereumMainnetNativeProverSelfTest(
+      {
+        nativeProverArtifacts,
+        nativeProverSelfTest: nativeProverSelfTestFn,
+      },
       options,
     );
     if (

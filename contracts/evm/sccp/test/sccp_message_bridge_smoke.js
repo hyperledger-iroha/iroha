@@ -569,6 +569,7 @@ async function main() {
     "SccpGroth16Bn254MessageVerifier.sol",
     "SccpGroth16Bn254MessageVerifier"
   );
+  const ownableArtifact = artifact(contracts, "Ownable.sol", "Ownable");
   const tronGroth16VerifierArtifact = artifact(
     contracts,
     "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
@@ -1229,6 +1230,16 @@ async function main() {
     groth16VerifierAddress
   );
   const groth16VerifierKeyHash = await groth16Verifier.verifyingKeyHash();
+  const nonVerifierContract = await deploy(
+    signer,
+    ownableArtifact.abi,
+    ownableArtifact.bytecode
+  );
+  const nonVerifierContractAddress = await nonVerifierContract.getAddress();
+  const nonVerifierContractCodeHash = await contractCodeHash(
+    provider,
+    nonVerifierContractAddress
+  );
 
   await assert.rejects(
     async () => {
@@ -1291,6 +1302,27 @@ async function main() {
       );
     },
     callExceptionWithReason("Verifier key hash mismatch")
+  );
+
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        bridgeArtifact.abi,
+        bridgeArtifact.bytecode,
+        [
+          nonVerifierContractAddress,
+          nonVerifierContractCodeHash,
+          groth16VerifierKeyHash,
+          "evm-groth16-bn254-v1",
+          "stark-fri-v1",
+          networkId,
+          0,
+          1,
+        ]
+      );
+    },
+    callExceptionWithReason("Verifier key hash unavailable")
   );
 
   const groth16Bridge = await deploy(
@@ -1912,6 +1944,19 @@ async function main() {
         statementHash
       );
       await replayGroth16Tx.wait();
+    },
+    callExceptionWithReason("Message proof already used")
+  );
+
+  await assert.rejects(
+    async () => {
+      const duplicateInvalidGroth16Tx =
+        await groth16Bridge.submitSccpMessageProof(
+          invalidGroth16ProofBytes,
+          publicInputs,
+          statementHash
+        );
+      await duplicateInvalidGroth16Tx.wait();
     },
     callExceptionWithReason("Message proof already used")
   );

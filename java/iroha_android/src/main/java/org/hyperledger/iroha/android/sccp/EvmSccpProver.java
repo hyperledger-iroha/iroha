@@ -54,6 +54,7 @@ public final class EvmSccpProver {
               "native_prover_self_test",
               "no_wasm_no_remote_scan"));
   public static final String NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1 = "sha256";
+  private static final int NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 = 256;
   public static final int GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
   public static final int SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   public static final String CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1";
@@ -1145,6 +1146,14 @@ public final class EvmSccpProver {
     }
   }
 
+  private static void requireNativeEvmProverProductionArtifactSize(
+      final byte[] bytes, final String field) {
+    if (bytes.length < NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1) {
+      throw new IllegalArgumentException(
+          field + " must be at least " + NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 + " bytes");
+    }
+  }
+
   private static byte[] hex32Bytes(final String value, final String field) {
     String body = Objects.requireNonNull(value, field);
     if (!body.trim().equals(body)) {
@@ -1739,6 +1748,9 @@ public final class EvmSccpProver {
         throw new IllegalArgumentException(
             "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test");
       }
+      requireNativeEvmProverProductionArtifactSize(proofArtifactBytes, "proofArtifactBytes");
+      requireNativeEvmProverProductionArtifactSize(provingKeyBytes, "provingKeyBytes");
+      requireNativeEvmProverProductionArtifactSize(verifierKeyBytes, "verifierKeyBytes");
       rejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, "proofArtifactBytes");
       rejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, "provingKeyBytes");
       rejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, "verifierKeyBytes");
@@ -1776,6 +1788,7 @@ public final class EvmSccpProver {
         throw new IllegalArgumentException(
             "implementationBytes sha256 must match nativeProverBundle implementationHash");
       }
+      requireNativeEvmProverProductionArtifactSize(implementationBytes, "implementationBytes");
       rejectNativeEvmProverForbiddenArtifactMarkers(implementationBytes, "implementationBytes");
       final String implementation = artifact.implementation();
       return new EthereumMainnetNativeEvmProverArtifacts(

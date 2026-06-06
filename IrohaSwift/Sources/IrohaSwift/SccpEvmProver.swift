@@ -36,6 +36,7 @@ public let sccpEthNativeEvmProverRequiredAuditHashesV1: [String] = [
 ]
 /// Hash algorithm used for native EVM prover bundle artifact bytes.
 public let sccpNativeEvmProverArtifactHashAlgorithmV1 = "sha256"
+private let sccpNativeEvmProverMinArtifactBytesV1 = 256
 /// Canonical byte length of the static BN254 Groth16 ABI proof tuple.
 public let sccpGroth16Bn254ProofAbiByteLengthV1 = 384
 /// EVM-family contract-call envelope encoding used by SCCP verifier submissions.
@@ -2437,6 +2438,18 @@ public extension EthereumMainnetNativeEvmProverBundle {
         guard nativeProverSelfTestHash == auditHashes["native_prover_self_test"] else {
             throw EvmSccpProverError.invalidPublicInputs("nativeProverSelfTestBytes")
         }
+        try sccpNativeEvmProverRequireProductionArtifactSize(
+            proofArtifactBytes,
+            field: "proofArtifactBytes"
+        )
+        try sccpNativeEvmProverRequireProductionArtifactSize(
+            provingKeyBytes,
+            field: "provingKeyBytes"
+        )
+        try sccpNativeEvmProverRequireProductionArtifactSize(
+            verifierKeyBytes,
+            field: "verifierKeyBytes"
+        )
         try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
             proofArtifactBytes,
             field: "proofArtifactBytes"
@@ -2479,6 +2492,10 @@ public extension EthereumMainnetNativeEvmProverBundle {
         guard implementationHash == artifact.implementationHash else {
             throw EvmSccpProverError.invalidPublicInputs("implementationBytes")
         }
+        try sccpNativeEvmProverRequireProductionArtifactSize(
+            implementationBytes,
+            field: "implementationBytes"
+        )
         try sccpNativeEvmProverRejectForbiddenArtifactMarkers(
             implementationBytes,
             field: "implementationBytes"
@@ -2539,6 +2556,15 @@ public extension EthereumMainnetNativeEvmProverBundle {
 
 private func sccpNativeEvmProverArtifactSha256Hex(_ data: Data) -> String {
     "0x" + Data(SHA256.hash(data: data)).hexEncodedString()
+}
+
+private func sccpNativeEvmProverRequireProductionArtifactSize(
+    _ data: Data,
+    field: String
+) throws {
+    guard data.count >= sccpNativeEvmProverMinArtifactBytesV1 else {
+        throw EvmSccpProverError.invalidPublicInputs("\(field).minBytes")
+    }
 }
 
 private let sccpNativeEvmProverForbiddenArtifactMarkers: [[UInt8]] = [
@@ -6058,23 +6084,14 @@ public final class EthereumMainnetSccp {
                 throw EvmSccpProverError.invalidPublicInputs("beaconFinality.\(field)")
             }
         }
-        let proofBytes = try await inboundProveFunction(Self.inboundCallbackEvidenceSnapshot(evidence))
-        guard !proofBytes.isEmpty else {
-            throw EvmSccpProverError.emptyProof
-        }
-        guard proofBytes.contains(where: { $0 != 0 }) else {
-            throw EvmSccpProverError.allZeroProof
-        }
-        return Data(proofBytes)
+        return try requireEvmLocalAdmissionBytes(
+            try await inboundProveFunction(Self.inboundCallbackEvidenceSnapshot(evidence)),
+            field: "proofBytes"
+        )
     }
 
     public func submitInboundToIroha(_ proofBytes: Data) async throws -> Any {
-        guard !proofBytes.isEmpty else {
-            throw EvmSccpProverError.emptyProof
-        }
-        guard proofBytes.contains(where: { $0 != 0 }) else {
-            throw EvmSccpProverError.allZeroProof
-        }
+        let proofBytes = try requireEvmLocalAdmissionBytes(proofBytes, field: "proofBytes")
         guard let inboundSubmitFunction else {
             throw EvmSccpProverError.localProverUnavailable
         }
@@ -6091,7 +6108,7 @@ public final class EthereumMainnetSccp {
     public func proveOutboundToEthereum(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
         let request = try await buildOutboundProofRequest(input)
         try Self.requireVerifiedNativeProverArtifacts(nativeProverArtifacts, request: request)
-        try await Self.requireNativeProverSelfTest(
+        _ = try await Self.requireNativeProverSelfTest(
             nativeProverArtifacts,
             nativeProverSelfTestFunction: nativeProverSelfTestFunction
         )
@@ -6109,6 +6126,17 @@ public final class EthereumMainnetSccp {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding")
         }
         return result
+    }
+
+    @discardableResult
+    public func runNativeProverSelfTest(
+        nativeProverArtifacts overrideArtifacts: EthereumMainnetNativeEvmProverArtifacts? = nil,
+        nativeProverSelfTestFunction overrideSelfTestFunction: NativeProverSelfTestFunction? = nil
+    ) async throws -> EthereumMainnetNativeEvmProverSelfTestSdkResult {
+        try await Self.requireNativeProverSelfTest(
+            overrideArtifacts ?? nativeProverArtifacts,
+            nativeProverSelfTestFunction: overrideSelfTestFunction ?? nativeProverSelfTestFunction
+        )
     }
 
     private static func requireVerifiedNativeProverArtifacts(
@@ -6151,7 +6179,7 @@ public final class EthereumMainnetSccp {
     private static func requireNativeProverSelfTest(
         _ artifacts: EthereumMainnetNativeEvmProverArtifacts?,
         nativeProverSelfTestFunction: NativeProverSelfTestFunction?
-    ) async throws {
+    ) async throws -> EthereumMainnetNativeEvmProverSelfTestSdkResult {
         guard let artifacts,
               let sdk = artifacts.sdk,
               let fixture = artifacts.nativeProverSelfTest,
@@ -6165,6 +6193,7 @@ public final class EthereumMainnetSccp {
         guard result == expectedResult else {
             throw EvmSccpProverError.invalidPublicInputs("nativeProverSelfTestResult")
         }
+        return result
     }
 
     private static func requireVerifiedNativeProverArtifacts(

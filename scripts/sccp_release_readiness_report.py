@@ -153,6 +153,7 @@ NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (
     b"proverendpoint",
     b"prover endpoint",
 )
+NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = 256
 
 
 class DuplicateJsonKeyError(ValueError):
@@ -182,7 +183,7 @@ def _load_json_without_duplicate_keys(path: Path) -> Any:
 PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
     "evidence-scripts": (
-        "python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+        "-m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
         "pytests/scripts/sccp_release_bundle_test.py",
         "pytests/scripts/sccp_release_readiness_report_test.py",
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -268,6 +269,7 @@ EVM_JS_USER_PROVER_HELPERS = (
     "buildBscMainnetSccpDestinationProofRequest",
     "wrapBscMainnetSccpDestinationProofResult",
     "EthereumMainnetSccp",
+    "EthereumMainnetSccp.runNativeProverSelfTest",
     "EthereumMainnetSccp.buildOutboundProofRequest",
     "EthereumMainnetSccp.proveOutboundToEthereum",
     "EthereumMainnetSccp.buildEthereumCalldata",
@@ -277,6 +279,7 @@ EVM_JS_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.submitInboundToIroha",
     "EthereumMainnetSccp.buildLocalAdmissionSubmission",
     "buildEthereumMainnetSccpLocalAdmissionSubmission",
+    "runEthereumMainnetNativeProverSelfTest",
     "consensusProvider",
     "BscMainnetSccpProver",
     "BscMainnetSccp",
@@ -338,6 +341,7 @@ EVM_SWIFT_USER_PROVER_HELPERS = (
     "buildBscMainnetSccpDestinationProofRequest",
     "wrapBscMainnetSccpDestinationProofResult",
     "EthereumMainnetSccp",
+    "EthereumMainnetSccp.runNativeProverSelfTest",
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
@@ -380,6 +384,7 @@ EVM_KOTLIN_USER_PROVER_HELPERS = (
     "SccpSourceProofs.bscReceiptProofHash",
     "SccpBsc.buildProofRequest",
     "EthereumMainnetSccp",
+    "EthereumMainnetSccp.runNativeProverSelfTest",
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
@@ -423,6 +428,7 @@ EVM_JAVA_ANDROID_USER_PROVER_HELPERS = (
     "SourceSccpProofs.bscReceiptProofHash",
     "BscSccpProver.buildProofRequest",
     "EthereumMainnetSccp",
+    "EthereumMainnetSccp.runNativeProverSelfTest",
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
@@ -464,6 +470,7 @@ EVM_DOTNET_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync",
     "EthereumMainnetSccp.ProveInboundToSoraAsync",
     "EthereumMainnetSccp.SubmitInboundToIrohaAsync",
+    "EthereumMainnetSccp.RunNativeProverSelfTestAsync",
     "EthereumMainnetSccp.BuildOutboundProofRequest",
     "EthereumMainnetSccp.ProveOutboundToEthereumAsync",
     "EthereumMainnetSccp.BuildEthereumCalldata",
@@ -1069,6 +1076,11 @@ def _native_evm_prover_payload_artifact(
 
     if artifact["bytes"] == 0:
         blockers.append(f"{prefix} must not be empty")
+    elif artifact["bytes"] < NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES:
+        blockers.append(
+            f"{prefix} must be at least "
+            f"{NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES} bytes"
+        )
 
     expected_hash = payload.get(hash_field)
     actual_hash = f"0x{artifact['sha256']}"

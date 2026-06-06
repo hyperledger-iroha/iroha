@@ -808,6 +808,50 @@ class EvmSccpProverTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+                sampleEthereumNativeEvmProverParityFixtureJson(nativeProverBundle)
+                    .replace(
+                        "\"schema\": \"${SccpEvm.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1}\"",
+                        "\"schema\": \"forged\", \"schema\": \"${SccpEvm.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1}\"",
+                    ),
+                nativeProverBundle,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("Duplicate JSON object key: schema") == true)
+        }
+        val selfTestFixture = SccpEvm.EthereumMainnetNativeEvmProverSelfTestFixture.fromJson(
+            sampleEthereumNativeEvmProverSelfTestFixtureJson(nativeProverBundle),
+            nativeProverBundle,
+        )
+        assertEquals(SccpEvm.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1, selfTestFixture.schema)
+        assertEquals(binding.hash, selfTestFixture.destinationBindingHash)
+        assertEquals(9, selfTestFixture.publicSignalWords.size)
+        assertEquals(
+            selfTestFixture.proofHash,
+            selfTestFixture.sdkResults.getValue("kotlin").proofHash,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverSelfTestFixture.fromJson(
+                sampleEthereumNativeEvmProverSelfTestFixtureJson(
+                    nativeProverBundle,
+                    kotlinProofHash = "0x" + "97".repeat(32),
+                ),
+                nativeProverBundle,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverSelfTestFixture.fromJson(
+                sampleEthereumNativeEvmProverSelfTestFixtureJson(nativeProverBundle)
+                    .replace(
+                        "\"schema\": \"${SccpEvm.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1}\"",
+                        "\"schema\": \"forged\", \"schema\": \"${SccpEvm.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1}\"",
+                    ),
+                nativeProverBundle,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("Duplicate JSON object key: schema") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
             SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(
                 sampleEthereumNativeEvmProverBundleJson(binding.hash, noWasm = false),
                 expectedDestinationBindingHash = binding.hash,
@@ -935,10 +979,10 @@ class EvmSccpProverTest {
         }.also { error ->
             assertTrue(error.message?.contains("nativeProverBundle.verifierKeyHash") == true)
         }
-        val proofArtifactBytes = byteArrayOf(1, 2, 3, 5, 8)
-        val provingKeyBytes = byteArrayOf(13, 21, 34, 55)
-        val verifierKeyBytes = byteArrayOf(89.toByte(), 144.toByte(), 233.toByte())
-        val implementationBytes = "sccp kotlin prover artifact v1".toByteArray()
+        val proofArtifactBytes = nativeEvmProverArtifactBytes("kotlin proof artifact v1")
+        val provingKeyBytes = nativeEvmProverArtifactBytes("kotlin proving key v1")
+        val verifierKeyBytes = nativeEvmProverArtifactBytes("kotlin verifier key v1")
+        val implementationBytes = nativeEvmProverArtifactBytes("kotlin implementation artifact v1")
         val proofArtifactHash = sha256Hex(proofArtifactBytes)
         val provingKeyHash = sha256Hex(provingKeyBytes)
         val verifierKeyHash = sha256Hex(verifierKeyBytes)
@@ -970,6 +1014,7 @@ class EvmSccpProverTest {
                         implementation = entry.value,
                         proofArtifactHash = proofArtifactHash,
                         provingKeyHash = provingKeyHash,
+                        implementationArtifact = "artifacts/eth-mainnet/${entry.key}-implementation.bin",
                         implementationHash = if (entry.key == "kotlin") {
                             implementationHash
                         } else {
@@ -1090,6 +1135,10 @@ class EvmSccpProverTest {
             },
             nativeProverArtifacts = verifiedArtifacts,
         )
+        val preflightResult = artifactBoundFacade.runNativeProverSelfTest()
+        assertTrue(artifactBoundSelfTestCalled)
+        assertEquals("0x" + "e4".repeat(32), preflightResult.proofHash)
+        artifactBoundSelfTestCalled = false
         val artifactBoundResult = artifactBoundFacade.proveOutboundToEthereum(artifactInput)
         assertTrue(artifactBoundSelfTestCalled)
         assertEquals(proofArtifactHash, artifactBoundRequest?.proofArtifactHash)
@@ -1225,6 +1274,71 @@ class EvmSccpProverTest {
         }.also { error ->
             assertTrue(error.message?.contains("proofArtifactBytes sha256") == true)
         }
+        val tinyProofArtifactBytes = byteArrayOf(1, 2, 3, 4, 5, 6, 7)
+        val tinyProofArtifactHash = sha256Hex(tinyProofArtifactBytes)
+        val draftTinyBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+            proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash = tinyProofArtifactHash,
+            provingKey = "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash = provingKeyHash,
+            verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash = verifierKeyHash,
+            destinationBindingHash = artifactBinding.hash,
+            nativeSdkArtifacts = SccpEvm.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1
+                .entries
+                .sortedBy { it.key }
+                .mapIndexed { index, entry ->
+                    SccpEvm.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk = entry.key,
+                        implementation = entry.value,
+                        proofArtifactHash = tinyProofArtifactHash,
+                        provingKeyHash = provingKeyHash,
+                        implementationArtifact = "artifacts/eth-mainnet/${entry.key}-implementation.bin",
+                        implementationHash = if (entry.key == "kotlin") {
+                            implementationHash
+                        } else {
+                            "0x" + (index + 1).toString(16).padStart(2, '0').repeat(32)
+                        },
+                    )
+                },
+            crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes = sampleEthereumNativeAuditHashes(),
+            expectedDestinationBindingHash = artifactBinding.hash,
+        )
+        val tinyParityFixtureBytes = sampleEthereumNativeEvmProverParityFixtureJson(draftTinyBundle)
+            .toByteArray(Charsets.UTF_8)
+        val tinySelfTestFixtureBytes = sampleEthereumNativeEvmProverSelfTestFixtureJson(draftTinyBundle)
+            .toByteArray(Charsets.UTF_8)
+        val tinyBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
+            proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash = tinyProofArtifactHash,
+            provingKey = "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash = provingKeyHash,
+            verifierKey = "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash = verifierKeyHash,
+            destinationBindingHash = artifactBinding.hash,
+            nativeSdkArtifacts = draftTinyBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact = "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact = "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes = sampleEthereumNativeAuditHashes() +
+                ("cross_sdk_fixture_parity" to sha256Hex(tinyParityFixtureBytes)) +
+                ("native_prover_self_test" to sha256Hex(tinySelfTestFixtureBytes)),
+            expectedDestinationBindingHash = artifactBinding.hash,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            tinyBundle.verifiedArtifacts(
+                proofArtifactBytes = tinyProofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                sdk = "kotlin",
+                implementationBytes = implementationBytes,
+                crossSdkFixtureParityBytes = tinyParityFixtureBytes,
+                nativeProverSelfTestBytes = tinySelfTestFixtureBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("proofArtifactBytes must be at least 256 bytes") == true)
+        }
         assertFailsWith<IllegalArgumentException> {
             verifiedBundle.verifiedArtifacts(
                 proofArtifactBytes = proofArtifactBytes,
@@ -1310,7 +1424,7 @@ class EvmSccpProverTest {
         }.also { error ->
             assertTrue(error.message?.contains("nativeProverSelfTestBytes sha256") == true)
         }
-        val flaggedArtifactBytes = byteArrayOf(0x77, 0x61, 0x73, 0x6d)
+        val flaggedArtifactBytes = nativeEvmProverArtifactBytes("proof.wasm kotlin artifact marker")
         val flaggedArtifactHash = sha256Hex(flaggedArtifactBytes)
         val draftFlaggedBundle = SccpEvm.EthereumMainnetNativeEvmProverBundle(
             proofArtifact = "artifacts/eth-mainnet/proof-artifact.bin",
@@ -1329,6 +1443,7 @@ class EvmSccpProverTest {
                         implementation = entry.value,
                         proofArtifactHash = flaggedArtifactHash,
                         provingKeyHash = provingKeyHash,
+                        implementationArtifact = "artifacts/eth-mainnet/${entry.key}-implementation.bin",
                         implementationHash = if (entry.key == "kotlin") {
                             implementationHash
                         } else {
@@ -4477,6 +4592,15 @@ class EvmSccpProverTest {
 
     private fun sha256Hex(bytes: ByteArray): String =
         "0x" + hexLower(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+    private fun nativeEvmProverArtifactBytes(label: String): ByteArray {
+        val labelBytes = label.toByteArray(Charsets.UTF_8)
+        val bytes = ByteArray(256) { index ->
+            ((index * 37 + labelBytes.size * 11) and 0xff).toByte()
+        }
+        labelBytes.copyInto(bytes, endIndex = labelBytes.size.coerceAtMost(bytes.size))
+        return bytes
+    }
 
     private fun sampleProofRequestInput(
         publicInputs: EvmSccpPublicInputsInput = samplePublicInputs(),

@@ -9028,6 +9028,19 @@ final class SccpSolanaProverTests: XCTestCase {
                 .invalidPublicInputs("nativeProverParityFixture.sdkResults.swift")
             )
         }
+        let duplicateParityFixture = parityJson.replacingOccurrences(
+            of: "\"schema\": \"\(sccpEthNativeEvmProverParityFixtureSchemaV1)\"",
+            with: """
+            "schema": "forged",
+                  "schema": "\(sccpEthNativeEvmProverParityFixtureSchemaV1)"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverParityFixture(
+            jsonString: duplicateParityFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverParityFixture.duplicateJsonKey"))
+        }
         let selfTestJson = Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
             nativeProverBundle: nativeProverBundle
         )
@@ -9051,6 +9064,19 @@ final class SccpSolanaProverTests: XCTestCase {
                 error as? EvmSccpProverError,
                 .invalidPublicInputs("nativeProverSelfTestFixture.sdkResults.swift")
             )
+        }
+        let duplicateSelfTestFixture = selfTestJson.replacingOccurrences(
+            of: "\"schema\": \"\(sccpEthNativeEvmProverSelfTestSchemaV1)\"",
+            with: """
+            "schema": "forged",
+                  "schema": "\(sccpEthNativeEvmProverSelfTestSchemaV1)"
+            """
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverSelfTestFixture(
+            jsonString: duplicateSelfTestFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestFixture.duplicateJsonKey"))
         }
         XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
             jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
@@ -9196,10 +9222,10 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertThrowsError(try verifierKeyMismatchedBundle.applying(to: input)) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverBundle.verifierKeyHash"))
         }
-        let proofArtifactBytes = Data([1, 2, 3, 5, 8])
-        let provingKeyBytes = Data([13, 21, 34, 55])
-        let verifierKeyBytes = Data([89, 144, 233])
-        let implementationBytes = Data("sccp swift prover artifact v1".utf8)
+        let proofArtifactBytes = Self.nativeEvmProverArtifactBytes("swift proof artifact v1")
+        let provingKeyBytes = Self.nativeEvmProverArtifactBytes("swift proving key v1")
+        let verifierKeyBytes = Self.nativeEvmProverArtifactBytes("swift verifier key v1")
+        let implementationBytes = Self.nativeEvmProverArtifactBytes("swift implementation artifact v1")
         let proofArtifactHash = Self.sha256Hex(proofArtifactBytes)
         let provingKeyHash = Self.sha256Hex(provingKeyBytes)
         let verifierKeyHash = Self.sha256Hex(verifierKeyBytes)
@@ -9362,6 +9388,10 @@ final class SccpSolanaProverTests: XCTestCase {
             },
             nativeProverArtifacts: verifiedArtifacts
         )
+        let preflightResult = try await artifactBoundFacade.runNativeProverSelfTest()
+        XCTAssertTrue(artifactBoundSelfTestCalled)
+        XCTAssertEqual(preflightResult.proofHash, "0x" + String(repeating: "e4", count: 32))
+        artifactBoundSelfTestCalled = false
         let artifactBoundResult = try await artifactBoundFacade.proveOutboundToEthereum(artifactInput)
         XCTAssertTrue(artifactBoundSelfTestCalled)
         XCTAssertEqual(artifactBoundRequest?.proofArtifactHash, proofArtifactHash)
@@ -9561,6 +9591,75 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifactBytes"))
         }
+        let tinyProofArtifactBytes = Data([1, 2, 3, 4, 5, 6, 7])
+        let tinyProofArtifactHash = Self.sha256Hex(tinyProofArtifactBytes)
+        let draftTinyBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: tinyProofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: try sccpEthNativeEvmProverRequiredImplementationsV1
+                .sorted { $0.key < $1.key }
+                .enumerated()
+                .map { index, entry in
+                    try EthereumMainnetNativeEvmProverBundleSdkArtifact(
+                        sdk: entry.key,
+                        implementation: entry.value,
+                        proofArtifactHash: tinyProofArtifactHash,
+                        provingKeyHash: provingKeyHash,
+                        implementationArtifact: "artifacts/eth-mainnet/\(entry.key)-implementation.bin",
+                        implementationHash: entry.key == "swift"
+                            ? implementationHash
+                            : "0x" + String(
+                                repeating: String(format: "%02x", index + 1),
+                                count: 32
+                            )
+                    )
+                },
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: Self.sampleEthereumNativeEvmProverAuditHashes(),
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        let tinyParityFixtureBytes = Data(Self.sampleEthereumNativeEvmProverParityFixtureJson(
+            nativeProverBundle: draftTinyBundle
+        ).utf8)
+        let tinySelfTestFixtureBytes = Data(Self.sampleEthereumNativeEvmProverSelfTestFixtureJson(
+            nativeProverBundle: draftTinyBundle
+        ).utf8)
+        var tinyAuditHashes = Self.sampleEthereumNativeEvmProverAuditHashes()
+        tinyAuditHashes["cross_sdk_fixture_parity"] = Self.sha256Hex(tinyParityFixtureBytes)
+        tinyAuditHashes["native_prover_self_test"] = Self.sha256Hex(tinySelfTestFixtureBytes)
+        let tinyBundle = try EthereumMainnetNativeEvmProverBundle(
+            proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
+            proofArtifactHash: tinyProofArtifactHash,
+            provingKey: "artifacts/eth-mainnet/proving-key.bin",
+            provingKeyHash: provingKeyHash,
+            verifierKey: "artifacts/eth-mainnet/verifier-key.bin",
+            verifierKeyHash: verifierKeyHash,
+            destinationBindingHash: artifactBinding.hash,
+            nativeSdkArtifacts: draftTinyBundle.nativeSdkArtifacts,
+            crossSdkFixtureParityArtifact: "artifacts/eth-mainnet/cross-sdk-fixture-parity.json",
+            nativeProverSelfTestArtifact: "artifacts/eth-mainnet/native-prover-self-test.json",
+            auditHashes: tinyAuditHashes,
+            expectedDestinationBindingHash: artifactBinding.hash
+        )
+        XCTAssertThrowsError(try tinyBundle.verifiedArtifacts(
+            proofArtifactBytes: tinyProofArtifactBytes,
+            provingKeyBytes: provingKeyBytes,
+            verifierKeyBytes: verifierKeyBytes,
+            sdk: "swift",
+            implementationBytes: implementationBytes,
+            crossSdkFixtureParityBytes: tinyParityFixtureBytes,
+            nativeProverSelfTestBytes: tinySelfTestFixtureBytes
+        )) { error in
+            XCTAssertEqual(
+                error as? EvmSccpProverError,
+                .invalidPublicInputs("proofArtifactBytes.minBytes")
+            )
+        }
         XCTAssertThrowsError(try verifiedBundle.verifiedArtifacts(
             proofArtifactBytes: proofArtifactBytes,
             provingKeyBytes: provingKeyBytes,
@@ -9634,7 +9733,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverSelfTestBytes"))
         }
-        let flaggedArtifactBytes = Data([0x77, 0x61, 0x73, 0x6D])
+        let flaggedArtifactBytes = Self.nativeEvmProverArtifactBytes("proof.wasm swift artifact marker")
         let flaggedArtifactHash = Self.sha256Hex(flaggedArtifactBytes)
         let draftFlaggedBundle = try EthereumMainnetNativeEvmProverBundle(
             proofArtifact: "artifacts/eth-mainnet/proof-artifact.bin",
@@ -16756,6 +16855,18 @@ final class SccpSolanaProverTests: XCTestCase {
 
     private static func sha256Hex(_ data: Data) -> String {
         "0x" + Data(SHA256.hash(data: data)).hexEncodedString()
+    }
+
+    private static func nativeEvmProverArtifactBytes(_ label: String) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 256)
+        let labelBytes = Array(label.utf8)
+        for index in bytes.indices {
+            bytes[index] = UInt8((index * 37 + labelBytes.count * 11) & 0xff)
+        }
+        for (index, byte) in labelBytes.prefix(bytes.count).enumerated() {
+            bytes[index] = byte
+        }
+        return Data(bytes)
     }
 
     private static func sampleEthereumNativeEvmProverBundleJson(

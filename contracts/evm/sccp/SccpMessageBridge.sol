@@ -164,6 +164,10 @@ contract SccpMessageBridge {
         require(publicInputs[3] != bytes32(0), "Commitment root is required");
         require(publicInputs[4] != bytes32(0), "Finality height is required");
         require(publicInputs[5] != bytes32(0), "Finality block hash is required");
+        require(
+            !usedMessageProofs[publicInputs[0]],
+            "Message proof already used"
+        );
 
         bytes32 bindingHash = _destinationBindingHash();
         uint32 sourceDomain;

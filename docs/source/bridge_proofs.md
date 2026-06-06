@@ -855,9 +855,14 @@ signal words, calldata hash, and Torii submit-payload hash that each SDK must
 produce for the release self-test vector. Product facades run the app-linked
 native prover self-test hook after verifying bundle artifacts and before
 production proof callbacks, then compare the normalized result to the
-manifest-bound SDK row. Replayed audit hashes, cross-SDK vector drift, missing
-self-test hooks, and self-test vector drift are rejected by SDK code, release
-tooling, and strict public bundle verification before the lane can be
+manifest-bound SDK row. The JS/browser SDK also exposes
+`runEthereumMainnetNativeProverSelfTest(...)`, and the JS/browser, Swift,
+Kotlin/JVM, and Java Android facades expose `runNativeProverSelfTest(...)`;
+.NET exposes `RunNativeProverSelfTestAsync(...)`. Apps can use these preflight
+entry points to verify the local native prover bundle at startup without
+invoking the outbound prover. Replayed audit hashes, cross-SDK vector drift,
+missing self-test hooks, and self-test vector drift are rejected by SDK code,
+release tooling, and strict public bundle verification before the lane can be
 advertised.
 JS/browser, Swift, Kotlin/JVM, Java Android, and .NET signed manifest parsers
 expose the same `cross_sdk_fixture_parity_artifact` and
@@ -1233,8 +1238,14 @@ calldata, Torii payload, destination-binding, bundle-hash, and public-signal
 outputs that every native SDK must reproduce. The outbound Ethereum mainnet
 facades now require an SDK-owned native prover self-test runner for that vector,
 fail before production proof execution when the runner is absent, and reject
-any runner output that drifts from the verified descriptor. JS/browser, Swift,
-Kotlin/JVM, Java Android, and C# also expose bundle-resolver helpers that accept
+any runner output that drifts from the verified descriptor. JS/browser apps can
+call the same check directly with `runEthereumMainnetNativeProverSelfTest(...)`
+or through a configured facade's `runNativeProverSelfTest(...)`; Swift,
+Kotlin/JVM, Java Android, and .NET expose matching startup preflight helpers
+for native app integrations. Product integrations can fail closed during
+startup before the first outbound proof request. JS/browser, Swift, Kotlin/JVM,
+Java Android, and C# also expose
+bundle-resolver helpers that accept
 an app-owned local artifact resolver, load the manifest-declared proof artifact,
 proving key, verifier key, cross-SDK parity fixture, native prover self-test
 fixture, and selected SDK implementation bytes, and then run the same
