@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   BscMainnetSccp,
   BscTestnetSccp,
@@ -8,13 +9,19 @@ import {
   SCCP_BSC_MAINNET_NETWORK_ID,
   SCCP_BSC_TESTNET_EVM_CHAIN_ID,
   SCCP_BSC_TESTNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SORA,
+  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
   SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
   SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
   SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   bscMainnetSccpDestinationBinding,
   bscTestnetSccpDestinationBinding,
   bscSccpReceiptProofHash,
@@ -24,11 +31,22 @@ import {
   buildBscTestnetSccpDestinationProofRequest,
   buildBscTestnetSccpDestinationSubmission,
   evmSccpSourceEventTopic,
+  parseBscTestnetNativeEvmProverBundleManifest,
+  parseBscTestnetNativeEvmProverParityFixture,
+  parseBscTestnetNativeEvmProverSelfTestFixture,
+  runBscTestnetNativeProverSelfTest,
+  validateBscTestnetNativeEvmProverBundle,
+  validateBscTestnetNativeEvmProverParityFixture,
+  validateBscTestnetNativeEvmProverSelfTestFixture,
+  verifyBscTestnetNativeEvmProverArtifacts,
+  verifyBscTestnetNativeEvmProverArtifactsFromBundle,
   wrapBscMainnetSccpDestinationProofResult,
   wrapBscTestnetSccpDestinationProofResult,
 } from "../src/sccp.js";
 
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
+const sha256Hex = (bytes) =>
+  `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 const TX_HASH = hex32("aa");
 const BLOCK_HASH = hex32("bb");
 const RECEIPTS_ROOT = hex32("cc");
@@ -104,6 +122,13 @@ const sampleDestinationBindingInput = (overrides = {}) => ({
   ...overrides,
 });
 
+const destinationBindingInputFromBinding = (binding) => ({
+  verifierAddress: binding.verifierAddress,
+  bridgeAddress: binding.bridgeAddress,
+  verifierCodeHash: binding.verifierCodeHash,
+  verifierKeyHash: binding.verifierKeyHash,
+});
+
 const sampleOutboundInput = (targetDomain = SCCP_DOMAIN_BSC, destinationBindingOverrides = {}) => ({
   publicInputs: { ...samplePublicInputs, targetDomain },
   bundleBytes: [1, 2, 3],
@@ -126,6 +151,270 @@ const sampleBscTestnetOutboundInput = (
   sourceDomain: SCCP_DOMAIN_SORA,
   statementHash: hex32("66"),
 });
+
+const sampleBscTestnetNativeEvmProverBundle = (
+  destinationBindingHash,
+  overrides = {},
+) => {
+  const proofArtifactHash = hex32("91");
+  const provingKeyHash = hex32("92");
+  return {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundle_id: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact: "artifacts/bsc-testnet/proof-artifact.bin",
+    proof_artifact_hash: proofArtifactHash,
+    proving_key: "artifacts/bsc-testnet/proving-key.bin",
+    proving_key_hash: provingKeyHash,
+    verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
+    verifier_key_hash: hex32("cc"),
+    destination_binding_hash: destinationBindingHash,
+    no_wasm: true,
+    remote_prover_required: false,
+    browser_implementation: "pure-typescript",
+    cross_sdk_fixture_parity_artifact:
+      "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
+    native_prover_self_test_artifact:
+      "artifacts/bsc-testnet/native-prover-self-test.json",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/bsc-testnet/${sdk}-implementation.bin`,
+      implementation_hash: hex32((index + 1).toString(16).padStart(2, "0")),
+    })),
+    audit_hashes: {
+      circuit_security_audit: hex32("a1"),
+      native_implementation_audit: hex32("a2"),
+      reproducible_build_attestation: hex32("a3"),
+      cross_sdk_fixture_parity: hex32("a4"),
+      native_prover_self_test: hex32("a5"),
+      no_wasm_no_remote_scan: hex32("a6"),
+    },
+    ...overrides,
+  };
+};
+
+const sampleBscTestnetNativeEvmProverParityFixture = (
+  bundle,
+  overrides = {},
+) => {
+  const publicSignalWords = Array.from({ length: 9 }, (_, index) =>
+    hex32((index + 0x10).toString(16).padStart(2, "0")),
+  );
+  const destinationBindingHash =
+    bundle.destination_binding_hash ?? bundle.destinationBindingHash;
+  const result = {
+    receipt_proof_hash: hex32("d1"),
+    source_proof_hash: hex32("d2"),
+    destination_binding_hash: destinationBindingHash,
+    public_signal_words: publicSignalWords,
+    calldata_hash: hex32("d3"),
+    torii_submit_payload_hash: hex32("d4"),
+  };
+  return {
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: bundle.proof_artifact_hash ?? bundle.proofArtifactHash,
+    proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
+    verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
+    destination_binding_hash: destinationBindingHash,
+    ...result,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...result }],
+      ),
+    ),
+    ...overrides,
+  };
+};
+
+const sampleBscTestnetNativeEvmProverParityFixtureBytes = (
+  bundle,
+  overrides = {},
+) =>
+  Buffer.from(
+    JSON.stringify(
+      sampleBscTestnetNativeEvmProverParityFixture(bundle, overrides),
+    ),
+    "utf8",
+  );
+
+const sampleBscTestnetNativeEvmProverSelfTestFixture = (
+  bundle,
+  overrides = {},
+) => {
+  const publicSignalWords = Array.from({ length: 9 }, (_, index) =>
+    hex32((index + 0x30).toString(16).padStart(2, "0")),
+  );
+  const destinationBindingHash =
+    bundle.destination_binding_hash ?? bundle.destinationBindingHash;
+  const result = {
+    request_hash: hex32("e1"),
+    witness_hash: hex32("e2"),
+    source_proof_hash: hex32("e3"),
+    proof_hash: hex32("e4"),
+    public_signal_words: publicSignalWords,
+    calldata_hash: hex32("e5"),
+    torii_submit_payload_hash: hex32("e6"),
+  };
+  return {
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: bundle.proof_artifact_hash ?? bundle.proofArtifactHash,
+    proving_key_hash: bundle.proving_key_hash ?? bundle.provingKeyHash,
+    verifier_key_hash: bundle.verifier_key_hash ?? bundle.verifierKeyHash,
+    destination_binding_hash: destinationBindingHash,
+    ...result,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map(
+        (sdk) => [sdk, { ...result }],
+      ),
+    ),
+    ...overrides,
+  };
+};
+
+const sampleBscTestnetNativeEvmProverSelfTestFixtureBytes = (
+  bundle,
+  overrides = {},
+) =>
+  Buffer.from(
+    JSON.stringify(
+      sampleBscTestnetNativeEvmProverSelfTestFixture(bundle, overrides),
+    ),
+    "utf8",
+  );
+
+const sampleBscTestnetNativeEvmProverBundleWithFixtureBytes = (
+  destinationBindingHash,
+  overrides = {},
+) => {
+  const draftBundle = sampleBscTestnetNativeEvmProverBundle(
+    destinationBindingHash,
+    overrides,
+  );
+  const parityFixtureBytes =
+    sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
+  const parityFixtureHash = sha256Hex(parityFixtureBytes);
+  const selfTestFixtureBytes =
+    sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
+  const bundle = sampleBscTestnetNativeEvmProverBundle(
+    destinationBindingHash,
+    {
+      ...overrides,
+      audit_hashes: {
+        ...draftBundle.audit_hashes,
+        cross_sdk_fixture_parity: parityFixtureHash,
+        native_prover_self_test: selfTestFixtureHash,
+      },
+    },
+  );
+  return {
+    bundle,
+    parityFixtureBytes:
+      sampleBscTestnetNativeEvmProverParityFixtureBytes(bundle),
+    parityFixtureHash,
+    selfTestFixtureBytes:
+      sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(bundle),
+    selfTestFixtureHash,
+  };
+};
+
+const nativeEvmProverArtifactBytes = (label) => {
+  const seed = Buffer.from(`${label}\n`, "utf8");
+  const out = Buffer.alloc(256);
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = seed[index % seed.length];
+  }
+  return out;
+};
+
+const sampleVerifiedBscTestnetNativeEvmProverFixture = () => {
+  const proofArtifactBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc testnet proof artifact v1",
+  );
+  const provingKeyBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc testnet proving key v1",
+  );
+  const verifierKeyBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc testnet verifier key v1",
+  );
+  const implementationBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc testnet pure typescript prover artifact v1",
+  );
+  const proofArtifactHash = sha256Hex(proofArtifactBytes);
+  const provingKeyHash = sha256Hex(provingKeyBytes);
+  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const implementationHash = sha256Hex(implementationBytes);
+  const destinationBinding = bscTestnetSccpDestinationBinding(
+    sampleDestinationBindingInput({ verifierKeyHash }),
+  );
+  const {
+    bundle,
+    parityFixtureBytes,
+    parityFixtureHash,
+    selfTestFixtureBytes,
+    selfTestFixtureHash,
+  } = sampleBscTestnetNativeEvmProverBundleWithFixtureBytes(
+    destinationBinding.bindingHash,
+    {
+      proof_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      verifier_key_hash: verifierKeyHash,
+      native_sdk_artifacts: Object.entries(
+        SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+      ).map(([sdk, implementation], index) => ({
+        sdk,
+        implementation,
+        prover_artifact_hash: proofArtifactHash,
+        proving_key_hash: provingKeyHash,
+        implementation_artifact: `artifacts/bsc-testnet/${sdk}-implementation.bin`,
+        implementation_hash:
+          sdk === "javascript"
+            ? implementationHash
+            : hex32((index + 1).toString(16).padStart(2, "0")),
+      })),
+    },
+  );
+  const nativeProverArtifacts = verifyBscTestnetNativeEvmProverArtifacts(
+    {
+      nativeProverBundle: bundle,
+      proofArtifactBytes,
+      provingKeyBytes,
+      verifierKeyBytes,
+      crossSdkFixtureParityBytes: parityFixtureBytes,
+      nativeProverSelfTestBytes: selfTestFixtureBytes,
+      sdk: "javascript",
+      implementationBytes,
+    },
+    { destinationBinding },
+  );
+  return {
+    bundle,
+    destinationBinding,
+    nativeProverArtifacts,
+    proofArtifactBytes,
+    provingKeyBytes,
+    verifierKeyBytes,
+    parityFixtureBytes,
+    parityFixtureHash,
+    selfTestFixtureBytes,
+    selfTestFixtureHash,
+    implementationBytes,
+    implementationHash,
+  };
+};
 
 const abiWord = (value) => {
   let remaining = BigInt(value);
@@ -584,8 +873,15 @@ test("BSC testnet destination helpers bind outbound proofs to chain id 97", () =
 });
 
 test("BscTestnetSccp keeps outbound proof and calldata on BSC testnet", async () => {
-  const sdk = new BscTestnetSccp();
-  const request = sdk.buildOutboundProofRequest(sampleBscTestnetOutboundInput());
+  const { destinationBinding, nativeProverArtifacts } =
+    sampleVerifiedBscTestnetNativeEvmProverFixture();
+  const sdk = new BscTestnetSccp({ nativeProverArtifacts });
+  const request = sdk.buildOutboundProofRequest(
+    sampleBscTestnetOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(destinationBinding),
+    ),
+  );
   assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
   assert.equal(request.destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
 
@@ -615,6 +911,133 @@ test("BscTestnetSccp keeps outbound proof and calldata on BSC testnet", async ()
   assert.equal((await new BscTestnetSccpProver().buildRequest(
     sampleBscTestnetOutboundInput(),
   )).destinationBinding.networkId, SCCP_BSC_TESTNET_NETWORK_ID);
+});
+
+test("BscTestnetSccp validates native prover bundles and binds artifact hashes", async () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+  const descriptor = validateBscTestnetNativeEvmProverBundle(fixture.bundle, {
+    destinationBinding: fixture.destinationBinding,
+  });
+  const parsedDescriptor = parseBscTestnetNativeEvmProverBundleManifest(
+    JSON.stringify(fixture.bundle),
+    { destinationBinding: fixture.destinationBinding },
+  );
+
+  assert.deepEqual(parsedDescriptor, descriptor);
+  assert.equal(descriptor.bundleId, SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1);
+  assert.equal(descriptor.domain, SCCP_DOMAIN_BSC);
+  assert.equal(descriptor.chain, "bsc-testnet");
+  assert.equal(descriptor.destinationBindingHash, fixture.destinationBinding.bindingHash);
+
+  const parityFixture =
+    sampleBscTestnetNativeEvmProverParityFixture(fixture.bundle);
+  const parityDescriptor = validateBscTestnetNativeEvmProverParityFixture(
+    parityFixture,
+    fixture.bundle,
+  );
+  assert.deepEqual(
+    parseBscTestnetNativeEvmProverParityFixture(
+      JSON.stringify(parityFixture),
+      fixture.bundle,
+    ),
+    parityDescriptor,
+  );
+  assert.equal(
+    parityDescriptor.schema,
+    SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  );
+
+  const selfTestFixture =
+    sampleBscTestnetNativeEvmProverSelfTestFixture(fixture.bundle);
+  const selfTestDescriptor = validateBscTestnetNativeEvmProverSelfTestFixture(
+    selfTestFixture,
+    fixture.bundle,
+  );
+  assert.deepEqual(
+    parseBscTestnetNativeEvmProverSelfTestFixture(
+      JSON.stringify(selfTestFixture),
+      fixture.bundle,
+    ),
+    selfTestDescriptor,
+  );
+  assert.equal(
+    selfTestDescriptor.schema,
+    SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+  );
+
+  const javascriptArtifact = descriptor.nativeSdkArtifacts.find(
+    (artifact) => artifact.sdk === "javascript",
+  );
+  const artifactBytesByPath = new Map([
+    [descriptor.proofArtifact, fixture.proofArtifactBytes],
+    [descriptor.provingKey, fixture.provingKeyBytes],
+    [descriptor.verifierKey, fixture.verifierKeyBytes],
+    [descriptor.crossSdkFixtureParityArtifact, fixture.parityFixtureBytes],
+    [descriptor.nativeProverSelfTestArtifact, fixture.selfTestFixtureBytes],
+    [javascriptArtifact.implementationArtifact, fixture.implementationBytes],
+  ]);
+  const verifiedFromBundle =
+    await verifyBscTestnetNativeEvmProverArtifactsFromBundle(
+      {
+        nativeProverBundle: JSON.stringify(fixture.bundle),
+        sdk: "javascript",
+        artifactResolver(path) {
+          return artifactBytesByPath.get(path);
+        },
+      },
+      { destinationBinding: fixture.destinationBinding },
+    );
+  assert.equal(verifiedFromBundle.implementationHash, fixture.implementationHash);
+  assert.equal(verifiedFromBundle.nativeProverBundle.chain, "bsc-testnet");
+
+  const selfTestResult = await runBscTestnetNativeProverSelfTest({
+    nativeProverArtifacts: verifiedFromBundle,
+    nativeProverSelfTest(context) {
+      assert.equal(context.sdk, "javascript");
+      return context.expectedResult;
+    },
+  });
+  assert.equal(selfTestResult.proofHash, hex32("e4"));
+
+  let factoryRequest;
+  const sdk = await BscTestnetSccp.fromNativeProverBundle({
+    destinationBinding: fixture.destinationBinding,
+    manifest: JSON.stringify(fixture.bundle),
+    sdk: "javascript",
+    artifactResolver(path) {
+      return artifactBytesByPath.get(path);
+    },
+    nativeProverSelfTest(context) {
+      return context.expectedResult;
+    },
+    outboundProver: {
+      async prove(request) {
+        factoryRequest = request;
+        return wrapBscTestnetSccpDestinationProofResult(
+          GROTH16_PROOF_BYTES,
+          request,
+        );
+      },
+    },
+  });
+  const proofResult = await sdk.proveOutboundToBsc(
+    sampleBscTestnetOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(fixture.destinationBinding),
+    ),
+  );
+  assert.equal(factoryRequest.proofArtifactHash, descriptor.proofArtifactHash);
+  assert.equal(proofResult.provingKeyHash, descriptor.provingKeyHash);
+  assert.equal(sdk.buildBscCalldata({ proofResult }).targetDomain, SCCP_DOMAIN_BSC);
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        { ...fixture.bundle, chain: "eth" },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /chain must be bsc-testnet/u,
+  );
 });
 
 test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () => {
@@ -826,6 +1249,8 @@ test("BscMainnetSccp validates configured providers before app-owned submit call
 });
 
 test("BscTestnetSccp outbound provider path submits on chain id 0x61", async () => {
+  const { destinationBinding, nativeProverArtifacts } =
+    sampleVerifiedBscTestnetNativeEvmProverFixture();
   const submittedTxs = [];
   const provider = {
     async request({ method, params }) {
@@ -837,8 +1262,16 @@ test("BscTestnetSccp outbound provider path submits on chain id 0x61", async () 
       throw new Error(`unexpected RPC method ${method}`);
     },
   };
-  const sdk = new BscTestnetSccp({ executionProvider: provider });
-  const request = sdk.buildOutboundProofRequest(sampleBscTestnetOutboundInput());
+  const sdk = new BscTestnetSccp({
+    executionProvider: provider,
+    nativeProverArtifacts,
+  });
+  const request = sdk.buildOutboundProofRequest(
+    sampleBscTestnetOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(destinationBinding),
+    ),
+  );
   const proofResult = wrapBscTestnetSccpDestinationProofResult(
     GROTH16_PROOF_BYTES,
     request,
@@ -858,14 +1291,20 @@ test("BscTestnetSccp outbound provider path submits on chain id 0x61", async () 
             throw new Error(`unexpected RPC method ${method}`);
           },
         },
+        nativeProverArtifacts,
       }).submitOutboundToBsc({ proofResult }),
     /eth_chainId == 0x61/u,
   );
 });
 
 test("BscTestnetSccp validates configured providers before app-owned submit callbacks", async () => {
-  const request = new BscTestnetSccp().buildOutboundProofRequest(
-    sampleBscTestnetOutboundInput(),
+  const { destinationBinding, nativeProverArtifacts } =
+    sampleVerifiedBscTestnetNativeEvmProverFixture();
+  const request = new BscTestnetSccp({ nativeProverArtifacts }).buildOutboundProofRequest(
+    sampleBscTestnetOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(destinationBinding),
+    ),
   );
   const proofResult = wrapBscTestnetSccpDestinationProofResult(
     GROTH16_PROOF_BYTES,
@@ -885,6 +1324,7 @@ test("BscTestnetSccp validates configured providers before app-owned submit call
           called = true;
           return "submitted";
         },
+        nativeProverArtifacts,
       }).submitOutboundToBsc({ proofResult }),
     /eth_chainId == 0x61/u,
   );
@@ -905,6 +1345,7 @@ test("BscTestnetSccp validates configured providers before app-owned submit call
         assert.equal(submission.destinationBindingHash, request.destinationBindingHash);
         return "submitted";
       },
+      nativeProverArtifacts,
     }).submitOutboundToBsc({ proofResult }),
     "submitted",
   );

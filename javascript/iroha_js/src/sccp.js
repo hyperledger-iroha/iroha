@@ -46,6 +46,12 @@ export const SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
   "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
   "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
+  "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
+  "sccp-bsc-testnet-native-evm-prover-self-test-v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
+  "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1 =
   Object.freeze({
     javascript: "pure-typescript",
@@ -8161,8 +8167,39 @@ const normalizeEthereumMainnetNativeEvmProverSdkArtifact = (
   });
 };
 
-const normalizeExpectedEthereumMainnetNativeEvmProverDestinationBindingHash = (
+const nativeEvmProverBundleProfiles = Object.freeze({
+  ethereumMainnet: Object.freeze({
+    displayName: "Ethereum mainnet",
+    className: "EthereumMainnetSccp",
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    bundleId: SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    parityFixtureSchema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    selfTestFixtureSchema: SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    destinationBinding: ethereumMainnetSccpDestinationBinding,
+    unavailableCode: "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+    selfTestUnavailableCode: "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+  }),
+  bscTestnet: Object.freeze({
+    displayName: "BSC testnet",
+    className: "BscTestnetSccp",
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    bundleId: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    parityFixtureSchema:
+      SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    selfTestFixtureSchema:
+      SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    destinationBinding: bscTestnetSccpDestinationBinding,
+    unavailableCode: "ERR_SCCP_BSC_TESTNET_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+    selfTestUnavailableCode:
+      "ERR_SCCP_BSC_TESTNET_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+  }),
+});
+
+const normalizeExpectedNativeEvmProverDestinationBindingHash = (
   options,
+  profile,
 ) => {
   if (options == null) {
     return undefined;
@@ -8191,11 +8228,11 @@ const normalizeExpectedEthereumMainnetNativeEvmProverDestinationBindingHash = (
       : normalizeCanonicalNativeEvmProverBundleHex32(
           direct,
           "expectedDestinationBindingHash",
-        );
+  );
   const bindingHash =
     binding === SCCP_OPTIONAL_FIELD_MISSING
       ? undefined
-      : ethereumMainnetSccpDestinationBinding(binding).bindingHash;
+      : profile.destinationBinding(binding).bindingHash;
   if (
     directHash !== undefined &&
     bindingHash !== undefined &&
@@ -8241,13 +8278,17 @@ const requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation = ({
   }
 };
 
-export function validateEthereumMainnetNativeEvmProverBundle(
+const validateNativeEvmProverBundle = (
   manifest,
   options = {},
-) {
+) => {
+  const profile =
+    options?.profile && typeof options.profile === "object"
+      ? options.profile
+      : nativeEvmProverBundleProfiles.ethereumMainnet;
   requireNativeEvmProverBundleObject(
     manifest,
-    "Ethereum mainnet native EVM prover bundle",
+    `${profile.displayName} native EVM prover bundle`,
   );
   requireNativeEvmProverBundleKnownFields(
     manifest,
@@ -8267,19 +8308,19 @@ export function validateEthereumMainnetNativeEvmProverBundle(
       "bundle_id",
     ),
     "bundleId",
-    SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    profile.bundleId,
   );
   const domain = normalizeSccpDomainId(
     requiredNativeEvmProverBundleField(manifest, "domain", "domain"),
     "domain",
   );
-  if (domain !== SCCP_DOMAIN_ETH) {
-    throw new TypeError("domain must be Ethereum mainnet");
+  if (domain !== profile.domain) {
+    throw new TypeError(`domain must be ${profile.displayName}`);
   }
   const chain = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(manifest, "chain", "chain"),
     "chain",
-    "eth",
+    profile.chain,
   );
   const proofBackend = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(
@@ -8389,9 +8430,7 @@ export function validateEthereumMainnetNativeEvmProverBundle(
     "destinationBindingHash",
   );
   const expectedDestinationBindingHash =
-    normalizeExpectedEthereumMainnetNativeEvmProverDestinationBindingHash(
-      options,
-    );
+    normalizeExpectedNativeEvmProverDestinationBindingHash(options, profile);
   if (
     expectedDestinationBindingHash !== undefined &&
     destinationBindingHash !== expectedDestinationBindingHash
@@ -8513,6 +8552,26 @@ export function validateEthereumMainnetNativeEvmProverBundle(
     nativeProverSelfTestArtifact,
     auditHashes,
   });
+};
+
+export function validateEthereumMainnetNativeEvmProverBundle(
+  manifest,
+  options = {},
+) {
+  return validateNativeEvmProverBundle(manifest, {
+    ...options,
+    profile: nativeEvmProverBundleProfiles.ethereumMainnet,
+  });
+}
+
+export function validateBscTestnetNativeEvmProverBundle(
+  manifest,
+  options = {},
+) {
+  return validateNativeEvmProverBundle(manifest, {
+    ...options,
+    profile: nativeEvmProverBundleProfiles.bscTestnet,
+  });
 }
 
 export function parseEthereumMainnetNativeEvmProverBundleManifest(
@@ -8524,6 +8583,17 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
   return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
+}
+
+export function parseBscTestnetNativeEvmProverBundleManifest(
+  json,
+  options = {},
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverBundle JSON manifest must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
+  return validateBscTestnetNativeEvmProverBundle(JSON.parse(json), options);
 }
 
 const normalizeNativeEvmProverParityHex32 = (value, label) =>
@@ -8641,16 +8711,18 @@ const normalizeEthereumMainnetNativeEvmProverParitySdkResult = (
   });
 };
 
-export function validateEthereumMainnetNativeEvmProverParityFixture(
+const validateNativeEvmProverParityFixture = (
   fixture,
   nativeProverBundle,
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     fixture,
-    "Ethereum mainnet native EVM prover parity fixture",
+    `${profile.displayName} native EVM prover parity fixture`,
   );
-  const bundle =
-    validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle);
+  const bundle = validateNativeEvmProverBundle(nativeProverBundle, {
+    profile,
+  });
   requireNativeEvmProverBundleKnownFields(
     fixture,
     "nativeProverParityFixture",
@@ -8659,13 +8731,13 @@ export function validateEthereumMainnetNativeEvmProverParityFixture(
   const schema = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(fixture, "schema", "schema"),
     "schema",
-    SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    profile.parityFixtureSchema,
   );
   const domain = normalizeSccpDomainId(
     requiredNativeEvmProverBundleField(fixture, "domain", "domain"),
     "domain",
   );
-  if (domain !== SCCP_DOMAIN_ETH || domain !== bundle.domain) {
+  if (domain !== profile.domain || domain !== bundle.domain) {
     throw new TypeError(
       "nativeProverParityFixture domain must match nativeProverBundle",
     );
@@ -8844,6 +8916,28 @@ export function validateEthereumMainnetNativeEvmProverParityFixture(
     toriiSubmitPayloadHash,
     sdkResults,
   });
+};
+
+export function validateEthereumMainnetNativeEvmProverParityFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverParityFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export function validateBscTestnetNativeEvmProverParityFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverParityFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
 }
 
 export function parseEthereumMainnetNativeEvmProverParityFixture(
@@ -8855,6 +8949,20 @@ export function parseEthereumMainnetNativeEvmProverParityFixture(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverParityFixture");
   return validateEthereumMainnetNativeEvmProverParityFixture(
+    JSON.parse(json),
+    nativeProverBundle,
+  );
+}
+
+export function parseBscTestnetNativeEvmProverParityFixture(
+  json,
+  nativeProverBundle,
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverParityFixture JSON must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverParityFixture");
+  return validateBscTestnetNativeEvmProverParityFixture(
     JSON.parse(json),
     nativeProverBundle,
   );
@@ -8969,16 +9077,18 @@ const normalizeEthereumMainnetNativeEvmProverSelfTestSdkResult = (
   });
 };
 
-export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
+const validateNativeEvmProverSelfTestFixture = (
   fixture,
   nativeProverBundle,
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     fixture,
-    "Ethereum mainnet native EVM prover self-test fixture",
+    `${profile.displayName} native EVM prover self-test fixture`,
   );
-  const bundle =
-    validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle);
+  const bundle = validateNativeEvmProverBundle(nativeProverBundle, {
+    profile,
+  });
   requireNativeEvmProverBundleKnownFields(
     fixture,
     "nativeProverSelfTestFixture",
@@ -8987,13 +9097,13 @@ export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
   const schema = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(fixture, "schema", "schema"),
     "schema",
-    SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    profile.selfTestFixtureSchema,
   );
   const domain = normalizeSccpDomainId(
     requiredNativeEvmProverBundleField(fixture, "domain", "domain"),
     "domain",
   );
-  if (domain !== SCCP_DOMAIN_ETH || domain !== bundle.domain) {
+  if (domain !== profile.domain || domain !== bundle.domain) {
     throw new TypeError(
       "nativeProverSelfTestFixture domain must match nativeProverBundle",
     );
@@ -9193,6 +9303,28 @@ export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
     toriiSubmitPayloadHash,
     sdkResults,
   });
+};
+
+export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverSelfTestFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export function validateBscTestnetNativeEvmProverSelfTestFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverSelfTestFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
 }
 
 export function parseEthereumMainnetNativeEvmProverSelfTestFixture(
@@ -9204,6 +9336,20 @@ export function parseEthereumMainnetNativeEvmProverSelfTestFixture(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverSelfTestFixture");
   return validateEthereumMainnetNativeEvmProverSelfTestFixture(
+    JSON.parse(json),
+    nativeProverBundle,
+  );
+}
+
+export function parseBscTestnetNativeEvmProverSelfTestFixture(
+  json,
+  nativeProverBundle,
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverSelfTestFixture JSON must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverSelfTestFixture");
+  return validateBscTestnetNativeEvmProverSelfTestFixture(
     JSON.parse(json),
     nativeProverBundle,
   );
@@ -9391,13 +9537,14 @@ function assertNativeEvmProverArtifactHasProductionSize(bytes, label) {
   }
 }
 
-export function verifyEthereumMainnetNativeEvmProverArtifacts(
+const verifyNativeEvmProverArtifacts = (
   input,
   options = {},
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     input,
-    "Ethereum mainnet native EVM prover artifacts",
+    `${profile.displayName} native EVM prover artifacts`,
   );
   const manifestInput = strictOptionalResultField(
     input,
@@ -9411,13 +9558,16 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
   if (manifestInput === SCCP_OPTIONAL_FIELD_MISSING) {
     throw new TypeError("nativeProverBundle is required");
   }
-  const nativeProverBundle =
-    typeof manifestInput === "string"
-      ? parseEthereumMainnetNativeEvmProverBundleManifest(
-          manifestInput,
-          options,
-        )
-      : validateEthereumMainnetNativeEvmProverBundle(manifestInput, options);
+  if (typeof manifestInput === "string") {
+    rejectDuplicateJsonObjectKeys(manifestInput, "nativeProverBundle");
+  }
+  const nativeProverBundle = validateNativeEvmProverBundle(
+    typeof manifestInput === "string" ? JSON.parse(manifestInput) : manifestInput,
+    {
+      ...options,
+      profile,
+    },
+  );
   const proofArtifactBytes = requiredNativeEvmProverArtifactBytes(
     input,
     "proofArtifactBytes",
@@ -9533,16 +9683,20 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
     nativeProverSelfTestBytes,
     "nativeProverSelfTestBytes",
   );
-  const crossSdkFixtureParity =
-    parseEthereumMainnetNativeEvmProverParityFixture(
-      textDecoder.decode(crossSdkFixtureParityBytes),
-      nativeProverBundle,
-    );
-  const nativeProverSelfTest =
-    parseEthereumMainnetNativeEvmProverSelfTestFixture(
-      textDecoder.decode(nativeProverSelfTestBytes),
-      nativeProverBundle,
-    );
+  const parityJson = textDecoder.decode(crossSdkFixtureParityBytes);
+  rejectDuplicateJsonObjectKeys(parityJson, "nativeProverParityFixture");
+  const crossSdkFixtureParity = validateNativeEvmProverParityFixture(
+    JSON.parse(parityJson),
+    nativeProverBundle,
+    profile,
+  );
+  const selfTestJson = textDecoder.decode(nativeProverSelfTestBytes);
+  rejectDuplicateJsonObjectKeys(selfTestJson, "nativeProverSelfTestFixture");
+  const nativeProverSelfTest = validateNativeEvmProverSelfTestFixture(
+    JSON.parse(selfTestJson),
+    nativeProverBundle,
+    profile,
+  );
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   const implementationBytes = optionalNativeEvmProverArtifactBytes(
     input,
@@ -9602,6 +9756,28 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
     implementation,
     implementationHash,
   });
+};
+
+export function verifyEthereumMainnetNativeEvmProverArtifacts(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export function verifyBscTestnetNativeEvmProverArtifacts(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
 }
 
 const resolveNativeEvmProverArtifactBytes = async (
@@ -9620,13 +9796,14 @@ const resolveNativeEvmProverArtifactBytes = async (
   return toBytes(value, label);
 };
 
-export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+const verifyNativeEvmProverArtifactsFromBundle = async (
   input,
   options = {},
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     input,
-    "Ethereum mainnet native EVM prover artifact bundle",
+    `${profile.displayName} native EVM prover artifact bundle`,
   );
   const manifestInput = strictOptionalResultField(
     input,
@@ -9642,11 +9819,17 @@ export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
   }
   const nativeProverBundle =
     typeof manifestInput === "string"
-      ? parseEthereumMainnetNativeEvmProverBundleManifest(
-          manifestInput,
-          options,
-        )
-      : validateEthereumMainnetNativeEvmProverBundle(manifestInput, options);
+      ? (() => {
+          rejectDuplicateJsonObjectKeys(manifestInput, "nativeProverBundle");
+          return validateNativeEvmProverBundle(JSON.parse(manifestInput), {
+            ...options,
+            profile,
+          });
+        })()
+      : validateNativeEvmProverBundle(manifestInput, {
+          ...options,
+          profile,
+        });
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   if (typeof sdk !== "string" || sdk.length === 0) {
     throw new TypeError(
@@ -9715,7 +9898,7 @@ export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
     "implementationBytes",
     { ...sharedMetadata, role: "implementationArtifact" },
   );
-  return verifyEthereumMainnetNativeEvmProverArtifacts(
+  return verifyNativeEvmProverArtifacts(
     {
       nativeProverBundle,
       proofArtifactBytes,
@@ -9727,6 +9910,29 @@ export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
       implementationBytes,
     },
     options,
+    profile,
+  );
+};
+
+export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifactsFromBundle(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export async function verifyBscTestnetNativeEvmProverArtifactsFromBundle(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifactsFromBundle(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
   );
 }
 
@@ -9790,13 +9996,14 @@ const ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput = (
   return options;
 };
 
-const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
+const normalizeVerifiedNativeEvmProverArtifacts = (
   input,
   options = {},
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) => {
   requireNativeEvmProverBundleObject(
     input,
-    "Ethereum mainnet verified native EVM prover artifacts",
+    `${profile.displayName} verified native EVM prover artifacts`,
   );
   const hashAlgorithm = strictResultField(
     input,
@@ -9807,7 +10014,7 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
   if (hashAlgorithm !== SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1) {
     throw new TypeError("nativeProverArtifacts hashAlgorithm is not supported");
   }
-  const nativeProverBundle = validateEthereumMainnetNativeEvmProverBundle(
+  const nativeProverBundle = validateNativeEvmProverBundle(
     strictResultField(
       input,
       "nativeProverArtifacts.nativeProverBundle",
@@ -9816,7 +10023,10 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
       "proverBundle",
       "prover_bundle",
     ),
-    options,
+    {
+      ...options,
+      profile,
+    },
   );
   const proofArtifactHash = normalizeNonZeroHex32(
     strictResultField(
@@ -9900,30 +10110,30 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
       "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle.auditHashes.native_prover_self_test",
     );
   }
-  const crossSdkFixtureParity =
-    validateEthereumMainnetNativeEvmProverParityFixture(
-      strictResultField(
-        input,
-        "nativeProverArtifacts.crossSdkFixtureParity",
-        "crossSdkFixtureParity",
-        "cross_sdk_fixture_parity",
-        "parityFixture",
-        "parity_fixture",
-      ),
-      nativeProverBundle,
-    );
-  const nativeProverSelfTest =
-    validateEthereumMainnetNativeEvmProverSelfTestFixture(
-      strictResultField(
-        input,
-        "nativeProverArtifacts.nativeProverSelfTest",
-        "nativeProverSelfTest",
-        "native_prover_self_test",
-        "selfTest",
-        "self_test",
-      ),
-      nativeProverBundle,
-    );
+  const crossSdkFixtureParity = validateNativeEvmProverParityFixture(
+    strictResultField(
+      input,
+      "nativeProverArtifacts.crossSdkFixtureParity",
+      "crossSdkFixtureParity",
+      "cross_sdk_fixture_parity",
+      "parityFixture",
+      "parity_fixture",
+    ),
+    nativeProverBundle,
+    profile,
+  );
+  const nativeProverSelfTest = validateNativeEvmProverSelfTestFixture(
+    strictResultField(
+      input,
+      "nativeProverArtifacts.nativeProverSelfTest",
+      "nativeProverSelfTest",
+      "native_prover_self_test",
+      "selfTest",
+      "self_test",
+    ),
+    nativeProverBundle,
+    profile,
+  );
   const sdk = strictOptionalResultField(
     input,
     "nativeProverArtifacts.sdk",
@@ -9990,15 +10200,36 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
   });
 };
 
-const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest = (
+const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
+  input,
+  options = {},
+) =>
+  normalizeVerifiedNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+
+const normalizeBscTestnetVerifiedNativeEvmProverArtifacts = (
+  input,
+  options = {},
+) =>
+  normalizeVerifiedNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
+
+const requireVerifiedNativeEvmProverArtifactsForRequest = (
   artifacts,
   request,
+  profile,
 ) => {
   if (artifacts == null) {
     const error = new Error(
-      "Ethereum mainnet SCCP outbound proof requires verified native EVM prover artifacts",
+      `${profile.displayName} SCCP outbound proof requires verified native EVM prover artifacts`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    error.code = profile.unavailableCode;
     throw error;
   }
   if (
@@ -10072,15 +10303,36 @@ const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest = (
   return artifacts;
 };
 
-const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult = (
+const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest = (
+  artifacts,
+  request,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForRequest(
+    artifacts,
+    request,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+
+const requireBscTestnetVerifiedNativeEvmProverArtifactsForRequest = (
+  artifacts,
+  request,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForRequest(
+    artifacts,
+    request,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
+
+const requireVerifiedNativeEvmProverArtifactsForProofResult = (
   artifacts,
   proofResult,
+  profile,
 ) => {
   if (artifacts == null) {
     const error = new Error(
-      "Ethereum mainnet SCCP submission requires verified native EVM prover artifacts",
+      `${profile.displayName} SCCP submission requires verified native EVM prover artifacts`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    error.code = profile.unavailableCode;
     throw error;
   }
   const proofArtifactHash = strictOptionalResultField(
@@ -10177,6 +10429,26 @@ const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult = (
   return artifacts;
 };
 
+const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult = (
+  artifacts,
+  proofResult,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForProofResult(
+    artifacts,
+    proofResult,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+
+const requireBscTestnetVerifiedNativeEvmProverArtifactsForProofResult = (
+  artifacts,
+  proofResult,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForProofResult(
+    artifacts,
+    proofResult,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
+
 const normalizeEthereumMainnetNativeProverSelfTestResult = (
   result,
   artifacts,
@@ -10202,12 +10474,13 @@ const requireEthereumMainnetNativeProverSelfTest = async (
   artifacts,
   selfTestFn,
   options,
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) => {
   if (typeof selfTestFn !== "function") {
     const error = new Error(
-      "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
+      `${profile.displayName} SCCP outbound prover requires a native prover self-test hook`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE";
+    error.code = profile.selfTestUnavailableCode;
     throw error;
   }
   const sdk = artifacts.sdk;
@@ -10227,12 +10500,16 @@ const requireEthereumMainnetNativeProverSelfTest = async (
   return normalizeEthereumMainnetNativeProverSelfTestResult(result, artifacts);
 };
 
-export async function runEthereumMainnetNativeProverSelfTest(input = {}, options = {}) {
+const runNativeProverSelfTestForProfile = async (
+  input = {},
+  options = {},
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
+) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("Ethereum mainnet native prover self-test input must be an object");
+    throw new TypeError(`${profile.displayName} native prover self-test input must be an object`);
   }
   if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("Ethereum mainnet native prover self-test options must be an object");
+    throw new TypeError(`${profile.displayName} native prover self-test options must be an object`);
   }
   const destinationBinding = strictOptionalConstructorOption(
     input,
@@ -10255,14 +10532,15 @@ export async function runEthereumMainnetNativeProverSelfTest(input = {}, options
       : null);
   if (nativeProverArtifactsInput == null) {
     const error = new Error(
-      "Ethereum mainnet SCCP native prover self-test requires verified native EVM prover artifacts",
+      `${profile.displayName} SCCP native prover self-test requires verified native EVM prover artifacts`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    error.code = profile.unavailableCode;
     throw error;
   }
-  const nativeProverArtifacts = normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts(
+  const nativeProverArtifacts = normalizeVerifiedNativeEvmProverArtifacts(
     nativeProverArtifactsInput,
     destinationBinding == null ? {} : { destinationBinding },
+    profile,
   );
   const nativeProverSelfTestFn =
     strictOptionalConstructorOption(
@@ -10285,12 +10563,30 @@ export async function runEthereumMainnetNativeProverSelfTest(input = {}, options
     nativeProverArtifacts,
     nativeProverSelfTestFn,
     options,
+    profile,
+  );
+};
+
+export async function runEthereumMainnetNativeProverSelfTest(input = {}, options = {}) {
+  return runNativeProverSelfTestForProfile(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export async function runBscTestnetNativeProverSelfTest(input = {}, options = {}) {
+  return runNativeProverSelfTestForProfile(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
   );
 }
 
 const prepareEthereumMainnetNativeEvmProverBundleInput = (
   input,
   defaultNativeProverBundle,
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return { input, nativeProverBundle: undefined };
@@ -10312,7 +10608,7 @@ const prepareEthereumMainnetNativeEvmProverBundleInput = (
   const nativeProverBundle =
     bundleInput === SCCP_OPTIONAL_FIELD_MISSING
       ? defaultNativeProverBundle
-      : validateEthereumMainnetNativeEvmProverBundle(bundleInput);
+      : validateNativeEvmProverBundle(bundleInput, { profile });
   const artifacts = normalizeOptionalGroth16ProverArtifacts(
     input,
     "proof request",
@@ -16344,6 +16640,44 @@ export class BscMainnetSccp {
 }
 
 export class BscTestnetSccp {
+  static async fromNativeProverBundle(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError(
+        "BscTestnetSccp native prover bundle options must be an object",
+      );
+    }
+    const existingArtifacts = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    if (existingArtifacts != null) {
+      throw new TypeError(
+        "BscTestnetSccp.fromNativeProverBundle resolves artifacts from the bundle; pass nativeProverArtifacts to the constructor directly",
+      );
+    }
+    const destinationBinding = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp destinationBinding",
+      "destinationBinding",
+      "destination_binding",
+    );
+    const nativeProverArtifacts =
+      await verifyBscTestnetNativeEvmProverArtifactsFromBundle(
+        options,
+        destinationBinding == null ? {} : { destinationBinding },
+      );
+    return new BscTestnetSccp(
+      ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput(
+        options,
+        nativeProverArtifacts,
+      ),
+    );
+  }
+
   constructor(options = {}) {
     if (!options || typeof options !== "object" || Array.isArray(options)) {
       throw new TypeError("BscTestnetSccp options must be an object");
@@ -16381,12 +16715,80 @@ export class BscTestnetSccp {
       "submit_outbound_to_bsc",
       "submitToBsc",
     );
+    this.nativeProverSelfTestFn = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverSelfTest",
+      "nativeProverSelfTest",
+      "native_prover_self_test",
+      "selfTestNativeProver",
+      "self_test_native_prover",
+    );
     this.destinationBinding = strictOptionalConstructorOption(
       options,
       "BscTestnetSccp destinationBinding",
       "destinationBinding",
       "destination_binding",
     );
+    const nativeProverBundleInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverBundle",
+      "nativeProverBundle",
+      "native_prover_bundle",
+      "proverBundle",
+      "prover_bundle",
+    );
+    this.nativeProverBundle =
+      nativeProverBundleInput == null
+        ? null
+        : validateBscTestnetNativeEvmProverBundle(
+            nativeProverBundleInput,
+            this.destinationBinding == null
+              ? {}
+              : { destinationBinding: this.destinationBinding },
+          );
+    const nativeProverArtifactsInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    this.nativeProverArtifacts =
+      nativeProverArtifactsInput == null
+        ? hasEthereumMainnetNativeEvmProverArtifactBytes(options)
+          ? verifyBscTestnetNativeEvmProverArtifacts(
+              options,
+              this.destinationBinding == null
+                ? {}
+                : { destinationBinding: this.destinationBinding },
+            )
+          : null
+        : normalizeBscTestnetVerifiedNativeEvmProverArtifacts(
+            nativeProverArtifactsInput,
+            this.destinationBinding == null
+              ? {}
+              : { destinationBinding: this.destinationBinding },
+          );
+    if (this.nativeProverArtifacts != null) {
+      if (
+        this.nativeProverBundle != null &&
+        (this.nativeProverBundle.proofArtifactHash !==
+          this.nativeProverArtifacts.nativeProverBundle.proofArtifactHash ||
+          this.nativeProverBundle.provingKeyHash !==
+            this.nativeProverArtifacts.nativeProverBundle.provingKeyHash ||
+          this.nativeProverBundle.verifierKeyHash !==
+            this.nativeProverArtifacts.nativeProverBundle.verifierKeyHash ||
+          this.nativeProverBundle.destinationBindingHash !==
+            this.nativeProverArtifacts.nativeProverBundle
+              .destinationBindingHash)
+      ) {
+        throw new TypeError(
+          "nativeProverArtifacts must match nativeProverBundle",
+        );
+      }
+      this.nativeProverBundle = this.nativeProverArtifacts.nativeProverBundle;
+    }
     this.sourceVerifierMaterial = strictOptionalConstructorOption(
       options,
       "BscTestnetSccp sourceVerifierMaterial",
@@ -16660,12 +17062,125 @@ export class BscTestnetSccp {
   }
 
   buildOutboundProofRequest(input) {
-    return requireBscTestnetOutboundRequest(
-      buildBscTestnetSccpDestinationProofRequest(input),
+    const prepared = prepareEthereumMainnetNativeEvmProverBundleInput(
+      input,
+      this.nativeProverBundle,
+      nativeEvmProverBundleProfiles.bscTestnet,
+    );
+    const request = buildBscTestnetSccpDestinationProofRequest(prepared.input);
+    if (
+      prepared.nativeProverBundle !== undefined &&
+      request.destinationBindingHash !==
+        prepared.nativeProverBundle.destinationBindingHash
+    ) {
+      throw new TypeError(
+        "nativeProverBundle destinationBindingHash must match destinationBinding",
+      );
+    }
+    if (
+      prepared.nativeProverBundle !== undefined &&
+      request.destinationBinding?.verifierKeyHash !==
+        prepared.nativeProverBundle.verifierKeyHash
+    ) {
+      throw new TypeError(
+        "nativeProverBundle verifierKeyHash must match destinationBinding",
+      );
+    }
+    return requireBscTestnetOutboundRequest(request);
+  }
+
+  async runNativeProverSelfTest(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError(
+        "BscTestnetSccp native prover self-test options must be an object",
+      );
+    }
+    const nativeProverArtifactsInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    const nativeProverArtifacts =
+      nativeProverArtifactsInput == null
+        ? this.nativeProverArtifacts
+        : normalizeBscTestnetVerifiedNativeEvmProverArtifacts(
+            nativeProverArtifactsInput,
+            this.destinationBinding == null
+              ? {}
+              : { destinationBinding: this.destinationBinding },
+          );
+    const nativeProverSelfTestFn =
+      strictOptionalConstructorOption(
+        options,
+        "BscTestnetSccp nativeProverSelfTest",
+        "nativeProverSelfTest",
+        "native_prover_self_test",
+        "selfTestNativeProver",
+        "self_test_native_prover",
+      ) ??
+      this.nativeProverSelfTestFn ??
+      (typeof this.outboundProver?.nativeProverSelfTest === "function"
+        ? this.outboundProver.nativeProverSelfTest.bind(this.outboundProver)
+        : null) ??
+      (typeof this.outboundProver?.selfTest === "function"
+        ? this.outboundProver.selfTest.bind(this.outboundProver)
+        : null);
+    return runBscTestnetNativeProverSelfTest(
+      {
+        nativeProverArtifacts,
+        nativeProverSelfTest: nativeProverSelfTestFn,
+      },
+      options,
     );
   }
 
   async proveOutboundToBsc(input, options = {}) {
+    const request = this.buildOutboundProofRequest(input);
+    const nativeProverArtifactsInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    const nativeProverArtifacts =
+      nativeProverArtifactsInput == null
+        ? this.nativeProverArtifacts
+        : normalizeBscTestnetVerifiedNativeEvmProverArtifacts(
+            nativeProverArtifactsInput,
+            { destinationBinding: request.destinationBinding },
+          );
+    requireBscTestnetVerifiedNativeEvmProverArtifactsForRequest(
+      nativeProverArtifacts,
+      request,
+    );
+    const nativeProverSelfTestFn =
+      strictOptionalConstructorOption(
+        options,
+        "BscTestnetSccp nativeProverSelfTest",
+        "nativeProverSelfTest",
+        "native_prover_self_test",
+        "selfTestNativeProver",
+        "self_test_native_prover",
+      ) ??
+      this.nativeProverSelfTestFn ??
+      (typeof this.outboundProver?.nativeProverSelfTest === "function"
+        ? this.outboundProver.nativeProverSelfTest.bind(this.outboundProver)
+        : null) ??
+      (typeof this.outboundProver?.selfTest === "function"
+        ? this.outboundProver.selfTest.bind(this.outboundProver)
+        : null);
+    await runBscTestnetNativeProverSelfTest(
+      {
+        nativeProverArtifacts,
+        nativeProverSelfTest: nativeProverSelfTestFn,
+      },
+      options,
+    );
     if (
       !this.outboundProver ||
       typeof this.outboundProver.prove !== "function"
@@ -16676,7 +17191,6 @@ export class BscTestnetSccp {
       error.code = "ERR_SCCP_BSC_TESTNET_OUTBOUND_PROVER_UNAVAILABLE";
       throw error;
     }
-    const request = this.buildOutboundProofRequest(input);
     const proofResult = normalizeEvmProofResult(
       await this.outboundProver.prove(
         immutableGroth16ProofRequest(request),
@@ -16694,10 +17208,21 @@ export class BscTestnetSccp {
   }
 
   buildBscCalldata(input) {
-    return requireBscTestnetSubmission(
+    const submission = requireBscTestnetSubmission(
       buildBscTestnetSccpDestinationSubmission(input),
       input,
     );
+    const proofResult = strictResultField(
+      input,
+      "proofResult",
+      "proofResult",
+      "proof_result",
+    );
+    requireBscTestnetVerifiedNativeEvmProverArtifactsForProofResult(
+      this.nativeProverArtifacts,
+      proofResult,
+    );
+    return submission;
   }
 
   async submitOutboundToBsc(input, options = {}) {
