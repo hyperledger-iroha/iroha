@@ -52,14 +52,18 @@ verifier_key_hash`). The wrapper constructor rejects missing or mismatched
 verifier bytecode hashes, any backend other than `evm-groth16-bn254-v1`, and
 any proof family other than `stark-fri-v1`. It requires the verifier contract
 to expose the expected immutable verifying-key hash via `verifyingKeyHash()`
-and rejects empty verifier-backend/proof-family labels, a zero network id, a
-non-SORA source domain, a target domain outside ETH/BSC, and same-domain
-deployments. ETH-targeted deployments must use the bytes32 EIP-155 chain-id
+and rejects contracts that have runtime code but no compatible key-hash
+endpoint. It also rejects empty verifier-backend/proof-family labels, a zero
+network id, a non-SORA source domain, a target domain outside ETH/BSC, and
+same-domain deployments. ETH-targeted deployments must use the bytes32 EIP-155 chain-id
 word for Ethereum mainnet (`1`), and BSC-targeted deployments must use the
 bytes32 EIP-155 chain-id word for BNB Smart Chain mainnet (`56`).
 The wrapper enforces the expected source/target domains, rejects zero SCCP
 statement/public-input fields before calling the verifier, and checks the
 returned `messageId` and `commitmentRoot` against the supplied public inputs.
+It also rejects an already-used `messageId` from `public_inputs[0]` before the
+verifier call, so replay traffic cannot force another pairing check even when
+the replayed proof bytes are malformed.
 The `destinationBindingHash()` view exposes the deployment binding that the
 wrapper passes to the verifier, and accepted proof events include both the
 statement hash and destination binding hash so canary logs can be matched to the

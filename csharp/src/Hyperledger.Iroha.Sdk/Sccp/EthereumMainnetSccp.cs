@@ -28,6 +28,7 @@ public static class EthereumMainnetSccp
     public const string EthNativeEvmProverBundleIdV1 =
         "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
     public const string NativeEvmProverArtifactHashAlgorithmV1 = "sha256";
+    internal const int NativeEvmProverMinArtifactBytesV1 = 256;
     public const string StarkFriProofFamily = "stark-fri-v1";
     public const string ContractCallAbiTuple = "abi_tuple_v1";
     public const string LocalAdmissionEnvelopeEncoding = "norito:sccp-local-admission:v1";
@@ -701,8 +702,8 @@ public static class EthereumMainnetSccp
                 32);
         }
 
-        receipt = SnapshotDictionary(receipt);
-        block = SnapshotDictionary(block);
+        receipt = SnapshotDictionaryOrNull(receipt);
+        block = SnapshotDictionaryOrNull(block);
 
         var beaconFinality = input.BeaconFinality;
         if (beaconFinality is null && consensusProvider is not null)
@@ -1265,7 +1266,7 @@ public static class EthereumMainnetSccp
 
         var request = BuildOutboundProofRequest(input, nativeProverArtifacts.NativeProverBundle);
         RequireVerifiedNativeProverArtifacts(nativeProverArtifacts, request);
-        await RequireNativeProverSelfTestAsync(
+        _ = await RequireNativeProverSelfTestAsync(
             nativeProverArtifacts,
             nativeProverSelfTest,
             cancellationToken).ConfigureAwait(false);
@@ -1273,6 +1274,20 @@ public static class EthereumMainnetSccp
             Snapshot(request),
             cancellationToken).ConfigureAwait(false);
         return WrapOutboundProofResult(proofBytes, request);
+    }
+
+    public static async ValueTask<EthereumMainnetNativeEvmProverSelfTestSdkResult>
+        RunNativeProverSelfTestAsync(
+            EthereumMainnetNativeEvmProverArtifacts nativeProverArtifacts,
+            IEthereumMainnetNativeProverSelfTest nativeProverSelfTest,
+            CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(nativeProverArtifacts);
+        ArgumentNullException.ThrowIfNull(nativeProverSelfTest);
+        return await RequireNativeProverSelfTestAsync(
+            nativeProverArtifacts,
+            nativeProverSelfTest,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public static ValueTask<EthereumMainnetOutboundProofResult> ProveOutboundToEthereumFromNativeProverBundleAsync(
@@ -2225,7 +2240,8 @@ public static class EthereumMainnetSccp
         }
     }
 
-    private static async ValueTask RequireNativeProverSelfTestAsync(
+    private static async ValueTask<EthereumMainnetNativeEvmProverSelfTestSdkResult>
+        RequireNativeProverSelfTestAsync(
         EthereumMainnetNativeEvmProverArtifacts artifacts,
         IEthereumMainnetNativeProverSelfTest? nativeProverSelfTest,
         CancellationToken cancellationToken)
@@ -2267,6 +2283,8 @@ public static class EthereumMainnetSccp
                 "nativeProverSelfTest result must match nativeProverBundle fixture.",
                 nameof(nativeProverSelfTest));
         }
+
+        return result;
     }
 
     private static bool NativeProverSelfTestResultEquals(
@@ -3317,7 +3335,7 @@ public static class EthereumMainnetSccp
         var prefix = bytes[offset];
         if (prefix <= 0x7f)
         {
-            return new RlpDecodedItem(offset, 1, offset + 1, isList: false);
+            return new RlpDecodedItem(offset, 1, offset + 1, false);
         }
 
         if (prefix <= 0xb7)
@@ -3330,7 +3348,7 @@ public static class EthereumMainnetSccp
                 throw new ArgumentException("RLP byte field is not canonical.", nameof(bytes));
             }
 
-            return new RlpDecodedItem(payloadOffset, length, payloadOffset + length, isList: false);
+            return new RlpDecodedItem(payloadOffset, length, payloadOffset + length, false);
         }
 
         if (prefix <= 0xbf)
@@ -3344,7 +3362,7 @@ public static class EthereumMainnetSccp
 
             var payloadOffset = offset + 1 + lengthOfLength;
             RequireRlpBounds(bytes, payloadOffset, payloadLength);
-            return new RlpDecodedItem(payloadOffset, payloadLength, payloadOffset + payloadLength, isList: false);
+            return new RlpDecodedItem(payloadOffset, payloadLength, payloadOffset + payloadLength, false);
         }
 
         if (prefix <= 0xf7)
@@ -3352,7 +3370,7 @@ public static class EthereumMainnetSccp
             var length = prefix - 0xc0;
             var payloadOffset = offset + 1;
             RequireRlpBounds(bytes, payloadOffset, length);
-            return new RlpDecodedItem(payloadOffset, length, payloadOffset + length, isList: true);
+            return new RlpDecodedItem(payloadOffset, length, payloadOffset + length, true);
         }
 
         var listLengthOfLength = prefix - 0xf7;
@@ -3368,7 +3386,7 @@ public static class EthereumMainnetSccp
             listPayloadOffset,
             listPayloadLength,
             listPayloadOffset + listPayloadLength,
-            isList: true);
+            true);
     }
 
     private static int ReadRlpLength(byte[] bytes, int offset, int lengthOfLength)
@@ -3839,57 +3857,6 @@ public static class EthereumMainnetSccp
                     nameof(receiptProof));
             }
         }
-    }
-
-    private static EthereumMainnetInboundEvidence SnapshotInboundEvidence(EthereumMainnetInboundEvidence evidence)
-        => evidence with
-        {
-            Receipt = SnapshotDictionary(evidence.Receipt),
-            Block = SnapshotDictionary(evidence.Block),
-            BeaconFinality = SnapshotDictionary(evidence.BeaconFinality),
-            BlockReceipts = evidence.BlockReceipts is null
-                ? null
-                : evidence.BlockReceipts.Select(SnapshotRequiredDictionary).ToArray(),
-            InclusionBranch = evidence.InclusionBranch is null
-                ? null
-                : CopyByteArrays(evidence.InclusionBranch),
-            ReceiptProof = SnapshotReceiptProof(evidence.ReceiptProof),
-        };
-
-    private static IReadOnlyDictionary<string, object?> SnapshotRequiredDictionary(
-        IReadOnlyDictionary<string, object?> value)
-        => SnapshotDictionary(value)!;
-
-    private static IReadOnlyDictionary<string, object?>? SnapshotDictionary(
-        IReadOnlyDictionary<string, object?>? value)
-    {
-        if (value is null)
-        {
-            return null;
-        }
-
-        var copy = new Dictionary<string, object?>(StringComparer.Ordinal);
-        foreach (var (key, item) in value)
-        {
-            copy[key] = SnapshotObject(item);
-        }
-
-        return copy;
-    }
-
-    private static object? SnapshotObject(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            byte[] bytes => bytes.ToArray(),
-            IReadOnlyDictionary<string, object?> dictionary => SnapshotDictionary(dictionary),
-            IEnumerable<string> strings => strings.ToArray(),
-            IReadOnlyList<object?> list => list.Select(SnapshotObject).ToArray(),
-            System.Collections.IEnumerable enumerable when value is not string
-                => enumerable.Cast<object?>().Select(SnapshotObject).ToArray(),
-            _ => value,
-        };
     }
 
     private static EthereumMainnetReceiptProof? SnapshotReceiptProof(EthereumMainnetReceiptProof? receiptProof)
@@ -5701,6 +5668,9 @@ public sealed record EthereumMainnetNativeEvmProverBundle
                 nameof(nativeProverSelfTestBytes));
         }
 
+        RequireNativeEvmProverProductionArtifactSize(proofArtifactBytes, nameof(proofArtifactBytes));
+        RequireNativeEvmProverProductionArtifactSize(provingKeyBytes, nameof(provingKeyBytes));
+        RequireNativeEvmProverProductionArtifactSize(verifierKeyBytes, nameof(verifierKeyBytes));
         RejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, nameof(proofArtifactBytes));
         RejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, nameof(provingKeyBytes));
         RejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, nameof(verifierKeyBytes));
@@ -5745,6 +5715,9 @@ public sealed record EthereumMainnetNativeEvmProverBundle
                 nameof(implementationBytes));
         }
 
+        RequireNativeEvmProverProductionArtifactSize(
+            implementationBytes,
+            nameof(implementationBytes));
         RejectNativeEvmProverForbiddenArtifactMarkers(
             implementationBytes,
             nameof(implementationBytes));
@@ -6044,6 +6017,18 @@ public sealed record EthereumMainnetNativeEvmProverBundle
                     $"{parameterName} contains forbidden prover dependency marker.",
                     parameterName);
             }
+        }
+    }
+
+    private static void RequireNativeEvmProverProductionArtifactSize(
+        byte[] bytes,
+        string parameterName)
+    {
+        if (bytes.Length < EthereumMainnetSccp.NativeEvmProverMinArtifactBytesV1)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must be at least {EthereumMainnetSccp.NativeEvmProverMinArtifactBytesV1} bytes.",
+                parameterName);
         }
     }
 
@@ -6395,7 +6380,7 @@ public sealed record EthereumMainnetNativeEvmProverBundle
         {
             var text = value.GetString()!;
             if (text.Length == 0
-                || (text != "0" && (text[0] == '0' || !text.All(IsDecimalDigit)))
+                || (text != "0" && (text[0] == '0' || !text.All(static character => character is >= '0' and <= '9')))
                 || !int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
             {
                 throw new ArgumentException($"{label} must be a canonical decimal integer.");
@@ -8214,7 +8199,7 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         return value;
     }
 
-    private static object FirstPresent(IReadOnlyDictionary<string, object?> value, params string[] names)
+    private static object? FirstPresent(IReadOnlyDictionary<string, object?> value, params string[] names)
     {
         foreach (var name in names)
         {
@@ -8223,7 +8208,38 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
                 return item;
             }
         }
-        throw new ArgumentException($"{names[0]} is required");
+        return null;
+    }
+
+    private static object? StrictFirstPresent(
+        IReadOnlyDictionary<string, object?> value,
+        string parameterName,
+        params string[] names)
+    {
+        object? selected = null;
+        var found = false;
+        foreach (var name in names)
+        {
+            if (value.TryGetValue(name, out var item))
+            {
+                if (found)
+                {
+                    throw new ArgumentException(
+                        $"{parameterName} must not use multiple aliases.",
+                        parameterName);
+                }
+
+                selected = item;
+                found = true;
+            }
+        }
+
+        if (!found)
+        {
+            throw new ArgumentException($"{parameterName} is required.", parameterName);
+        }
+
+        return selected;
     }
 
     private static string NormalizeRpcHex(

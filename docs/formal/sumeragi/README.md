@@ -7756,11 +7756,13 @@ Invariants:
 - `FinalityCertificateStackMatchesFinality`
 - `FinalityClearsNewViewHandoff`
 - `CommitDisablesProgressActions`
+- `CommitDisablesByzantineCommitVote`
 - `CommittedPhaseMatchesFinality`
 - `CommitViewMatchesFinality`
 - `CommitViewDoesNotLeadCurrentView`
 - `GstElapsedGateMatchesPreGst`
 - `TimeoutTickGateMatchesStalledProgress`
+- `ByzantineCommitVoteDoesNotBlockTimeoutStall`
 - `ViewEvidenceMatchesActiveView`
 - `NewViewPhaseBelowQuorum`
 - `LiveNewViewVotesStayInHandoff`
@@ -8723,6 +8725,15 @@ Temporal properties:
 - `CommitArtifactsOnlyChangeByFinalitySource` proves that any commit-view or
   commit-certificate witness change is sourced by one exact finality branch:
   honest commit vote, Byzantine commit vote, or RBC delivery.
+- `CommitArtifactsChangeAlwaysMatchesCertifiedFinalityStack` proves that any
+  change to the latched commit-view or commit-certificate witnesses carries the
+  full certified finality stack: finality latch transition, source classifier,
+  quorum gates, committed-phase entry, and finality witnesses all match.
+- `CommitArtifactsChangeAlwaysCompletesCommittedDeliveryFromExactSource` proves
+  that any durable commit-view or commit-certificate witness change also
+  completes the delivered committed state through the same certified
+  exact-source chain used by finality-latch and committed-phase entry
+  transitions.
 - `FinalityLatchOnlySetsCompleteStack` proves that any transition setting the
   abstract finality latch enters `Committed` with the complete finality stack:
   prepare quorum, live commit quorum, stake quorum, commit-certificate witness,
@@ -8747,6 +8758,22 @@ Temporal properties:
   latched commit-certificate vote and stake witnesses install exactly with the
   abstract finality latch, changing from absent witnesses to the post-state
   live vote and stake counters that satisfy quorum.
+- `CommitCertificateWitnessComponentsAlwaysChangeTogether` proves that the
+  latched commit-certificate vote-count witness and stake witness are coupled:
+  neither component can change without the other on any real or stuttering
+  transition.
+- `CommitCertificateWitnessChangeAlwaysMatchesCertifiedFinalityStack` proves
+  that any change to the latched commit-certificate vote or stake witnesses
+  installs both witnesses from the live post-state counters, satisfies vote and
+  stake quorum, and carries the certified finality stack.
+- `CommitCertificateWitnessChangeAlwaysInstallsCommitViewWitness` proves that
+  any change to the latched commit-certificate witnesses also installs the
+  commit-view witness as the finality view, including the view-zero case where
+  that witness installation is value preserving.
+- `CommitCertificateWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource`
+  proves that any latched commit-certificate vote/stake witness change also
+  completes the delivered committed state through the same certified
+  exact-source chain as commit-artifact installation.
 - `CommitViewWitnessOnlyChangesOnNonzeroFinality` proves that the latched
   commit-view witness changes exactly on nonzero-view finality transitions,
   where it is installed as the active view; view-zero finality is handled
@@ -8755,6 +8782,18 @@ Temporal properties:
   finality-latch transition installs the commit-view witness as the active
   finality view, including the view-zero case where installation is value
   preserving.
+- `CommitViewWitnessChangeAlwaysMatchesCertifiedFinalityStack` proves that any
+  nonzero change to the commit-view witness installs the active finality view
+  with view-quorum evidence and carries the same certified finality stack as
+  the commit-artifact and finality-latch transitions.
+- `CommitViewWitnessChangeAlwaysInstallsCommitCertificateWitnesses` proves that
+  any nonzero commit-view witness change also installs the latched
+  commit-certificate vote and stake witnesses from the live post-state counters
+  that satisfy vote and stake quorum.
+- `CommitViewWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource`
+  proves that any nonzero commit-view witness change also completes the
+  delivered committed state through the same certified exact-source chain as
+  commit-certificate witness installation.
 - `FinalityLatchNeverCarriesNewViewHandoff` proves that a finality-latch
   transition is not a `NewView` handoff, carries no live NewView votes, and
   preserves the existing view-quorum evidence.
@@ -8770,8 +8809,32 @@ Temporal properties:
   finality-latch source is backed by its finalizing `CanCommit(...)` gate,
   prepare quorum, honest-support threshold, stake quorum, active-view evidence,
   and RBC delivery evidence.
+- `FinalitySourceActionAlwaysCompletesCommittedDeliveryFromExactSource` proves
+  that any honest commit vote, Byzantine commit vote, or RBC delivery action
+  that flips the finality latch also completes the delivered committed state
+  through the certified exact-source artifact, certificate, commit-view, latch,
+  and committed-phase proof chain.
+- `FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery` proves
+  that those exact finality-source actions also leave the post-state with every
+  proposal, vote, view-change, RBC, timeout, Byzantine-fault, and post-GST
+  progress gate disabled.
+- `FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses` proves that
+  those exact finality-source actions install the latched commit-certificate
+  vote and stake witnesses from the post-state live counters.
+- `FinalityLatchChangeAlwaysMatchesCertifiedSourceStack` proves that every
+  finality-latch transition is simultaneously classified by the commit-artifact
+  installation/source, committed-phase entry, live commit-gate crossing,
+  certificate witness, commit-view witness, NewView isolation, source-effect,
+  and source-quorum classifiers.
+- `FinalityLatchChangeAlwaysCompletesCommittedDeliveryFromExactSource` proves
+  that every finality-latch transition completes the committed delivered state
+  through exactly one certified source: honest commit vote, Byzantine commit
+  vote, or RBC delivery.
 - `CommitViewNeverChanges` proves that the latched commit-view witness remains
   the active view after finality.
+- `CommittedViewWitnessAlwaysStaysAtCommittedView` proves that after finality
+  the committed phase, active view, and commit-view witness remain stable on
+  every step, and the witness remains equal to the committed view.
 - `CommitViewNeverLeadsCurrentView` proves that the latched commit-view witness
   never points to a future view.
 - `GstElapsedGateNeverBypassesPreGst` proves that the GST-elapsed gate is
@@ -8794,6 +8857,9 @@ Temporal properties:
 - `TimeoutTickGateNeverBypassesStalledProgress` proves that the timeout-driven
   view-change gate is enabled only before finality, and only before GST or when
   every post-GST honest/RBC progress action is disabled.
+- `ByzantineCommitVoteDoesNotBlockTimeoutStall` proves that post-GST timeout
+  recovery does not wait for Byzantine commit-vote cooperation once the
+  honest/RBC progress gate is stalled.
 - `TimeoutTickStepAlwaysStartsFreshNewView` proves that a timeout step enters
   `NewView`, monotonically advances or clamps the view, clears live
   prepare/commit/NewView/view-evidence counters, preserves RBC evidence, and
@@ -8801,6 +8867,17 @@ Temporal properties:
 - `TimeoutTickStepNeverPreemptsProgress` proves that any timeout transition is
   guarded by the stalled-progress condition: it occurs before finality and only
   before GST or after every honest protocol/RBC progress action is disabled.
+- `TimeoutTickStepAlwaysClearsCommitVoteGates` proves that timeout recovery
+  exits commit-vote mode, clears honest and Byzantine commit-vote counters plus
+  signed stake, disables both commit-vote gates, and leaves the live commit gate
+  unsatisfied in the post-state.
+- `TimeoutTickStepAlwaysStartsNewViewVoteHandoff` proves that timeout recovery
+  opens a fresh NewView vote handoff: the post-state is `NewView`, transient
+  NewView and view-evidence counters are clear, the NewView vote gate is
+  enabled, and proposal/prepare/commit-vote gates are disabled.
+- `TimeoutTickStepAlwaysPreservesRbcEvidence` proves that timeout recovery
+  preserves the RBC state, chunk coverage, READY votes, header evidence, and
+  digest-validity evidence while resetting live vote/view-change state.
 - `ViewAdvanceOnlyComesFromTimeout` proves that the active view can advance
   only on a timeout transition, where it increments by one below `MaxView`,
   enters `NewView`, clears live per-view vote/evidence counters, preserves RBC
@@ -8813,6 +8890,9 @@ Temporal properties:
   view-change quorum witness can change only by installing the exact
   quorum-forming NewView vote count or by timeout-clearing it for a fresh
   `NewView` handoff.
+- `ViewEvidenceWitnessNeverTargetsZeroOrNewView` proves that every nonzero
+  view-evidence witness belongs to a nonzero active view outside the `NewView`
+  collection phase and is already quorum-complete.
 - `NewViewVotesOnlyChangeByVoteOrReset` proves that the transient NewView vote
   counter changes only by an honest NewView vote increment, proposal handoff
   reset, or timeout reset; the increment path also records whether it installs
@@ -8833,6 +8913,75 @@ Temporal properties:
   only be an honest proposal handoff from `Propose`, with live vote and
   certificate state clean and the proposal's RBC start-or-preserve effects
   applied.
+- `HonestProposeStepAlwaysStartsPrepareVoteHandoff` proves that every honest
+  proposal step opens the prepare-vote gate in the post-state while closing
+  stale proposal, NewView, honest commit-vote, and Byzantine commit-vote gates.
+- `CommitVotePhaseEntryOnlyByPrepareQuorum` proves that first entry into
+  `CommitVote` can only be a quorum-forming honest prepare vote from
+  `Prepare`, with commit-vote, stake, and finality artifacts still absent and
+  RBC evidence preserved.
+- `PrepareVoteQuorumStepAlwaysStartsCommitVoteHandoff` proves that a
+  quorum-forming prepare vote opens the commit-vote handoff, keeps finality and
+  commit-certificate witnesses absent, enables honest commit voting, and enables
+  Byzantine commit voting exactly when the configured Byzantine budget is
+  positive.
+- `PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff` proves that a
+  below-quorum prepare vote remains in `Prepare`, keeps the prepare-vote gate
+  open, keeps proposal/NewView/commit-vote gates closed, and preserves RBC
+  evidence while finality artifacts stay absent.
+- `ProposePhaseEntryOnlyByNewViewQuorum` proves that first transition entry
+  into `Propose` after genesis can only be a quorum-forming NewView vote, with
+  view evidence installed and stale prepare/commit/finality artifacts absent
+  while RBC evidence is preserved.
+- `NewViewVoteQuorumStepAlwaysStartsProposalHandoff` proves that a
+  quorum-forming NewView vote hands control directly to the proposal gate,
+  disables the NewView, prepare, and commit-vote gates, and carries complete
+  nonzero-view evidence into the post-state.
+- `NewViewPhaseEntryOnlyByTimeout` proves that first transition entry into
+  `NewView` can only be a timeout transition, with live prepare/commit/NewView
+  evidence reset, finality artifacts absent, view monotonicity preserved, and
+  RBC evidence unchanged.
+- `CommittedPhaseEntryOnlyByFinalitySource` proves that first transition entry
+  into `Committed` can only come from an honest commit vote, Byzantine commit
+  vote, or RBC delivery finality source, with finality latch, commit artifact,
+  quorum, and RBC delivery effects matching the selected source.
+- `CommittedPhaseEntryAlwaysMatchesCertifiedFinalityStack` proves that every
+  first entry into `Committed` also matches the certified finality stack used
+  for finality-latch changes: committed latch, source classification,
+  quorum gates, commit artifacts, and finality witnesses are all installed
+  together.
+- `CommittedPhaseEntryAlwaysInstallsCommitCertificateWitnesses` proves that
+  every first entry into `Committed` installs the latched commit-certificate
+  vote and stake witnesses from the live post-state counters that satisfy vote
+  and stake quorum.
+- `CommittedPhaseEntryAlwaysMatchesCommitCertificateWitnessChange` proves that
+  first entry into `Committed` is exactly the transition that changes the
+  latched commit-certificate vote and stake witnesses from absent to
+  quorum-complete.
+- `CommittedPhaseEntryAlwaysInstallsCommitViewWitness` proves that every first
+  entry into `Committed` installs the commit-view witness as the finality view,
+  including the view-zero case where installation is value preserving.
+- `CommittedPhaseEntryAlwaysMatchesLiveCommitGateCrossing` proves that every
+  first entry into `Committed` is exactly the transition where the live
+  `CanCommit(...)` gate crosses from false to true.
+- `CommittedPhaseEntryAlwaysMatchesCommitArtifactsChange` proves that first
+  entry into `Committed` is exactly the transition that installs durable commit
+  artifacts: commit-view and/or latched commit-certificate evidence.
+- `CommittedPhaseEntryAlwaysMatchesExactFinalitySourceEffects` proves that
+  every first entry into `Committed` is backed by the same finality-source
+  classification, exact vote/stake/RBC effects, and quorum gates used by
+  finality-latch transitions.
+- `CommittedPhaseEntryNeverCarriesNewViewHandoff` proves that first entry into
+  `Committed` cannot carry transient NewView handoff state: the transition is
+  outside `NewView`, the NewView vote counter is clear on both sides, and
+  latched view evidence is unchanged by finality entry.
+- `CommittedPhaseEntryAlwaysDisablesProgressActions` proves that the post-state
+  of first entry into `Committed` already disables proposal, vote, timeout,
+  Byzantine fault, and RBC progress gates.
+- `CommittedPhaseEntryAlwaysCompletesCommittedDeliveryFromExactSource` proves
+  that first entry into `Committed` completes the delivered committed state
+  through the same exact certified honest-commit, Byzantine-commit, or RBC
+  delivery source chain used by finality-latch transitions.
 - `ViewQuorumEvidenceNeverDiverges` proves that proposals, vote phases, and
   finality in nonzero views remain backed by a latched view-change quorum
   witness.
@@ -8932,6 +9081,11 @@ Temporal properties:
   signed-stake counters exactly, moves to committed, latches exact certificate
   artifacts, records the active commit view, and preserves the RBC and
   view-change evidence it used.
+- `HonestCommitVoteFinalityStepAlwaysCompletesCommittedDelivery` proves that a
+  finalizing honest commit-vote transition completes the committed delivered
+  state in one step: the exact certificate stack is present, the live commit
+  gate matches finality, NewView handoff evidence is cleared, delivered RBC
+  evidence remains complete, and all non-GST progress gates are closed.
 - `HonestCommitVotePendingGateNeverBypassesMissingNextEvidence` proves that an
   enabled honest commit-vote transition remains non-final exactly while the
   next honest vote still lacks vote quorum, stake quorum, or delivered RBC
@@ -8941,6 +9095,12 @@ Temporal properties:
   non-final honest commit-vote transition increments the honest vote and
   signed-stake counters exactly while preserving phase, RBC/view evidence, and
   absent commit-certificate artifacts.
+- `HonestCommitVotePendingStepAlwaysKeepsCommitVoteHandoff` proves that a
+  non-final honest commit-vote transition stays in the commit-vote corridor,
+  keeps proposal, prepare, and NewView gates closed, exposes only the
+  remaining commit-vote gates according to the honest and Byzantine voter
+  budgets, preserves RBC evidence, and still lacks the vote, stake, or RBC
+  evidence required to commit.
 - `ByzantineCommitVoteFinalityGateNeverBypassesNextEvidence` proves that the
   Byzantine commit-vote transition can flip finality only when the next
   Byzantine vote stays within the fault budget and completes vote and stake
@@ -8953,6 +9113,12 @@ Temporal properties:
   signed-stake counters exactly, moves to committed, latches exact certificate
   artifacts, preserves enough honest support after discounting the Byzantine
   vote, and keeps the RBC/view evidence it used.
+- `ByzantineCommitVoteFinalityStepAlwaysCompletesCommittedDelivery` proves that
+  a finalizing Byzantine commit-vote transition completes the committed
+  delivered state in one step: the exact certificate stack is present, honest
+  support remains above the discounted threshold, the live commit gate matches
+  finality, NewView handoff evidence is cleared, delivered RBC evidence remains
+  complete, and all non-GST progress gates are closed.
 - `ByzantineCommitVotePendingGateNeverBypassesMissingNextEvidence` proves that
   an enabled Byzantine commit-vote transition remains non-final exactly while
   the next Byzantine vote still lacks vote quorum, stake quorum, or delivered
@@ -8962,6 +9128,12 @@ Temporal properties:
   non-final Byzantine commit-vote transition increments the Byzantine vote and
   signed-stake counters exactly while preserving phase, RBC/view evidence, and
   absent commit-certificate artifacts.
+- `ByzantineCommitVotePendingStepAlwaysKeepsCommitVoteHandoff` proves that a
+  non-final Byzantine commit-vote transition stays in the commit-vote corridor,
+  keeps proposal, prepare, and NewView gates closed, exposes only the
+  remaining commit-vote gates according to the honest and Byzantine voter
+  budgets, preserves RBC evidence, and still lacks the vote, stake, or RBC
+  evidence required to commit.
 - `LiveCommitVotesNeverBypassCommitHandoff` proves that live commit-vote and
   signed-stake evidence stays confined to commit-vote or committed phases, and
   cannot cross into finality unless both vote and stake quorum are already met.
@@ -8992,6 +9164,9 @@ Temporal properties:
 - `CommitProgressActionsNeverReenabled` proves that finalized states cannot
   re-enable proposal, vote, view-change timeout, RBC, or Byzantine-fault
   progress actions.
+- `CommitDisablesByzantineCommitVote` proves that finalized states explicitly
+  disable Byzantine commit-vote equivocation gates alongside the honest progress
+  and RBC progress gates.
 - `CommitEvidenceNeverDivergesFromVoteCounters` proves that the latched commit
   certificate evidence remains traceable to the live vote counters and signed
   stake after finality.
@@ -9007,11 +9182,18 @@ Temporal properties:
   certificate evidence above threshold for all later states.
 - `RbcDeliveryNeverLost` proves that once RBC reaches the delivered state, later
   view-change, vote, or fault steps cannot roll it back.
+- `RbcDeliveredEvidenceNeverRegresses` proves that once RBC is delivered, the
+  complete READY/chunk/header/digest evidence tuple remains complete and
+  unchanged across later vote, view-change, proposal, GST, or stuttering steps.
 - `RbcDeliveryEntryOnlyByDeliver` proves that first entry into the RBC
   `Delivered` state can only be the RBC DELIVER transition with complete
   READY/chunk/header/digest evidence, and that the entry is classified into
   either the finality-installing branch or the pending branch that preserves
   pre-finality commit artifacts.
+- `RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch` proves that
+  every first entry into `Delivered` is also classified as a `ReadyQuorum` exit
+  with complete evidence preserved, and that the commit-artifact effects match
+  exactly one of the finality-installing or pending-delivery branches.
 - `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
@@ -9019,10 +9201,34 @@ Temporal properties:
 - `RbcStateOnlyChangesByProtocolOrFault` proves that the top-level RBC state
   changes only through proposal startup, explicit RBC INIT/CHUNK/READY/DELIVER
   protocol progress, or Byzantine fault corruption.
+- `RbcStateChangeAlwaysMatchesLocalExitClassification` proves that every
+  reachable RBC state change is also classified by the source state's local exit
+  theorem, so no `Idle`, `Init`, chunk, READY, delivery, or corrupted repair
+  transition can bypass its proved evidence/effect shape.
 - `RbcEvidenceOnlyChangesByProtocolOrFault` proves that RBC evidence fields
   (`headerSeen`, `digestValid`, CHUNK count, and READY vote count) change only
   through proposal startup, RBC INIT/CHUNK/READY protocol progress, or
   Byzantine fault corruption.
+- `RbcEvidenceChangeAlwaysMatchesLocalEffectClassification` proves that every
+  reachable change to header, digest, CHUNK-count, or READY-vote evidence is
+  also covered by the exact per-field installation, invalidation, counter
+  increase, or reset classifier for the field that moved.
+- `RbcHeaderInstallationOnlyByProposalOrInit` proves that RBC header evidence
+  can move from absent to present only through an honest proposal starting RBC
+  from `Idle` or an explicit RBC INIT repair/recovery step.
+- `RbcHeaderEvidenceNeverLost` proves that once RBC header evidence is present,
+  no later transition clears it.
+- `RbcDigestInstallationOnlyByProposalInitOrChunk` proves that RBC digest
+  evidence can move from absent to valid only through proposal startup, RBC INIT
+  repair/recovery, or RBC CHUNK recovery/progress.
+- `RbcWithheldNeverReached` proves that the main Sumeragi model never reaches
+  the defensive `Withheld` RBC state from its initial state; `Withheld` remains
+  available only to gate repair/recovery branches if a future model explicitly
+  adds a withholding transition.
+- `RbcWithheldEntryOnlyByStutteringFromWithheld` proves that no active
+  transition can target the defensive `Withheld` RBC state; a post-state
+  `Withheld` value is possible only as an unchanged stutter from an already
+  withheld state, which the initial-state reachability proof excludes.
 - `ByzantineFaultGateNeverBypassesCorruptibleRbc` proves that Byzantine RBC
   corruption is enabled only against non-final initialized/chunk/ready RBC
   states carrying the matching evidence, and only before GST or once all
@@ -9030,16 +9236,27 @@ Temporal properties:
 - `ByzantineFaultStepAlwaysCorruptsOnlyRbcDigest` proves that a Byzantine fault
   step only moves RBC to `Corrupted` and clears digest validity while preserving
   phase, view, vote, certificate, chunk, READY, header, finality, and GST state.
+- `RbcDigestInvalidationOnlyByFault` proves that a transition can clear a valid
+  RBC digest only through the Byzantine fault path, entering `Corrupted` while
+  preserving consensus, chunk, READY, header, finality, and GST state.
 - `RbcCorruptionEntryOnlyByFault` proves that first entry into `Corrupted` can
   only be a Byzantine fault against an initialized/chunk/ready RBC state with
   the matching header, digest, chunk, and READY evidence, preserving all
   non-digest consensus and RBC counters.
+- `RbcCorruptionExitOnlyByInit` proves that once RBC is in `Corrupted`, leaving
+  it can only be an explicit RBC INIT repair/recovery step that enters `Init`,
+  reinstalls header/digest evidence, resets chunk/READY counters, and preserves
+  consensus/finality context.
 - `RbcInitGateNeverBypassesRepairableState` proves that the live RBC INIT gate
   is enabled only from idle, withheld, or corrupted RBC states, so INIT cannot
   restart an already progressed valid session.
 - `RbcInitStepAlwaysInstallsHeaderDigestEvidence` proves that an RBC INIT step
   enters `Init`, resets chunk and READY counters, installs header and digest
   evidence, and preserves consensus-phase, vote, view, finality, and GST state.
+- `RbcIdleExitOnlyByProposalOrInit` proves that once RBC is `Idle`, leaving it
+  can only be proposal startup into `Init` while entering `Prepare`, or an
+  explicit RBC INIT repair/recovery step that installs header/digest evidence
+  while preserving the existing consensus phase.
 - `RbcInitEntryOnlyByProposalOrInit` proves that first entry into `Init` can
   only be a proposal starting RBC from `Idle` or an explicit RBC INIT repair
   from `Idle`, `Withheld`, or `Corrupted`, with header/digest evidence
@@ -9054,10 +9271,33 @@ Temporal properties:
   `ChunksComplete` exactly when full coverage is reached, otherwise remains in
   `Chunking`, refreshes valid digest evidence, and preserves consensus-phase,
   vote, view, READY, finality, and GST state.
+- `RbcInitExitOnlyByChunkOrFault` proves that once RBC is in `Init`, leaving it
+  can only be an RBC CHUNK transition into `Chunking` or `ChunksComplete` with
+  header/digest evidence retained, or a Byzantine fault step to `Corrupted`
+  that clears only digest validity.
+- `RbcChunkCountIncreaseOnlyByChunk` proves that the RBC chunk counter can
+  increase only through an RBC CHUNK transition, which advances the counter by
+  exactly one and preserves READY, consensus, finality, and GST state.
+- `RbcChunkCountDecreaseOnlyByProposalOrInit` proves that the RBC chunk counter
+  can decrease only by being reset to zero through proposal startup or explicit
+  RBC INIT repair/recovery.
+- `RbcChunkingEntryOnlyByChunk` proves that first entry into `Chunking` can
+  only be an RBC CHUNK transition from `Init` or post-GST `Withheld`, with
+  header evidence retained, valid post-state digest evidence, chunk progress
+  advanced but still below full coverage, and consensus/finality state
+  preserved.
+- `RbcChunkingExitOnlyByChunkOrFault` proves that once RBC is in `Chunking`,
+  leaving it can only be a final RBC CHUNK transition into `ChunksComplete` with
+  chunk evidence crossing full coverage, or a Byzantine fault step to
+  `Corrupted` that clears only digest validity.
 - `RbcChunkCompletionEntryOnlyByChunk` proves that first entry into
   `ChunksComplete` can only be an RBC CHUNK transition from INIT, CHUNKING, or
   post-GST withheld recovery state with header evidence, valid post-state
   digest evidence, and chunk count reaching full coverage.
+- `RbcChunksCompleteExitOnlyByReadyOrFault` proves that once RBC is in
+  `ChunksComplete`, leaving it can only be a READY transition into
+  `ReadyPartial` or `ReadyQuorum` with chunk/header/digest evidence preserved,
+  or a Byzantine fault step to `Corrupted` that clears only digest validity.
 - `RbcReadyGateNeverBypassesChunkEvidence` proves that the live RBC READY
   transition is enabled exactly when the session is chunk-complete or already
   in a READY handoff state with full chunk coverage, header evidence, a valid
@@ -9067,14 +9307,40 @@ Temporal properties:
   increments READY evidence exactly, enters `ReadyQuorum` once commit quorum is
   reached, otherwise stays `ReadyPartial`, keeps chunk/header/digest evidence,
   and preserves consensus-phase, vote, view, finality, and GST state.
+- `RbcReadyQuorumStepAlwaysEnablesDeliverHandoff` proves that any RBC READY
+  step whose post-state reaches READY quorum preserves complete chunk and
+  header/digest evidence, opens the RBC DELIVER gate, closes earlier RBC init
+  and chunk gates, and leaves consensus vote/view evidence unchanged.
+- `RbcReadyVotesIncreaseOnlyByReady` proves that the RBC READY vote counter can
+  increase only through an RBC READY transition, which increments the counter by
+  exactly one and preserves chunk/header/digest, consensus, finality, and GST
+  state.
+- `RbcReadyVotesDecreaseOnlyByProposalOrInit` proves that the RBC READY vote
+  counter can decrease only by being reset to zero through proposal startup or
+  explicit RBC INIT repair/recovery.
+- `RbcReadyPartialEntryOnlyByReady` proves that first entry into
+  `ReadyPartial` can only be an RBC READY transition from `ChunksComplete`, with
+  full chunk/header/digest evidence retained, READY evidence incremented but
+  still below commit quorum, and consensus/finality state preserved.
+- `RbcReadyPartialExitOnlyByReadyOrFault` proves that once RBC is in
+  `ReadyPartial`, leaving it can only be a READY transition crossing commit
+  quorum into `ReadyQuorum`, or a Byzantine fault step to `Corrupted` that
+  clears only digest validity.
 - `RbcReadyQuorumEntryOnlyByReady` proves that first entry into
   `ReadyQuorum` can only be an RBC READY transition from chunk-complete or
   READY-partial state, with completed chunk/header/digest evidence and the
   post-state READY count crossing commit quorum.
+- `RbcReadyQuorumExitOnlyByDeliverOrFault` proves that once RBC is in
+  `ReadyQuorum`, leaving it can only be an RBC DELIVER step to `Delivered` with
+  complete evidence preserved or a Byzantine fault step to `Corrupted` that
+  clears only digest validity.
 - `RbcDeliverGateNeverBypassesCompleteEvidence` proves that the live RBC
   DELIVER transition is enabled exactly when the session is in `ReadyQuorum`
   with READY quorum, full chunk coverage, header evidence, and a valid digest,
   so DELIVER cannot bypass complete RBC evidence.
+- `RbcDeliverStepAlwaysPreservesCompleteEvidence` proves that an RBC DELIVER
+  step moves `ReadyQuorum` to `Delivered` while preserving the complete
+  READY/chunk/header/digest evidence tuple and the live vote/view/GST context.
 - `RbcDeliverFinalityGateNeverBypassesBufferedCommitEvidence` proves that RBC
   delivery can trigger finality only when buffered commit-vote/stake evidence,
   prepare quorum, cleared NewView handoff state, and nonzero-view quorum evidence
@@ -9083,6 +9349,11 @@ Temporal properties:
   RBC DELIVER transition moves the phase to committed, latches the exact
   commit-vote and signed-stake certificate artifacts, records the active commit
   view, and preserves the live vote, RBC, and view evidence it used.
+- `RbcDeliverFinalityStepAlwaysCompletesCommittedDelivery` proves that a
+  finalizing RBC DELIVER transition completes the committed delivered state in
+  one step: the exact certificate stack is present, the live commit gate matches
+  finality, NewView handoff evidence is cleared, RBC evidence remains complete,
+  and all non-GST progress gates are closed.
 - `RbcDeliverPendingGateNeverBypassesMissingBufferedCommitEvidence` proves that
   RBC delivery remains non-final exactly when complete RBC evidence is present
   but buffered commit-vote or signed-stake quorum is still missing, leaving
@@ -9091,6 +9362,11 @@ Temporal properties:
   RBC DELIVER transition only moves the RBC session from ready quorum to
   delivered while preserving phase, vote/stake counters, view evidence, and
   absent commit-certificate artifacts.
+- `RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality` proves
+  that a non-final RBC DELIVER transition leaves complete delivered RBC
+  evidence in place, keeps commit-certificate artifacts absent, disables the
+  remaining RBC/fault progress gates, and still lacks the vote or stake
+  evidence required to commit.
 - `LiveHeaderDigestEvidenceNeverBypassRbcHandoff` proves that live RBC header
   and digest evidence remains confined to initialized, withheld, corrupted, or
   delivered handoff states; digest evidence always implies a seen header and an

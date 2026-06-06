@@ -18023,8 +18023,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:tiny-add2inst-public",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                vec![1, 2],
+                vec![3, 4],
             );
             let resolved = resolve_vk_commitment(&attachment, Some(&envelope), &stx)
                 .expect("resolve vk commitment");
@@ -18034,8 +18034,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:tiny-add2inst-public",
                 [0u8; 32],
-                Vec::new(),
-                Vec::new(),
+                vec![1, 2],
+                vec![3, 4],
             );
             assert!(
                 resolve_vk_commitment(&attachment, Some(&zero_commitment_envelope), &stx).is_err(),

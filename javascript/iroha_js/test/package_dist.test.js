@@ -120,6 +120,7 @@ import {
   parseEthereumMainnetNativeEvmProverBundleManifest,
   parseEthereumMainnetNativeEvmProverParityFixture,
   parseEthereumMainnetNativeEvmProverSelfTestFixture,
+  runEthereumMainnetNativeProverSelfTest,
   validateEthereumMainnetNativeEvmProverBundle,
   validateEthereumMainnetNativeEvmProverParityFixture,
   validateEthereumMainnetNativeEvmProverSelfTestFixture,
@@ -3125,11 +3126,19 @@ test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
   );
   assert.match(
     declaration,
+    /runNativeProverSelfTest\([\s\S]*\): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;/u,
+  );
+  assert.match(
+    declaration,
     /proveOutboundToEthereum\([\s\S]*input: EvmSccpProofRequestInput,[\s\S]*\): Promise<EvmSccpProofResult>;/u,
   );
   assert.match(
     DECLARATIONS_TEXT,
     /export type EthereumMainnetNativeProverSelfTestFn = \([\s\S]*context: Readonly<EthereumMainnetNativeProverSelfTestContext>[\s\S]*EthereumMainnetNativeEvmProverSelfTestSdkResultInput/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function runEthereumMainnetNativeProverSelfTest\([\s\S]*input: EthereumMainnetNativeProverSelfTestRunInput,[\s\S]*\): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;/u,
   );
   assert.match(
     declaration,
@@ -4155,10 +4164,20 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     finality_block_hash: `0x${"44".repeat(32)}`,
   };
   assert.equal(SCCP_ETH_MAINNET_EVM_CHAIN_ID, 1);
-  const proofArtifactBytes = Uint8Array.from([1, 2, 3, 5, 8]);
-  const provingKeyBytes = Uint8Array.from([13, 21, 34, 55]);
-  const verifierKeyBytes = Uint8Array.from([89, 144, 233]);
-  const implementationBytes = Buffer.from("sccp package pure typescript prover artifact v1", "utf8");
+  const nativeArtifactPayloadBytes = (label) => {
+    const seed = Buffer.from(`${label}\n`, "utf8");
+    const out = Buffer.alloc(256);
+    for (let index = 0; index < out.length; index += 1) {
+      out[index] = seed[index % seed.length];
+    }
+    return out;
+  };
+  const proofArtifactBytes = nativeArtifactPayloadBytes("sccp package proof artifact v1");
+  const provingKeyBytes = nativeArtifactPayloadBytes("sccp package proving key v1");
+  const verifierKeyBytes = nativeArtifactPayloadBytes("sccp package verifier key v1");
+  const implementationBytes = nativeArtifactPayloadBytes(
+    "sccp package pure typescript prover artifact v1",
+  );
   const proofArtifactHash = sha256Hex(proofArtifactBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
   const verifierKeyHash = sha256Hex(verifierKeyBytes);
@@ -4335,6 +4354,15 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   assert.equal(verifiedNativeArtifacts.implementationHash, implementationHash);
   assert.equal(verifiedNativeArtifacts.crossSdkFixtureParityHash, parityFixtureHash);
   assert.equal(verifiedNativeArtifacts.nativeProverSelfTestHash, selfTestFixtureHash);
+  assert.equal(
+    (await runEthereumMainnetNativeProverSelfTest({
+      nativeProverArtifacts: verifiedNativeArtifacts,
+      nativeProverSelfTest(context) {
+        return context.expectedResult;
+      },
+    })).proofHash,
+    selfTestFixture.proof_hash,
+  );
   const nativeArtifactBytes = new Map([
     [nativeProverBundle.proof_artifact, proofArtifactBytes],
     [nativeProverBundle.proving_key, provingKeyBytes],
@@ -4378,6 +4406,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       },
     },
   });
+  assert.equal((await factorySdk.runNativeProverSelfTest()).calldataHash, selfTestFixture.calldata_hash);
   const factoryResult = await factorySdk.proveOutboundToEthereum({
     public_inputs: publicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),
@@ -4388,6 +4417,48 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   assert.equal(factoryRequest.proofArtifactHash, proofArtifactHash);
   assert.equal(factoryRequest.provingKeyHash, provingKeyHash);
   assert.equal(factoryResult.destinationBindingHash, ethereumMainnetBinding.bindingHash);
+  const tinyProofArtifactBytes = Buffer.from("tiny native proof artifact\n", "utf8");
+  const tinyProofArtifactHash = sha256Hex(tinyProofArtifactBytes);
+  const tinyNativeProverBundle = {
+    ...nativeProverBundle,
+    proof_artifact_hash: tinyProofArtifactHash,
+    native_sdk_artifacts: nativeProverBundle.native_sdk_artifacts.map((artifact) => ({
+      ...artifact,
+      prover_artifact_hash: tinyProofArtifactHash,
+    })),
+  };
+  const tinyParityFixture = {
+    ...parityFixture,
+    proof_artifact_hash: tinyProofArtifactHash,
+  };
+  const tinyParityFixtureBytes = Buffer.from(JSON.stringify(tinyParityFixture), "utf8");
+  const tinySelfTestFixture = {
+    ...selfTestFixture,
+    proof_artifact_hash: tinyProofArtifactHash,
+  };
+  const tinySelfTestFixtureBytes = Buffer.from(JSON.stringify(tinySelfTestFixture), "utf8");
+  tinyNativeProverBundle.audit_hashes = {
+    ...nativeProverBundle.audit_hashes,
+    cross_sdk_fixture_parity: sha256Hex(tinyParityFixtureBytes),
+    native_prover_self_test: sha256Hex(tinySelfTestFixtureBytes),
+  };
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyNativeProverBundle,
+          proofArtifactBytes: tinyProofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyParityFixtureBytes,
+          nativeProverSelfTestBytes: tinySelfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifactBytes must be at least 256 bytes/u,
+  );
   assert.throws(
     () =>
       verifyEthereumMainnetNativeEvmProverArtifacts(

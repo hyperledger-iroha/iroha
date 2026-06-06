@@ -32,6 +32,7 @@ import {
   parseEthereumMainnetNativeEvmProverBundleManifest,
   parseEthereumMainnetNativeEvmProverParityFixture,
   parseEthereumMainnetNativeEvmProverSelfTestFixture,
+  runEthereumMainnetNativeProverSelfTest,
   validateEthereumMainnetNativeEvmProverBundle,
   validateEthereumMainnetNativeEvmProverParityFixture,
   validateEthereumMainnetNativeEvmProverSelfTestFixture,
@@ -278,11 +279,22 @@ const sampleNativeEvmProverBundleWithFixtureBytes = (
   };
 };
 
+const nativeEvmProverArtifactBytes = (label) => {
+  const seed = Buffer.from(`${label}\n`, "utf8");
+  const out = Buffer.alloc(256);
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = seed[index % seed.length];
+  }
+  return out;
+};
+
 const sampleVerifiedNativeEvmProverFixture = () => {
-  const proofArtifactBytes = Uint8Array.from([1, 2, 3, 5, 8]);
-  const provingKeyBytes = Uint8Array.from([13, 21, 34, 55]);
-  const verifierKeyBytes = Uint8Array.from([89, 144, 233]);
-  const implementationBytes = Buffer.from("sccp pure typescript prover artifact v1", "utf8");
+  const proofArtifactBytes = nativeEvmProverArtifactBytes("sccp proof artifact v1");
+  const provingKeyBytes = nativeEvmProverArtifactBytes("sccp proving key v1");
+  const verifierKeyBytes = nativeEvmProverArtifactBytes("sccp verifier key v1");
+  const implementationBytes = nativeEvmProverArtifactBytes(
+    "sccp pure typescript prover artifact v1",
+  );
   const proofArtifactHash = sha256Hex(proofArtifactBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
   const verifierKeyHash = sha256Hex(verifierKeyBytes);
@@ -363,6 +375,12 @@ const groth16ProofBytes = () => {
 };
 
 const GROTH16_PROOF_BYTES = groth16ProofBytes();
+
+const groth16ProofBytesWithWord = (index, word) => {
+  const out = new Uint8Array(GROTH16_PROOF_BYTES);
+  out.set(word, index * 32);
+  return out;
+};
 
 test("EthereumMainnetSccp validates EIP-1193 execution providers as Ethereum mainnet", async () => {
   const provider = {
@@ -3487,6 +3505,44 @@ test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof res
   );
 });
 
+test("EthereumMainnetSccp rejects malformed Ethereum Groth16 proof tuples", () => {
+  const { destinationBinding } = sampleVerifiedNativeEvmProverFixture();
+  const request = new EthereumMainnetSccp().buildOutboundProofRequest({
+    ...sampleOutboundInput(),
+    destinationBinding,
+  });
+  const rejectProofBytes = (proofBytes, pattern) => {
+    assert.throws(() => wrapEvmSccpProofResult(proofBytes, request), pattern);
+  };
+
+  rejectProofBytes(groth16ProofBytesWithWord(0, abiWord(2)), /proofBytes\.version/u);
+  rejectProofBytes(
+    groth16ProofBytesWithWord(4, new Uint8Array(32).fill(0xff)),
+    /BN254 base-field/u,
+  );
+  rejectProofBytes(
+    (() => {
+      const proofBytes = new Uint8Array(GROTH16_PROOF_BYTES);
+      proofBytes.fill(0, 6 * 32, 10 * 32);
+      return proofBytes;
+    })(),
+    /proofBytes\.b/u,
+  );
+  rejectProofBytes(groth16ProofBytesWithWord(11, abiWord(3)), /proofBytes\.c/u);
+  rejectProofBytes(
+    groth16ProofBytesWithWord(1, Uint8Array.from({ length: 32 }, () => 0x12)),
+    /messageId must match/u,
+  );
+  rejectProofBytes(
+    groth16ProofBytesWithWord(2, abiWord(BigInt(SCCP_DOMAIN_SORA) + 1n)),
+    /sourceDomain must match/u,
+  );
+  rejectProofBytes(
+    groth16ProofBytesWithWord(3, Uint8Array.from({ length: 32 }, () => 0x44)),
+    /commitmentRoot must match/u,
+  );
+});
+
 test("EthereumMainnetSccp binds custom outbound proof results to the requested proof", async () => {
   const { destinationBinding, nativeProverArtifacts } = sampleVerifiedNativeEvmProverFixture();
   const input = {
@@ -3776,11 +3832,57 @@ test("EthereumMainnetSccp validates native prover cross-SDK parity fixtures", ()
   );
 });
 
+test("EthereumMainnetSccp validates native prover self-test fixtures", () => {
+  const input = sampleOutboundInput();
+  const bundle = sampleNativeEvmProverBundle(input.destinationBinding.bindingHash);
+  const fixture = sampleNativeEvmProverSelfTestFixture(bundle);
+  const descriptor = validateEthereumMainnetNativeEvmProverSelfTestFixture(fixture, bundle);
+  const parsedDescriptor = parseEthereumMainnetNativeEvmProverSelfTestFixture(
+    JSON.stringify(fixture),
+    bundle,
+  );
+
+  assert.deepEqual(parsedDescriptor, descriptor);
+  assert.equal(descriptor.schema, SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1);
+  assert.equal(descriptor.destinationBindingHash, input.destinationBinding.bindingHash);
+  assert.equal(descriptor.publicSignalWords.length, 9);
+  assert.equal(descriptor.sdkResults.javascript.proofHash, descriptor.proofHash);
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverSelfTestFixture(
+        sampleNativeEvmProverSelfTestFixture(bundle, {
+          sdk_results: {
+            ...fixture.sdk_results,
+            javascript: {
+              ...fixture.sdk_results.javascript,
+              proof_hash: hex32("97"),
+            },
+          },
+        }),
+        bundle,
+      ),
+    /sdkResults\.javascript\.proofHash must match proofHash/u,
+  );
+  assert.throws(
+    () =>
+      parseEthereumMainnetNativeEvmProverSelfTestFixture(
+        JSON.stringify(fixture).replace(
+          `"schema":"${SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1}"`,
+          `"schema":"forged","schema":"${SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1}"`,
+        ),
+        bundle,
+      ),
+    /nativeProverSelfTestFixture contains duplicate JSON key: schema/u,
+  );
+});
+
 test("EthereumMainnetSccp verifies native prover artifact bytes against manifest hashes", async () => {
-  const proofArtifactBytes = Uint8Array.from([1, 2, 3, 5, 8]);
-  const provingKeyBytes = Uint8Array.from([13, 21, 34, 55]);
-  const verifierKeyBytes = Uint8Array.from([89, 144, 233]);
-  const implementationBytes = Buffer.from("sccp pure typescript prover artifact v1", "utf8");
+  const proofArtifactBytes = nativeEvmProverArtifactBytes("sccp proof artifact v1");
+  const provingKeyBytes = nativeEvmProverArtifactBytes("sccp proving key v1");
+  const verifierKeyBytes = nativeEvmProverArtifactBytes("sccp verifier key v1");
+  const implementationBytes = nativeEvmProverArtifactBytes(
+    "sccp pure typescript prover artifact v1",
+  );
   const proofArtifactHash = sha256Hex(proofArtifactBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
   const verifierKeyHash = sha256Hex(verifierKeyBytes);
@@ -3859,6 +3961,21 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
   assert.equal(verifiedFromBundle.implementationHash, implementationHash);
   assert.equal(verifiedFromBundle.crossSdkFixtureParityHash, parityFixtureHash);
   assert.equal(verifiedFromBundle.nativeProverSelfTestHash, selfTestFixtureHash);
+  let helperSawOptions = false;
+  const helperSelfTestResult = await runEthereumMainnetNativeProverSelfTest(
+    {
+      nativeProverArtifacts: verified,
+      nativeProverSelfTest(context, options) {
+        helperSawOptions = options?.preflight === true;
+        assert.equal(Object.isFrozen(context.nativeProverArtifacts), true);
+        assert.equal(context.nativeProverSelfTest.proofHash, hex32("e4"));
+        return context.expectedResult;
+      },
+    },
+    { preflight: true },
+  );
+  assert.equal(helperSawOptions, true);
+  assert.equal(helperSelfTestResult.proofHash, hex32("e4"));
   assert.deepEqual(resolvedArtifacts, [
     `proofArtifact:${verified.nativeProverBundle.proofArtifact}`,
     `provingKey:${verified.nativeProverBundle.provingKey}`,
@@ -3928,6 +4045,26 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         { destinationBinding: input.destinationBinding },
       ),
     /crossSdkFixtureParityBytes resolver returned no bytes/u,
+  );
+  let preflightHookCalls = 0;
+  const preflightSdk = new EthereumMainnetSccp({
+    destinationBinding: input.destinationBinding,
+    nativeProverArtifacts: verified,
+    nativeProverSelfTest(context) {
+      preflightHookCalls += 1;
+      return context.expectedResult;
+    },
+    outboundProver: {
+      async prove() {
+        throw new Error("preflight must not call prove");
+      },
+    },
+  });
+  assert.equal((await preflightSdk.runNativeProverSelfTest()).calldataHash, hex32("e5"));
+  assert.equal(preflightHookCalls, 1);
+  await assert.rejects(
+    () => new EthereumMainnetSccp().runNativeProverSelfTest(),
+    /verified native EVM prover artifacts/u,
   );
   const { implementationHash: _implementationHash, ...missingImplementationHash } = verified;
   const missingImplementationHashMessage = "nativeProverArtifacts.implementationHash is required";
@@ -4121,6 +4258,39 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
       ),
     /nativeProverSelfTestBytes is required/u,
   );
+  const tinyProofArtifactBytes = Buffer.from("tiny native proof artifact\n", "utf8");
+  const tinyProofArtifactHash = sha256Hex(tinyProofArtifactBytes);
+  const {
+    bundle: tinyBundle,
+    parityFixtureBytes: tinyParityFixtureBytes,
+    selfTestFixtureBytes: tinySelfTestFixtureBytes,
+  } =
+    sampleNativeEvmProverBundleWithFixtureBytes(input.destinationBinding.bindingHash, {
+    proof_artifact_hash: tinyProofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) => ({
+      ...artifact,
+      prover_artifact_hash: tinyProofArtifactHash,
+    })),
+  });
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: tinyBundle,
+          proofArtifactBytes: tinyProofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: tinyParityFixtureBytes,
+          nativeProverSelfTestBytes: tinySelfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /proofArtifactBytes must be at least 256 bytes/u,
+  );
   assert.throws(
     () =>
       verifyEthereumMainnetNativeEvmProverArtifacts(
@@ -4138,7 +4308,9 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
       ),
     /crossSdkFixtureParityBytes sha256/u,
   );
-  const flaggedArtifactBytes = Uint8Array.from([0x77, 0x61, 0x73, 0x6d]);
+  const flaggedArtifactBytes = nativeEvmProverArtifactBytes(
+    "native proof artifact imports proof.wasm",
+  );
   const flaggedArtifactHash = sha256Hex(flaggedArtifactBytes);
   const {
     bundle: flaggedBundle,

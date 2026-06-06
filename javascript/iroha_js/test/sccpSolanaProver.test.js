@@ -14131,7 +14131,9 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
     amount,
     nonce,
   });
-  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
   const messageBundle = {
     version: 1,
     commitmentRoot: HEX32_D,
@@ -14403,7 +14405,9 @@ test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
     amount,
     nonce,
   });
-  const payloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(payload));
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
   const sourceEventDigest = tairaXorBurnSourceEventDigest({
     bridgeAddress,
     burnerAddress: tronSender,
@@ -14965,12 +14969,13 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
   const proofBytes = Uint8Array.from([1, 2, 3, 4, 5]);
   const recipientAddress = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const amount = 1000n;
-  const canonicalPayloadBytes = tairaXorCanonicalTransferPayloadBytes({
+  const canonicalPayload = buildTairaXorTransferPayload({
     sender: TAIRA_ACCOUNT_ID,
     recipientAddress,
     amount,
     nonce: 42n,
   });
+  const canonicalPayloadBytes = canonicalSccpTransferPayloadBytes(canonicalPayload);
   const publicInputs = {
     messageId: tairaXorTransferMessageId({
       sender: TAIRA_ACCOUNT_ID,
@@ -14978,7 +14983,9 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
       amount,
       nonce: 42n,
     }),
-    payloadHash: sccpPayloadHash(canonicalPayloadBytes),
+    payloadHash: sccpPayloadHash(
+      canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: canonicalPayload }),
+    ),
     targetDomain: SCCP_DOMAIN_TRON,
     commitmentRoot: HEX32_C,
     finalityHeight: 9,
@@ -15457,7 +15464,7 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
         statementHash: HEX32_E,
         canonicalPayloadBytes: finalizePayload,
       }),
-    /payloadHash must match canonicalPayloadBytes/,
+    /payloadHash must match canonical SCCP payload envelope/,
   );
   assert.throws(
     () =>

@@ -11066,11 +11066,27 @@ pub fn canonical_sccp_source_adapter_proof_bytes(proof: &SccpSourceAdapterProofV
     out
 }
 
+pub fn canonical_sccp_source_adapter_proof_bytes_checked(
+    proof: &SccpSourceAdapterProofV1,
+) -> Option<Vec<u8>> {
+    if !sccp_source_adapter_proof_shape_is_bounded(proof) {
+        return None;
+    }
+    Some(canonical_sccp_source_adapter_proof_bytes(proof))
+}
+
 pub fn sccp_source_adapter_proof_hash(proof: &SccpSourceAdapterProofV1) -> H256 {
-    prefixed_blake2b(
-        b"sccp:source-adapter-proof:v1",
-        &canonical_sccp_source_adapter_proof_bytes(proof),
-    )
+    sccp_source_adapter_proof_hash_from_bytes(&canonical_sccp_source_adapter_proof_bytes(proof))
+}
+
+pub fn sccp_source_adapter_proof_hash_checked(proof: &SccpSourceAdapterProofV1) -> Option<H256> {
+    Some(sccp_source_adapter_proof_hash_from_bytes(
+        &canonical_sccp_source_adapter_proof_bytes_checked(proof)?,
+    ))
+}
+
+fn sccp_source_adapter_proof_hash_from_bytes(proof_bytes: &[u8]) -> H256 {
+    prefixed_blake2b(b"sccp:source-adapter-proof:v1", proof_bytes)
 }
 
 pub fn sccp_source_adapter_transcript_hash(
@@ -12874,13 +12890,28 @@ pub fn canonical_sccp_source_adapter_verification_statement_bytes(
     adapter_transcript_hash: H256,
     verifier_evidence_hash: H256,
 ) -> Vec<u8> {
-    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes(adapter_proof);
-    let adapter_proof_hash = sccp_source_adapter_proof_hash(adapter_proof);
+    canonical_sccp_source_adapter_verification_statement_bytes_checked(
+        proof,
+        adapter_proof,
+        adapter_transcript_hash,
+        verifier_evidence_hash,
+    )
+    .unwrap_or_default()
+}
+
+pub fn canonical_sccp_source_adapter_verification_statement_bytes_checked(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    adapter_proof: &SccpSourceAdapterProofV1,
+    adapter_transcript_hash: H256,
+    verifier_evidence_hash: H256,
+) -> Option<Vec<u8>> {
+    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes_checked(adapter_proof)?;
+    let adapter_proof_hash = sccp_source_adapter_proof_hash_from_bytes(&adapter_proof_bytes);
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, proof.source_domain);
     push_u32(&mut out, proof.target_domain);
-    push_vec(&mut out, proof.source_chain.as_bytes());
+    push_vec_checked(&mut out, proof.source_chain.as_bytes())?;
     push_u8(
         &mut out,
         sccp_source_proof_plan_code(proof.source_proof_plan),
@@ -12900,62 +12931,58 @@ pub fn canonical_sccp_source_adapter_verification_statement_bytes(
     out.extend_from_slice(&adapter_transcript_hash);
     out.extend_from_slice(&verifier_evidence_hash);
     out.extend_from_slice(&adapter_proof_hash);
-    push_u32(
-        &mut out,
-        u32::try_from(adapter_proof_bytes.len()).expect("source adapter proof length fits u32"),
-    );
-    out
+    push_u32_len_checked(&mut out, adapter_proof_bytes.len())?;
+    Some(out)
 }
 
-fn canonical_sccp_source_adapter_proof_commitment_bytes(
+fn canonical_sccp_source_adapter_proof_commitment_bytes_checked(
     adapter_proof: &SccpSourceAdapterProofV1,
-) -> Vec<u8> {
-    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes(adapter_proof);
+) -> Option<Vec<u8>> {
+    let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes_checked(adapter_proof)?;
     let mut out = Vec::new();
     push_u8(&mut out, 1);
-    out.extend_from_slice(&sccp_source_adapter_proof_hash(adapter_proof));
-    push_u32(
-        &mut out,
-        u32::try_from(adapter_proof_bytes.len()).expect("source adapter proof length fits u32"),
-    );
-    out
+    out.extend_from_slice(&sccp_source_adapter_proof_hash_from_bytes(
+        &adapter_proof_bytes,
+    ));
+    push_u32_len_checked(&mut out, adapter_proof_bytes.len())?;
+    Some(out)
 }
 
-fn canonical_sccp_source_adapter_verification_context_bytes(
+fn canonical_sccp_source_adapter_verification_context_bytes_checked(
     proof: &SccpSourceChainProofEnvelopeV1,
     adapter_proof: &SccpSourceAdapterProofV1,
     adapter_transcript_hash: H256,
     verifier_evidence_hash: H256,
-) -> Vec<u8> {
-    let statement = canonical_sccp_source_adapter_verification_statement_bytes(
+) -> Option<Vec<u8>> {
+    let statement = canonical_sccp_source_adapter_verification_statement_bytes_checked(
         proof,
         adapter_proof,
         adapter_transcript_hash,
         verifier_evidence_hash,
-    );
+    )?;
     let mut out = Vec::new();
     push_u8(&mut out, 1);
-    push_vec(
+    push_vec_checked(
         &mut out,
         SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-    );
-    push_vec(
+    )?;
+    push_vec_checked(
         &mut out,
         sccp_chain_key_for_domain(proof.source_domain)
             .unwrap_or_default()
             .as_bytes(),
-    );
-    push_vec(
+    )?;
+    push_vec_checked(
         &mut out,
         SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1.as_bytes(),
-    );
+    )?;
     out.extend_from_slice(&prefixed_blake2b(
         b"sccp:source-adapter:statement:v1",
         &statement,
     ));
     out.extend_from_slice(&adapter_transcript_hash);
     out.extend_from_slice(&verifier_evidence_hash);
-    out
+    Some(out)
 }
 
 fn sccp_source_adapter_fastpq_public_inputs(
@@ -13211,19 +13238,20 @@ fn build_sccp_source_adapter_fastpq_batch(
     adapter_transcript_hash: H256,
     verifier_evidence_hash: H256,
 ) -> Option<FastpqTransitionBatch> {
-    let statement = canonical_sccp_source_adapter_verification_statement_bytes(
+    let statement = canonical_sccp_source_adapter_verification_statement_bytes_checked(
         proof,
         adapter_proof,
         adapter_transcript_hash,
         verifier_evidence_hash,
-    );
-    let adapter_commitment = canonical_sccp_source_adapter_proof_commitment_bytes(adapter_proof);
-    let context = canonical_sccp_source_adapter_verification_context_bytes(
+    )?;
+    let adapter_commitment =
+        canonical_sccp_source_adapter_proof_commitment_bytes_checked(adapter_proof)?;
+    let context = canonical_sccp_source_adapter_verification_context_bytes_checked(
         proof,
         adapter_proof,
         adapter_transcript_hash,
         verifier_evidence_hash,
-    );
+    )?;
     let mut batch = FastpqTransitionBatch::new(
         SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
         sccp_source_adapter_fastpq_public_inputs(proof, adapter_transcript_hash),
@@ -35398,6 +35426,53 @@ mod tests {
         }
     }
 
+    fn sample_checked_solana_source_chain_proof_envelope() -> SccpSourceChainProofEnvelopeV1 {
+        SccpSourceChainProofEnvelopeV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_chain: "solana".to_owned(),
+            source_proof_plan: SccpSourceProofPlanV1::SolanaFinalizedTransactionProof,
+            finality_model: SccpProofFinalityModelV1::SolanaFinalizedSlot,
+            message_id: [0x12; 32],
+            payload_hash: [0x23; 32],
+            source_event_digest: [0x34; 32],
+            commitment_root: [0x45; 32],
+            finality_height: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_345,
+            finality_block_hash: [0x56; 32],
+            finalized_header_hash: [0x67; 32],
+            receipt_or_message_root: [0x78; 32],
+            consensus_proof: vec![0x89; 3],
+            message_inclusion_proof: vec![0x9A; 5],
+            inclusion_branch: vec![vec![0xAB; 32]],
+        }
+    }
+
+    fn sample_checked_solana_source_adapter_proof() -> SccpSourceAdapterProofV1 {
+        SccpSourceAdapterProofV1::SolanaFinalizedTransaction(SccpSolanaFinalizedSourceProofV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SOL,
+            finalized_slot: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_345,
+            blockhash: [0x21; 32],
+            bank_hash: [0x22; 32],
+            transaction_status_root: [0x23; 32],
+            message_proof_hash: [0x24; 32],
+            transaction_signature: vec![0x25; SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES],
+            emitter_program_id: vec![0x26; SCCP_SOLANA_PROGRAM_ID_BYTES],
+            finality_context: SccpSolanaFinalityContextV1 {
+                version: 1,
+                epoch: 2,
+                rooted_slot: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_345,
+                parent_slot: SCCP_SOLANA_MAINNET_SLOTS_PER_EPOCH + 12_344,
+                parent_bank_hash: [0x27; 32],
+                epoch_stake_root: [0x28; 32],
+                tower_lockout_hash: [0x29; 32],
+                ..SccpSolanaFinalityContextV1::default()
+            },
+            vote_proof: SccpSolanaFinalizedVoteProofV1::default(),
+        })
+    }
+
     #[test]
     fn sccp_checked_bundle_encoder_matches_legacy_canonical_bytes() {
         let bundle = sample_taira_tron_xor_diagnostic_bundle(
@@ -35425,6 +35500,124 @@ mod tests {
             sccp_source_chain_proof_envelope_hash_checked(&envelope)
                 .expect("sample source envelope hash is length-canonical"),
             sccp_source_chain_proof_envelope_hash(&envelope),
+        );
+    }
+
+    #[test]
+    fn sccp_checked_source_adapter_verification_encoders_match_legacy_bytes() {
+        let envelope = sample_checked_solana_source_chain_proof_envelope();
+        let adapter = sample_checked_solana_source_adapter_proof();
+        let adapter_transcript_hash = [0xBC; 32];
+        let verifier_evidence_hash = [0xCD; 32];
+
+        assert_eq!(
+            canonical_sccp_source_adapter_proof_bytes_checked(&adapter)
+                .expect("sample source adapter proof is bounded"),
+            canonical_sccp_source_adapter_proof_bytes(&adapter),
+        );
+        let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes(&adapter);
+        assert_eq!(
+            sccp_source_adapter_proof_hash_checked(&adapter)
+                .expect("sample source adapter proof hash is bounded"),
+            sccp_source_adapter_proof_hash(&adapter),
+        );
+        assert_eq!(
+            canonical_sccp_source_adapter_verification_statement_bytes_checked(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .expect("sample source adapter statement is length-canonical"),
+            canonical_sccp_source_adapter_verification_statement_bytes(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            ),
+        );
+        let mut expected_adapter_commitment = Vec::new();
+        push_u8(&mut expected_adapter_commitment, 1);
+        expected_adapter_commitment.extend_from_slice(&sccp_source_adapter_proof_hash(&adapter));
+        push_u32(
+            &mut expected_adapter_commitment,
+            u32::try_from(adapter_proof_bytes.len())
+                .expect("sample source adapter proof length fits u32"),
+        );
+        assert_eq!(
+            canonical_sccp_source_adapter_proof_commitment_bytes_checked(&adapter)
+                .expect("sample source adapter commitment is length-canonical"),
+            expected_adapter_commitment,
+        );
+        let statement = canonical_sccp_source_adapter_verification_statement_bytes(
+            &envelope,
+            &adapter,
+            adapter_transcript_hash,
+            verifier_evidence_hash,
+        );
+        let mut expected_context = Vec::new();
+        push_u8(&mut expected_context, 1);
+        push_vec(
+            &mut expected_context,
+            SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
+        );
+        push_vec(
+            &mut expected_context,
+            sccp_chain_key_for_domain(envelope.source_domain)
+                .expect("sample source chain key")
+                .as_bytes(),
+        );
+        push_vec(
+            &mut expected_context,
+            SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1.as_bytes(),
+        );
+        expected_context.extend_from_slice(&prefixed_blake2b(
+            b"sccp:source-adapter:statement:v1",
+            &statement,
+        ));
+        expected_context.extend_from_slice(&adapter_transcript_hash);
+        expected_context.extend_from_slice(&verifier_evidence_hash);
+        assert_eq!(
+            canonical_sccp_source_adapter_verification_context_bytes_checked(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .expect("sample source adapter context is length-canonical"),
+            expected_context,
+        );
+        assert!(
+            build_sccp_source_adapter_fastpq_batch(
+                &envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn sccp_checked_source_adapter_verification_rejects_unbounded_adapter() {
+        let envelope = sample_checked_solana_source_chain_proof_envelope();
+        let mut adapter = sample_checked_solana_source_adapter_proof();
+        let SccpSourceAdapterProofV1::SolanaFinalizedTransaction(solana) = &mut adapter else {
+            panic!("sample adapter is Solana");
+        };
+        solana.transaction_signature = vec![0x25; SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES + 1];
+
+        assert!(canonical_sccp_source_adapter_proof_bytes_checked(&adapter).is_none());
+        assert!(sccp_source_adapter_proof_hash_checked(&adapter).is_none());
+        assert!(
+            canonical_sccp_source_adapter_verification_statement_bytes_checked(
+                &envelope, &adapter, [0xBC; 32], [0xCD; 32],
+            )
+            .is_none()
+        );
+        assert!(
+            build_sccp_source_adapter_fastpq_batch(&envelope, &adapter, [0xBC; 32], [0xCD; 32],)
+                .is_none()
         );
     }
 

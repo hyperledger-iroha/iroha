@@ -1248,6 +1248,23 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("sdkResults.java-android.calldataHash");
     }
     assert threw : "Ethereum native prover parity fixture must reject SDK drift";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+          sampleEthereumNativeEvmProverParityFixtureJson(nativeProverBundle)
+              .replace(
+                  "\"schema\":\""
+                      + EvmSccpProver.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1
+                      + "\"",
+                  "\"schema\":\"forged\","
+                      + "\"schema\":\""
+                      + EvmSccpProver.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1
+                      + "\""),
+          nativeProverBundle);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("Duplicate JSON object key: schema");
+    }
+    assert threw : "Ethereum native prover parity fixture parser must reject duplicate keys";
     final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture selfTestFixture =
         EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture.fromJson(
             sampleEthereumNativeEvmProverSelfTestFixtureJson(nativeProverBundle),
@@ -1273,6 +1290,23 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("sdkResults.java-android.proofHash");
     }
     assert threw : "Ethereum native prover self-test fixture must reject SDK drift";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture.fromJson(
+          sampleEthereumNativeEvmProverSelfTestFixtureJson(nativeProverBundle)
+              .replace(
+                  "\"schema\":\""
+                      + EvmSccpProver.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1
+                      + "\"",
+                  "\"schema\":\"forged\","
+                      + "\"schema\":\""
+                      + EvmSccpProver.ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1
+                      + "\""),
+          nativeProverBundle);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("Duplicate JSON object key: schema");
+    }
+    assert threw : "Ethereum native prover self-test fixture parser must reject duplicate keys";
     threw = false;
     try {
       EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
@@ -1433,11 +1467,11 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("nativeProverBundle.verifierKeyHash");
     }
     assert threw : "Ethereum native prover bundle must match destination verifierKeyHash";
-    final byte[] proofArtifactBytes = new byte[] {1, 2, 3, 5, 8};
-    final byte[] provingKeyBytes = new byte[] {13, 21, 34, 55};
-    final byte[] verifierKeyBytes = new byte[] {89, (byte) 144, (byte) 233};
+    final byte[] proofArtifactBytes = nativeEvmProverArtifactBytes("java android proof artifact v1");
+    final byte[] provingKeyBytes = nativeEvmProverArtifactBytes("java android proving key v1");
+    final byte[] verifierKeyBytes = nativeEvmProverArtifactBytes("java android verifier key v1");
     final byte[] implementationBytes =
-        "sccp java android prover artifact v1".getBytes(StandardCharsets.UTF_8);
+        nativeEvmProverArtifactBytes("java android implementation artifact v1");
     final String proofArtifactHash = sha256Hex(proofArtifactBytes);
     final String provingKeyHash = sha256Hex(provingKeyBytes);
     final String verifierKeyHash = sha256Hex(verifierKeyBytes);
@@ -1636,34 +1670,42 @@ public final class EvmSccpProverTests {
     final EvmSccpProver.ProofRequest[] artifactBoundRequest =
         new EvmSccpProver.ProofRequest[] {null};
     final boolean[] artifactBoundSelfTestCalled = new boolean[] {false};
-    final EvmSccpProver.ProofResult artifactBoundResult =
+    final EthereumMainnetSccp artifactBoundFacade =
         new EthereumMainnetSccp(
-                null,
-                proofRequest -> {
-                  artifactBoundRequest[0] = proofRequest;
-                  assert proofArtifactHash.equals(proofRequest.proofArtifactHash())
-                      : "verified artifacts must bind proofArtifactHash before callback";
-                  assert provingKeyHash.equals(proofRequest.provingKeyHash())
-                      : "verified artifacts must bind provingKeyHash before callback";
-                  return proofBytes;
-                },
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                verifiedArtifacts,
-                (fixture, expected, artifacts) -> {
-                  artifactBoundSelfTestCalled[0] = true;
-                  assert ("0x" + repeat("e4", 32)).equals(fixture.proofHash())
-                      : "native prover self-test fixture must reach callback";
-                  assert selfTestFixtureHash.equals(artifacts.nativeProverSelfTestHash())
-                      : "native prover self-test callback must see verified artifacts";
-                  return expected;
-                },
-                null)
-            .proveOutboundToEthereum(artifactInput);
+            null,
+            proofRequest -> {
+              artifactBoundRequest[0] = proofRequest;
+              assert proofArtifactHash.equals(proofRequest.proofArtifactHash())
+                  : "verified artifacts must bind proofArtifactHash before callback";
+              assert provingKeyHash.equals(proofRequest.provingKeyHash())
+                  : "verified artifacts must bind provingKeyHash before callback";
+              return proofBytes;
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            verifiedArtifacts,
+            (fixture, expected, artifacts) -> {
+              artifactBoundSelfTestCalled[0] = true;
+              assert ("0x" + repeat("e4", 32)).equals(fixture.proofHash())
+                  : "native prover self-test fixture must reach callback";
+              assert selfTestFixtureHash.equals(artifacts.nativeProverSelfTestHash())
+                  : "native prover self-test callback must see verified artifacts";
+              return expected;
+            },
+            null);
+    final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestSdkResult
+        preflightSelfTestResult = artifactBoundFacade.runNativeProverSelfTest();
+    assert artifactBoundSelfTestCalled[0]
+        : "Ethereum native prover self-test preflight must run the app-linked self-test";
+    assert ("0x" + repeat("e4", 32)).equals(preflightSelfTestResult.proofHash())
+        : "Ethereum native prover self-test preflight must return the fixture proof hash";
+    artifactBoundSelfTestCalled[0] = false;
+    final EvmSccpProver.ProofResult artifactBoundResult =
+        artifactBoundFacade.proveOutboundToEthereum(artifactInput);
     assert artifactBoundSelfTestCalled[0]
         : "Ethereum outbound proof must run native self-test before proof callback";
     assert proofArtifactHash.equals(artifactBoundRequest[0].proofArtifactHash())
@@ -1880,6 +1922,63 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("proofArtifactBytes sha256");
     }
     assert threw : "Android native prover artifact verifier must reject tampered artifacts";
+    final byte[] tinyProofArtifactBytes = new byte[] {1, 2, 3, 4, 5, 6, 7};
+    final String tinyProofArtifactHash = sha256Hex(tinyProofArtifactBytes);
+    final ArrayList<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact>
+        tinySdkArtifacts = new ArrayList<>();
+    artifactIndex = 0;
+    for (final Map.Entry<String, String> entry :
+        EvmSccpProver.ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1.entrySet()) {
+      artifactIndex++;
+      tinySdkArtifacts.add(
+          new EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact(
+              entry.getKey(),
+              entry.getValue(),
+              tinyProofArtifactHash,
+              provingKeyHash,
+              "java-android".equals(entry.getKey())
+                  ? implementationHash
+                  : "0x" + repeat(String.format("%02x", artifactIndex), 32)));
+    }
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle draftTinyBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            tinyProofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.hash,
+            tinySdkArtifacts,
+            sampleEthereumNativeAuditHashes());
+    final byte[] tinyParityFixtureBytes =
+        sampleEthereumNativeEvmProverParityFixtureJson(draftTinyBundle)
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] tinySelfTestFixtureBytes =
+        sampleEthereumNativeEvmProverSelfTestFixtureJson(draftTinyBundle)
+            .getBytes(StandardCharsets.UTF_8);
+    final Map<String, String> tinyAuditHashes = sampleEthereumNativeAuditHashes();
+    tinyAuditHashes.put("cross_sdk_fixture_parity", sha256Hex(tinyParityFixtureBytes));
+    tinyAuditHashes.put("native_prover_self_test", sha256Hex(tinySelfTestFixtureBytes));
+    final EvmSccpProver.EthereumMainnetNativeEvmProverBundle tinyBundle =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverBundle(
+            tinyProofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            artifactBinding.hash,
+            tinySdkArtifacts,
+            tinyAuditHashes);
+    threw = false;
+    try {
+      tinyBundle.verifiedArtifacts(
+          tinyProofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          "java-android",
+          implementationBytes,
+          tinyParityFixtureBytes,
+          tinySelfTestFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofArtifactBytes must be at least 256 bytes");
+    }
+    assert threw : "Android native prover artifact verifier must reject tiny hash-consistent artifacts";
     threw = false;
     try {
       verifiedBundle.verifiedArtifacts(
@@ -1974,7 +2073,7 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("nativeProverSelfTestBytes sha256");
     }
     assert threw : "Android native prover artifact verifier must reject tampered self-test fixture bytes";
-    final byte[] flaggedArtifactBytes = new byte[] {0x77, 0x61, 0x73, 0x6d};
+    final byte[] flaggedArtifactBytes = nativeEvmProverArtifactBytes("proof.wasm java android marker");
     final String flaggedArtifactHash = sha256Hex(flaggedArtifactBytes);
     final ArrayList<EvmSccpProver.EthereumMainnetNativeEvmProverBundleSdkArtifact>
         flaggedSdkArtifacts = new ArrayList<>();
@@ -6777,7 +6876,7 @@ public final class EvmSccpProverTests {
     final byte[] ethBundleBytes = new byte[] {5, 6, 7};
     final byte[] ethSourceProofBytes = new byte[] {9, 10};
     final String ethNativeVerifierKeyHash =
-        sha256Hex(new byte[] {89, (byte) 144, (byte) 233});
+        sha256Hex(nativeEvmProverArtifactBytes("java android verifier key v1"));
     final SourceSccpProofs.EvmDestinationBinding ethBinding =
         EthereumMainnetSccp.destinationBinding(
             "0x" + repeat("11", 20),
@@ -6825,28 +6924,29 @@ public final class EvmSccpProverTests {
         EthereumMainnetSccp.buildProofRequest(ethInput, ethNativeArtifacts.nativeProverBundle());
     final EvmSccpProver.ProofResult ethProofResult =
         new EthereumMainnetSccp(
-                null,
-                request -> {
-                  seenEthProofRequest[0] = request;
-                  assert request != directEthRequest
-                      : "Ethereum proof engine must receive a callback request snapshot";
-                  assert request.requestHash().equals(directEthRequest.requestHash())
-                      : "Ethereum callback request snapshot must preserve the request hash";
-                  final byte[] callbackBundleBytes = request.bundleBytes();
-                  final byte[] callbackSourceProofBytes = request.sourceProofBytes();
-                  callbackBundleBytes[0] = 0x7d;
-                  callbackSourceProofBytes[0] = 0x7c;
-                  return sampleGroth16ProofBytes();
-                },
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                ethNativeArtifacts,
-                null)
-            .proveOutboundToEthereum(ethInput);
+            null,
+            request -> {
+              seenEthProofRequest[0] = request;
+              assert request != directEthRequest
+                  : "Ethereum proof engine must receive a callback request snapshot";
+              assert request.requestHash().equals(directEthRequest.requestHash())
+                  : "Ethereum callback request snapshot must preserve the request hash";
+              final byte[] callbackBundleBytes = request.bundleBytes();
+              final byte[] callbackSourceProofBytes = request.sourceProofBytes();
+              callbackBundleBytes[0] = 0x7d;
+              callbackSourceProofBytes[0] = 0x7c;
+              return sampleGroth16ProofBytes();
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            ethNativeArtifacts,
+            (fixture, expectedResult, artifacts) -> expectedResult,
+            null)
+        .proveOutboundToEthereum(ethInput);
     assert seenEthProofRequest[0] != null
         : "Ethereum proof engine must receive a callback request";
     assert Arrays.equals(new byte[] {5, 6, 7}, ethProofResult.bundleBytes())
@@ -6994,6 +7094,16 @@ public final class EvmSccpProverTests {
     } catch (final NoSuchAlgorithmException ex) {
       throw new IllegalStateException("SHA-256 digest is unavailable", ex);
     }
+  }
+
+  private static byte[] nativeEvmProverArtifactBytes(final String label) {
+    final byte[] labelBytes = label.getBytes(StandardCharsets.UTF_8);
+    final byte[] bytes = new byte[256];
+    for (int index = 0; index < bytes.length; index++) {
+      bytes[index] = (byte) ((index * 37 + labelBytes.length * 11) & 0xff);
+    }
+    System.arraycopy(labelBytes, 0, bytes, 0, Math.min(labelBytes.length, bytes.length));
+    return bytes;
   }
 
   private static Map<String, Object> sampleEvmReceipt(
@@ -7570,11 +7680,11 @@ public final class EvmSccpProverTests {
 
   private static EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts
       sampleVerifiedEthereumNativeEvmProverArtifacts(final String destinationBindingHash) {
-    final byte[] proofArtifactBytes = new byte[] {1, 2, 3, 5, 8};
-    final byte[] provingKeyBytes = new byte[] {13, 21, 34, 55};
-    final byte[] verifierKeyBytes = new byte[] {89, (byte) 144, (byte) 233};
+    final byte[] proofArtifactBytes = nativeEvmProverArtifactBytes("java android proof artifact v1");
+    final byte[] provingKeyBytes = nativeEvmProverArtifactBytes("java android proving key v1");
+    final byte[] verifierKeyBytes = nativeEvmProverArtifactBytes("java android verifier key v1");
     final byte[] implementationBytes =
-        "sccp java android prover artifact v1".getBytes(StandardCharsets.UTF_8);
+        nativeEvmProverArtifactBytes("java android implementation artifact v1");
     final String proofArtifactHash = sha256Hex(proofArtifactBytes);
     final String provingKeyHash = sha256Hex(provingKeyBytes);
     final String verifierKeyHash = sha256Hex(verifierKeyBytes);

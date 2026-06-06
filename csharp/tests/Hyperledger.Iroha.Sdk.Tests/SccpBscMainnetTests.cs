@@ -154,7 +154,7 @@ public sealed class SccpBscMainnetTests
     {
         var logs = Assert.IsType<object?[]>(receipt?["logs"]);
         var metadata = Assert.IsAssignableFrom<IDictionary<string, object?>>(logs[0]);
-        var topics = Assert.IsType<object?[]>(logs[1]);
+        var topics = Assert.IsType<object?[]>(metadata["topics"]);
 
         metadata["address"] = "0x" + new string('e', 40);
         topics[0] = "0x" + new string('e', 64);
@@ -1020,17 +1020,27 @@ public sealed class SccpBscMainnetTests
         var txHash = "0x" + new string('a', 64);
         var blockHash = "0x" + new string('b', 64);
         var receiptsRoot = "0x" + new string('c', 64);
+        var sourceEventDigest = "0x" + new string('1', 64);
         var logAddress = "0x" + new string('f', 40);
-        var logTopic = "0x" + new string('1', 64);
-        var logMetadata = new Dictionary<string, string> { ["address"] = logAddress };
-        var logTopics = new System.Collections.ArrayList { logTopic };
+        var validatorSetHash = "0x" + new string('d', 64);
+        var commitSealHash = "0x" + new string('e', 64);
+        var logTopics = new object?[] { BscMainnetSccp.SourceEventTopic, sourceEventDigest };
+        var logMetadata = new Dictionary<string, object?>
+        {
+            ["address"] = logAddress,
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["topics"] = logTopics,
+            ["data"] = "0x",
+        };
         var receipt = new Dictionary<string, object?>
         {
             ["status"] = "0x1",
             ["transactionHash"] = txHash,
             ["blockHash"] = blockHash,
             ["blockNumber"] = "0x1234",
-            ["logs"] = new object?[] { logMetadata, logTopics },
+            ["logs"] = new object?[] { logMetadata },
         };
         var block = new Dictionary<string, object?>
         {
@@ -1042,7 +1052,23 @@ public sealed class SccpBscMainnetTests
             "0x1234",
             blockHash,
             receiptsRoot).ToDictionary(
-                [new KeyValuePair<string, object?>("validatorSetHash", "0x" + new string('d', 64))]);
+                [
+                    new KeyValuePair<string, object?>("validatorSetHash", validatorSetHash),
+                    new KeyValuePair<string, object?>("commitSealHash", commitSealHash),
+                ]);
+        var receiptProof = new BscMainnetReceiptProof
+        {
+            SourceEventDigest = sourceEventDigest,
+            ValidatorEpoch = 0,
+            BlockNumber = 0x1234,
+            BlockHash = blockHash,
+            ReceiptsRoot = receiptsRoot,
+            ValidatorSetHash = validatorSetHash,
+            CommitSealHash = commitSealHash,
+            ReceiptRootIndex = 0,
+            ReceiptTrieProofNodes = [new byte[] { 0x01 }],
+            InclusionBranch = [Enumerable.Repeat((byte)0x11, 32).ToArray()],
+        };
 
         var collected = await BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
             new BscMainnetInboundEvidence { TransactionHash = txHash },
@@ -1053,7 +1079,8 @@ public sealed class SccpBscMainnetTests
         Assert.Equal("0x1", receipt["status"]);
         Assert.Equal(receiptsRoot, block["receiptsRoot"]);
         Assert.Equal(logAddress, logMetadata["address"]);
-        Assert.Equal(logTopic, Assert.IsType<string>(logTopics[0]));
+        Assert.Equal(BscMainnetSccp.SourceEventTopic, Assert.IsType<string>(logTopics[0]));
+        Assert.Equal(sourceEventDigest, Assert.IsType<string>(logTopics[1]));
 
         var proofBytes = await BscMainnetSccp.ProveInboundToSoraAsync(
             new BscMainnetInboundEvidence
@@ -1061,13 +1088,16 @@ public sealed class SccpBscMainnetTests
                 Receipt = receipt,
                 Block = block,
                 ParliaFinality = parliaFinality,
+                ReceiptProof = receiptProof,
+                SourceBridgeEmitterAddress = logAddress,
             },
             new MutatingInboundProverStub(receipt, block, parliaFinality, txHash));
         Assert.Equal(new byte[] { 1, 2, 3 }, proofBytes);
         Assert.Equal("0x1", receipt["status"]);
         Assert.Equal(receiptsRoot, block["receiptsRoot"]);
         Assert.Equal(logAddress, logMetadata["address"]);
-        Assert.Equal(logTopic, Assert.IsType<string>(logTopics[0]));
+        Assert.Equal(BscMainnetSccp.SourceEventTopic, Assert.IsType<string>(logTopics[0]));
+        Assert.Equal(sourceEventDigest, Assert.IsType<string>(logTopics[1]));
         Assert.Equal(blockHash, parliaFinality["executionBlockHash"]);
     }
 

@@ -64,6 +64,7 @@ object SccpEvm {
         "no_wasm_no_remote_scan",
     )
     const val NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1: String = "sha256"
+    private const val NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1: Int = 256
     /** Resolves manifest-declared native prover artifact paths from app-local storage. */
     fun interface NativeEvmProverArtifactResolver {
         fun resolveArtifact(path: String): ByteArray
@@ -453,6 +454,9 @@ object SccpEvm {
             require(nativeProverSelfTestHash == auditHashes["native_prover_self_test"]) {
                 "nativeProverSelfTestBytes sha256 must match nativeProverBundle.auditHashes.native_prover_self_test"
             }
+            requireNativeEvmProverProductionArtifactSize(proofArtifactBytes, "proofArtifactBytes")
+            requireNativeEvmProverProductionArtifactSize(provingKeyBytes, "provingKeyBytes")
+            requireNativeEvmProverProductionArtifactSize(verifierKeyBytes, "verifierKeyBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(proofArtifactBytes, "proofArtifactBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(provingKeyBytes, "provingKeyBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(verifierKeyBytes, "verifierKeyBytes")
@@ -484,6 +488,7 @@ object SccpEvm {
             require(implementationHash == artifact.implementationHash) {
                 "implementationBytes sha256 must match nativeProverBundle implementationHash"
             }
+            requireNativeEvmProverProductionArtifactSize(implementationBytes, "implementationBytes")
             rejectNativeEvmProverForbiddenArtifactMarkers(implementationBytes, "implementationBytes")
             val implementation = artifact.implementation
             return EthereumMainnetNativeEvmProverArtifacts(
@@ -2217,6 +2222,12 @@ object SccpEvm {
             containsNativeEvmProverMarker(bytes, marker)
         }?.let {
             throw IllegalArgumentException("$field contains forbidden prover dependency marker")
+        }
+    }
+
+    private fun requireNativeEvmProverProductionArtifactSize(bytes: ByteArray, field: String) {
+        require(bytes.size >= NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1) {
+            "$field must be at least $NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 bytes"
         }
     }
 
@@ -4900,6 +4911,12 @@ class EthereumMainnetSccp(
         )
     }
 
+    fun runNativeProverSelfTest(
+        artifacts: SccpEvm.EthereumMainnetNativeEvmProverArtifacts? = nativeProverArtifacts,
+        nativeProverSelfTest: EthereumMainnetNativeProverSelfTest? = this.nativeProverSelfTest,
+    ): SccpEvm.EthereumMainnetNativeEvmProverSelfTestSdkResult =
+        requireNativeProverSelfTest(artifacts, nativeProverSelfTest)
+
     private fun requireVerifiedNativeProverArtifacts(
         artifacts: SccpEvm.EthereumMainnetNativeEvmProverArtifacts?,
         request: EvmSccpProofRequest,
@@ -4951,7 +4968,7 @@ class EthereumMainnetSccp(
     private fun requireNativeProverSelfTest(
         artifacts: SccpEvm.EthereumMainnetNativeEvmProverArtifacts?,
         nativeProverSelfTest: EthereumMainnetNativeProverSelfTest?,
-    ) {
+    ): SccpEvm.EthereumMainnetNativeEvmProverSelfTestSdkResult {
         require(artifacts != null) {
             "nativeProverArtifacts are required"
         }
@@ -4967,6 +4984,7 @@ class EthereumMainnetSccp(
         require(result == expectedResult) {
             "nativeProverSelfTest result must match nativeProverBundle fixture"
         }
+        return result
     }
 
     private fun requireVerifiedNativeProverArtifacts(

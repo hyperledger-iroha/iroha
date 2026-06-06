@@ -89,6 +89,10 @@ def abi_word_address(address):
     return b"\x00" * 12 + address
 
 
+def abi_word_hex(value):
+    return int(value, 16).to_bytes(32, "big")
+
+
 def evm_route_canary_submit_call_data(
     module,
     *,
@@ -101,12 +105,25 @@ def evm_route_canary_submit_call_data(
     finality_height=123,
     finality_block_hash=bytes.fromhex("99" * 32),
 ):
+    g2_generator_words = tuple(
+        abi_word_hex(value)
+        for value in (
+            "1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed",
+            "198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2",
+            "12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa",
+            "090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b",
+        )
+    )
     proof_words = [
         abi_word_u32(1),
         message_id,
         abi_word_u32(source_domain),
         commitment_root,
-        *(bytes([index]) * 32 for index in range(1, 9)),
+        abi_word_u32(1),
+        abi_word_u32(2),
+        *g2_generator_words,
+        abi_word_u32(1),
+        abi_word_u32(2),
     ]
     proof_bytes = b"".join(proof_words)
     public_inputs = [
@@ -149,6 +166,16 @@ def shorten_route_canary_proof(_module, call_data):
     data = bytearray(call_data)
     data[4 + 32 * 8 : 4 + 32 * 9] = abi_word_u32(352)
     return bytes(data[: 4 + 32 * 9 + 352])
+
+
+def replace_call_word_with_bn254_base_modulus(word_index):
+    def mutate(module, call_data):
+        return replace_call_word(
+            word_index,
+            module.BN254_BASE_FIELD_MODULUS.to_bytes(32, "big"),
+        )(module, call_data)
+
+    return mutate
 
 
 def fake_opener_for(
@@ -1161,6 +1188,38 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
                 route_canary_call_data_mutator=replace_call_word(12, bytes.fromhex("ab" * 32)),
             ),
             "proof commitmentRoot must match accepted event",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word_with_bn254_base_modulus(13),
+            ),
+            "proofBytes.a.x must be a BN254 base-field element",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(14, abi_word_u32(3)),
+            ),
+            "proofBytes.a must be a BN254 G1 point",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(15, abi_word_u32(0)),
+            ),
+            "proofBytes.b must be a BN254 G2 point",
+            None,
+        ),
+        (
+            fake_opener_for(
+                module,
+                route_canary_call_data_mutator=replace_call_word(20, abi_word_u32(3)),
+            ),
+            "proofBytes.c must be a BN254 G1 point",
             None,
         ),
         (
