@@ -4408,10 +4408,26 @@ pub struct SccpRouteManifest {
     pub taira_xor_token_address: String,
     /// TRON TairaXOR bridge contract address.
     pub taira_xor_bridge_address: String,
-    /// TRON SCCP source bridge contract address.
-    pub sccp_tron_source_bridge_address: String,
-    /// TRON destination verifier contract address.
-    pub tron_verifier_address: String,
+    /// Generic SCCP source bridge contract address.
+    pub source_bridge_address: Option<String>,
+    /// BSC SCCP source bridge contract address.
+    pub sccp_bsc_source_bridge_address: Option<String>,
+    /// BSC source bridge contract address.
+    pub bsc_source_bridge_address: Option<String>,
+    /// Legacy TRON-named SCCP source bridge contract address.
+    pub sccp_tron_source_bridge_address: Option<String>,
+    /// Generic destination verifier contract address.
+    pub destination_verifier_address: Option<String>,
+    /// Generic verifier contract address.
+    pub verifier_address: Option<String>,
+    /// BSC destination verifier contract address.
+    pub sccp_bsc_destination_verifier_address: Option<String>,
+    /// BSC verifier contract address.
+    pub bsc_verifier_address: Option<String>,
+    /// EVM verifier contract address.
+    pub evm_verifier_address: Option<String>,
+    /// Legacy TRON-named destination verifier contract address.
+    pub tron_verifier_address: Option<String>,
     /// Hex-encoded verifier code digest.
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
@@ -4453,7 +4469,111 @@ pub struct SccpRouteManifest {
 }
 
 impl SccpRouteManifest {
+    const BSC_DIAGNOSTIC_DISABLED_REASON: &'static str =
+        "BSC verifier material is diagnostic and must be replaced before production readiness.";
+    const BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES: &'static [&'static str] =
+        &["0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4"];
+
+    fn resolve_required_alias(role: &str, aliases: &[(&'static str, Option<&str>)]) -> String {
+        let mut resolved: Option<(&'static str, String)> = None;
+        for (name, value) in aliases {
+            let Some(value) = value else {
+                continue;
+            };
+            let value = value.trim();
+            assert!(
+                !value.is_empty(),
+                "SCCP route manifest {role} alias `{name}` must not be empty"
+            );
+            if let Some((previous_name, previous_value)) = resolved.as_ref() {
+                assert!(
+                    previous_value == value,
+                    "SCCP route manifest {role} aliases disagree: `{previous_name}` = `{previous_value}` but `{name}` = `{value}`"
+                );
+            } else {
+                resolved = Some((*name, value.to_owned()));
+            }
+        }
+        let expected = aliases
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        resolved.map(|(_, value)| value).unwrap_or_else(|| {
+            panic!("SCCP route manifest requires {role} using one of: {expected}")
+        })
+    }
+
+    fn source_bridge_address(&self) -> String {
+        Self::resolve_required_alias(
+            "source bridge address",
+            &[
+                (
+                    "source_bridge_address",
+                    self.source_bridge_address.as_deref(),
+                ),
+                (
+                    "sccp_bsc_source_bridge_address",
+                    self.sccp_bsc_source_bridge_address.as_deref(),
+                ),
+                (
+                    "bsc_source_bridge_address",
+                    self.bsc_source_bridge_address.as_deref(),
+                ),
+                (
+                    "sccp_tron_source_bridge_address",
+                    self.sccp_tron_source_bridge_address.as_deref(),
+                ),
+            ],
+        )
+    }
+
+    fn destination_verifier_address(&self) -> String {
+        Self::resolve_required_alias(
+            "destination verifier address",
+            &[
+                (
+                    "destination_verifier_address",
+                    self.destination_verifier_address.as_deref(),
+                ),
+                ("verifier_address", self.verifier_address.as_deref()),
+                (
+                    "sccp_bsc_destination_verifier_address",
+                    self.sccp_bsc_destination_verifier_address.as_deref(),
+                ),
+                ("bsc_verifier_address", self.bsc_verifier_address.as_deref()),
+                ("evm_verifier_address", self.evm_verifier_address.as_deref()),
+                (
+                    "tron_verifier_address",
+                    self.tron_verifier_address.as_deref(),
+                ),
+            ],
+        )
+    }
+
+    fn uses_bsc_diagnostic_verifier_key_hash(&self) -> bool {
+        self.counterparty_domain == 2
+            && Self::BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES
+                .iter()
+                .any(|hash| self.verifier_key_hash.trim().eq_ignore_ascii_case(hash))
+    }
+
     fn parse(self) -> actual::SccpRouteManifest {
+        let uses_diagnostic_verifier_key_hash = self.uses_bsc_diagnostic_verifier_key_hash();
+        assert!(
+            !(self.production_ready && uses_diagnostic_verifier_key_hash),
+            "SCCP BSC route manifest production_ready cannot be true with diagnostic verifier material"
+        );
+        let source_bridge_address = self.source_bridge_address();
+        let destination_verifier_address = self.destination_verifier_address();
+        let disabled_reason = if !self.production_ready
+            && uses_diagnostic_verifier_key_hash
+            && self.disabled_reason.is_none()
+        {
+            Some(Self::BSC_DIAGNOSTIC_DISABLED_REASON.to_owned())
+        } else {
+            self.disabled_reason
+        };
         actual::SccpRouteManifest {
             version: self.version,
             route_id: self.route_id,
@@ -4464,12 +4584,12 @@ impl SccpRouteManifest {
             counterparty_domain: self.counterparty_domain,
             verifier_target: self.verifier_target,
             production_ready: self.production_ready,
-            disabled_reason: self.disabled_reason,
+            disabled_reason,
             network_id_hex: self.network_id_hex,
             taira_xor_token_address: self.taira_xor_token_address,
             taira_xor_bridge_address: self.taira_xor_bridge_address,
-            sccp_tron_source_bridge_address: self.sccp_tron_source_bridge_address,
-            tron_verifier_address: self.tron_verifier_address,
+            sccp_tron_source_bridge_address: source_bridge_address,
+            tron_verifier_address: destination_verifier_address,
             verifier_code_hash: self.verifier_code_hash,
             verifier_key_hash: self.verifier_key_hash,
             destination_binding_key: self.destination_binding_key,
@@ -4491,6 +4611,195 @@ impl SccpRouteManifest {
             post_deploy_route_canary_transaction_id: self.post_deploy_route_canary_transaction_id,
             post_deploy_offline_full_toml_sha256: self.post_deploy_offline_full_toml_sha256,
         }
+    }
+}
+
+#[cfg(test)]
+mod sccp_route_manifest_user_config_tests {
+    use super::SccpRouteManifest;
+
+    const SOURCE_BRIDGE: &str = "0x3333333333333333333333333333333333333333";
+    const VERIFIER: &str = "0x4444444444444444444444444444444444444444";
+
+    fn route_manifest() -> SccpRouteManifest {
+        SccpRouteManifest {
+            version: 1,
+            route_id: "taira_bsc_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: "bsc-testnet".to_owned(),
+            chain: "bsc-testnet".to_owned(),
+            chain_id_hex: "0x61".to_owned(),
+            counterparty_domain: 2,
+            verifier_target: "EvmContract".to_owned(),
+            production_ready: false,
+            disabled_reason: Some("test route".to_owned()),
+            network_id_hex: format!("0x{}", "61".repeat(32)),
+            taira_xor_token_address: "0x1111111111111111111111111111111111111111".to_owned(),
+            taira_xor_bridge_address: "0x2222222222222222222222222222222222222222".to_owned(),
+            source_bridge_address: None,
+            sccp_bsc_source_bridge_address: None,
+            bsc_source_bridge_address: None,
+            sccp_tron_source_bridge_address: Some(SOURCE_BRIDGE.to_owned()),
+            destination_verifier_address: None,
+            verifier_address: None,
+            sccp_bsc_destination_verifier_address: None,
+            bsc_verifier_address: None,
+            evm_verifier_address: None,
+            tron_verifier_address: Some(VERIFIER.to_owned()),
+            verifier_code_hash: format!("0x{}", "45".repeat(32)),
+            verifier_key_hash: format!("0x{}", "46".repeat(32)),
+            destination_binding_key: "evm:0:2:test-binding".to_owned(),
+            destination_binding_hash: format!("0x{}", "47".repeat(32)),
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", "48".repeat(32)),
+            taira_burn_record_code_hash: format!("0x{}", "49".repeat(32)),
+            taira_burn_record_vk_backend: "halo2_ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_bsc_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: None,
+            post_deploy_full_toml_ready: Some(false),
+            post_deploy_source_bridge_config_hash: Some(format!("0x{}", "4a".repeat(32))),
+            post_deploy_source_event_transaction_id: Some(format!("0x{}", "4b".repeat(32))),
+            post_deploy_route_canary_evidence_hash: Some(format!("0x{}", "4c".repeat(32))),
+            post_deploy_route_canary_transaction_id: Some(format!("0x{}", "4d".repeat(32))),
+            post_deploy_offline_full_toml_sha256: None,
+        }
+    }
+
+    #[test]
+    fn legacy_tron_route_address_fields_still_parse() {
+        let actual = route_manifest().parse();
+
+        assert_eq!(actual.sccp_tron_source_bridge_address, SOURCE_BRIDGE);
+        assert_eq!(actual.tron_verifier_address, VERIFIER);
+    }
+
+    #[test]
+    fn generic_bsc_route_address_aliases_parse_into_runtime_fields() {
+        let mut manifest = route_manifest();
+        manifest.sccp_tron_source_bridge_address = None;
+        manifest.tron_verifier_address = None;
+        manifest.source_bridge_address = Some(format!(" {SOURCE_BRIDGE} "));
+        manifest.destination_verifier_address = Some(VERIFIER.to_owned());
+
+        let actual = manifest.parse();
+
+        assert_eq!(actual.sccp_tron_source_bridge_address, SOURCE_BRIDGE);
+        assert_eq!(actual.tron_verifier_address, VERIFIER);
+    }
+
+    #[test]
+    fn bsc_specific_route_address_aliases_parse_into_runtime_fields() {
+        let mut manifest = route_manifest();
+        manifest.sccp_tron_source_bridge_address = None;
+        manifest.tron_verifier_address = None;
+        manifest.sccp_bsc_source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
+        manifest.bsc_verifier_address = Some(VERIFIER.to_owned());
+
+        let actual = manifest.parse();
+
+        assert_eq!(actual.sccp_tron_source_bridge_address, SOURCE_BRIDGE);
+        assert_eq!(actual.tron_verifier_address, VERIFIER);
+    }
+
+    #[test]
+    fn matching_legacy_and_generic_route_aliases_are_allowed() {
+        let mut manifest = route_manifest();
+        manifest.source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
+        manifest.sccp_bsc_source_bridge_address = Some(SOURCE_BRIDGE.to_owned());
+        manifest.destination_verifier_address = Some(VERIFIER.to_owned());
+        manifest.evm_verifier_address = Some(VERIFIER.to_owned());
+
+        let actual = manifest.parse();
+
+        assert_eq!(actual.sccp_tron_source_bridge_address, SOURCE_BRIDGE);
+        assert_eq!(actual.tron_verifier_address, VERIFIER);
+    }
+
+    #[test]
+    #[should_panic(expected = "source bridge address aliases disagree")]
+    fn conflicting_source_bridge_aliases_are_rejected() {
+        let mut manifest = route_manifest();
+        manifest.source_bridge_address =
+            Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "destination verifier address aliases disagree")]
+    fn conflicting_destination_verifier_aliases_are_rejected() {
+        let mut manifest = route_manifest();
+        manifest.destination_verifier_address =
+            Some("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "requires source bridge address")]
+    fn missing_source_bridge_aliases_are_rejected() {
+        let mut manifest = route_manifest();
+        manifest.source_bridge_address = None;
+        manifest.sccp_bsc_source_bridge_address = None;
+        manifest.bsc_source_bridge_address = None;
+        manifest.sccp_tron_source_bridge_address = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "requires destination verifier address")]
+    fn missing_destination_verifier_aliases_are_rejected() {
+        let mut manifest = route_manifest();
+        manifest.destination_verifier_address = None;
+        manifest.verifier_address = None;
+        manifest.sccp_bsc_destination_verifier_address = None;
+        manifest.bsc_verifier_address = None;
+        manifest.evm_verifier_address = None;
+        manifest.tron_verifier_address = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be empty")]
+    fn empty_route_aliases_are_rejected() {
+        let mut manifest = route_manifest();
+        manifest.source_bridge_address = Some("   ".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "production_ready cannot be true with diagnostic verifier material")]
+    fn production_ready_bsc_diagnostic_verifier_hash_is_rejected() {
+        let mut manifest = route_manifest();
+        manifest.production_ready = true;
+        manifest.verifier_key_hash =
+            "0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    fn disabled_bsc_diagnostic_verifier_hash_gets_default_reason() {
+        let mut manifest = route_manifest();
+        manifest.disabled_reason = None;
+        manifest.verifier_key_hash =
+            "0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4".to_owned();
+
+        let actual = manifest.parse();
+
+        assert_eq!(
+            actual.disabled_reason.as_deref(),
+            Some(
+                "BSC verifier material is diagnostic and must be replaced before production readiness."
+            )
+        );
     }
 }
 

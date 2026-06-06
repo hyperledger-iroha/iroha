@@ -6740,17 +6740,43 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
-    /// Hex-encoded TRON destination network id used in destination binding evidence.
+    /// Hex-encoded destination network id used in destination binding evidence.
     pub network_id_hex: String,
-    /// TRON TairaXOR token contract address.
+    /// Counterparty TairaXOR token contract address.
     pub taira_xor_token_address: String,
-    /// TRON TairaXOR bridge contract address.
+    /// Counterparty TairaXOR bridge contract address.
     pub taira_xor_bridge_address: String,
-    /// TRON SCCP source bridge contract address.
+    /// Generic SCCP source bridge contract address.
+    pub source_bridge_address: String,
+    /// BSC SCCP source bridge contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub sccp_bsc_source_bridge_address: Option<String>,
+    /// BSC source bridge contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub bsc_source_bridge_address: Option<String>,
+    /// Legacy TRON-named SCCP source bridge contract address.
     pub sccp_tron_source_bridge_address: String,
-    /// TRON destination verifier contract address.
+    /// Generic destination verifier contract address.
+    pub destination_verifier_address: String,
+    /// Generic verifier contract address.
+    pub verifier_address: String,
+    /// BSC destination verifier contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub sccp_bsc_destination_verifier_address: Option<String>,
+    /// BSC verifier contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub bsc_verifier_address: Option<String>,
+    /// EVM verifier contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub evm_verifier_address: Option<String>,
+    /// Legacy TRON-named destination verifier contract address.
     pub tron_verifier_address: String,
-    /// TRON destination verifier contract address.
+    /// Legacy TRON-named destination verifier contract address.
     pub sccp_tron_destination_verifier_address: String,
     /// Destination rollout proof material.
     pub destination_rollout: SccpRouteManifestDestinationRolloutDto,
@@ -6922,9 +6948,21 @@ fn sccp_route_manifest_post_deploy_evidence(
     })
 }
 
+fn sccp_route_manifest_verifier_backend(
+    manifest: &iroha_config::parameters::actual::SccpRouteManifest,
+) -> String {
+    iroha_sccp::sccp_verifier_backend_for_domain(manifest.counterparty_domain).map_or_else(
+        || format!("unsupported-domain-{}", manifest.counterparty_domain),
+        |backend| backend.key,
+    )
+}
+
 fn sccp_route_manifest_dto(
     manifest: &iroha_config::parameters::actual::SccpRouteManifest,
 ) -> SccpRouteManifestDto {
+    let is_bsc = manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC;
+    let source_bridge_address = manifest.sccp_tron_source_bridge_address.clone();
+    let verifier_address = manifest.tron_verifier_address.clone();
     SccpRouteManifestDto {
         version: manifest.version,
         route_id: manifest.route_id.clone(),
@@ -6939,16 +6977,24 @@ fn sccp_route_manifest_dto(
         network_id_hex: manifest.network_id_hex.clone(),
         taira_xor_token_address: manifest.taira_xor_token_address.clone(),
         taira_xor_bridge_address: manifest.taira_xor_bridge_address.clone(),
-        sccp_tron_source_bridge_address: manifest.sccp_tron_source_bridge_address.clone(),
-        tron_verifier_address: manifest.tron_verifier_address.clone(),
-        sccp_tron_destination_verifier_address: manifest.tron_verifier_address.clone(),
+        source_bridge_address: source_bridge_address.clone(),
+        sccp_bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
+        bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
+        sccp_tron_source_bridge_address: source_bridge_address,
+        destination_verifier_address: verifier_address.clone(),
+        verifier_address: verifier_address.clone(),
+        sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
+        bsc_verifier_address: is_bsc.then(|| verifier_address.clone()),
+        evm_verifier_address: is_bsc.then(|| verifier_address.clone()),
+        tron_verifier_address: verifier_address.clone(),
+        sccp_tron_destination_verifier_address: verifier_address.clone(),
         destination_rollout: SccpRouteManifestDestinationRolloutDto {
             version: 1,
             destination_network_id: manifest.network_id_hex.clone(),
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             target_domain: manifest.counterparty_domain,
-            verifier_identity: manifest.tron_verifier_address.clone(),
-            verifier_backend: "tron-groth16-bn254-v1".to_owned(),
+            verifier_identity: verifier_address,
+            verifier_backend: sccp_route_manifest_verifier_backend(manifest),
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             verifier_code_hash: manifest.verifier_code_hash.clone(),
             verifier_key_hash: manifest.verifier_key_hash.clone(),
@@ -12039,6 +12085,197 @@ mod sccp_message_backend_tests {
             ton.destination_rollout.verifier_plan,
             iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
+    }
+
+    fn sample_sccp_route_manifest_for_domain(
+        domain: u32,
+    ) -> iroha_config::parameters::actual::SccpRouteManifest {
+        let chain = iroha_sccp::sccp_chain_key_for_domain(domain)
+            .unwrap_or("unknown")
+            .to_owned();
+        iroha_config::parameters::actual::SccpRouteManifest {
+            version: 1,
+            route_id: "taira_bsc_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: chain.clone(),
+            chain,
+            chain_id_hex: "0x61".to_owned(),
+            counterparty_domain: domain,
+            verifier_target: "EvmContract".to_owned(),
+            production_ready: false,
+            disabled_reason: Some("test route".to_owned()),
+            network_id_hex: format!("0x{}", "61".repeat(32)),
+            taira_xor_token_address: "0x1111111111111111111111111111111111111111".to_owned(),
+            taira_xor_bridge_address: "0x2222222222222222222222222222222222222222".to_owned(),
+            sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
+                .to_owned(),
+            tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
+            verifier_code_hash: format!("0x{}", "45".repeat(32)),
+            verifier_key_hash: format!("0x{}", "46".repeat(32)),
+            destination_binding_key: "evm:0:2:test-binding".to_owned(),
+            destination_binding_hash: format!("0x{}", "47".repeat(32)),
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", "48".repeat(32)),
+            taira_burn_record_code_hash: format!("0x{}", "49".repeat(32)),
+            taira_burn_record_vk_backend: "halo2_ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_bsc_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: None,
+            post_deploy_full_toml_ready: Some(false),
+            post_deploy_source_bridge_config_hash: Some(format!("0x{}", "4a".repeat(32))),
+            post_deploy_source_event_transaction_id: Some(format!("0x{}", "4b".repeat(32))),
+            post_deploy_route_canary_evidence_hash: Some(format!("0x{}", "4c".repeat(32))),
+            post_deploy_route_canary_transaction_id: Some(format!("0x{}", "4d".repeat(32))),
+            post_deploy_offline_full_toml_sha256: None,
+        }
+    }
+
+    #[test]
+    fn sccp_route_manifest_dto_uses_counterparty_domain_backend_for_bsc() {
+        let manifest = sample_sccp_route_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_BSC);
+        let dto = sccp_route_manifest_dto(&manifest);
+
+        assert_eq!(dto.route_id, "taira_bsc_xor");
+        assert_eq!(dto.counterparty_domain, iroha_sccp::SCCP_DOMAIN_BSC);
+        assert_eq!(
+            dto.destination_rollout.verifier_backend,
+            iroha_sccp::SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+        );
+        assert_ne!(
+            dto.destination_rollout.verifier_backend,
+            iroha_sccp::SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
+        );
+        assert_eq!(
+            dto.destination_rollout.target_domain,
+            iroha_sccp::SCCP_DOMAIN_BSC
+        );
+        assert_eq!(
+            dto.destination_rollout.verifier_identity,
+            "0x4444444444444444444444444444444444444444"
+        );
+        assert_eq!(
+            dto.sccp_tron_source_bridge_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            dto.source_bridge_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            dto.sccp_bsc_source_bridge_address.as_deref(),
+            Some("0x3333333333333333333333333333333333333333")
+        );
+        assert_eq!(
+            dto.bsc_source_bridge_address.as_deref(),
+            Some("0x3333333333333333333333333333333333333333")
+        );
+        assert_eq!(
+            dto.destination_verifier_address,
+            "0x4444444444444444444444444444444444444444"
+        );
+        assert_eq!(
+            dto.verifier_address,
+            "0x4444444444444444444444444444444444444444"
+        );
+        assert_eq!(
+            dto.sccp_bsc_destination_verifier_address.as_deref(),
+            Some("0x4444444444444444444444444444444444444444")
+        );
+        assert_eq!(
+            dto.bsc_verifier_address.as_deref(),
+            Some("0x4444444444444444444444444444444444444444")
+        );
+        assert_eq!(
+            dto.evm_verifier_address.as_deref(),
+            Some("0x4444444444444444444444444444444444444444")
+        );
+    }
+
+    #[test]
+    fn configured_bsc_route_manifest_snapshot_uses_evm_backend() {
+        let mut zk = iroha_core::state::default_zk_config();
+        zk.sccp_route_manifests.clear();
+        zk.sccp_allow_unready_transparent_proofs = true;
+        zk.sccp_route_manifests
+            .push(sample_sccp_route_manifest_for_domain(
+                iroha_sccp::SCCP_DOMAIN_BSC,
+            ));
+
+        let routes = sccp_route_manifests_from_zk_config(&zk);
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].route_id, "taira_bsc_xor");
+        assert_eq!(routes[0].counterparty_domain, iroha_sccp::SCCP_DOMAIN_BSC);
+        assert_eq!(
+            routes[0].destination_rollout.verifier_backend,
+            iroha_sccp::SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+        );
+        assert_eq!(
+            routes[0].sccp_tron_source_bridge_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            routes[0].source_bridge_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            routes[0].bsc_source_bridge_address.as_deref(),
+            Some("0x3333333333333333333333333333333333333333")
+        );
+        assert_eq!(
+            routes[0].bsc_verifier_address.as_deref(),
+            Some("0x4444444444444444444444444444444444444444")
+        );
+    }
+
+    #[test]
+    fn sccp_route_manifest_dto_does_not_emit_bsc_aliases_for_tron() {
+        let manifest = sample_sccp_route_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TRON);
+        let dto = sccp_route_manifest_dto(&manifest);
+
+        assert_eq!(dto.counterparty_domain, iroha_sccp::SCCP_DOMAIN_TRON);
+        assert_eq!(
+            dto.source_bridge_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(
+            dto.destination_verifier_address,
+            "0x4444444444444444444444444444444444444444"
+        );
+        assert!(dto.sccp_bsc_source_bridge_address.is_none());
+        assert!(dto.bsc_source_bridge_address.is_none());
+        assert!(dto.sccp_bsc_destination_verifier_address.is_none());
+        assert!(dto.bsc_verifier_address.is_none());
+        assert!(dto.evm_verifier_address.is_none());
+    }
+
+    #[test]
+    fn sccp_route_manifest_dto_does_not_spoof_tron_backend_for_unknown_domains() {
+        let unknown_domain = 65_535;
+        let manifest = sample_sccp_route_manifest_for_domain(unknown_domain);
+        let dto = sccp_route_manifest_dto(&manifest);
+
+        assert_eq!(dto.counterparty_domain, unknown_domain);
+        assert_eq!(
+            dto.destination_rollout.verifier_backend,
+            "unsupported-domain-65535"
+        );
+        assert_ne!(
+            dto.destination_rollout.verifier_backend,
+            iroha_sccp::SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1
+        );
+        assert_ne!(
+            dto.destination_rollout.verifier_backend,
+            iroha_sccp::SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+        );
+        assert!(dto.sccp_bsc_source_bridge_address.is_none());
+        assert!(dto.bsc_source_bridge_address.is_none());
+        assert!(dto.sccp_bsc_destination_verifier_address.is_none());
+        assert!(dto.bsc_verifier_address.is_none());
+        assert!(dto.evm_verifier_address.is_none());
     }
 
     #[test]

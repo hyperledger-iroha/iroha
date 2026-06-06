@@ -64,10 +64,41 @@ evidence before a production-ready manifest can be written. Production canary
 evidence must include distinct source-event and route-canary transaction ids
 plus canonical `https://testnet.bscscan.com/tx/0x...` URLs matching those ids.
 
+After a route manifest has been assembled, generate the TAIRA runtime config
+overlay from that public manifest:
+
+```bash
+node scripts/sccp_bsc_taira_xor_deploy.mjs route-config \
+  --manifest artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json \
+  --allow-unready true \
+  --out artifacts/sccp-bsc/taira-bsc-xor-route.torii.toml
+```
+
+For a local operator dry run, the same command can merge the route into the
+checked-in TAIRA config template:
+
+```bash
+node scripts/sccp_bsc_taira_xor_deploy.mjs route-config \
+  --manifest artifacts/sccp-bsc/taira-bsc-xor-route.manifest.json \
+  --allow-unready true \
+  --base-config configs/soranexus/taira/config.toml \
+  --out artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.toml
+```
+
+The route config command validates `taira_bsc_xor`, BSC testnet chain id
+`0x61`, SORA/BSC domains `0 -> 2`, distinct EVM contract addresses,
+destination binding key/hash, canonical XOR settlement asset id, and the
+TAIRA burn-record artifact SHA-256 before writing TOML. The backend accepts
+generic/BSC route address fields and the generated overlay still mirrors the
+same EVM addresses into legacy TRON-named fields for mixed-version nodes.
+Conflicting generic, BSC-specific, and legacy aliases are rejected before the
+route is loaded.
+
 Quick verification:
 
 ```bash
 scripts/sccp_evm_contract_smoke.sh
+cargo test -p iroha_config --test sccp_route_manifest_aliases
 node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs
 tmpdir=$(mktemp -d /tmp/iroha-bsc-smoke-deps.XXXXXX)
 npm install --prefix "$tmpdir" --silent solc@0.7.4 ethers@6.16.0 ganache@7.9.2 >/dev/null
