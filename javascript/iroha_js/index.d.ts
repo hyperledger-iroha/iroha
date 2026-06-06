@@ -15233,9 +15233,13 @@ export function deriveConfidentialNullifierV2(input: {
   rho?: ArrayBufferView | ArrayBuffer | Buffer;
 }): { nullifier: Buffer; nullifierHex: string };
 
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
+export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7;
+export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1:
+  "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1:
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
@@ -15266,10 +15270,16 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDI
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1:
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 export type KagemushaOfflineSpendMode =
+  | "recursive_compact_v1"
   | "recursive_spend_v1"
   | "checked_prefold_v1";
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable?: boolean,
+  recursiveCompactAvailable?: boolean,
+): KagemushaOfflineSpendMode;
+export function preferredKagemushaOfflineSpendModeForCapabilities(
+  recursiveCompactAvailable: boolean,
+  recursiveSpendAvailable: boolean,
 ): KagemushaOfflineSpendMode;
 export function canRedeemKagemushaRecursiveSpendWitnessless(
   proofCircuitId: string,
@@ -15325,6 +15335,23 @@ export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppe
   previousHopCount: number,
 ): boolean;
 export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
+export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
+export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
+export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean;
+export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(
+  recordBundleArchive: BinaryLike,
+): Buffer;
+export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+  recordBundleArchive: BinaryLike,
+  pallasOpenEnvelopesArchive: BinaryLike,
+): Buffer;
+export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+  recordBundleArchive: BinaryLike,
+  pallasOpenEnvelopesArchive: BinaryLike,
+): Buffer;
+export function kagemushaVerifyRecursiveCompactPaymentToken(
+  compactTokenArchive: BinaryLike,
+): boolean;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendAppend(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendTransitionProfileInit(

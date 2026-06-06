@@ -26,7 +26,9 @@ import errno
 import hashlib
 import ipaddress
 import json
+import math
 import os
+import secrets
 import stat
 import sys
 import urllib.error
@@ -44,6 +46,11 @@ PERSISTED_RECORD_DIGEST_FIELD = "record_sha256"
 PERSISTED_RECORD_VERSION = 1
 RECORDS_DIR = "messages"
 MAX_BEARER_TOKEN_BYTES = 8192
+MAX_HTTP_URL_CHARS = 2048
+MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
+LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
 INDEX_DIGEST_FIELD = "index_sha256"
 INDEX_FILE = "messages.index.json"
@@ -144,10 +151,36 @@ ANCHOR_KEYS = {
     "audit_index",
     ANCHOR_DIGEST_FIELD,
 }
+SECRET_PREVIEW_MARKERS = ("authorization", "bearer ", "private_key", "secret", "token")
+REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
+REDACTED_ERROR = "[redacted: sensitive error]"
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 
 class AdapterError(RuntimeError):
     """Raised when an audit preimage or publication response is invalid."""
+
+
+def _require_positive_cli_int(value: int, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise AdapterError(f"{label} must be a positive integer")
+    return value
+
+
+def _require_positive_finite_cli_number(value: float, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise AdapterError(f"{label} must be a positive finite number")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise AdapterError(f"{label} must be a positive finite number")
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -174,7 +207,10 @@ class PublishResult:
     error: str | None = None
 
 
-def _read_regular_file(path: Path) -> bytes:
+def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+    if max_bytes is not None and max_bytes <= 0:
+        raise AdapterError("max file bytes must be positive")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
@@ -183,15 +219,24 @@ def _read_regular_file(path: Path) -> bytes:
         raise AdapterError(f"{path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
         raise AdapterError(f"{path} must be a regular file")
+    if max_bytes is not None and metadata.st_size > max_bytes:
+        raise AdapterError(f"{path} exceeds {max_bytes} byte input limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        fd_metadata = os.fstat(fd)
+        if not stat.S_ISREG(fd_metadata.st_mode):
             raise AdapterError(f"{path} must be a regular file")
+        if max_bytes is not None and fd_metadata.st_size > max_bytes:
+            raise AdapterError(f"{path} exceeds {max_bytes} byte input limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            return handle.read()
+            limit = max_bytes + 1 if max_bytes is not None else -1
+            raw = handle.read(limit)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise AdapterError(f"{path} exceeds {max_bytes} byte input limit")
+        return raw
     except FileNotFoundError as error:
         raise AdapterError(f"{path} does not exist") from error
     except OSError as error:
@@ -204,6 +249,7 @@ def _read_regular_file(path: Path) -> bytes:
 
 
 def _ensure_input_directory(path: Path, label: str) -> None:
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
@@ -214,7 +260,97 @@ def _ensure_input_directory(path: Path, label: str) -> None:
         raise AdapterError(f"{label} {path} must be a directory")
 
 
+def _reject_symlinked_existing_ancestors(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(mode):
+            if path.is_absolute() and current.parent == Path(path.anchor):
+                continue
+            raise AdapterError(f"{current} must not be a symlink")
+
+
+def _reject_output_path_smuggling(path: Path, label: str) -> None:
+    raw = str(path)
+    if not raw or not path.name:
+        raise AdapterError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise AdapterError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise AdapterError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise AdapterError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise AdapterError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise AdapterError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise AdapterError(f"{label} must not contain semicolon path parameters")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    if any(part.startswith("-") for part in parts if part):
+        raise AdapterError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in parts):
+        raise AdapterError(f"{label} must not contain dot or parent segments")
+
+
+def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
+    if not raw:
+        raise AdapterError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise AdapterError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise AdapterError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise AdapterError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise AdapterError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise AdapterError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise AdapterError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise AdapterError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise AdapterError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in checked_parts):
+        raise AdapterError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 < len(raw_args):
+                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
 def _ensure_output_directory(path: Path, label: str) -> None:
+    _reject_output_path_smuggling(path, label)
+    _reject_symlinked_existing_ancestors(path)
     if path.exists() or path.is_symlink():
         mode = path.lstat().st_mode
         if stat.S_ISLNK(mode):
@@ -232,14 +368,18 @@ def _ensure_output_directory(path: Path, label: str) -> None:
 
 def _ensure_output_file_target(path: Path) -> None:
     if path.exists() or path.is_symlink():
-        mode = path.lstat().st_mode
-        if stat.S_ISLNK(mode):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
             raise AdapterError(f"{path} must not be a symlink")
-        if not stat.S_ISREG(mode):
+        if not stat.S_ISREG(metadata.st_mode):
             raise AdapterError(f"{path} must be a regular file")
+        if metadata.st_nlink > 1:
+            raise AdapterError(f"{path} must not be hard-linked")
 
 
 def _write_text_output(path: Path, text: str) -> None:
+    _reject_output_path_smuggling(path, "output path")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
@@ -260,22 +400,44 @@ def _write_text_output(path: Path, text: str) -> None:
         raise AdapterError(f"{path.parent} must be a directory") from error
 
     fd = -1
+    leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
+    tmp_name = f".iso-{leaf_digest[:16]}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    tmp_created = False
     try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         try:
-            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+            fd = os.open(tmp_name, flags | nofollow, 0o600, dir_fd=parent_fd)
+            tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise AdapterError(f"{path} must not be a symlink") from error
-            raise AdapterError(f"cannot open {path} for writing: {error.strerror}") from error
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+                raise AdapterError(f"{path} temp file must not be a symlink") from error
+            raise AdapterError(
+                f"cannot open temporary output for {path}: {error.strerror}"
+            ) from error
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise AdapterError(f"{path} temp file must be a regular file")
+        if opened.st_nlink > 1:
+            raise AdapterError(f"{path} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        tmp_created = False
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
     finally:
         if fd >= 0:
             os.close(fd)
+        if tmp_created:
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
         os.close(parent_fd)
 
 
@@ -284,16 +446,19 @@ def _absolute_path_without_resolving_leaf(path: Path) -> Path:
 
 
 def _load_json(path: Path) -> Any:
-    raw = _read_regular_file(path)
+    raw = _read_regular_file(path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
     try:
-        return json.loads(
+        value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except UnicodeDecodeError as error:
         raise AdapterError(f"{path} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
         raise AdapterError(f"{path} is not valid JSON: {error}") from error
+    _reject_json_surrogates(value)
+    return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -307,6 +472,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_json_constant(value: str) -> None:
+    raise AdapterError(f"JSON contains non-finite numeric constant {value}")
+
+
+def _reject_json_surrogates(value: Any) -> None:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise AdapterError("JSON contains invalid Unicode surrogate")
+    elif isinstance(value, list):
+        for item in value:
+            _reject_json_surrogates(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_json_surrogates(key)
+            _reject_json_surrogates(item)
+
+
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
@@ -314,16 +496,19 @@ def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -
 
 
 def _load_json_bytes(path: Path) -> tuple[Any, bytes]:
-    raw = _read_regular_file(path)
+    raw = _read_regular_file(path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
     try:
-        return json.loads(
+        value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
-        ), raw
+            parse_constant=_reject_json_constant,
+        )
     except UnicodeDecodeError as error:
         raise AdapterError(f"{path} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
         raise AdapterError(f"{path} is not valid JSON: {error}") from error
+    _reject_json_surrogates(value)
+    return value, raw
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -374,6 +559,27 @@ def _require_clean_string(value: Any, label: str) -> str:
     if value != value.strip():
         raise AdapterError(f"{label} must not have surrounding whitespace")
     return value
+
+
+def _require_clean_path_string(value: Any, label: str) -> str:
+    path = _require_clean_string(value, label)
+    if any(ch.isspace() for ch in path):
+        raise AdapterError(f"{label} must not contain whitespace")
+    if path.startswith("-"):
+        raise AdapterError(f"{label} must not start with a dash")
+    if "\\" in path:
+        raise AdapterError(f"{label} must use forward slashes")
+    if ";" in path:
+        raise AdapterError(f"{label} must not contain semicolon path parameters")
+    parts = path.split("/")
+    checked_parts = parts[1:] if path.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise AdapterError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise AdapterError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in parts):
+        raise AdapterError(f"{label} must not contain dot or parent segments")
+    return path
 
 
 def _require_optional_clean_string(value: Any, label: str) -> str | None:
@@ -473,7 +679,7 @@ def _verify_persisted_metadata(
             raise AdapterError(f"{label}.{key} does not match audit index record")
 
 
-def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str]:
+def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:
     if not isinstance(value, dict):
         raise AdapterError(f"{label} must be an object")
     _reject_unknown_keys(value, PERSISTED_HISTORY_KEYS, label)
@@ -481,10 +687,13 @@ def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str]:
     if status not in {"Pending", "Accepted", "Rejected"}:
         raise AdapterError(f"{label}.status must be Pending, Accepted, or Rejected")
     code = _require_pacs002_code(value.get("pacs002_code"), f"{label}.pacs002_code")
-    _require_nonnegative_int(value.get("updated_at_ms"), f"{label}.updated_at_ms")
+    updated_at_ms = _require_nonnegative_int(
+        value.get("updated_at_ms"),
+        f"{label}.updated_at_ms",
+    )
     _require_optional_clean_string(value.get("detail"), f"{label}.detail")
     _require_optional_clean_string(value.get("reason_code"), f"{label}.reason_code")
-    return status, code
+    return status, code, updated_at_ms
 
 
 def _verify_persisted_record_source(
@@ -505,8 +714,11 @@ def _verify_persisted_record_source(
         raise AdapterError(f"{label}.message_id does not match audit index record")
     if value.get("state") != index_record.get("state"):
         raise AdapterError(f"{label}.state does not match audit index record")
-    _require_nonnegative_int(value.get("updated_at_ms"), f"{label}.updated_at_ms")
-    if value.get("updated_at_ms") != index_record.get("updated_at_ms"):
+    updated_at_ms = _require_nonnegative_int(
+        value.get("updated_at_ms"),
+        f"{label}.updated_at_ms",
+    )
+    if updated_at_ms != index_record.get("updated_at_ms"):
         raise AdapterError(f"{label}.updated_at_ms does not match audit index record")
     _require_optional_nonnegative_int(value.get("settled_at_ms"), f"{label}.settled_at_ms")
     if value.get("settled_at_ms") != index_record.get("settled_at_ms"):
@@ -537,23 +749,35 @@ def _verify_persisted_record_source(
         raise AdapterError(f"{label}.status_history must be a non-empty array")
     last_status = None
     last_code = None
+    last_updated_at_ms = None
+    previous_updated_at_ms = None
     for offset, entry in enumerate(history):
-        last_status, last_code = _verify_persisted_history_entry(
+        last_status, last_code, last_updated_at_ms = _verify_persisted_history_entry(
             entry,
             f"{label}.status_history[{offset}]",
         )
+        if (
+            previous_updated_at_ms is not None
+            and last_updated_at_ms < previous_updated_at_ms
+        ):
+            raise AdapterError(
+                f"{label}.status_history[{offset}].updated_at_ms must not move backwards"
+            )
+        previous_updated_at_ms = last_updated_at_ms
     derived_code = _derived_pacs002_code(value, label)
     if derived_code != index_record.get("pacs002_code"):
         raise AdapterError(f"{label}.pacs002_code does not match persisted state")
     if last_status != value.get("state") or last_code != derived_code:
         raise AdapterError(f"{label}.status_history does not end with current status")
+    if last_updated_at_ms != updated_at_ms:
+        raise AdapterError(f"{label}.status_history does not end at current updated_at_ms")
 
 
 def _record_store_dir(anchor: dict[str, Any], label: str) -> Path | None:
     store_dir = anchor.get("store_dir")
     if store_dir is None:
         return None
-    return Path(_require_clean_string(store_dir, f"{label}.store_dir"))
+    return Path(_require_clean_path_string(store_dir, f"{label}.store_dir"))
 
 
 def _verify_persisted_record_sources(
@@ -631,6 +855,23 @@ def _verify_audit_index_record(record: Any, label: str) -> None:
     )
 
 
+def _reject_duplicate_audit_index_records(records: list[Any], label: str) -> None:
+    seen: dict[str, dict[str, int]] = {
+        "message_id": {},
+        "filename": {},
+        PERSISTED_RECORD_DIGEST_FIELD: {},
+    }
+    for offset, record in enumerate(records):
+        for field, field_seen in seen.items():
+            value = record[field]
+            if value in field_seen:
+                raise AdapterError(
+                    f"{label} records[{offset}].{field} duplicates "
+                    f"{label} records[{field_seen[value]}].{field}: {value}"
+                )
+            field_seen[value] = offset
+
+
 def verify_audit_index(index: Any) -> dict[str, Any]:
     """Verify the exported audit index digest and basic record-count shape."""
 
@@ -650,6 +891,7 @@ def verify_audit_index(index: Any) -> dict[str, Any]:
         )
     for offset, record in enumerate(records):
         _verify_audit_index_record(record, f"audit index records[{offset}]")
+    _reject_duplicate_audit_index_records(records, "audit index")
     return index
 
 
@@ -707,7 +949,10 @@ def verify_anchor_file(
         digest_anchor = anchors_dir / f"{index_sha256}.notary.json"
         if not digest_anchor.exists():
             raise AdapterError(f"{latest} has no digest-addressed peer {digest_anchor}")
-        if _read_regular_file(digest_anchor) != raw:
+        if _read_regular_file(
+            digest_anchor,
+            max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+        ) != raw:
             raise AdapterError(f"{latest} differs from digest-addressed peer {digest_anchor}")
 
     return VerifiedAnchor(
@@ -762,6 +1007,14 @@ def _validate_url_port(parsed: urllib.parse.ParseResult, label: str) -> None:
         port = parsed.port
     except ValueError as error:
         raise AdapterError(f"{label} has invalid port: {error}") from error
+    port_text = _raw_url_port_text(parsed)
+    if port_text == "":
+        raise AdapterError(f"{label} must not include an empty port")
+    if port_text is not None:
+        if len(port_text) > 1 and port_text.startswith("0"):
+            raise AdapterError(f"{label} port must not contain leading zeros")
+        if port == 0:
+            raise AdapterError(f"{label} port must be positive")
     if (parsed.scheme == "https" and port == 443) or (
         parsed.scheme == "http" and port == 80
     ):
@@ -777,6 +1030,21 @@ def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
     return netloc.rsplit(":", 1)[0]
 
 
+def _raw_url_port_text(parsed: urllib.parse.ParseResult) -> str | None:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket == -1:
+            return None
+        remainder = netloc[bracket + 1 :]
+        if remainder.startswith(":"):
+            return remainder[1:]
+        return None
+    if ":" in netloc:
+        return netloc.rsplit(":", 1)[1]
+    return None
+
+
 def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
     raw_host = _raw_url_host(parsed)
     if "%" in raw_host:
@@ -785,6 +1053,8 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise AdapterError(f"{label} host must not end with a dot")
+    if len(raw_host) > 253:
+        raise AdapterError(f"{label} host must be at most 253 characters")
     try:
         ipaddress.ip_address(raw_host)
         return
@@ -792,6 +1062,7 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         pass
     if ":" in raw_host:
         raise AdapterError(f"{label} host must be a valid IP address")
+    _reject_legacy_ipv4_host_notation(raw_host, label)
     labels = raw_host.split(".")
     if any(not part for part in labels):
         raise AdapterError(f"{label} host must not contain empty labels")
@@ -808,52 +1079,126 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
             )
 
 
+def _reject_legacy_ipv4_host_notation(raw_host: str, label: str) -> None:
+    parts = raw_host.split(".")
+    if len(parts) > 4:
+        return
+    saw_hex_part = False
+    for part in parts:
+        if part.startswith("0x"):
+            digits = part[2:]
+            if not digits or any(ch not in "0123456789abcdef" for ch in digits):
+                return
+            saw_hex_part = True
+        elif not part.isdigit():
+            return
+    if saw_hex_part:
+        raise AdapterError(f"{label} host must not use legacy IPv4 numeric notation")
+
+
+def _reject_local_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+    *,
+    allow_insecure_http: bool,
+) -> None:
+    if allow_insecure_http:
+        return
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        raise AdapterError(f"{label} must not use localhost")
+    if _host_uses_rebinding_suffix(hostname):
+        raise AdapterError(f"{label} must not use local/private rebinding hostnames")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise AdapterError(f"{label} must not use local, private, or reserved IP addresses")
+    if _address_embeds_non_global_ipv4(address):
+        raise AdapterError(f"{label} must not embed local, private, or reserved IPv4 addresses")
+
+
+def _host_uses_rebinding_suffix(hostname: str) -> bool:
+    return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
+    )
+
+
+def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    embedded: ipaddress.IPv4Address | None = None
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            embedded = address.ipv4_mapped
+        elif address in NAT64_WELL_KNOWN_PREFIX or address in IPV4_COMPATIBLE_IPV6_PREFIX:
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFF_FFFF)
+        elif address.sixtofour is not None:
+            embedded = address.sixtofour
+        elif address.teredo is not None:
+            embedded = address.teredo[1]
+    return embedded is not None and not embedded.is_global
+
+
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
     if "\\" in path:
         raise AdapterError(f"{label} path must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} path must not contain semicolon parameters")
-    if any(segment in {".", ".."} for segment in path.split("/")):
+    segments = path.split("/")
+    checked_segments = segments[1:] if path.startswith("/") else segments
+    if any(segment == "" for segment in checked_segments[:-1]):
+        raise AdapterError(f"{label} path must not contain empty segments")
+    if any(segment in {".", ".."} for segment in segments):
         raise AdapterError(f"{label} path must not contain dot segments")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise AdapterError(f"{label} path must not contain encoded dot or separator characters")
+    if "%3b" in lowered:
+        raise AdapterError(f"{label} path must not contain encoded semicolon parameters")
+    if any(token in lowered for token in ("%23", "%3a", "%3f", "%40", "%5b", "%5d")):
+        raise AdapterError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise AdapterError(f"{label} path must not contain encoded percent characters")
 
 
 def _validate_endpoint(endpoint: str, allow_insecure_http: bool) -> None:
-    _reject_url_control_chars(endpoint, "endpoint")
-    _reject_url_percent_encoding_smuggling(endpoint, "endpoint")
+    label = "endpoint"
+    if len(endpoint) > MAX_HTTP_URL_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_HTTP_URL_CHARS} characters")
+    _reject_url_control_chars(endpoint, label)
+    _reject_url_percent_encoding_smuggling(endpoint, label)
     if endpoint != endpoint.strip():
-        raise AdapterError("endpoint must not have surrounding whitespace")
+        raise AdapterError(f"{label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in endpoint):
-        raise AdapterError("endpoint must not contain whitespace")
+        raise AdapterError(f"{label} must not contain whitespace")
     try:
         parsed = urllib.parse.urlparse(endpoint)
         hostname = parsed.hostname
     except ValueError as error:
-        raise AdapterError(f"endpoint {endpoint} is not a valid URL: {error}") from error
+        raise AdapterError(f"{label} is not a valid URL: {error}") from error
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and allow_insecure_http
     ):
         if parsed.scheme == "http":
             raise AdapterError(
-                f"refusing insecure HTTP endpoint {endpoint}; pass --allow-insecure-http for local tests"
+                f"refusing insecure HTTP {label}; pass --allow-insecure-http for local tests"
             )
-        raise AdapterError(f"endpoint {endpoint} must use http or https")
-    _validate_url_port(parsed, f"endpoint {endpoint}")
+        raise AdapterError(f"{label} must use http or https")
+    _validate_url_port(parsed, label)
     if not parsed.netloc or hostname is None or not hostname.strip():
-        raise AdapterError(f"endpoint {endpoint} must include a host")
+        raise AdapterError(f"{label} must include a host")
     if parsed.username is not None or parsed.password is not None:
-        raise AdapterError(f"endpoint {endpoint} must not contain credentials")
-    _validate_url_host(parsed, f"endpoint {endpoint}")
+        raise AdapterError(f"{label} must not contain credentials")
+    _validate_url_host(parsed, label)
+    _reject_local_url_host(
+        parsed,
+        label,
+        allow_insecure_http=allow_insecure_http,
+    )
     if parsed.params or parsed.query or parsed.fragment:
-        raise AdapterError(
-            f"endpoint {endpoint} must not contain params, query, or fragment"
-        )
-    _validate_url_path(parsed, f"endpoint {endpoint}")
+        raise AdapterError(f"{label} must not contain params, query, or fragment")
+    _validate_url_path(parsed, label)
 
 
 def _reject_duplicate_endpoints(endpoints: list[str]) -> None:
@@ -869,9 +1214,7 @@ def _reject_duplicate_endpoints(endpoints: list[str]) -> None:
 def _load_bearer_token(path: Path | None) -> str | None:
     if path is None:
         return None
-    raw = _read_regular_file(path)
-    if len(raw) > MAX_BEARER_TOKEN_BYTES:
-        raise AdapterError(f"bearer token file {path} exceeds {MAX_BEARER_TOKEN_BYTES} bytes")
+    raw = _read_regular_file(path, max_bytes=MAX_BEARER_TOKEN_BYTES)
     try:
         token = raw.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -906,7 +1249,7 @@ def publish_anchor(
         headers["Authorization"] = f"Bearer {bearer_token}"
     request = urllib.request.Request(endpoint, data=anchor.raw, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout_secs) as response:
+        with NO_REDIRECT_OPENER.open(request, timeout=timeout_secs) as response:
             body = response.read(response_limit_bytes + 1)
             if len(body) > response_limit_bytes:
                 raise AdapterError(
@@ -935,7 +1278,7 @@ def publish_anchor(
             ok=False,
             response_body_sha256=None,
             response_body_preview=None,
-            error=str(error.reason),
+            error=_receipt_error(str(error.reason)),
         )
 
     ok = 200 <= status_code <= 299
@@ -950,7 +1293,21 @@ def publish_anchor(
 
 
 def _response_preview(body: bytes) -> str:
-    return body[:4096].decode("utf-8", errors="replace")
+    preview = body[:4096].decode("utf-8", errors="replace")
+    if _response_preview_looks_secret(preview):
+        return REDACTED_RESPONSE_PREVIEW
+    return preview
+
+
+def _response_preview_looks_secret(preview: str) -> bool:
+    lowered = preview.lower()
+    return any(marker in lowered for marker in SECRET_PREVIEW_MARKERS)
+
+
+def _receipt_error(message: str) -> str:
+    if _response_preview_looks_secret(message):
+        return REDACTED_ERROR
+    return message
 
 
 def receipt_value(anchor: VerifiedAnchor, result: PublishResult) -> dict[str, Any]:
@@ -995,6 +1352,10 @@ def receipt_output_path(receipt_dir: Path, anchor: VerifiedAnchor, endpoint: str
 
 
 def run(args: argparse.Namespace) -> int:
+    timeout_secs = _require_positive_finite_cli_number(args.timeout_secs, "--timeout-secs")
+    response_limit_bytes = _require_positive_cli_int(
+        args.response_limit_bytes, "--response-limit-bytes"
+    )
     _ensure_input_directory(args.export_dir, "export_dir")
     export_dir = args.export_dir
     receipt_dir = _absolute_path_without_resolving_leaf(
@@ -1037,8 +1398,8 @@ def run(args: argparse.Namespace) -> int:
             result = publish_anchor(
                 anchor,
                 endpoint,
-                timeout_secs=args.timeout_secs,
-                response_limit_bytes=args.response_limit_bytes,
+                timeout_secs=timeout_secs,
+                response_limit_bytes=response_limit_bytes,
                 bearer_token=bearer_token,
             )
             receipts.append(str(write_receipt(receipt_dir, anchor, result)))
@@ -1122,8 +1483,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        _preflight_output_cli_paths(
+            argv,
+            {"--bearer-token-file", "--export-dir", "--receipt-dir"},
+        )
+        args = parser.parse_args(argv)
         return run(args)
     except AdapterError as error:
         print(f"error: {error}", file=sys.stderr)

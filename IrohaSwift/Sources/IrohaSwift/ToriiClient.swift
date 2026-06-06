@@ -8135,8 +8135,8 @@ public struct ToriiVerifyingKeyListItem: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let idObj = try? container.decode(ToriiVerifyingKeyId.self, forKey: .id) {
-            id = idObj
+        if container.contains(.id) {
+            id = try container.decode(ToriiVerifyingKeyId.self, forKey: .id)
         } else {
             let backend = try container.decode(String.self, forKey: .backend)
             let name = try container.decode(String.self, forKey: .name)

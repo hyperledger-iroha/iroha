@@ -73,7 +73,7 @@ use sorafs_car::{
     },
 };
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 6;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const ERR_NULL_PTR: c_int = -1;
@@ -126,6 +126,7 @@ const ERR_ASSET_ID_PARSE: c_int = -301;
 const ERR_JSON_SERIALIZE: c_int = -304;
 const ERR_OFFLINE_NOTE_PROVE: c_int = -310;
 const ERR_KAGEMUSHA_PROVE: c_int = -311;
+const ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE: c_int = -312;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -157,6 +158,7 @@ enum BridgeError {
     JsonSerialize,
     OfflineNoteProve,
     KagemushaProve,
+    KagemushaRecursiveCompactUnavailable,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -197,6 +199,9 @@ impl BridgeError {
             BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
             BridgeError::OfflineNoteProve => ERR_OFFLINE_NOTE_PROVE,
             BridgeError::KagemushaProve => ERR_KAGEMUSHA_PROVE,
+            BridgeError::KagemushaRecursiveCompactUnavailable => {
+                ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE
+            }
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -1571,14 +1576,16 @@ fn privacy_algorithm_catalog_vk_ref_names_have_duplicates(
 fn privacy_required_production_plan_rows_are_present(entries: &[PrivacyAlgorithmEntry]) -> bool {
     PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.iter().all(
         |(algorithm_id, proof_family, backend_family)| {
-            entries.iter().any(|entry| {
-                entry.id == *algorithm_id
-                    && entry.proof_family == *proof_family
-                    && entry.backend_family == *backend_family
-                    && privacy_entrypoints_include_production_proof_builder(
-                        entry.planned_entrypoints,
-                    )
-            })
+            let mut matching_rows = entries.iter().filter(|entry| entry.id == *algorithm_id);
+            matches!(
+                (matching_rows.next(), matching_rows.next()),
+                (Some(entry), None)
+                    if entry.proof_family == *proof_family
+                        && entry.backend_family == *backend_family
+                        && privacy_entrypoints_include_production_proof_builder(
+                            entry.planned_entrypoints,
+                        )
+            )
         },
     )
 }
@@ -5996,7 +6003,7 @@ fn prove_verified_kagemusha_compact_token_from_record_bundle(
 ///
 /// Inputs are Norito-archive bytes of
 /// `iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle` and a
-/// `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`. The output is Norito-archive
+/// `Vec<iroha_data_model::zk::OpenVerifyEnvelope>`. The output is Norito-archive
 /// bytes of `KagemushaRecursiveAggregationProofBundle`.
 ///
 /// This symbol is proof-carrying and admission-neutral: compact-token
@@ -6068,6 +6075,126 @@ fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundl
         None,
     )
     .map_err(|_| BridgeError::KagemushaProve)
+}
+
+/// ABI 7 recursive compact-token prover surface for `kagemusha-recursive-compact-v1`.
+///
+/// Input archives are Norito-encoded
+/// `KagemushaVerifiedFoldRecordBundle` and ordered Pallas opening envelopes.
+/// Output is a Norito-encoded `KagemushaCompactPaymentToken` whose proof uses
+/// the compact recursive verifier key.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+    verified_record_bundle_norito_ptr: *const c_uchar,
+    verified_record_bundle_norito_len: c_ulong,
+    pallas_open_envelopes_norito_ptr: *const c_uchar,
+    pallas_open_envelopes_norito_len: c_ulong,
+    out_compact_token_ptr: *mut *mut c_uchar,
+    out_compact_token_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output(out_compact_token_ptr, out_compact_token_len);
+        if out_compact_token_ptr.is_null() || out_compact_token_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        if verified_record_bundle_norito_ptr.is_null() || pallas_open_envelopes_norito_ptr.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let record_bundle_len: usize = verified_record_bundle_norito_len
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        let pallas_open_envelopes_len: usize = pallas_open_envelopes_norito_len
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        if kagemusha_archive_out_of_bounds(record_bundle_len)
+            || kagemusha_archive_out_of_bounds(pallas_open_envelopes_len)
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let record_bundle_archive = unsafe {
+            read_vec_bytes(
+                verified_record_bundle_norito_ptr,
+                verified_record_bundle_norito_len,
+            )
+        }?;
+        let pallas_open_envelopes_archive = unsafe {
+            read_vec_bytes(
+                pallas_open_envelopes_norito_ptr,
+                pallas_open_envelopes_norito_len,
+            )
+        }?;
+        let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+            norito::decode_from_bytes(&record_bundle_archive)
+                .map_err(|_| BridgeError::KagemushaProve)?;
+        let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&pallas_open_envelopes_archive)
+                .map_err(|_| BridgeError::KagemushaProve)?;
+        let _ = (record_bundle, pallas_open_envelopes);
+        Err(BridgeError::KagemushaRecursiveCompactUnavailable)
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Verify an ABI-7 recursive compact-token archive against the canonical compact verifier key.
+///
+/// Malformed archives and malformed token bindings return
+/// [`ERR_KAGEMUSHA_PROVE`]. Shape-valid but production-disabled ABI-7 compact
+/// tokens return success with `*out_valid = 0`, matching ordinary signature
+/// verifier FFI behavior and letting receivers distinguish transport/codec
+/// failures from cryptographic rejection.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(
+    compact_token_norito_ptr: *const c_uchar,
+    compact_token_norito_len: c_ulong,
+    out_valid: *mut c_uchar,
+) -> c_int {
+    let result = (|| {
+        if !out_valid.is_null() {
+            unsafe {
+                *out_valid = 0;
+            }
+        }
+        if out_valid.is_null() || compact_token_norito_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let compact_token_len: usize = compact_token_norito_len
+            .try_into()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        if kagemusha_archive_out_of_bounds(compact_token_len) {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let compact_token_archive =
+            unsafe { read_vec_bytes(compact_token_norito_ptr, compact_token_norito_len) }?;
+        let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+            norito::decode_from_bytes(&compact_token_archive)
+                .map_err(|_| BridgeError::KagemushaProve)?;
+        let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+            Err(err)
+                if err.contains(
+                    iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
+                ) => {}
+            Err(_) => return Err(BridgeError::KagemushaProve),
+            Ok(()) => {
+                if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box)
+                {
+                    unsafe {
+                        *out_valid = 1;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        unsafe {
+            *out_valid = 0;
+        }
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
 }
 
 /// Initialize production recursive Kagemusha spendable offline cash.
@@ -6632,6 +6759,9 @@ fn kagemusha_recursive_spend_verify_from_request_archive(
 
     let request: KagemushaRecursiveSpendVerifyRequestV1 =
         norito::decode_from_bytes(request_archive).map_err(|_| BridgeError::KagemushaProve)?;
+    request
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
     match request.block_height {
         Some(block_height) => {
             kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
@@ -6861,33 +6991,38 @@ mod offline_note_prover_tests {
         confidential_v2, hash_vk, kagemusha_folded_vk_box,
         kagemusha_pallas_open_envelope_metadata_for_verified_hop,
         kagemusha_recursive_aggregation_proof_vk_box,
+        kagemusha_recursive_compact_payment_token_vk_box,
         kagemusha_recursive_fixed_window_shared_table_manifest_digest,
         kagemusha_recursive_fixed_window_table_schedule_digest,
         kagemusha_recursive_spend_bundle_instance_values,
         kagemusha_verified_folded_public_inputs_from_record_bundle, offline_note_recursive_vk_box,
         verify_backend, verify_kagemusha_compact_payment_token,
         verify_kagemusha_recursive_aggregation_proof_bundle,
+        verify_kagemusha_recursive_compact_payment_token,
     };
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         offline::{
+            KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
             KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
             KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
-            KagemushaRecursiveAggregationProof, KagemushaRecursiveAggregationProofBundle,
-            KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendAppendRequestV1,
-            KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendInitRequestV1,
-            KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendRedeemRequestV1,
-            KagemushaRecursiveSpendVerifyRequestV1, KagemushaRecursiveSpendVerifyResultV1,
-            KagemushaSpendableNoteDescriptorV1, KagemushaVerifiedFoldBundle,
-            KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
-            KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
+            KagemushaFoldedProof, KagemushaRecursiveAggregationProof,
+            KagemushaRecursiveAggregationProofBundle, KagemushaRecursiveSpendAccumulatorV1,
+            KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendBundleV1,
+            KagemushaRecursiveSpendInitRequestV1, KagemushaRecursiveSpendLineageWitnessV1,
+            KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendVerifyRequestV1,
+            KagemushaRecursiveSpendVerifyResultV1, KagemushaSpendableNoteDescriptorV1,
+            KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
+            KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
             kagemusha_recursive_spend_accumulator_from_initial_evidence,
             kagemusha_recursive_spend_public_inputs_from_accumulator,
         },
-        proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+        proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::{BackendTag, OpenVerifyEnvelope},
     };
 
@@ -7626,6 +7761,40 @@ mod offline_note_prover_tests {
             .clone()
     }
 
+    fn sample_recursive_compact_token_shape(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+    ) -> KagemushaCompactPaymentToken {
+        let mut public_inputs =
+            kagemusha_verified_folded_public_inputs_from_record_bundle(record_bundle)
+                .expect("verified folded public inputs");
+        public_inputs.aggregation_mode = KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1;
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive compact public input hash");
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1.to_owned(),
+            vk_hash: Hash::new(b"bridge-recursive-compact-vk").into(),
+            public_inputs: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA.to_vec(),
+            proof_bytes: vec![0xC7],
+            aux: Vec::new(),
+        };
+        KagemushaCompactPaymentToken {
+            public_inputs,
+            folded_proof: KagemushaFoldedProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+                ),
+                public_inputs_hash,
+                proof: ProofBox::new(
+                    ZK_BACKEND_HALO2_IPA.to_owned(),
+                    norito::to_bytes(&envelope).expect("encode recursive compact envelope"),
+                ),
+            },
+        }
+    }
+
     fn decode_recursive_proof(
         out_ptr: *mut c_uchar,
         out_len: c_ulong,
@@ -7729,7 +7898,271 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_kagemusha_compact_prover() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 6);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 7);
+    }
+
+    #[test]
+    fn kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs() {
+        let malformed_archive = [0_u8];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let record_bundle = sample_kagemusha_verified_record_bundle();
+        let record_archive =
+            norito::to_bytes(&record_bundle).expect("encode verified record bundle");
+        let envelope_archive = sample_current_hop_pallas_open_envelopes_archive(
+            &record_bundle,
+            "bridge-recursive-compact-one-hop-open-envelope",
+        );
+        let _: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+            norito::decode_from_bytes(&record_archive)
+                .expect("valid recursive compact record bundle fixture must decode");
+        let _: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&envelope_archive)
+                .expect("valid recursive compact Pallas envelope fixture must decode");
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                record_archive.as_ptr(),
+                record_archive.len() as c_ulong,
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact prover must reject malformed Pallas opening archives before the unavailable gate"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+        let direct_token = sample_recursive_compact_token_shape(&record_bundle);
+        let compact_vk =
+            kagemusha_recursive_compact_payment_token_vk_box().expect("recursive compact vk");
+        assert!(
+            !verify_kagemusha_recursive_compact_payment_token(&direct_token, &compact_vk),
+            "core recursive compact verifier must fail closed until compact proofs compose the private-hop verifier slice"
+        );
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                record_archive.as_ptr(),
+                record_archive.len() as c_ulong,
+                envelope_archive.as_ptr(),
+                envelope_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+        let token = direct_token;
+        let token_archive = norito::to_bytes(&token).expect("encode direct compact token");
+        assert_eq!(
+            token.public_inputs.aggregation_mode,
+            iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        );
+        assert_eq!(
+            token.folded_proof.verifier_key_id.name,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
+        );
+        assert!(
+            !verify_kagemusha_recursive_compact_payment_token(&token, &compact_vk),
+            "core recursive compact verifier must remain fail-closed for well-formed ABI-7 token shapes"
+        );
+        assert!(
+            !verify_kagemusha_compact_payment_token(&token, &compact_vk),
+            "legacy checked-prefold compact verifier must not accept recursive mode-2 tokens"
+        );
+        let mut out_valid: c_uchar = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                token_archive.as_ptr(),
+                token_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact verifier must reject dummy proof envelopes before returning a soft invalid result"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "malformed dummy compact tokens must clear stale valid flags"
+        );
+
+        let mut forged_token = token.clone();
+        forged_token.public_inputs.hop_count = forged_token
+            .public_inputs
+            .hop_count
+            .checked_add(1)
+            .expect("test hop count increment");
+        let forged_token_archive =
+            norito::to_bytes(&forged_token).expect("encode forged compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                forged_token_archive.as_ptr(),
+                forged_token_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact verifier must reject malformed public-input bindings before returning a soft invalid result"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "malformed compact-token bindings must clear stale valid flags"
+        );
+
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            out_valid, 0,
+            "malformed verifier input must clear stale valid flags"
+        );
+
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                ptr::null(),
+                token_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
+        assert_eq!(
+            out_valid, 0,
+            "null verifier input must clear stale valid flags"
+        );
+
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                token_archive.as_ptr(),
+                c_ulong::MAX,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            out_valid, 0,
+            "oversized verifier input must reject before slicing and clear stale valid flags"
+        );
+
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                token_archive.as_ptr(),
+                token_archive.len() as c_ulong,
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
+
+        out_ptr = std::ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                ptr::null(),
+                malformed_archive.len() as c_ulong,
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
+        assert!(
+            out_ptr.is_null(),
+            "null-input rejection must clear stale output pointers"
+        );
+        assert_eq!(
+            out_len, 0,
+            "null-input rejection must clear stale output lengths"
+        );
+
+        out_ptr = std::ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                ptr::null(),
+                malformed_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
+        assert!(
+            out_ptr.is_null(),
+            "null-envelope rejection must clear stale output pointers"
+        );
+        assert_eq!(
+            out_len, 0,
+            "null-envelope rejection must clear stale output lengths"
+        );
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                malformed_archive.as_ptr(),
+                c_ulong::MAX,
+                malformed_archive.as_ptr(),
+                c_ulong::MAX,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                ptr::null_mut(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
+
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                malformed_archive.as_ptr(),
+                malformed_archive.len() as c_ulong,
+                &mut out_ptr,
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
     }
 
     #[test]
@@ -8268,7 +8701,7 @@ mod offline_note_prover_tests {
             KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1
         ));
 
-        let mut out_ptr = 0x1 as *mut c_uchar;
+        let mut out_ptr = ptr::dangling_mut::<c_uchar>();
         let mut out_len: c_ulong = 99;
         let err = unsafe { write_kagemusha_archive_bridge(&mut out_ptr, &mut out_len, &[]) }
             .expect_err("empty Kagemusha native archive output must reject");
@@ -9484,6 +9917,27 @@ mod offline_note_prover_tests {
             connect_norito_free(out_ptr);
             norito::decode_from_bytes(&out).expect("decode recursive spend verify result")
         }
+        fn assert_request_rejected(request: &KagemushaRecursiveSpendVerifyRequestV1) {
+            let archive = norito::to_bytes(request).expect("encode recursive spend verify request");
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let status = unsafe {
+                connect_norito_kagemusha_recursive_spend_verify(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+
+            assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+            assert!(
+                out_ptr.is_null(),
+                "malformed verify request must not return a diagnostic archive"
+            );
+            assert_eq!(out_len, 0);
+        }
 
         let request = KagemushaRecursiveSpendVerifyRequestV1 {
             bundle: sample_kagemusha_recursive_spend_bundle(),
@@ -9507,16 +9961,7 @@ mod offline_note_prover_tests {
         let mut trusted_setup_backend = request.clone();
         trusted_setup_backend.bundle.recursive_proof.proof =
             ProofBox::new("halo2/kzg".into(), vec![0xA5; 64]);
-        let trusted_setup_result = verify_result(&trusted_setup_backend);
-        assert!(!trusted_setup_result.valid);
-        assert!(!trusted_setup_result.chain_admissible);
-        assert!(!trusted_setup_result.witnessless_redeem_supported);
-        assert!(trusted_setup_result.lineage_witness_required_for_redeem);
-        assert!(
-            trusted_setup_result.reason.contains("not supported"),
-            "unexpected trusted-setup rejection reason: {}",
-            trusted_setup_result.reason
-        );
+        assert_request_rejected(&trusted_setup_backend);
 
         let mut stark_recursive_bundle = request.clone();
         stark_recursive_bundle.bundle.recursive_proof.proof =
@@ -9528,40 +9973,44 @@ mod offline_note_prover_tests {
             "stark/fri/transparent-v1",
             KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         );
-        let stark_result = verify_result(&stark_recursive_bundle);
-        assert!(!stark_result.valid);
-        assert!(!stark_result.chain_admissible);
-        assert!(!stark_result.witnessless_redeem_supported);
-        assert!(stark_result.lineage_witness_required_for_redeem);
-        assert!(
-            stark_result.reason.contains("proof.backend"),
-            "unexpected STARK/FRI rejection reason: {}",
-            stark_result.reason
-        );
+        assert_request_rejected(&stark_recursive_bundle);
 
         let mut empty_recursive_proof = request;
         empty_recursive_proof.bundle.recursive_proof.proof =
             ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
-        let empty_result = verify_result(&empty_recursive_proof);
-        assert!(!empty_result.valid);
-        assert!(!empty_result.chain_admissible);
-        assert!(!empty_result.witnessless_redeem_supported);
-        assert!(empty_result.lineage_witness_required_for_redeem);
-        assert!(
-            empty_result.reason.contains("proof.bytes"),
-            "unexpected empty-proof rejection reason: {}",
-            empty_result.reason
-        );
+        assert_request_rejected(&empty_recursive_proof);
     }
 
     #[test]
     fn kagemusha_recursive_spend_verify_ffi_rejects_reserved_lineage_without_matching_record() {
-        fn verify_result(
+        fn assert_verify_request_rejected(
             request: &KagemushaRecursiveSpendVerifyRequestV1,
-        ) -> KagemushaRecursiveSpendVerifyResultV1 {
+            label: &str,
+        ) {
             let archive = norito::to_bytes(request).expect("encode recursive spend verify request");
-            kagemusha_recursive_spend_verify_from_request_archive(&archive)
-                .expect("recursive spend verify result")
+            let err =
+                kagemusha_recursive_spend_verify_from_request_archive(&archive).expect_err(label);
+            assert!(
+                matches!(err, BridgeError::KagemushaProve),
+                "unexpected verify request error: {err:?}"
+            );
+
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+            let status = unsafe {
+                connect_norito_kagemusha_recursive_spend_verify(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+            assert!(
+                out_ptr.is_null(),
+                "malformed verify request must not return a diagnostic archive"
+            );
+            assert_eq!(out_len, 0);
         }
 
         let missing_record = KagemushaRecursiveSpendVerifyRequestV1 {
@@ -9569,15 +10018,9 @@ mod offline_note_prover_tests {
             lineage_verifier_record: None,
             block_height: None,
         };
-        let result = verify_result(&missing_record);
-        assert!(!result.valid);
-        assert!(!result.chain_admissible);
-        assert!(!result.witnessless_redeem_supported);
-        assert!(result.lineage_witness_required_for_redeem);
-        assert!(
-            result.reason.contains("requires a lineage verifier record"),
-            "unexpected missing-record rejection reason: {}",
-            result.reason
+        assert_verify_request_rejected(
+            &missing_record,
+            "reserved-lineage verify request without a lineage record must reject at decode boundary",
         );
 
         let mut semantic_record = VerifyingKeyRecord::new_with_owner(
@@ -9598,15 +10041,9 @@ mod offline_note_prover_tests {
             lineage_verifier_record: Some(semantic_record),
             block_height: None,
         };
-        let result = verify_result(&wrong_record);
-        assert!(!result.valid);
-        assert!(!result.chain_admissible);
-        assert!(!result.witnessless_redeem_supported);
-        assert!(result.lineage_witness_required_for_redeem);
-        assert!(
-            result.reason.contains("lineage verifier circuit id"),
-            "unexpected wrong-record rejection reason: {}",
-            result.reason
+        assert_verify_request_rejected(
+            &wrong_record,
+            "reserved-lineage verify request with a semantic verifier record must reject at decode boundary",
         );
 
         let mut forged_record = sample_recursive_spend_lineage_verifier_record();
@@ -9616,15 +10053,9 @@ mod offline_note_prover_tests {
             lineage_verifier_record: Some(forged_record),
             block_height: None,
         };
-        let result = verify_result(&forged_record);
-        assert!(!result.valid);
-        assert!(!result.chain_admissible);
-        assert!(!result.witnessless_redeem_supported);
-        assert!(result.lineage_witness_required_for_redeem);
-        assert!(
-            result.reason.contains("commitment mismatch"),
-            "unexpected forged-record rejection reason: {}",
-            result.reason
+        assert_verify_request_rejected(
+            &forged_record,
+            "reserved-lineage verify request with forged verifier-record commitment must reject at decode boundary",
         );
     }
 
@@ -9720,7 +10151,9 @@ mod offline_note_prover_tests {
             result.reason
         );
         assert!(
-            result.chain_admission_reason.contains("offline verification failed"),
+            result
+                .chain_admission_reason
+                .contains("offline verification failed"),
             "unexpected semantic recursive spend verify reason: {}",
             result.chain_admission_reason
         );
@@ -16916,6 +17349,89 @@ fn java_native_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_native_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+    env: &mut jni::JNIEnv<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+    pallas_open_envelopes_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let record_bundle_bytes =
+            read_java_byte_array(env, &record_bundle_archive, "recordBundleArchive")
+                .ok_or_else(|| "invalid Kagemusha record bundle archive bytes".to_string())?;
+        let pallas_open_envelope_bytes = read_java_byte_array(
+            env,
+            &pallas_open_envelopes_archive,
+            "pallasOpenEnvelopesArchive",
+        )
+        .ok_or_else(|| "invalid Kagemusha Pallas open-envelope archive bytes".to_string())?;
+        let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+            norito::decode_from_bytes(&record_bundle_bytes).map_err(|err| {
+                format!("failed to decode Kagemusha record bundle archive: {err}")
+            })?;
+        let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&pallas_open_envelope_bytes).map_err(|err| {
+                format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+            })?;
+        let _ = (record_bundle, pallas_open_envelopes);
+        Err(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE.to_owned())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_kagemusha_verify_recursive_compact_payment_token(
+    env: &mut jni::JNIEnv<'_>,
+    compact_token_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    let result = (|| -> Result<jni::sys::jboolean, String> {
+        let token_bytes = read_java_byte_array(env, &compact_token_archive, "compactTokenArchive")
+            .ok_or_else(|| "invalid Kagemusha recursive compact payment token bytes".to_string())?;
+        let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+            norito::decode_from_bytes(&token_bytes).map_err(|err| {
+                format!("failed to decode Kagemusha recursive compact payment token archive: {err}")
+            })?;
+        let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()?;
+        match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+            Err(err)
+                if err.contains(
+                    iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
+                ) =>
+            {
+                Ok(0)
+            }
+            Err(err) => Err(err),
+            Ok(()) => Ok(
+                iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box)
+                    as jni::sys::jboolean,
+            ),
+        }
+    })();
+    match result {
+        Ok(valid) => valid,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            0
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_kagemusha_recursive_spend_archive(
     env: &mut jni::JNIEnv<'_>,
     request_archive: jni::objects::JByteArray<'_>,
@@ -17475,6 +17991,58 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveCompactPaymentTokenProver_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveCompactPaymentTokenProver_nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+    pallas_open_envelopes_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+        &mut env,
+        record_bundle_archive,
+        pallas_open_envelopes_archive,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveCompactPaymentTokenProver_nativeVerifyRecursiveCompactPaymentToken(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    compact_token_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_kagemusha_verify_recursive_compact_payment_token(&mut env, compact_token_archive)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -17721,6 +18289,58 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         record_bundle_archive,
         pallas_open_envelopes_archive,
     )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveCompactPaymentTokenProver_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveCompactPaymentTokenProver_nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    record_bundle_archive: jni::objects::JByteArray<'_>,
+    pallas_open_envelopes_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+        &mut env,
+        record_bundle_archive,
+        pallas_open_envelopes_archive,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveCompactPaymentTokenProver_nativeVerifyRecursiveCompactPaymentToken(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    compact_token_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_kagemusha_verify_recursive_compact_payment_token(&mut env, compact_token_archive)
 }
 
 #[cfg(any(
@@ -20194,6 +20814,17 @@ mod tests {
             "missing required production plan rows must be rejected",
         );
 
+        let mut duplicate_required: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
+        let duplicate = *PRIVACY_ALGORITHM_ENTRIES
+            .iter()
+            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
+            .expect("required production plan row");
+        duplicate_required.push(duplicate);
+        assert!(
+            !privacy_required_production_plan_rows_are_present(&duplicate_required),
+            "duplicate required production plan rows must be rejected",
+        );
+
         let mut wrong_backend: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
         wrong_backend
             .iter_mut()
@@ -21044,6 +21675,34 @@ mod tests {
             algorithm.algorithm_id == "orchard-halo2-actions-v1"
                 && algorithm.backend_family == "halo2-ipa-orchard"
         }));
+        let zk_ace = capabilities
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
+            .expect("ZK-ACE native capability must be advertised");
+        assert_eq!(zk_ace.proof_family, "stark/fri/sha256-goldilocks");
+        assert_eq!(zk_ace.backend_family, "stark-fri");
+        assert!(
+            !zk_ace.production_ready,
+            "ZK-ACE native capability must not become production-ready only because its verifier backend is allowlisted",
+        );
+        assert!(!zk_ace.production_gate.ready);
+        assert!(zk_ace.production_gate.audit_references.is_empty());
+        assert!(zk_ace.production_gate.gates.iter().all(|gate| !gate.passed));
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE)
+        );
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST)
+        );
         for algorithm in capabilities.algorithms {
             assert!(!algorithm.production_ready);
             assert!(!algorithm.production_gate.ready);
@@ -22164,7 +22823,7 @@ mod tests {
     }
 
     #[test]
-    fn privacy_proof_ffi_rejects_empty_public_inputs_before_production_gate() {
+    fn privacy_build_proof_rejects_empty_public_inputs_before_production_gate() {
         let mut request = privacy_request(
             "confidential-transfer-v2",
             "buildConfidentialTransferProofV2",
@@ -22173,6 +22832,28 @@ mod tests {
         request.public_inputs.clear();
 
         let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
+
+        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        assert!(result.message.contains("public_inputs"));
+        assert!(result.message.contains("non-empty"));
+        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
+        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
+        assert!(result.public_inputs.is_empty());
+        assert!(result.proof.is_empty());
+        assert!(!result.verified);
+    }
+
+    #[test]
+    fn privacy_verify_proof_rejects_empty_public_inputs_before_production_gate() {
+        let mut request = privacy_request(
+            "confidential-transfer-v2",
+            "buildConfidentialTransferProofV2",
+            b"proof bytes".to_vec(),
+        );
+        request.public_inputs.clear();
+        request.witness.clear();
+
+        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Verify);
 
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
         assert!(result.message.contains("public_inputs"));
@@ -22308,7 +22989,7 @@ mod tests {
         let mut request = privacy_request(
             "confidential-transfer-v2",
             "buildConfidentialTransferProofV2",
-            b"candidate-proof".to_vec(),
+            b"secret proof".to_vec(),
         );
         request.witness = b"forged-verify-witness-shadow".to_vec();
 
@@ -22374,6 +23055,41 @@ mod tests {
         assert!(result.proof.is_empty());
         assert!(!result.verified);
         assert!(!result.message.contains("secret"));
+
+        let zk_ace_request = privacy_request(
+            "zk-ace-pq-authorization-v0",
+            "buildZkAceAuthorizationProofV1",
+            Vec::new(),
+        );
+        let zk_ace_request_bytes = public_privacy_request_archive(&zk_ace_request);
+        let mut zk_ace_out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut zk_ace_out_len: c_ulong = 0;
+
+        let zk_ace_rc = unsafe {
+            iroha_privacy_build_proof_v1(
+                zk_ace_request_bytes.as_ptr(),
+                zk_ace_request_bytes.len() as c_ulong,
+                &mut zk_ace_out_ptr,
+                &mut zk_ace_out_len,
+            )
+        };
+        assert_eq!(zk_ace_rc, 0);
+        let zk_ace_result: PrivacyProofResultV1 =
+            take_privacy_output(zk_ace_out_ptr, zk_ace_out_len);
+
+        assert_eq!(zk_ace_result.status, PRIVACY_FFI_STATUS_ERROR);
+        assert_eq!(
+            zk_ace_result.error_code,
+            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+        );
+        assert_eq!(zk_ace_result.algorithm_id, "zk-ace-pq-authorization-v0");
+        assert_eq!(zk_ace_result.entrypoint, "buildZkAceAuthorizationProofV1");
+        assert_eq!(zk_ace_result.vk_ref, "stark-fri:zk_ace_pq_authorization_v0");
+        assert_eq!(zk_ace_result.public_inputs, b"public-inputs");
+        assert!(zk_ace_result.message.contains("Iroha production allowlist"));
+        assert!(zk_ace_result.proof.is_empty());
+        assert!(!zk_ace_result.verified);
+        assert!(!zk_ace_result.message.contains("secret-witness"));
     }
 
     #[test]
@@ -22427,6 +23143,43 @@ mod tests {
         }
         assert!(result.proof.is_empty());
         assert!(!result.verified);
+        assert!(!result.message.contains("secret"));
+
+        let mut zk_ace_request = privacy_request(
+            "zk-ace-pq-authorization-v0",
+            "buildZkAceAuthorizationProofV1",
+            b"candidate-zk-ace-proof".to_vec(),
+        );
+        zk_ace_request.witness.clear();
+        let zk_ace_request_bytes = public_privacy_request_archive(&zk_ace_request);
+        let mut zk_ace_out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut zk_ace_out_len: c_ulong = 0;
+
+        let zk_ace_rc = unsafe {
+            iroha_privacy_verify_proof_v1(
+                zk_ace_request_bytes.as_ptr(),
+                zk_ace_request_bytes.len() as c_ulong,
+                &mut zk_ace_out_ptr,
+                &mut zk_ace_out_len,
+            )
+        };
+        assert_eq!(zk_ace_rc, 0);
+        let zk_ace_result: PrivacyProofResultV1 =
+            take_privacy_output(zk_ace_out_ptr, zk_ace_out_len);
+
+        assert_eq!(zk_ace_result.status, PRIVACY_FFI_STATUS_ERROR);
+        assert_eq!(
+            zk_ace_result.error_code,
+            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+        );
+        assert_eq!(zk_ace_result.algorithm_id, "zk-ace-pq-authorization-v0");
+        assert_eq!(zk_ace_result.entrypoint, "buildZkAceAuthorizationProofV1");
+        assert_eq!(zk_ace_result.vk_ref, "stark-fri:zk_ace_pq_authorization_v0");
+        assert_eq!(zk_ace_result.public_inputs, b"public-inputs");
+        assert!(zk_ace_result.message.contains("Iroha production allowlist"));
+        assert!(zk_ace_result.proof.is_empty());
+        assert!(!zk_ace_result.verified);
+        assert!(!zk_ace_result.message.contains("candidate-zk-ace-proof"));
     }
 
     #[test]

@@ -70,7 +70,9 @@ cd "${ROOT_DIR}/kotlin"
 cd "${ROOT_DIR}"
 javac -d "${JAVA_OUT}" \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java \
   java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java \
+  java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java
 java -ea -cp "${JAVA_OUT}" \
   org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest

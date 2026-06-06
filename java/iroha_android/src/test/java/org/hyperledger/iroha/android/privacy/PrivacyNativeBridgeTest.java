@@ -16,6 +16,8 @@ public final class PrivacyNativeBridgeTest {
     rejectsNullAndEmptyNativeOutputs();
     rejectsInvalidNoritoNativeOutputs();
     rejectsWrongOperationSchemaNativeOutputs();
+    privacySchemaMatcherRequiresExplicitExpectedSchema();
+    rejectsUnknownOperationSchemaNativeOutputs();
     rejectsInvalidNoritoRequestsBeforeNativeDispatch();
     rejectsWrongSchemaRequestsBeforeNativeDispatch();
     nativeDispatchReturnsDefensiveOutputCopy();
@@ -146,8 +148,8 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void nativeProbeRequiresAbiAndAllPrivacySymbols() {
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> privacyNoritoFrame(0x50));
-    assert PrivacyNativeBridge.returnsOutputProbe(() -> privacyNoritoFrameWithPayload(0x51));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrame(0x50));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPayload(0x51));
     assert PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPadding(0x50, 64));
     assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrame(0x50));
     assert PrivacyNativeBridge.returnsOutputProbe(0x42, () -> privacyNoritoFrameWithPayload(0x42));
@@ -156,40 +158,45 @@ public final class PrivacyNativeBridgeTest {
     assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPayload(0x42));
     assert !PrivacyNativeBridge.returnsOutputProbe(0x42, () -> privacyNoritoFrameWithPayload(0x56));
     assert !PrivacyNativeBridge.returnsOutputProbe(0x56, () -> privacyNoritoFrameWithPayload(0x50));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> new byte[] {1});
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoFrame(0, 'X'));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoFrame(4, 1));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoFrame(5, 1));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoFrame(22, 1));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoDeclaredPayloadLength(0x50));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoOversizedPayloadLength(0x50));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoFrame(39, 0x40));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoFrame(39, 0x20));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoWithNonzeroPadding());
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoWithExcessivePadding());
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoFrame(31, 1));
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> invalidPrivacyNoritoPayloadTamper());
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> new byte[0]);
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> new byte[] {1});
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(0, 'X'));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(4, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(5, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(22, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoDeclaredPayloadLength(0x50));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoOversizedPayloadLength(0x50));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(39, 0x40));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(39, 0x20));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoWithNonzeroPadding());
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoWithExcessivePadding());
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoFrame(31, 1));
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidPrivacyNoritoPayloadTamper());
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> new byte[0]);
     assert !PrivacyNativeBridge.returnsOutputProbe(
-        () -> new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1]);
-    assert !PrivacyNativeBridge.returnsOutputProbe(() -> null);
+        0x50, () -> new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1]);
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> null);
     assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
         () -> {
           throw new UnsatisfiedLinkError("missing symbol");
         });
     assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
         () -> {
           throw new IllegalArgumentException("bad probe");
         });
     assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
         () -> {
           throw new SecurityException("blocked probe");
         });
     assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
         () -> {
           throw new RuntimeException("unexpected probe failure");
         });
     assert !PrivacyNativeBridge.returnsOutputProbe(
+        0x50,
         () -> {
           throw new LinkageError("bad linked bridge");
         });
@@ -320,6 +327,24 @@ public final class PrivacyNativeBridgeTest {
     assertIllegalState(
         () ->
             PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x50),
+                "privacy capabilities"),
+        "empty privacy result payload");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x42),
+                "privacy build proof"),
+        "empty privacy result payload");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x56),
+                "privacy verify proof"),
+        "empty privacy result payload");
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
                 invalidPrivacyNoritoFrame(0, 'X'),
                 "privacy build proof"),
         "invalid Norito V1 archive");
@@ -395,6 +420,37 @@ public final class PrivacyNativeBridgeTest {
     assertAcceptsOnlySchema("privacy capabilities", 0x50, new int[] {0x42, 0x56, 0x52});
     assertAcceptsOnlySchema("privacy build proof", 0x42, new int[] {0x50, 0x56, 0x52});
     assertAcceptsOnlySchema("privacy verify proof", 0x56, new int[] {0x50, 0x42, 0x52});
+  }
+
+  private static void privacySchemaMatcherRequiresExplicitExpectedSchema() {
+    final byte[] capabilities = privacyNoritoFrameWithPayload(0x50);
+
+    assert !PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, -1);
+    assert !PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, 0x42);
+    assert PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, 0x50);
+  }
+
+  private static void rejectsUnknownOperationSchemaNativeOutputs() {
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrameWithPayload(0x50),
+                "privacy forged operation"),
+        "not a supported privacy native operation");
+
+    final boolean[] invoked = {false};
+    assertIllegalState(
+        () ->
+            PrivacyNativeBridge.call(
+                "forged proof",
+                privacyNoritoFrameWithPayload(0x52),
+                request -> {
+                  invoked[0] = true;
+                  return privacyNoritoFrameWithPayload(0x42);
+                },
+                true),
+        "not a supported privacy native operation");
+    assert !invoked[0] : "unsupported privacy operations must not reach native dispatch";
   }
 
   private static void assertAcceptsOnlySchema(
@@ -587,6 +643,26 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void rejectsInvalidNoritoRequestsBeforeNativeDispatch() {
+    assertIllegalArgument(
+        () ->
+            PrivacyNativeBridge.call(
+                "build proof",
+                privacyNoritoFrame(0x52),
+                request -> {
+                  throw new AssertionError("empty-payload build request must not reach native dispatch");
+                },
+                true),
+        "requestArchive must contain a non-empty privacy request payload");
+    assertIllegalArgument(
+        () ->
+            PrivacyNativeBridge.call(
+                "verify proof",
+                privacyNoritoFrame(0x52),
+                request -> {
+                  throw new AssertionError("empty-payload verify request must not reach native dispatch");
+                },
+                true),
+        "requestArchive must contain a non-empty privacy request payload");
     for (final byte[] malformedArchive : invalidPrivacyRequestArchives()) {
       assertIllegalArgument(
           () ->

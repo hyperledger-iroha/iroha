@@ -8,8 +8,10 @@ import {
   isKagemushaRecursiveSpendNativeAvailable,
   kagemushaRecursiveSpendInit,
   KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   normalizeCryptoAlgorithm,
   preferredKagemushaOfflineSpendMode,
+  preferredKagemushaOfflineSpendModeForCapabilities,
   supportedCryptoAlgorithms,
 } from "../src/crypto.browser.js";
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
@@ -77,6 +79,48 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       crypto.preferredKagemushaOfflineSpendMode(true),
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       `${label} native recursive availability should select recursive spend mode`,
+    );
+    assert.equal(
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
+      "recursive_compact_v1",
+      `${label} exposes recursive compact spend mode`,
+    );
+    assert.equal(
+      crypto.preferredKagemushaOfflineSpendModeForCapabilities(true, true),
+      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+      `${label} capability helper should prefer recursive spend mode`,
+    );
+    assert.equal(
+      crypto.isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
+      false,
+      `${label} browser build must not expose native recursive compact prover`,
+    );
+    assert.equal(
+      crypto.isKagemushaCompactPaymentTokenNativeAvailable(),
+      false,
+      `${label} browser build must not expose native compact-token prover`,
+    );
+    assert.equal(
+      crypto.isKagemushaRecursiveAggregationProofBundleNativeAvailable(),
+      false,
+      `${label} browser build must not expose native recursive aggregation prover`,
+    );
+    assert.throws(
+      () => crypto.kagemushaProveVerifiedCompactPaymentTokenWithRecords(),
+      /unavailable in browser-only crypto builds/,
+      `${label} compact-token prover must be native-only`,
+    );
+    assert.throws(
+      () =>
+        crypto.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(),
+      /unavailable in browser-only crypto builds/,
+      `${label} recursive aggregation prover must be native-only`,
+    );
+    assert.throws(
+      () =>
+        crypto.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(),
+      /unavailable in browser-only crypto builds/,
+      `${label} recursive compact prover must be native-only`,
     );
     assert.equal(crypto.KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
     assert.equal(

@@ -2,14 +2,23 @@ import Foundation
 
 public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError {
     case emptyRequestArchive
+    case invalidInputArchive
+    case emptyInputPayload
     case bridgeUnavailable
     case proofRejected
     case oversizedNativeOutput
+    case invalidNativeOutput
+    case emptyNativeOutputPayload
+    case invalidLineageKeyArtifact(String)
 
     public var errorDescription: String? {
         switch self {
         case .emptyRequestArchive:
             return "Kagemusha recursive spend request archive must not be empty."
+        case .invalidInputArchive:
+            return "Kagemusha recursive spend input archive must be a valid Norito archive."
+        case .emptyInputPayload:
+            return "Kagemusha recursive spend input archive must contain a non-empty Norito payload."
         case .bridgeUnavailable:
             return NoritoNativeBridge.bridgeUnavailableMessage(
                 "Kagemusha recursive spend native bridge is unavailable."
@@ -18,18 +27,28 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
             return "Kagemusha recursive spend request was rejected by the native bridge."
         case .oversizedNativeOutput:
             return "Kagemusha recursive spend native bridge returned an oversized archive."
+        case .invalidNativeOutput:
+            return "Kagemusha recursive spend native bridge returned an invalid Norito archive."
+        case .emptyNativeOutputPayload:
+            return "Kagemusha recursive spend native bridge returned an empty Norito payload."
+        case let .invalidLineageKeyArtifact(field):
+            return "Kagemusha recursive spend lineage key artifact is invalid: \(field)."
         }
     }
 }
 
 public enum KagemushaOfflineSpendMode: String, Equatable {
+    case recursiveCompactV1 = "recursive_compact_v1"
     case recursiveSpendV1 = "recursive_spend_v1"
     case checkedPrefoldV1 = "checked_prefold_v1"
 }
 
 public enum KagemushaRecursiveSpendProver {
     public static let requiredBridgeAbiVersion: UInt32 = 6
+    public static let recursiveCompactRequiredBridgeAbiVersion: UInt32 = 7
     public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
+    public static let recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"
+    public static let recursiveAggregationProofBackend = "halo2/ipa"
     public static let recursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1"
     public static let recursiveSpendLineageOneHopProofCircuitIdV1 =
         "kagemusha-recursive-spend-lineage-onehop-v1"
@@ -56,17 +75,32 @@ public enum KagemushaRecursiveSpendProver {
         "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1"
     public static let recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1 =
         "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"
+    private static let maxNoritoHeaderPaddingBytes = 64
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
     }
 
     public static var preferredMode: KagemushaOfflineSpendMode {
-        preferredMode(recursiveSpendAvailable: isNativeAvailable)
+        preferredMode(
+            recursiveCompactAvailable: KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable,
+            recursiveSpendAvailable: isNativeAvailable
+        )
     }
 
     public static func preferredMode(recursiveSpendAvailable: Bool) -> KagemushaOfflineSpendMode {
-        recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1
+        preferredMode(
+            recursiveCompactAvailable: false,
+            recursiveSpendAvailable: recursiveSpendAvailable
+        )
+    }
+
+    public static func preferredMode(
+        recursiveCompactAvailable: Bool,
+        recursiveSpendAvailable: Bool
+    ) -> KagemushaOfflineSpendMode {
+        _ = recursiveCompactAvailable
+        return recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1
     }
 
     public static func canRedeemWitnessless(circuitId: String, hopCount: UInt32) -> Bool {
@@ -85,6 +119,134 @@ public enum KagemushaRecursiveSpendProver {
     public static func isLineageAppendOutputCircuitId(_ outputCircuitId: String?) -> Bool {
         outputCircuitId == recursiveSpendLineageProofCircuitIdV1
             || outputCircuitId == recursiveSpendLineageAppendProofCircuitIdV1
+    }
+
+    public static func isSupportedLineageKeyArtifactOpeningLen(_ verifierOpeningLen: UInt32) -> Bool {
+        switch verifierOpeningLen {
+        case 2, 4, 8, 16, 32, 64, 128:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public struct LineageKeyArtifacts: Equatable {
+        public let proofCircuitId: String
+        public let verifierOpeningLen: UInt32
+        public let lineageVerifierKeyBackend: String
+        public let lineageVerifierKey: Data
+        public let lineageProvingKeyArchive: Data
+
+        public var isInitArtifact: Bool {
+            proofCircuitId == KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1
+        }
+
+        public var isAppendArtifact: Bool {
+            proofCircuitId == KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1
+        }
+
+        public init(
+            proofCircuitId: String,
+            verifierOpeningLen: UInt32,
+            lineageVerifierKeyBackend: String,
+            lineageVerifierKey: Data,
+            lineageProvingKeyArchive: Data
+        ) throws {
+            try KagemushaRecursiveSpendProver.validateLineageKeyArtifactFields(
+                proofCircuitId: proofCircuitId,
+                verifierOpeningLen: verifierOpeningLen,
+                lineageVerifierKeyBackend: lineageVerifierKeyBackend,
+                lineageVerifierKey: lineageVerifierKey,
+                lineageProvingKeyArchive: lineageProvingKeyArchive
+            )
+            self.proofCircuitId = proofCircuitId
+            self.verifierOpeningLen = verifierOpeningLen
+            self.lineageVerifierKeyBackend = lineageVerifierKeyBackend
+            self.lineageVerifierKey = lineageVerifierKey
+            self.lineageProvingKeyArchive = lineageProvingKeyArchive
+        }
+    }
+
+    public static func lineageKeyArtifactsForInit(
+        verifierOpeningLen: UInt32,
+        lineageVerifierKeyBackend: String,
+        lineageVerifierKey: Data,
+        lineageProvingKeyArchive: Data
+    ) throws -> LineageKeyArtifacts {
+        try lineageKeyArtifacts(
+            proofCircuitId: recursiveSpendLineageOneHopProofCircuitIdV1,
+            verifierOpeningLen: verifierOpeningLen,
+            lineageVerifierKeyBackend: lineageVerifierKeyBackend,
+            lineageVerifierKey: lineageVerifierKey,
+            lineageProvingKeyArchive: lineageProvingKeyArchive
+        )
+    }
+
+    public static func lineageKeyArtifactsForAppend(
+        verifierOpeningLen: UInt32,
+        lineageVerifierKeyBackend: String,
+        lineageVerifierKey: Data,
+        lineageProvingKeyArchive: Data
+    ) throws -> LineageKeyArtifacts {
+        try lineageKeyArtifacts(
+            proofCircuitId: recursiveSpendLineageAppendProofCircuitIdV1,
+            verifierOpeningLen: verifierOpeningLen,
+            lineageVerifierKeyBackend: lineageVerifierKeyBackend,
+            lineageVerifierKey: lineageVerifierKey,
+            lineageProvingKeyArchive: lineageProvingKeyArchive
+        )
+    }
+
+    public static func lineageKeyArtifacts(
+        proofCircuitId: String,
+        verifierOpeningLen: UInt32,
+        lineageVerifierKeyBackend: String,
+        lineageVerifierKey: Data,
+        lineageProvingKeyArchive: Data
+    ) throws -> LineageKeyArtifacts {
+        try LineageKeyArtifacts(
+            proofCircuitId: proofCircuitId,
+            verifierOpeningLen: verifierOpeningLen,
+            lineageVerifierKeyBackend: lineageVerifierKeyBackend,
+            lineageVerifierKey: lineageVerifierKey,
+            lineageProvingKeyArchive: lineageProvingKeyArchive
+        )
+    }
+
+    public static func validateLineageKeyArtifacts(_ artifacts: LineageKeyArtifacts) throws -> LineageKeyArtifacts {
+        try validateLineageKeyArtifactFields(
+            proofCircuitId: artifacts.proofCircuitId,
+            verifierOpeningLen: artifacts.verifierOpeningLen,
+            lineageVerifierKeyBackend: artifacts.lineageVerifierKeyBackend,
+            lineageVerifierKey: artifacts.lineageVerifierKey,
+            lineageProvingKeyArchive: artifacts.lineageProvingKeyArchive
+        )
+        return artifacts
+    }
+
+    private static func validateLineageKeyArtifactFields(
+        proofCircuitId: String,
+        verifierOpeningLen: UInt32,
+        lineageVerifierKeyBackend: String,
+        lineageVerifierKey: Data,
+        lineageProvingKeyArchive: Data
+    ) throws {
+        guard proofCircuitId == recursiveSpendLineageOneHopProofCircuitIdV1
+            || proofCircuitId == recursiveSpendLineageAppendProofCircuitIdV1
+        else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("proof_circuit_id")
+        }
+        guard isSupportedLineageKeyArtifactOpeningLen(verifierOpeningLen) else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("verifier_opening_len")
+        }
+        guard lineageVerifierKeyBackend == recursiveAggregationProofBackend,
+              !lineageVerifierKey.isEmpty
+        else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+        }
+        guard !lineageProvingKeyArchive.isEmpty else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
     }
 
     public static func requiresLineageKeyArtifactsForInit() -> Bool {
@@ -316,6 +478,7 @@ public enum KagemushaRecursiveSpendProver {
         guard archives.allSatisfy({ !$0.isEmpty }) else {
             throw KagemushaRecursiveSpendProverError.emptyRequestArchive
         }
+        try archives.forEach(requireValidInputArchive)
         guard bridgeAvailable else {
             throw KagemushaRecursiveSpendProverError.bridgeUnavailable
         }
@@ -336,6 +499,39 @@ public enum KagemushaRecursiveSpendProver {
         guard archive.count <= nativeArchiveMaxBytes else {
             throw KagemushaRecursiveSpendProverError.oversizedNativeOutput
         }
+        try requireValidOutputArchive(archive)
         return archive
+    }
+
+    private static func requireValidInputArchive(_ archive: Data) throws {
+        try requireValidNoritoArchive(
+            archive,
+            invalidError: .invalidInputArchive,
+            emptyPayloadError: .emptyInputPayload
+        )
+    }
+
+    private static func requireValidOutputArchive(_ archive: Data) throws {
+        try requireValidNoritoArchive(
+            archive,
+            invalidError: .invalidNativeOutput,
+            emptyPayloadError: .emptyNativeOutputPayload
+        )
+    }
+
+    private static func requireValidNoritoArchive(
+        _ archive: Data,
+        invalidError: KagemushaRecursiveSpendProverError,
+        emptyPayloadError: KagemushaRecursiveSpendProverError
+    ) throws {
+        guard archive.count <= nativeArchiveMaxBytes,
+              let frame = noritoDecodeFrame(archive),
+              frame.paddingLength <= maxNoritoHeaderPaddingBytes
+        else {
+            throw invalidError
+        }
+        guard frame.header.length > 0 else {
+            throw emptyPayloadError
+        }
     }
 }

@@ -54,6 +54,8 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 write_record_sources_flag=True,
             )
             summary_out = root / "summary" / "canary.summary.json"
+            summary_out.parent.mkdir()
+            summary_out.write_text('{"stale": true}\n' + ("x" * 4096), encoding="utf-8")
 
             with rail_test.capture_server() as (torii_url, rail_requests):
                 with audit_test.capture_server() as (notary_url, notary_requests):
@@ -101,6 +103,11 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertEqual(
                 json.loads(summary_out.read_text(encoding="utf-8")),
                 summary,
+            )
+            self.assertEqual(summary_out.stat().st_mode & 0o077, 0)
+            self.assertEqual(
+                list(summary_out.parent.glob(".iso-*.tmp")),
+                [],
             )
 
     def test_plan_only_redacts_token_paths_and_does_not_execute(self):
@@ -210,6 +217,34 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("must not be a symlink", stderr)
 
+    def test_symlinked_config_ancestor_is_rejected_before_plan(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "config-target"
+            target_dir.mkdir()
+            target = write_config(
+                target_dir,
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "missing-inbox",
+                        "torii_base_url": "https://torii.example.invalid",
+                    },
+                },
+            )
+            ancestor = root / "config-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            config = ancestor / target.name
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must not be a symlink", stderr)
+
     def test_directory_config_is_rejected_before_plan(self):
         with tempfile.TemporaryDirectory() as raw_root:
             config = Path(raw_root) / "config-dir"
@@ -219,6 +254,21 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("must be a regular file", stderr)
+
+    def test_oversized_config_is_rejected_before_plan(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            config = Path(raw_root) / "oversized-canary.json"
+            config.write_text(
+                '{"provider":"local-bank","environment":"preprod","padding":"'
+                + ("a" * CANARY.MAX_CONFIG_JSON_BYTES)
+                + '"}',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("exceeds", stderr)
 
     def test_symlinked_summary_output_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -249,6 +299,128 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("must not be a symlink", stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_config_cli_path_rejects_raw_smuggling_before_read(self):
+        cases = (
+            ("semicolon", "canary;debug.json", "semicolon path"),
+            ("whitespace", "canary config.json", "whitespace"),
+            ("leading-dash", "nested/-canary.json", "leading-dash path segments"),
+            ("parent", "nested/../canary.json", "dot or parent"),
+            ("dot", lambda root: f"{root}/nested/./canary.json", "dot or parent"),
+            ("empty", lambda root: f"{root}//canary.json", "empty path"),
+        )
+        for name, config_arg, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    value = (
+                        config_arg(root) if callable(config_arg) else str(root / config_arg)
+                    )
+
+                    rc, stdout, stderr = run_canary(["--config", value, "--plan-only"])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_summary_output_path_rejects_smuggled_segments(self):
+        cases = (
+            ("semicolon", "summary;debug.json", "must not contain semicolon path parameters"),
+            ("whitespace", "summary out.json", "must not contain whitespace"),
+            ("leading-dash", "nested/-summary.json", "must not contain leading-dash path segments"),
+            ("parent", "nested/../summary.json", "must not contain dot or parent segments"),
+            ("dot", lambda root: f"{root}/nested/./summary.json", "dot or parent segments"),
+            ("empty", lambda root: f"{root}//summary.json", "empty path segments"),
+        )
+        for name, summary_arg, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    config = write_config(
+                        root,
+                        {
+                            "provider": "local-bank",
+                            "environment": "preprod",
+                            "rail": {
+                                "inbox_dir": "missing-inbox",
+                                "torii_base_url": "https://torii.example.invalid",
+                            },
+                        },
+                    )
+
+                    rc, _stdout, stderr = run_canary(
+                        [
+                            "--config",
+                            str(config),
+                            "--plan-only",
+                            "--summary-out",
+                            summary_arg(root) if callable(summary_arg) else str(root / summary_arg),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_hardlinked_summary_output_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "missing-inbox",
+                        "torii_base_url": "https://torii.example.invalid",
+                    },
+                },
+            )
+            target = root / "summary-target.json"
+            target.write_text("untouched\n", encoding="utf-8")
+            summary_out = root / "summary-hardlink.json"
+            try:
+                summary_out.hardlink_to(target)
+            except OSError as error:
+                self.skipTest(f"hard link creation unavailable: {error}")
+
+            rc, _stdout, stderr = run_canary(
+                ["--config", str(config), "--plan-only", "--summary-out", str(summary_out)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must not be hard-linked", stderr)
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_symlinked_summary_output_ancestor_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "preprod",
+                    "rail": {
+                        "inbox_dir": "missing-inbox",
+                        "torii_base_url": "https://torii.example.invalid",
+                    },
+                },
+            )
+            target_dir = root / "summary-target"
+            target_dir.mkdir()
+            ancestor = root / "summary-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            summary_out = ancestor / "nested" / "summary.json"
+
+            rc, _stdout, stderr = run_canary(
+                ["--config", str(config), "--plan-only", "--summary-out", str(summary_out)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must not be a symlink", stderr)
+            self.assertFalse((target_dir / "nested").exists())
 
     def test_relative_symlinked_stage_receipt_dir_reaches_child_boundary(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -293,6 +465,149 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertIn(str(root.resolve() / receipt_link.name), rail_stage["command"])
             self.assertNotIn(str(root.resolve() / receipt_target.name), rail_stage["command"])
             self.assertIn("must not be a symlink", rail_stage["stderr_preview"])
+
+    def test_child_output_is_bounded_while_drained(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            script_dir = root / "scripts"
+            script_dir.mkdir()
+            fake_rail = script_dir / "iso_rail_gateway_adapter.py"
+            fake_rail.write_text(
+                "\n".join(
+                    [
+                        "import sys",
+                        "sys.stdout.write('O' * 32)",
+                        "sys.stderr.write('E' * 32)",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            inbox = root / "inbox"
+            inbox.mkdir()
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": str(inbox),
+                        "torii_base_url": "https://torii.example.invalid",
+                    },
+                    "verify": {"enabled": False},
+                },
+            )
+            original_script_dir = CANARY.SCRIPT_DIR
+            CANARY.SCRIPT_DIR = script_dir
+            try:
+                rc, stdout, stderr = run_canary(
+                    [
+                        "--config",
+                        str(config),
+                        "--output-limit-bytes",
+                        "8",
+                    ]
+                )
+            finally:
+                CANARY.SCRIPT_DIR = original_script_dir
+
+            self.assertEqual(rc, 0, stderr)
+            summary = load_summary(stdout)
+            stage = summary["stages"][0]
+            self.assertEqual(stage["stdout_preview"], "O" * 8)
+            self.assertEqual(stage["stderr_preview"], "E" * 8)
+            self.assertTrue(stage["stdout_truncated"])
+            self.assertTrue(stage["stderr_truncated"])
+
+    def test_child_stage_timeout_is_bounded_and_recorded(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            script_dir = root / "scripts"
+            script_dir.mkdir()
+            fake_rail = script_dir / "iso_rail_gateway_adapter.py"
+            fake_rail.write_text(
+                "\n".join(
+                    [
+                        "import sys",
+                        "import time",
+                        "sys.stdout.write('started')",
+                        "sys.stdout.flush()",
+                        "time.sleep(5)",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            inbox = root / "inbox"
+            inbox.mkdir()
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": str(inbox),
+                        "torii_base_url": "https://torii.example.invalid",
+                    },
+                    "verify": {"enabled": False},
+                },
+            )
+            original_script_dir = CANARY.SCRIPT_DIR
+            CANARY.SCRIPT_DIR = script_dir
+            try:
+                rc, stdout, stderr = run_canary(
+                    [
+                        "--config",
+                        str(config),
+                        "--stage-timeout-secs",
+                        "1",
+                    ]
+                )
+            finally:
+                CANARY.SCRIPT_DIR = original_script_dir
+
+            self.assertEqual(rc, 1, stderr)
+            summary = load_summary(stdout)
+            self.assertFalse(summary["ok"])
+            stage = summary["stages"][0]
+            self.assertEqual(stage["name"], "rail")
+            self.assertEqual(stage["returncode"], 124)
+            self.assertTrue(stage["timed_out"])
+            self.assertEqual(stage["stdout_preview"], "started")
+            self.assertEqual(stage["stderr_preview"], "")
+
+    def test_stage_timeout_cli_rejects_nonpositive_and_nonfinite_values(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": str(inbox),
+                        "torii_base_url": "https://torii.example.invalid",
+                    },
+                    "verify": {"enabled": False},
+                },
+            )
+            for value in ("0", "-1", "nan", "inf"):
+                with self.subTest(value=value):
+                    rc, stdout, stderr = run_canary(
+                        [
+                            "--config",
+                            str(config),
+                            "--plan-only",
+                            "--stage-timeout-secs",
+                            value,
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("positive finite number", stderr)
 
     def test_require_explicit_policy_rejects_omitted_policy_booleans(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -386,7 +701,47 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
 
+    def test_non_finite_runbook_json_numbers_are_rejected_before_planning(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = root / "canary.json"
+            config.write_text(
+                (
+                    '{"provider":"local-bank","environment":"ci",'
+                    '"rail":{"inbox_dir":"inbox",'
+                    '"torii_base_url":"https://torii.example.invalid",'
+                    '"timeout_secs":Infinity}}\n'
+                ),
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("non-finite numeric constant Infinity", stderr)
+
+    def test_runbook_json_surrogate_strings_are_rejected_before_planning(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = root / "canary.json"
+            config.write_text(
+                (
+                    '{"provider":"\\ud800","environment":"ci",'
+                    '"rail":{"inbox_dir":"inbox",'
+                    '"torii_base_url":"https://torii.example.invalid"}}\n'
+                ),
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid Unicode surrogate", stderr)
+
     def test_endpoint_urls_are_validated_before_planning(self):
+        long_torii_url = "https://torii.example/" + ("a" * CANARY.MAX_HTTP_URL_CHARS)
+        long_notary_url = "https://notary.example/" + ("a" * CANARY.MAX_HTTP_URL_CHARS)
+        long_host = ".".join(["a" * 63] * 4 + ["example"])
         cases = [
             (
                 {
@@ -427,10 +782,65 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
+                        "torii_base_url": long_torii_url,
+                    },
+                },
+                "must be no longer than 2048 characters",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
                         "torii_base_url": "https://torii.example.invalid:abc",
                     },
                 },
                 "invalid port",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid:",
+                    },
+                },
+                "empty port",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid:0",
+                    },
+                },
+                "port must be positive",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid:08443",
+                    },
+                },
+                "port must not contain leading zeros",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://[::1",
+                    },
+                },
+                "is not a valid URL",
             ),
             (
                 {
@@ -475,6 +885,61 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     },
                 },
                 "host must not contain empty labels",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://localhost/base",
+                    },
+                },
+                "must not use localhost",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://127.0.0.1.nip.io/base",
+                    },
+                },
+                "must not use local/private rebinding hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://0x7f000001/base",
+                    },
+                },
+                "host must not use legacy IPv4 numeric notation",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://[64:ff9b::7f00:1]/base",
+                    },
+                },
+                "must not embed local, private, or reserved IPv4 addresses",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": f"https://{long_host}/base",
+                    },
+                },
+                "host must be at most 253 characters",
             ),
             (
                 {
@@ -612,6 +1077,28 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 {
                     "provider": "local-bank",
                     "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid/base%3bdebug/v1",
+                    },
+                },
+                "path must not contain encoded semicolon parameters",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid/base%3Fdebug/v1",
+                    },
+                },
+                "path must not contain encoded URL delimiter characters",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
                     "notary": {
                         "export_dir": "export",
                         "endpoints": ["https://notary.example.invalid/iso-anchor#frag"],
@@ -636,10 +1123,65 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
+                        "endpoints": [long_notary_url],
+                    },
+                },
+                "must be no longer than 2048 characters",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
                         "endpoints": ["https://notary.example.invalid:99999/iso-anchor"],
                     },
                 },
                 "invalid port",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid:/iso-anchor"],
+                    },
+                },
+                "empty port",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid:0/iso-anchor"],
+                    },
+                },
+                "port must be positive",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid:08443/iso-anchor"],
+                    },
+                },
+                "port must not contain leading zeros",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://[]/iso-anchor"],
+                    },
+                },
+                "is not a valid URL",
             ),
             (
                 {
@@ -684,6 +1226,61 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     },
                 },
                 "host must not contain empty labels",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://127.0.0.1/iso-anchor"],
+                    },
+                },
+                "must not use local, private, or reserved IP addresses",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://service.localtest.me/iso-anchor"],
+                    },
+                },
+                "must not use local/private rebinding hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://0x7f.0.0.1/iso-anchor"],
+                    },
+                },
+                "host must not use legacy IPv4 numeric notation",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://[::127.0.0.1]/iso-anchor"],
+                    },
+                },
+                "must not embed local, private, or reserved IPv4 addresses",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": [f"https://{long_host}/iso-anchor"],
+                    },
+                },
+                "host must be at most 253 characters",
             ),
             (
                 {
@@ -739,6 +1336,28 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     },
                 },
                 "path must not contain encoded percent characters",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso%3bdebug/anchor"],
+                    },
+                },
+                "path must not contain encoded semicolon parameters",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso%40debug/anchor"],
+                    },
+                },
+                "path must not contain encoded URL delimiter characters",
             ),
             (
                 {
@@ -910,6 +1529,11 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail message backslash",
                 lambda body: body["rail"].__setitem__("message", r"messages\status.xml"),
                 "rail.message must use forward slashes",
+            ),
+            (
+                "rail message leading dash segment",
+                lambda body: body["rail"].__setitem__("message", "messages/--status.xml"),
+                "rail.message must not contain leading-dash path segments",
             ),
             (
                 "rail receipt semicolon",

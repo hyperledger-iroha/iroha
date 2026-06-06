@@ -26,6 +26,16 @@ REQUIRED_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_redeem",
 )
 
+REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = (
+    "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
+    "connect_norito_kagemusha_verify_recursive_compact_payment_token",
+)
+
+REQUIRED_RECORD_BACKED_KAGEMUSHA_C_SYMBOLS = (
+    "connect_norito_kagemusha_prove_verified_compact_payment_token_with_records",
+    "connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes",
+)
+
 REQUIRED_JS_NATIVE_METHODS = (
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
@@ -38,6 +48,29 @@ REQUIRED_JS_NATIVE_METHODS = (
     "kagemushaRecursiveSpendRedeem",
 )
 
+REQUIRED_RECURSIVE_COMPACT_JS_METHODS = (
+    "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+    "kagemushaVerifyRecursiveCompactPaymentToken",
+)
+
+REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS = (
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+    "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
+    *REQUIRED_RECURSIVE_COMPACT_JS_METHODS,
+)
+
+REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS = (
+    "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
+    "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+)
+
+REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS = (
+    "isKagemushaCompactPaymentTokenNativeAvailable",
+    "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+    *REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS,
+)
+
 REQUIRED_PYTHON_NATIVE_METHODS = (
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
@@ -48,6 +81,18 @@ REQUIRED_PYTHON_NATIVE_METHODS = (
     "kagemusha_recursive_spend_lineage_witness_append_result",
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
+)
+
+REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = (
+    "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
+    "kagemusha_verify_recursive_compact_payment_token",
+)
+
+REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS = (
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+    "is_kagemusha_recursive_compact_payment_token_prover_available",
+    "is_kagemusha_recursive_compact_payment_token_verifier_available",
 )
 
 REQUIRED_PUBLIC_METHODS = (
@@ -111,17 +156,40 @@ JNI_METHODS = (
     "nativeRedeemSpend",
 )
 
+REQUIRED_RECURSIVE_COMPACT_JNI_METHODS = (
+    "nativeBridgeAbiVersion",
+    "nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+    "nativeVerifyRecursiveCompactPaymentToken",
+)
+
 SOURCE_PATHS = (
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/connect_norito_bridge/include/connect_norito_bridge.h",
     "crates/connect_norito_bridge/include/NoritoBridge.h",
+    "crates/iroha_core/src/zk.rs",
     "crates/iroha_data_model/src/offline/mod.rs",
     "crates/iroha_js_host/src/lib.rs",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
     "javascript/iroha_js/src/crypto.js",
     "javascript/iroha_js/dist/crypto.js",
     "javascript/iroha_js/src/crypto.browser.js",
@@ -131,11 +199,13 @@ SOURCE_PATHS = (
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
+    "javascript/iroha_js/test/crypto.browser.test.js",
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_python/src/iroha_python/kagemusha.py",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
+    "python/iroha_python/tests/kagemusha_test.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
@@ -229,6 +299,14 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "cross-SDK helper-body negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies",
+    ),
+    (
+        "ABI-7 recursive compact verifier surface negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface",
+    ),
+    (
+        "Kagemusha ABI probe bounds negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds",
     ),
     (
         "SDK negative-control workflow negative control",
@@ -429,6 +507,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "C# SDK dotnet major script negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-major-script",
+    ),
+    (
+        "C# SDK native bridge script negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script",
     ),
     (
         "C# SDK test workflow negative control",
@@ -1062,6 +1144,27 @@ def check_c_bridge(texts, errors):
     )
     require_same_set(rust_exports, REQUIRED_C_SYMBOLS, "Rust C recursive Kagemusha exports", errors)
     require_same_set(header_exports, REQUIRED_C_SYMBOLS, "C header recursive Kagemusha declarations", errors)
+    rust_record_exports = names_from_matches(
+        rust,
+        r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        r"(connect_norito_kagemusha_(?:prove_verified_compact_payment_token_with_records|prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes))\s*\(",
+    )
+    header_record_exports = names_from_matches(
+        header,
+        r"int32_t\s+(connect_norito_kagemusha_(?:prove_verified_compact_payment_token_with_records|prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes))\s*\(",
+    )
+    require_same_set(
+        rust_record_exports,
+        REQUIRED_RECORD_BACKED_KAGEMUSHA_C_SYMBOLS,
+        "Rust C record-backed Kagemusha prover exports",
+        errors,
+    )
+    require_same_set(
+        header_record_exports,
+        REQUIRED_RECORD_BACKED_KAGEMUSHA_C_SYMBOLS,
+        "C header record-backed Kagemusha prover declarations",
+        errors,
+    )
     require(
         re.search(
             r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(',
@@ -1084,7 +1187,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*6\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*7\s*;",
         "C bridge ABI version",
         errors,
     )
@@ -1093,6 +1196,528 @@ def check_c_bridge(texts, errors):
         for method in JNI_METHODS:
             symbol = f"Java_org_hyperledger_iroha_{package}_offline_KagemushaRecursiveSpendProver_{method}"
             require(symbol in rust, f"JNI export missing {symbol}", errors)
+
+
+def check_recursive_compact_surface(texts, errors):
+    rust = texts["crates/connect_norito_bridge/src/lib.rs"]
+    header = texts["crates/connect_norito_bridge/include/connect_norito_bridge.h"]
+
+    rust_exports = names_from_matches(
+        rust,
+        r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        r"(connect_norito_kagemusha_(?:prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes|verify_recursive_compact_payment_token))\s*\(",
+    )
+    header_exports = names_from_matches(
+        header,
+        r"int32_t\s+(connect_norito_kagemusha_(?:prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes|verify_recursive_compact_payment_token))\s*\(",
+    )
+    require_same_set(
+        rust_exports,
+        REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS,
+        "Rust recursive compact C bridge exports",
+        errors,
+    )
+    require_same_set(
+        header_exports,
+        REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS,
+        "C header recursive compact declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+        (
+            "uint8_t* out_valid",
+            "Malformed archives and malformed token bindings return ERR_KAGEMUSHA_PROVE.",
+            "Output: `*out_valid = 0` for every shape-valid token in this release.",
+        ),
+        "C header recursive compact verifier contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/connect_norito_bridge/src/lib.rs",
+        (
+            "*out_valid = 0",
+            "preverify_kagemusha_recursive_compact_payment_token",
+            "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
+            "Vec<iroha_data_model::zk::OpenVerifyEnvelope>",
+            "malformed Pallas opening archives before the unavailable gate",
+            "malformed public-input bindings before returning a soft invalid result",
+            "KagemushaRecursiveCompactUnavailable",
+        ),
+        "Rust recursive compact verifier contract",
+        errors,
+    )
+    require_contains(
+        texts,
+        "crates/iroha_core/src/zk.rs",
+        (
+            "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
+            "semantic ABI-7 compact tokens are disabled for production",
+        ),
+        "Rust recursive compact fail-closed diagnostic",
+        errors,
+    )
+    for package in ("android", "sdk"):
+        for method in REQUIRED_RECURSIVE_COMPACT_JNI_METHODS:
+            symbol = (
+                "Java_org_hyperledger_iroha_"
+                f"{package}_offline_KagemushaRecursiveCompactPaymentTokenProver_{method}"
+            )
+            require(symbol in rust, f"recursive compact JNI export missing {symbol}", errors)
+
+    require_contains(
+        texts,
+        "crates/iroha_js_host/src/lib.rs",
+        [f'js_name = "{name}"' for name in REQUIRED_RECURSIVE_COMPACT_JS_METHODS]
+        + [
+            "napi::Result<bool>",
+            "Ok(false)",
+            "preverify_kagemusha_recursive_compact_payment_token",
+            "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
+            "Kagemusha recursive compact Pallas open-envelope archive",
+            "public-input hash mismatch",
+        ],
+        "Node recursive compact verifier export",
+        errors,
+    )
+
+    for relative in (
+        "javascript/iroha_js/src/crypto.js",
+        "javascript/iroha_js/dist/crypto.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS
+            + (
+                "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+                '"kagemusha-recursive-compact-v1"',
+                'typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"',
+                "native.kagemushaVerifyRecursiveCompactPaymentToken(KAGEMUSHA_NATIVE_PROBE_ARCHIVE)",
+                'assertKagemushaNoritoArchive(compactToken, "compactTokenArchive")',
+                "kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result",
+            ),
+            "JavaScript recursive compact verifier gate",
+            errors,
+        )
+    for relative in (
+        "javascript/iroha_js/src/crypto.browser.js",
+        "javascript/iroha_js/dist/crypto.browser.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS
+            + (
+                "return false;",
+                'unsupported("kagemushaVerifyRecursiveCompactPaymentToken")',
+            ),
+            "JavaScript browser recursive compact stubs",
+            errors,
+        )
+    for relative in ("javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_RECURSIVE_COMPACT_JS_PUBLIC_EXPORTS,
+            f"{relative} recursive compact re-exports",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        (
+            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7",
+            "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1:",
+            "isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean",
+            "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(",
+            "kagemushaVerifyRecursiveCompactPaymentToken(",
+        ),
+        "JavaScript recursive compact TypeScript declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "kagemushaVerifyRecursiveCompactPaymentToken",
+            "recursive compact Kagemusha payment-token verifier requires native bridge ABI 7",
+            "compactTokenArchive must be a valid Norito archive",
+            "compactTokenArchive must contain a non-empty Norito payload",
+            "kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result",
+        ),
+        "JavaScript recursive compact verifier tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        (
+            "kagemushaVerifyRecursiveCompactPaymentToken",
+            "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
+        ),
+        "JavaScript package recursive compact verifier exports",
+        errors,
+    )
+
+    wrapper = "python/iroha_python/src/iroha_python/kagemusha.py"
+    init = "python/iroha_python/src/iroha_python/__init__.py"
+    host = "python/iroha_python/iroha_python_rs/src/lib.rs"
+    require_contains(
+        texts,
+        wrapper,
+        REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS
+        + (
+            "_RECURSIVE_COMPACT_TOKEN_METHOD",
+            '"kagemusha_prove_verified_recursive_compact_payment_token"',
+            '"_with_records_and_pallas_open_envelopes"',
+            "_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD",
+            '"kagemusha_verify_recursive_compact_payment_token"',
+            "globals()[_RECURSIVE_COMPACT_TOKEN_METHOD]",
+            "globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD]",
+            "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
+            '"kagemusha-recursive-compact-v1"',
+            "bridge ABI 7 with compact prover and verifier symbols",
+            "bridge ABI 7 with the compact verifier symbol",
+            '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
+            "returned non-boolean result",
+        ),
+        "Python recursive compact verifier surface",
+        errors,
+    )
+    require_contains(
+        texts,
+        init,
+        REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS,
+        "Python package recursive compact re-exports",
+        errors,
+    )
+    require_contains(
+        texts,
+        host,
+        [f'name = "{name}"' for name in REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS]
+        + [
+            "preverify_kagemusha_recursive_compact_payment_token",
+            "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
+            "Kagemusha recursive compact Pallas open-envelope archive",
+            "public-input hash mismatch",
+        ],
+        "Python PyO3 recursive compact exports",
+        errors,
+    )
+    for name in REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS:
+        require_regex(
+            texts,
+            host,
+            rf"wrap_pyfunction!\s*\(\s*{name}_py\s*,\s*module\s*\)",
+            f"Python PyO3 module registration for {name}",
+            errors,
+        )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "kagemusha_verify_recursive_compact_payment_token",
+            "is_kagemusha_recursive_compact_payment_token_verifier_available",
+            "compact_token_archive must be a valid Norito archive",
+            "compact_token_archive must contain a non-empty Norito payload",
+            "returned non-boolean result",
+        ),
+        "Python recursive compact verifier tests",
+        errors,
+    )
+
+    swift_wrapper = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
+    swift_bridge = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+    require_contains(
+        texts,
+        swift_wrapper,
+        (
+            "KagemushaRecursiveCompactPaymentTokenProver",
+            "requiredBridgeAbiVersion: UInt32 = 7",
+            'recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"',
+            "public static func proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+            "public static func verifyRecursiveCompactPaymentToken",
+            "Kagemusha recursive compact-token archive must not be empty.",
+            "try requireValidInputArchive(",
+            "try requireValidRecursiveCompactTokenArchive(token)",
+            "requireValidRecursiveCompactTokenArchive(compactTokenArchive)",
+            "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
+            "Kagemusha Pallas open-envelope archive must contain a non-empty Norito payload.",
+            "Kagemusha recursive compact-token archive must be a valid Norito archive.",
+            "Kagemusha recursive compact-token archive must contain a non-empty Norito payload.",
+            "Kagemusha recursive compact-token archive was rejected by the native verifier.",
+        ),
+        "Swift recursive compact wrapper",
+        errors,
+    )
+    require_contains(
+        texts,
+        swift_bridge,
+        REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS
+        + (
+            "kagemushaVerifyRecursiveCompactPaymentTokenFn",
+            "probeKagemushaRecursiveCompactPaymentTokenVerifierFunction",
+            "kagemushaVerifyRecursiveCompactPaymentTokenFn != nil",
+        ),
+        "Swift recursive compact bridge verifier probe",
+        errors,
+    )
+    require_contains(
+        texts,
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+        (
+            "testVerifyRejectsEmptyCompactTokenArchiveBeforeBridgeCall",
+            "testVerifyRejectsMalformedCompactTokenArchiveBeforeBridgeCall",
+            "testVerifyRejectsEmptyPayloadCompactTokenArchiveBeforeBridgeCall",
+            "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
+            "testRejectsMalformedNativeOutput",
+            "testRejectsEmptyPayloadNativeOutput",
+            "testReturnsValidNativeOutput",
+            "validKagemushaNoritoArchive",
+            "testVerifyReturnsNativeBoolean",
+            "testVerifyNilNativeResultIsBridgeUnavailable",
+            "testVerifyNativeRejectionIsVerificationRejected",
+        ),
+        "Swift recursive compact verifier tests",
+        errors,
+    )
+
+    jvm_files = (
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+            "Kotlin recursive compact wrapper",
+            "REQUIRED_BRIDGE_ABI_VERSION: Int = 7",
+            "fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray): Boolean",
+            "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(compactTokenArchive)",
+            "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(compactTokenArchive)",
+            "nativeVerifyRecursiveCompactPaymentToken(ByteArray(0))",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+            "Android Java recursive compact wrapper",
+            "REQUIRED_BRIDGE_ABI_VERSION = 7",
+            "public static boolean verifyRecursiveCompactPaymentToken(final byte[] compactTokenArchive)",
+            "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(compactTokenArchive)",
+            "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(compactTokenArchive)",
+            "nativeVerifyRecursiveCompactPaymentToken(new byte[0])",
+        ),
+    )
+    for relative, label, *snippets in jvm_files:
+        require_contains(
+            texts,
+            relative,
+            (
+                "KagemushaRecursiveCompactPaymentTokenProver",
+                '"kagemusha-recursive-compact-v1"',
+                "proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+                "nativeVerifyRecursiveCompactPaymentToken",
+                *snippets,
+                "recursive compact-token prover/verifier is not available",
+            ),
+            label,
+            errors,
+        )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+        ("KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable()",),
+        "Kotlin recursive compact spend-mode selector",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+        ("KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable()",),
+        "Android Java recursive compact spend-mode selector",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+        (
+            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION",
+            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(ByteArray(0))",
+            "valid Norito archive",
+            "non-empty Norito payload",
+        ),
+        "Kotlin recursive compact verifier tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+        (
+            "KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION",
+            "KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(new byte[0])",
+            "compactTokenArchive must be a valid Norito archive",
+            "compactTokenArchive must contain a non-empty Norito payload",
+        ),
+        "Android Java recursive compact verifier tests",
+        errors,
+    )
+
+    csharp = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
+    require_contains(
+        texts,
+        csharp,
+        REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS
+        + (
+            "RecursiveCompactRequiredBridgeAbiVersion = 7",
+            "IsRecursiveCompactPaymentTokenProverAvailable",
+            "IsRecursiveCompactPaymentTokenVerifierAvailable",
+            "TryProbeRecursiveCompactPaymentTokenSurface",
+            "TryProbeRecursiveCompactPaymentTokenVerifierSymbol",
+            "public static bool VerifyRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)",
+            "RequireValidInputArchive",
+            "RequireValidRecursiveCompactTokenArchive(compactToken)",
+            "PrivacyNative.IsNoritoV1Archive(compactTokenArchive)",
+            "Record bundle archive",
+            "Pallas open-envelopes archive",
+            "must be a valid Norito archive.",
+            "must contain a non-empty Norito payload.",
+            "RequireValidNativeOutput(symbol, result)",
+            "returned invalid Norito archive",
+            "returned empty Norito payload",
+            "Compact token archive must be a valid Norito archive.",
+            "Compact token archive must contain a non-empty Norito payload.",
+            "out byte valid",
+        ),
+        "C# recursive compact wrapper",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "IsRecursiveCompactPaymentTokenVerifierAvailable",
+            "VerifyRecursiveCompactPaymentToken(Array.Empty<byte>())",
+            "RecursiveCompactProverRejectsMalformedInputsBeforeLoadingNativeBridge",
+            "RecursiveCompactProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
+            "RecursiveSpendNativeReadBridgeOutputRejectsMalformedNoritoSuccessOutput",
+            "RecursiveSpendNativeReadBridgeOutputRejectsEmptyPayloadNoritoSuccessOutput",
+            "RecursiveSpendNativeReadBridgeOutputReturnsValidNoritoSuccessOutput",
+            "valid Norito archive",
+            "non-empty Norito payload",
+            "KagemushaNoritoFrameWithPayload",
+            "KagemushaNoritoFrame",
+        ),
+        "C# recursive compact verifier tests",
+        errors,
+    )
+
+
+def check_record_backed_javascript_surface(texts, errors):
+    require_contains(
+        texts,
+        "crates/iroha_js_host/src/lib.rs",
+        [f'js_name = "{name}"' for name in REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_METHODS]
+        + [
+            "prove_verified_kagemusha_compact_payment_token_from_record_bundle",
+            "prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive",
+            "KAGEMUSHA_FOLDED_CIRCUIT_ID",
+            "KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID",
+            "serialize Kagemusha compact payment-token archive",
+            "serialize Kagemusha recursive aggregation proof-bundle archive",
+        ],
+        "Node record-backed Kagemusha prover exports",
+        errors,
+    )
+
+    for relative in (
+        "javascript/iroha_js/src/crypto.js",
+        "javascript/iroha_js/dist/crypto.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+            + (
+                'typeof native.kagemushaProveVerifiedCompactPaymentTokenWithRecords !== "function"',
+                "native.kagemushaProveVerifiedCompactPaymentTokenWithRecords(",
+                "native.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(",
+                'assertKagemushaNoritoArchive(recordBundle, "recordBundleArchive")',
+                'assertKagemushaNoritoArchive(pallasOpenEnvelopes, "pallasOpenEnvelopesArchive")',
+                "Kagemusha compact payment-token prover requires native bridge ABI 6 with compact-token prover symbol",
+                "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 6 with recursive aggregation prover symbol",
+                "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
+                "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+            ),
+            "JavaScript record-backed Kagemusha prover wrappers",
+            errors,
+        )
+    for relative in (
+        "javascript/iroha_js/src/crypto.browser.js",
+        "javascript/iroha_js/dist/crypto.browser.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+            + (
+                "return false;",
+                'unsupported("kagemushaProveVerifiedCompactPaymentTokenWithRecords")',
+                'unsupported(\n    "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes"',
+            ),
+            "JavaScript browser record-backed Kagemusha stubs",
+            errors,
+        )
+    for relative in ("javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS,
+            f"{relative} record-backed Kagemusha re-exports",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        (
+            "isKagemushaCompactPaymentTokenNativeAvailable(): boolean",
+            "isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean",
+            "kagemushaProveVerifiedCompactPaymentTokenWithRecords(",
+            "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(",
+        ),
+        "JavaScript record-backed Kagemusha TypeScript declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        (
+            "Kagemusha record-backed JS builders probe availability and validate native output",
+            "isKagemushaCompactPaymentTokenNativeAvailable",
+            "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+            "recordBundleArchive must be a valid Norito archive",
+            "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
+            "returned invalid Norito archive",
+            "returned empty Norito payload",
+        ),
+        "JavaScript record-backed Kagemusha runtime tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/crypto.browser.test.js",
+        REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS
+        + (
+            "browser build must not expose native compact-token prover",
+            "browser build must not expose native recursive aggregation prover",
+        ),
+        "JavaScript browser record-backed Kagemusha tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/package_dist.test.js",
+        REQUIRED_RECORD_BACKED_KAGEMUSHA_JS_PUBLIC_EXPORTS,
+        "JavaScript package record-backed Kagemusha exports",
+        errors,
+    )
 
 
 def check_rust_policy_constants(texts, errors):
@@ -1172,7 +1797,7 @@ def check_node_host(texts, errors):
     require_regex(
         texts,
         relative,
-        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*6\s*\}",
+        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
         "Node NAPI bridge ABI version",
         errors,
     )
@@ -1210,6 +1835,11 @@ def check_jvm_sdk_script_pins_jdk21(texts, errors):
         "Kagemusha JVM SDK script must print the selected Java version",
         errors,
     )
+    require(
+        "KagemushaRecursiveAggregationProofBundleProver.java" in script,
+        "Kagemusha JVM SDK script must compile the Android recursive aggregation prover wrapper",
+        errors,
+    )
 
 
 def check_javascript(texts, errors):
@@ -1238,6 +1868,38 @@ def check_javascript(texts, errors):
     ):
         require_contains(texts, relative, constants, f"{relative} constants", errors)
         require_contains(texts, relative, REQUIRED_JS_PUBLIC_EXPORTS, f"{relative} public API", errors)
+
+    for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "const KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff",
+                "Number.isSafeInteger(version)",
+                "version >= 0",
+                "version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+            ),
+            f"{relative} Kagemusha ABI probe bounds",
+            errors,
+        )
+
+    for relative in (
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+        "javascript/iroha_js/test/package_dist.test.js",
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "Number.NaN",
+                "Number.POSITIVE_INFINITY",
+                "Number.MAX_SAFE_INTEGER + 1",
+                "0x1_0000_0000",
+                "isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false",
+            ),
+            f"{relative} Kagemusha ABI probe test coverage",
+            errors,
+        )
 
     for relative in ("javascript/iroha_js/src/index.js", "javascript/iroha_js/dist/index.js"):
         require_contains(texts, relative, REQUIRED_JS_PUBLIC_EXPORTS, f"{relative} re-exports", errors)
@@ -1295,6 +1957,44 @@ def check_javascript(texts, errors):
         "javascript/iroha_js/src/crypto.js",
         [f"native.{name}" for name in REQUIRED_JS_NATIVE_METHODS],
         "JavaScript malformed-archive probes",
+        errors,
+    )
+    for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
+        require_contains(
+            texts,
+            relative,
+            (
+                "kagemushaRecursiveSpendOutputToBuffer",
+                'assertKagemushaNoritoArchive(recordBundle, "recordBundleArchive")',
+                'assertKagemushaNoritoArchive(pallasOpenEnvelopes, "pallasOpenEnvelopesArchive")',
+                "assertKagemushaNoritoArchive(request, archiveName)",
+                'assertKagemushaNoritoArchive(bundle, "bundleArchive")',
+                'assertKagemushaNoritoArchive(previousWitness, "previousWitnessArchive")',
+                "assertKagemushaNoritoArchive(",
+                "native ${operation} returned invalid Norito archive",
+                "native ${operation} returned empty Norito payload",
+            ),
+            f"{relative} native output Norito guard",
+            errors,
+        )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
+            (
+                "Kagemusha recursive spend helpers reject malformed Norito request archives before native calls",
+                "Kagemusha recursive spend helpers reject empty-payload Norito request archives before native calls",
+                "requestArchive must be a valid Norito archive",
+                "recordBundleArchive must be a valid Norito archive",
+                "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
+                "previousWitnessArchive must contain a non-empty Norito payload",
+                "kagemushaInputArchive",
+                "Kagemusha recursive spend helpers reject malformed Norito native outputs",
+                "Kagemusha recursive spend helpers reject empty-payload Norito native outputs",
+                "native kagemushaRecursiveSpendRedeem returned invalid Norito archive",
+            "native kagemushaRecursiveSpendRedeem returned empty Norito payload",
+            "kagemushaNoritoFrameWithPayload",
+        ),
+        "JavaScript native output Norito guard tests",
         errors,
     )
     for relative in (
@@ -1410,6 +2110,33 @@ def check_python(texts, errors):
         texts,
         wrapper,
         (
+            "KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF",
+            "isinstance(version, bool)",
+            "not isinstance(version, int)",
+            "version < 0",
+            "version > KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+        ),
+        "Python Kagemusha ABI probe bounds",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            '"6"',
+            "6.5",
+            "0x1_0000_0000",
+            "10**100",
+            "is_kagemusha_recursive_compact_payment_token_prover_available",
+            "is_kagemusha_recursive_compact_payment_token_verifier_available",
+        ),
+        "Python Kagemusha ABI probe test coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        wrapper,
+        (
             "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64",
             "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = True",
@@ -1459,6 +2186,46 @@ def check_python(texts, errors):
     )
     require_contains(
         texts,
+        wrapper,
+        (
+            "_require_kagemusha_native_output",
+            "_norito_archive_bytes_named",
+            "_assert_kagemusha_norito_archive(data, name)",
+            '_norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive")',
+            "pallas_open_envelopes = _norito_archive_bytes_named(",
+            '_norito_archive_bytes_named(request_archive, "request_archive")',
+            '_norito_archive_bytes_named(bundle_archive, "bundle_archive")',
+            "_assert_kagemusha_norito_archive(output, name)",
+            "returned invalid Norito archive",
+            "returned empty Norito payload",
+        ),
+        "Python native output Norito guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "test_recursive_kagemusha_helpers_reject_malformed_norito_requests",
+            "test_recursive_kagemusha_helpers_reject_empty_payload_norito_requests",
+            "test_kagemusha_native_prover_helpers_reject_malformed_norito_requests",
+            "test_kagemusha_native_prover_helpers_reject_empty_payload_norito_requests",
+            "record_bundle_archive must be a valid Norito archive",
+            "pallas_open_envelopes_archive must contain a non-empty Norito payload",
+            "request_archive must be a valid Norito archive",
+            "previous_witness_archive must contain a non-empty Norito payload",
+            "_kagemusha_input_archive",
+            "test_recursive_kagemusha_helpers_reject_malformed_native_outputs",
+            "test_recursive_kagemusha_helpers_reject_empty_payload_native_outputs",
+            "returned invalid Norito archive",
+            "returned empty Norito payload",
+            "_kagemusha_norito_frame_with_payload",
+        ),
+        "Python native output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
         host,
         [f'#[pyo3(name = "{name}")]' for name in REQUIRED_PYTHON_NATIVE_METHODS],
         "Python PyO3 exports",
@@ -1475,7 +2242,7 @@ def check_python(texts, errors):
     require_regex(
         texts,
         host,
-        r"fn\s+kagemusha_recursive_spend_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*6\s*\}",
+        r"fn\s+kagemusha_recursive_spend_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
         "Python recursive spend ABI version",
         errors,
     )
@@ -1495,7 +2262,12 @@ def check_python(texts, errors):
 
 def check_swift(texts, errors):
     prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
+    compact_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
+    recursive_aggregation_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
     bridge = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+    test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
+    compact_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
+    recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
     require_contains(texts, prover, REQUIRED_PUBLIC_METHODS, "Swift public prover", errors)
     require_contains(
         texts,
@@ -1527,6 +2299,145 @@ def check_swift(texts, errors):
             '"iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"',
         ),
         "Swift constants",
+        errors,
+    )
+    require_contains(
+        texts,
+        prover,
+        (
+            "LineageKeyArtifacts",
+            "recursiveAggregationProofBackend",
+            "isSupportedLineageKeyArtifactOpeningLen",
+            "lineageKeyArtifactsForInit",
+            "lineageKeyArtifactsForAppend",
+            "validateLineageKeyArtifacts",
+            "invalidLineageKeyArtifact",
+            "isInitArtifact",
+            "isAppendArtifact",
+            '"proof_circuit_id"',
+            '"verifier_opening_len"',
+            '"lineage_verifier_key"',
+            '"lineage_proving_key_archive"',
+        ),
+        "Swift portable lineage key artifact package",
+        errors,
+    )
+    require_contains(
+        texts,
+        prover,
+        (
+            "invalidInputArchive",
+            "emptyInputPayload",
+            "invalidNativeOutput",
+            "emptyNativeOutputPayload",
+            "try archives.forEach(requireValidInputArchive)",
+            "try requireValidOutputArchive(archive)",
+            "noritoDecodeFrame(archive)",
+            "Kagemusha recursive spend input archive must be a valid Norito archive.",
+            "Kagemusha recursive spend input archive must contain a non-empty Norito payload.",
+            "Kagemusha recursive spend native bridge returned an invalid Norito archive.",
+            "Kagemusha recursive spend native bridge returned an empty Norito payload.",
+        ),
+        "Swift recursive spend input/output Norito guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
+            "testRejectsMalformedNativeOutput",
+            "testRejectsEmptyPayloadNativeOutput",
+            "testReturnsValidNativeOutput",
+            ".invalidInputArchive",
+            ".emptyInputPayload",
+            ".invalidNativeOutput",
+            ".emptyNativeOutputPayload",
+            "validKagemushaNoritoArchive",
+            "emptyPayloadKagemushaNoritoArchive",
+        ),
+        "Swift recursive spend input/output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        compact_prover,
+        (
+            "invalidRecordBundleArchive",
+            "emptyRecordBundlePayload",
+            "oversizedCompactTokenArchive",
+            "invalidCompactTokenArchive",
+            "emptyCompactTokenPayload",
+            "try requireValidRecordBundleArchive(recordBundleArchive)",
+            "try requireValidCompactTokenArchive(token)",
+            "noritoDecodeFrame(archive)",
+            "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
+            "Kagemusha verified fold record bundle archive must contain a non-empty Norito payload.",
+            "Kagemusha compact-token native bridge returned an invalid Norito archive.",
+            "Kagemusha compact-token native bridge returned an empty Norito payload.",
+        ),
+        "Swift compact-token input/output Norito guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        compact_test,
+        (
+            "testRejectsMalformedRecordBundleArchiveBeforeBridgeCall",
+            "testRejectsEmptyPayloadRecordBundleArchiveBeforeBridgeCall",
+            "testRejectsMalformedNativeOutput",
+            "testRejectsEmptyPayloadNativeOutput",
+            "testReturnsValidNativeOutput",
+            ".invalidRecordBundleArchive",
+            ".emptyRecordBundlePayload",
+            ".invalidCompactTokenArchive",
+            ".emptyCompactTokenPayload",
+            "validKagemushaNoritoArchive",
+            "emptyPayloadKagemushaNoritoArchive",
+        ),
+        "Swift compact-token input/output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        recursive_aggregation_prover,
+        (
+            "invalidRecordBundleArchive",
+            "emptyRecordBundlePayload",
+            "invalidPallasOpenEnvelopesArchive",
+            "emptyPallasOpenEnvelopesPayload",
+            "oversizedProofBundleArchive",
+            "invalidProofBundleArchive",
+            "emptyProofBundlePayload",
+            "try requireValidInputArchive(",
+            "try requireValidProofBundleArchive(proofBundle)",
+            "noritoDecodeFrame(archive)",
+            "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
+            "Kagemusha Pallas open-envelope archive must contain a non-empty Norito payload.",
+            "Kagemusha recursive aggregation native bridge returned an invalid Norito archive.",
+            "Kagemusha recursive aggregation native bridge returned an empty Norito payload.",
+        ),
+        "Swift recursive aggregation input/output Norito guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        recursive_aggregation_test,
+        (
+            "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
+            "testRejectsMalformedNativeOutput",
+            "testRejectsEmptyPayloadNativeOutput",
+            "testReturnsValidNativeOutput",
+            ".invalidRecordBundleArchive",
+            ".emptyPallasOpenEnvelopesPayload",
+            ".invalidProofBundleArchive",
+            ".emptyProofBundlePayload",
+            "validKagemushaNoritoArchive",
+            "emptyPayloadKagemushaNoritoArchive",
+        ),
+        "Swift recursive aggregation input/output Norito guard tests",
         errors,
     )
     require_contains(texts, bridge, REQUIRED_C_SYMBOLS, "Swift C symbol loader", errors)
@@ -1575,8 +2486,16 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
 
 
 def check_java_kotlin(texts, errors):
+    java_compact = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
+    java_recursive_aggregation = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java"
     java = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+    kotlin_compact = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt"
+    kotlin_recursive_aggregation = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt"
     kotlin = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
+    java_recursive_compact = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
+    kotlin_recursive_compact = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
+    java_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
+    kotlin_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
     for relative, label in ((java, "Android Java SDK"), (kotlin, "Kotlin JVM SDK")):
         require_contains(texts, relative, REQUIRED_PUBLIC_METHODS, label, errors)
         require_contains(texts, relative, JNI_METHODS, f"{label} native declarations", errors)
@@ -1610,11 +2529,100 @@ def check_java_kotlin(texts, errors):
             texts,
             relative,
             (
+                "LineageKeyArtifacts",
+                "RECURSIVE_AGGREGATION_PROOF_BACKEND",
+                "isSupportedLineageKeyArtifactOpeningLen",
+                "lineageKeyArtifactsForInit",
+                "lineageKeyArtifactsForAppend",
+                "validateLineageKeyArtifacts",
+                "isInitArtifact",
+                "isAppendArtifact",
+                '"proof_circuit_id"',
+                '"verifier_opening_len"',
+                '"lineage_verifier_key"',
+                '"lineage_proving_key_archive"',
+            ),
+            f"{label} portable lineage key artifact package",
+            errors,
+        )
+        require_contains(
+            texts,
+            relative,
+            (
                 "nativeTransitionProfileInit",
                 "nativeTransitionProfileAppend",
                 "nativeLineageAppendBoundary",
             ),
             f"{label} transition-profile probes",
+            errors,
+        )
+        require_contains(
+            texts,
+            relative,
+            (
+                "requireNativeInput",
+                "KagemushaCompactPaymentTokenProver.isValidNoritoArchive",
+                "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload",
+                "must be a valid Norito archive",
+                "must contain a non-empty Norito payload",
+            ),
+            f"{label} recursive spend input Norito guard",
+            errors,
+        )
+
+    for relative, label in (
+        (java_compact, "Android Java compact-token prover"),
+        (kotlin_compact, "Kotlin compact-token prover"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "proveVerifiedCompactPaymentTokenWithRecords",
+                "requireNativeInput",
+                "isValidNoritoArchive(archive)",
+                "hasNonEmptyNoritoPayload(archive)",
+                "must be a valid Norito archive",
+                "must contain a non-empty Norito payload",
+            ),
+            f"{label} input Norito guard",
+            errors,
+        )
+
+    for relative, label in (
+        (java_recursive_aggregation, "Android Java recursive aggregation prover"),
+        (kotlin_recursive_aggregation, "Kotlin recursive aggregation prover"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+                "KagemushaCompactPaymentTokenProver.requireNativeInput",
+                "recordBundleArchive",
+                "pallasOpenEnvelopesArchive",
+            ),
+            f"{label} input Norito guard",
+            errors,
+        )
+
+    for relative, label in (
+        (java_recursive_compact, "Android Java recursive compact prover"),
+        (kotlin_recursive_compact, "Kotlin recursive compact prover"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "requireNativeInput",
+                'requireNativeInput(recordBundleArchive, "recordBundleArchive")',
+                'requireNativeInput(pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive")',
+                "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)",
+                "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)",
+                "must be a valid Norito archive",
+                "must contain a non-empty Norito payload",
+            ),
+            f"{label} input Norito guard",
             errors,
         )
 
@@ -1658,6 +2666,88 @@ def check_java_kotlin(texts, errors):
         "Kotlin witnessless Reserved-lineage helper bounds",
         errors,
     )
+    for relative, label in (
+        (java_test, "Android Java portable lineage key artifact tests"),
+        (kotlin_test, "Kotlin portable lineage key artifact tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "lineageKeyArtifactPackagesValidateReleaseProfiles",
+                "lineageKeyArtifactsForInit",
+                "lineageKeyArtifactsForAppend",
+                "validateLineageKeyArtifacts",
+                "isSupportedLineageKeyArtifactOpeningLen",
+                "RECURSIVE_AGGREGATION_PROOF_BACKEND",
+                "halo2/kzg",
+                '"proof_circuit_id"',
+                '"verifier_opening_len"',
+                '"lineage_verifier_key"',
+                '"lineage_proving_key_archive"',
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        ("java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java", "Android Java compact-token input Norito guard tests"),
+        ("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt", "Kotlin compact-token input Norito guard tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "kagemushaRecordBackedNativeProverValidatesInput",
+                "recordBundleArchive must not be empty",
+                "recordBundleArchive must be a valid Norito archive",
+                "recordBundleArchive must contain a non-empty Norito payload",
+                "kagemushaRecursiveAggregationNativeProverValidatesInput",
+                "pallasOpenEnvelopesArchive must not be empty",
+                "pallasOpenEnvelopesArchive must be a valid Norito archive",
+                "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
+                "kagemushaNoritoFrame(0x4b)",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (java_test, "Android Java recursive spend input Norito guard tests"),
+        (kotlin_test, "Kotlin recursive spend input Norito guard tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "rejectsMalformedAndEmptyPayloadArchivesBeforeNativeDispatch",
+                "requestArchive must be a valid Norito archive",
+                "bundleArchive must be a valid Norito archive",
+                "previousWitnessArchive must contain a non-empty Norito payload",
+                "kagemushaNoritoFrameWithPayload",
+            ),
+            label,
+            errors,
+        )
+    for relative, label in (
+        (java_test, "Android Java recursive compact prover input Norito guard tests"),
+        (kotlin_test, "Kotlin recursive compact prover input Norito guard tests"),
+    ):
+        require_contains(
+            texts,
+            relative,
+            (
+                "validRecursiveCompactInput",
+                "proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+                "recordBundleArchive must not be empty",
+                "pallasOpenEnvelopesArchive must not be empty",
+                "recordBundleArchive must be a valid Norito archive",
+                "pallasOpenEnvelopesArchive must be a valid Norito archive",
+                "recordBundleArchive must contain a non-empty Norito payload",
+                "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
+                "kagemushaNoritoFrameWithPayload",
+            ),
+            label,
+            errors,
+        )
 
 
 def check_csharp(texts, errors):
@@ -1682,6 +2772,31 @@ def check_csharp(texts, errors):
         "Kagemusha C# SDK script must reject non-.NET-8 SDK versions",
         errors,
     )
+    require(
+        'BRIDGE_TARGET_DIR="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR:-${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target}"' in script,
+        "Kagemusha C# SDK script must keep an overrideable native bridge target dir",
+        errors,
+    )
+    require(
+        'CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo build -p connect_norito_bridge' in script,
+        "Kagemusha C# SDK script must build the native bridge before P/Invoke tests",
+        errors,
+    )
+    require(
+        'export DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"' in script,
+        "Kagemusha C# SDK script must expose the native bridge on macOS loader path",
+        errors,
+    )
+    require(
+        'export LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"' in script,
+        "Kagemusha C# SDK script must expose the native bridge on Linux loader path",
+        errors,
+    )
+    require(
+        'export PATH="${BRIDGE_LIBRARY_DIR}:${PATH}"' in script,
+        "Kagemusha C# SDK script must expose the native bridge on Windows loader path",
+        errors,
+    )
     relative = "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
     require_contains(
         texts,
@@ -1696,15 +2811,28 @@ def check_csharp(texts, errors):
             "LineageWitnessAppendResult",
             "Verify",
             "Redeem",
+            "ProveVerifiedCompactPaymentTokenWithRecords",
+            "ProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
             "KagemushaRecursiveSpendTransitionProfileArchive",
             "KagemushaRecursiveSpendLineageAppendBoundaryArchive",
             "KagemushaRecursiveSpendLineageWitnessArchive",
+            "KagemushaCompactPaymentTokenArchive",
+            "KagemushaRecursiveAggregationProofBundleArchive",
+            "IsCompactPaymentTokenProverAvailable",
+            "IsRecursiveAggregationProofBundleProverAvailable",
             "IsSupportedAppendProofTransition",
         ),
         "C# public API",
         errors,
     )
     require_contains(texts, relative, REQUIRED_C_SYMBOLS, "C# P/Invoke symbols", errors)
+    require_contains(
+        texts,
+        relative,
+        REQUIRED_RECORD_BACKED_KAGEMUSHA_C_SYMBOLS,
+        "C# record-backed Kagemusha P/Invoke symbols",
+        errors,
+    )
     require_contains(
         texts,
         relative,
@@ -1739,8 +2867,48 @@ def check_csharp(texts, errors):
             "Probe(NativeLineageAppendBoundary)",
             "Probe((NativeArchivePairCall)NativeLineageWitnessFromInitResult)",
             "Probe((NativeArchiveTripleCall)NativeLineageWitnessAppendResult)",
+            "TryProbeCompactPaymentTokenSymbol",
+            "TryProbeRecursiveAggregationProofBundleSymbol",
+            "Probe((NativeArchiveCall)NativeCompactPaymentToken)",
+            "Probe((NativeArchivePairCall)NativeRecursiveAggregationProofBundle)",
         ),
         "C# native availability probe",
+        errors,
+    )
+    require_contains(
+        texts,
+        relative,
+        (
+            "RequireValidInputArchive",
+            "Request archive",
+            "Bundle archive",
+            "Record bundle archive",
+            "Pallas open-envelopes archive",
+            "must be a valid Norito archive.",
+            "must contain a non-empty Norito payload.",
+            "PrivacyNative.IsNoritoV1Archive(bytes)",
+            "PrivacyNative.HasNonEmptyPrivacyNoritoPayload(bytes)",
+        ),
+        "C# recursive spend input Norito guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+        (
+            "RecursiveSpendNativeRejectsMalformedArchivesBeforeLoadingNativeBridge",
+            "RecursiveSpendNativeRejectsEmptyPayloadArchivesBeforeLoadingNativeBridge",
+            "CompactTokenProverRejectsMalformedInputsBeforeLoadingNativeBridge",
+            "CompactTokenProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
+            "RecursiveAggregationProverRejectsMalformedInputsBeforeLoadingNativeBridge",
+            "RecursiveAggregationProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
+            "RecursiveCompactProverRejectsMalformedInputsBeforeLoadingNativeBridge",
+            "RecursiveCompactProverRejectsEmptyPayloadInputsBeforeLoadingNativeBridge",
+            "Record bundle archive must be a valid Norito archive",
+            "Pallas open-envelopes archive must contain a non-empty Norito payload",
+            "KagemushaNoritoFrameWithPayload",
+        ),
+        "C# recursive spend input Norito guard tests",
         errors,
     )
     require_contains(
@@ -1804,6 +2972,8 @@ def run_checks(texts):
     check_javascript_sdk_script(errors)
     check_js_parity_meta_test(errors)
     check_c_bridge(texts, errors)
+    check_recursive_compact_surface(texts, errors)
+    check_record_backed_javascript_surface(texts, errors)
     check_rust_policy_constants(texts, errors)
     check_node_host(texts, errors)
     check_jvm_sdk_script_pins_jdk21(texts, errors)
@@ -2805,6 +3975,25 @@ if mode == "--negative-control-csharp-sdk-dotnet-major-script":
         raise SystemExit(0)
     raise SystemExit("negative control failed: C# SDK dotnet major script drift was not detected")
 
+if mode == "--negative-control-csharp-sdk-native-bridge-script":
+    target = CSHARP_SDK_TEST_COMMAND
+    original = read(target)
+    mutated = original.replace(
+        'CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo build -p connect_norito_bridge\n',
+        "",
+        1,
+    )
+    if mutated == original:
+        raise SystemExit("negative control failed: unable to mutate C# SDK native bridge build")
+    text_overrides[target] = mutated
+    try:
+        run_checks(texts)
+    except ParityError as error:
+        print("negative control rejected C# SDK native bridge script drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: C# SDK native bridge script drift was not detected")
+
 if mode == "--negative-control-csharp-sdk-test-workflow":
     target = WORKFLOW_PATH
     original = read(target)
@@ -3313,9 +4502,133 @@ if mode == "--negative-control-cross-sdk-helper-bodies":
         raise SystemExit(0)
     raise SystemExit("negative control failed: cross-SDK helper body drift was not detected")
 
+if mode == "--negative-control-recursive-compact-verifier-surface":
+    mutated = dict(texts)
+    mutations = (
+        (
+            "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+            "int32_t connect_norito_kagemusha_verify_recursive_compact_payment_token(",
+            "int32_t connect_norito_kagemusha_check_recursive_compact_payment_token(",
+            "C header recursive compact declarations",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            'typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"',
+            'typeof native.kagemushaCheckRecursiveCompactPaymentToken !== "function"',
+            "JavaScript recursive compact verifier gate",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            'assertKagemushaNoritoArchive(compactToken, "compactTokenArchive")',
+            'assertKagemushaNoritoArchiveUnchecked(compactToken, "compactTokenArchive")',
+            "JavaScript recursive compact verifier gate",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            '"kagemusha_verify_recursive_compact_payment_token"',
+            '"kagemusha_check_recursive_compact_payment_token"',
+            "Python recursive compact verifier surface",
+        ),
+        (
+            "python/iroha_python/src/iroha_python/kagemusha.py",
+            '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
+            '_assert_kagemusha_norito_archive_unchecked(compact_token, "compact_token_archive")',
+            "Python recursive compact verifier surface",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+            "public static func verifyRecursiveCompactPaymentToken(",
+            "public static func checkRecursiveCompactPaymentToken(",
+            "Swift recursive compact wrapper",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+            "requireValidRecursiveCompactTokenArchive(compactTokenArchive)",
+            "requireValidRecursiveCompactTokenArchiveUnchecked(compactTokenArchive)",
+            "Swift recursive compact wrapper",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+            "try requireValidRecursiveCompactTokenArchive(token)",
+            "try requireValidRecursiveCompactTokenArchiveUnchecked(token)",
+            "Swift recursive compact wrapper",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+            "fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray): Boolean",
+            "fun checkRecursiveCompactPaymentToken(compactTokenArchive: ByteArray): Boolean",
+            "Kotlin recursive compact wrapper",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+            "public static boolean verifyRecursiveCompactPaymentToken(final byte[] compactTokenArchive)",
+            "public static boolean checkRecursiveCompactPaymentToken(final byte[] compactTokenArchive)",
+            "Android Java recursive compact wrapper",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "public static bool VerifyRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)",
+            "public static bool CheckRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)",
+            "C# recursive compact wrapper",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "RequireValidRecursiveCompactTokenArchive(compactToken)",
+            "RequireValidRecursiveCompactTokenArchiveUnchecked(compactToken)",
+            "C# recursive compact wrapper",
+        ),
+        (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+            "RequireValidNativeOutput(symbol, result)",
+            "RequireValidNativeOutputUnchecked(symbol, result)",
+            "C# recursive compact wrapper",
+        ),
+    )
+    expected_labels = []
+    for target, old, new, label in mutations:
+        updated = mutated[target].replace(old, new, 1)
+        if updated == mutated[target]:
+            raise SystemExit(f"negative control failed: unable to mutate {target}")
+        mutated[target] = updated
+        expected_labels.append(label)
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        message = str(error)
+        missing = [label for label in expected_labels if label not in message]
+        if missing:
+            raise SystemExit(
+                "negative control failed: recursive compact verifier drift was not detected for "
+                + ", ".join(missing)
+            )
+        print("negative control rejected ABI-7 recursive compact verifier surface drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: ABI-7 recursive compact verifier surface drift was not detected"
+    )
+
+if mode == "--negative-control-kagemusha-abi-probe-bounds":
+    mutated = dict(texts)
+    target = "javascript/iroha_js/src/crypto.js"
+    mutated[target] = mutated[target].replace(
+        "version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION",
+        "version <= Number.MAX_SAFE_INTEGER",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit("negative control failed: unable to mutate Kagemusha ABI probe bounds")
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected Kagemusha ABI probe bounds drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Kagemusha ABI probe bounds drift was not detected")
+
 if mode:
     raise SystemExit(f"unknown mode: {mode}")
 
 run_checks(texts)
-print("recursive Kagemusha ABI-6 SDK parity is consistent")
+print("recursive Kagemusha ABI-6/ABI-7 SDK parity is consistent")
 PY

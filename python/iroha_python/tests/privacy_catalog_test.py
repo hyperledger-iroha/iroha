@@ -346,6 +346,429 @@ def test_privacy_catalog_rejects_required_production_privacy_plan_backend_drift(
         )
 
 
+def test_privacy_catalog_rejects_required_production_privacy_plan_display_text_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["summary"] = "Account-based private payment pilot."
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep display text"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_category_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["category"] = "authorization"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep category 'payment'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_maturity_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["maturity"] = "specification"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep maturity "
+            "'accepted_conference'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_recommended_for_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["recommended_for"][0] = "claimed production rollout"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep recommendedFor"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_covered_criteria_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["covered_criteria"].append("hide_asset_type")
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep covered criteria"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_proof_family_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["proof_family"] = "forged-proof-family"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep proof family "
+            "'anonymous-pgc-k-out-of-n'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_public_input_schema_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["public_inputs_schema"] = "forged_public_input"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep public inputs schema "
+            "'anonymity_set_root,tx_digest,balance_commitments,"
+            "receiver_set_commitment,receiver_ciphertext_commitments,"
+            "receiver_threshold,receiver_count,link_tag,range_commitments,"
+            "chain_id,domain_separator'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_verifier_key_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["verifier_key_id"] = "forged_verifier_key"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep verifier key id "
+            "'anonymous_pgc_k_out_of_n_v1'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_pq_layer_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["pq_layers"]["proof"] = True
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep PQ layer 'proof'=False"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_chain_requirement_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["chain_requirements"][5] = (
+                "typed zk::SubmitAnonymousPgcProofOnly instruction"
+            )
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep chain requirements"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_required_state_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["required_state"][4] = "forged wallet recovery placeholder"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep required state"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_setup_step_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["setup_steps"][1] = "Register forged Anonymous PGC verifier setup."
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep setup steps"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_execution_step_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["execution_steps"][2] = (
+                "Submit forged Anonymous PGC proof-only envelope."
+            )
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep execution steps"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_state_token_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required_state_tokens = dict(
+        privacy_catalog.REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID
+    )
+    required_state_tokens["anonymous-pgc-k-out-of-n-v1"] = (
+        "forged state placeholder",
+    )
+    monkeypatch.setattr(
+        privacy_catalog,
+        "REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID",
+        required_state_tokens,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain required state token "
+            "'forged state placeholder'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(
+            get_privacy_algorithm_descriptors()
+        )
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_failure_modes_drift() -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["failure_modes"][1] = "accept forged replay tag"
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep failure modes"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_security_note_drift() -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["security_notes"][-1] = (
+                "Production hardening requires parser fuzzing, latency gates, "
+                "and external audit or verifier review."
+            )
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep security notes"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    required_failure_tokens = dict(
+        privacy_catalog.REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID
+    )
+    required_failure_tokens["anonymous-pgc-k-out-of-n-v1"] = (
+        "forged failure placeholder",
+    )
+    monkeypatch.setattr(
+        privacy_catalog,
+        "REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID",
+        required_failure_tokens,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain required "
+            "failure-mode token 'forged failure placeholder'"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(
+            get_privacy_algorithm_descriptors()
+        )
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_source_reference_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["source_references"][0]["url"] = (
+                "https://example.com/forged-source"
+            )
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must retain source reference "
+            "'Anonymous PGC with k-out-of-n Proofs' "
+            "<https://eprint.iacr.org/2025/884>"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_source_reference_extra(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["source_references"].append(
+                {
+                    "label": "Forged extra source",
+                    "url": "https://example.com/forged-extra-source",
+                }
+            )
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep source references"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_sdk_entrypoint_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["sdk_entrypoints"][1] = (
+                "buildForgedAnonymousPgcProductionProof"
+            )
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep SDK entrypoints"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
+def test_privacy_catalog_rejects_required_production_privacy_plan_planned_sdk_entrypoint_drift(
+) -> None:
+    descriptors = json.loads(json.dumps(get_privacy_algorithm_descriptors()))
+    for descriptor in descriptors:
+        if descriptor["id"] == "anonymous-pgc-k-out-of-n-v1":
+            descriptor["planned_sdk_entrypoints"][1] = (
+                "buildForgedAnonymousPgcProofV1"
+            )
+            break
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "required production privacy plan row "
+            "'anonymous-pgc-k-out-of-n-v1' must keep planned SDK entrypoints"
+        ),
+    ):
+        privacy_catalog._validate_required_privacy_plan_rows(tuple(descriptors))
+
+
 @pytest.mark.parametrize(
     "planned_entrypoints",
     [
@@ -4032,6 +4455,21 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         "note_encryption": False,
     }
     assert "post_quantum" not in zk_ace["covered_criteria"]
+    assert zk_ace["proof_family"] == "stark/fri/sha256-goldilocks"
+    assert zk_ace["backend_family"] == "stark-fri"
+    assert zk_ace["production_ready"] is False
+    assert zk_ace["production_gate"]["ready"] is False
+    assert zk_ace["production_gate"]["audit_references"] == []
+    assert list(zk_ace["production_gate"]["gates"].items()) == (
+        _expected_production_gate_items()
+    )
+    assert all(ready is False for ready in zk_ace["production_gate"]["gates"].values())
+    assert zk_ace["production_gate"]["missing"] == [
+        *(label for _key, label in privacy_catalog.PRODUCTION_GATE_REQUIREMENTS),
+        "implementation stage is not production-hardened",
+        "planned SDK entrypoints remain",
+        "Iroha production allowlist is not enabled for this audited row",
+    ]
 
     anonymous_pgc = by_id["anonymous-pgc-k-out-of-n-v1"]
     assert anonymous_pgc["implementation_stage"] == "sdk-builder"
@@ -4781,6 +5219,155 @@ def test_zk_ace_python_catalog_named_proof_builder_propagates_native_errors(
         crypto.build_zk_ace_authorization_proof_v1()
 
 
+def test_zk_ace_python_proof_builder_sanitizes_production_disabled_native_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = b"py-zk-ace-private-secret-1234567"
+    proof = "candidate-zk-ace-proof"
+
+    class ProductionDisabledNative:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, ...]] = []
+
+        def zk_ace_build_transfer_authorization_v1(self, *args: object) -> str:
+            self.calls.append(args)
+            raise RuntimeError(
+                "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED "
+                "zk-ace-pq-authorization-v0 "
+                "buildZkAceAuthorizationProofV1 "
+                "stark-fri:zk_ace_pq_authorization_v0 "
+                f"Iroha production allowlist {secret.decode()} {proof}"
+            )
+
+    native = ProductionDisabledNative()
+    monkeypatch.setattr(crypto, "_crypto", native)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        crypto.build_zk_ace_authorization_proof_v1(
+            from_account_id="alice@wonderland",
+            to_account_id="bob@wonderland",
+            asset_definition_id="xor#wonderland",
+            amount="17",
+            chain_id="wonderland",
+            identity_root=bytes([0x31]) * 32,
+            identity_blinding=bytes([0x32]) * 32,
+            replay_secret=secret,
+            policy_hash=bytes([0x34]) * 32,
+            verifier_key_id="stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            vk_commitment=bytes([0x55]) * 32,
+        )
+
+    error = exc_info.value
+    message = str(error)
+    assert "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED" in message
+    assert "zk-ace-pq-authorization-v0" in message
+    assert "buildZkAceAuthorizationProofV1" in message
+    assert "stark-fri:zk_ace_pq_authorization_v0" in message
+    assert "Iroha production allowlist" in message
+    assert secret.decode() not in message
+    assert proof not in message
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+    assert len(native.calls) == 1
+    assert native.calls[0][0] == "alice@wonderland"
+    assert native.calls[0][7] == secret
+    assert native.calls[0][9] == "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
+    assert native.calls[0][10] == bytes([0x55]) * 32
+
+
+def test_zk_ace_python_transfer_authorization_rejects_malformed_amounts_before_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountingNative:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def zk_ace_build_transfer_authorization_v1(self, *_args: object) -> str:
+            self.calls += 1
+            return "{}"
+
+    class HostileAmount:
+        stringified = False
+
+        def __str__(self) -> str:
+            self.stringified = True
+            return "17"
+
+    native = CountingNative()
+    hostile_amount = HostileAmount()
+    monkeypatch.setattr(crypto, "_crypto", native)
+
+    invalid_amounts: list[object] = [
+        None,
+        True,
+        "",
+        " ",
+        "0",
+        "0000",
+        "-1",
+        "+1",
+        "1.0",
+        "1e3",
+        0,
+        -1,
+        (1 << 128),
+        b"17",
+        hostile_amount,
+    ]
+
+    for amount in invalid_amounts:
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="amount must be a positive decimal u128 string",
+        ):
+            crypto.zk_ace_build_transfer_authorization_v1(
+                from_account_id="alice@wonderland",
+                to_account_id="bob@wonderland",
+                asset_definition_id="xor#wonderland",
+                amount=amount,  # type: ignore[arg-type]
+                chain_id="wonderland",
+                identity_root=bytes([0x31]) * 32,
+                identity_blinding=bytes([0x32]) * 32,
+                replay_secret=bytes([0x33]) * 32,
+                policy_hash=bytes([0x34]) * 32,
+            )
+
+    assert native.calls == 0
+    assert hostile_amount.stringified is False
+
+
+def test_zk_ace_python_transfer_authorization_canonicalizes_positive_u128_amounts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CapturingNative:
+        def __init__(self) -> None:
+            self.amounts: list[str] = []
+
+        def zk_ace_build_transfer_authorization_v1(self, *args: object) -> str:
+            self.amounts.append(str(args[3]))
+            return json.dumps({"ok": True})
+
+    native = CapturingNative()
+    monkeypatch.setattr(crypto, "_crypto", native)
+
+    for amount in ("00017", 23, (1 << 128) - 1):
+        result = crypto.zk_ace_build_transfer_authorization_v1(
+            from_account_id="alice@wonderland",
+            to_account_id="bob@wonderland",
+            asset_definition_id="xor#wonderland",
+            amount=amount,
+            chain_id="wonderland",
+            identity_root=bytes([0x31]) * 32,
+            identity_blinding=bytes([0x32]) * 32,
+            replay_secret=bytes([0x33]) * 32,
+            policy_hash=bytes([0x34]) * 32,
+        )
+        assert result == {"ok": True}
+
+    assert native.amounts == ["17", "23", str((1 << 128) - 1)]
+
+
 def test_zk_ace_python_transfer_authorization_rejects_non_object_native_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4848,6 +5435,26 @@ def test_privacy_capabilities_reports_native_bridge_without_production_claims(
         assert descriptor["production_gate"]["missing"] == (
             _expected_production_gate_missing(descriptor["production_gate"])
         )
+    zk_ace_capability = next(
+        descriptor
+        for descriptor in capabilities["privacy_algorithms"]
+        if descriptor["id"] == "zk-ace-pq-authorization-v0"
+    )
+    assert zk_ace_capability["proof_family"] == "stark/fri/sha256-goldilocks"
+    assert zk_ace_capability["backend_family"] == "stark-fri"
+    assert zk_ace_capability["production_ready"] is False
+    assert zk_ace_capability["production_gate"]["ready"] is False
+    assert zk_ace_capability["production_gate"]["audit_references"] == []
+    assert list(zk_ace_capability["production_gate"]["gates"].items()) == (
+        _expected_production_gate_items()
+    )
+    assert all(
+        ready is False
+        for ready in zk_ace_capability["production_gate"]["gates"].values()
+    )
+    assert "Iroha production allowlist is not enabled for this audited row" in (
+        zk_ace_capability["production_gate"]["missing"]
+    )
 
 
 def test_privacy_capabilities_returns_defensive_copies() -> None:

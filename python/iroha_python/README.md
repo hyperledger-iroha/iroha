@@ -72,9 +72,14 @@ print("offline notes", readiness.offline_note)
 
 The `iroha_python.kagemusha` module exposes ABI-6 recursive Kagemusha
 spend-again-offline helpers when the compiled `_crypto` extension is present.
-`preferred_kagemusha_offline_spend_mode()` returns `recursive_spend_v1` only
-when the native extension reports bridge ABI 6 and every required method rejects
-the malformed availability probe: `kagemusha_recursive_spend_init`,
+ABI 7 keeps the reserved `recursive_compact_v1` compact-token symbols
+source-stable, but public compact proving and receiver verification fail closed
+until that token proof composes the private-hop verifier-slice relation
+in-circuit. `preferred_kagemusha_offline_spend_mode()` selects
+`recursive_spend_v1` when the native extension reports bridge ABI 6 or later
+and every required recursive-spend method rejects the malformed availability
+probe, and otherwise falls back to `checked_prefold_v1`:
+`kagemusha_recursive_spend_init`,
 `kagemusha_recursive_spend_append`,
 `kagemusha_recursive_spend_transition_profile_init`,
 `kagemusha_recursive_spend_transition_profile_append`,
@@ -105,6 +110,11 @@ Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
 rejected before runtime key generation.
+Verify request archives must pass the same public-binding preflight before the
+PyO3 host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
+bundles require a matching active `lineage_verifier_record`, semantic bundles
+must omit it, and unsupported proof attachments are rejected as malformed
+requests rather than soft invalid proof results.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
@@ -129,9 +139,9 @@ expose algorithm-specific production proof builders while the privacy rows
 remain gated. Python's executable ZK-ACE SDK builder is exposed separately as
 `build_zk_ace_authorization_proof_v1()` and the legacy
 `zk_ace_build_transfer_authorization_v1()` alias; these helpers do not change
-the fail-closed production gate. Native availability requires bridge ABI 6 plus successful
-`capabilities`, `build`, and `verify` probes whose operation-specific result
-schema bytes match the called entry point.
+the fail-closed production gate. Native availability requires bridge ABI 6 or
+later plus successful `capabilities`, `build`, and `verify` probes whose
+operation-specific result schema bytes match the called entry point.
 
 All privacy request and response payloads must stay as raw Norito archives.
 Python validates archive magic, length, CRC, the 64 MiB native size cap, and the

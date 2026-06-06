@@ -38,7 +38,7 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "4b3982de131e11db13fb0a44fe3cbe330ecbb8180a681c6f9c3506c35c6ffb4d",
+        "macos-arm64": "daedce952f4e3929ec3b22bad67d3f9c9b334be95e282ecdc9fa878f1cfae26b",
         "ios-arm64": "26bb800e9dce021ef38306caef70dbba7928dd99c6612801fb1bbc520b52b7a9",
         "ios-arm64_x86_64-simulator": "d0f651e6dc837bff7e92b05c9bf1e3a2988fc6995cabee6e3aaa269a01ecd1b5"
     ]
@@ -57,6 +57,13 @@ enum NoritoBridgeLoader {
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
         return 6
+    }
+
+    static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
+        guard let actual else {
+            return false
+        }
+        return actual >= expectedBridgeAbiVersion(for: identifier)
     }
 
     private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {
@@ -156,7 +163,7 @@ enum NoritoBridgeLoader {
         for symbol in requiredSymbols where dlsym(handle, symbol) == nil {
             return false
         }
-        return bridgeAbiVersion(in: handle) == expectedBridgeAbiVersion
+        return isSupportedBridgeAbiVersion(bridgeAbiVersion(in: handle))
     }
 
     private static func bridgeAbiVersion(in handle: UnsafeMutableRawPointer?) -> UInt32? {
@@ -495,6 +502,7 @@ enum NativeBridgeError: Error, Equatable {
     case offlineBlinding
     case offlineNoteProve
     case kagemushaProve
+    case kagemushaRecursiveCompactUnavailable
     case unsupportedAlgorithm
     case metadataTarget
     case metadataKey
@@ -551,6 +559,7 @@ enum NativeBridgeError: Error, Equatable {
         case -306: return .offlineBlinding
         case -310: return .offlineNoteProve
         case -311: return .kagemushaProve
+        case -312: return .kagemushaRecursiveCompactUnavailable
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -403: return .verifyingKeyId
@@ -638,10 +647,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return readPrivacyUInt64LittleEndian(bytes, offset: 23) > 0
     }
 
-    static func hasPrivacyNoritoSchema(_ archive: Data, expectedSchemaByte: UInt8?) -> Bool {
-        guard let expectedSchemaByte else {
-            return true
-        }
+    static func hasPrivacyNoritoSchema(_ archive: Data, expectedSchemaByte: UInt8) -> Bool {
         guard archive.count >= 22 else {
             return false
         }
@@ -1705,6 +1711,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias KagemushaVerifyRecursiveCompactPaymentTokenFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UInt8>?
+    ) -> Int32
     private typealias KagemushaRecursiveSpendArchiveFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
@@ -1893,6 +1908,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var blake3HashFn: Blake3HashFn? = nil
     private var kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn? = nil
     private var kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn? = nil
+    private var kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn: KagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn? = nil
+    private var kagemushaVerifyRecursiveCompactPaymentTokenFn: KagemushaVerifyRecursiveCompactPaymentTokenFn? = nil
     private var kagemushaRecursiveSpendInitFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendTransitionProfileInitFn: KagemushaRecursiveSpendArchiveFn? = nil
@@ -1909,6 +1926,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var privacyNativeProbeOk = false
     private var kagemushaCompactPaymentTokenNativeProbeOk = false
     private var kagemushaRecursiveAggregationNativeProbeOk = false
+    private var kagemushaRecursiveCompactPaymentTokenNativeProbeOk = false
     private var kagemushaRecursiveSpendNativeProbeOk = false
     private var encodeIssueOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
     private var encodeRedeemOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
@@ -2019,6 +2037,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let blake3HashFn: Any? = nil
     private let kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: Any? = nil
     private let kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: Any? = nil
+    private let kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn: Any? = nil
+    private let kagemushaVerifyRecursiveCompactPaymentTokenFn: Any? = nil
     private let kagemushaRecursiveSpendInitFn: Any? = nil
     private let kagemushaRecursiveSpendAppendFn: Any? = nil
     private let kagemushaRecursiveSpendTransitionProfileInitFn: Any? = nil
@@ -2079,7 +2099,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private func installStaticallyLinkedBridgeIfAvailable() {
         #if IROHASWIFT_BRIDGE_PRESENT
         let abiVersion = connect_norito_bridge_abi_version()
-        guard abiVersion == NoritoBridgeLoader.expectedBridgeAbiVersion else {
+        guard NoritoBridgeLoader.isSupportedBridgeAbiVersion(abiVersion) else {
             NSLog(
                 "[NoritoNativeBridge] statically linked transfer bridge ABI mismatch expected=%u actual=%u",
                 NoritoBridgeLoader.expectedBridgeAbiVersion,
@@ -2128,6 +2148,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
+        }
+        if let kagemushaRecursiveCompactSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes")
+        }) {
+            self.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn = unsafeBitCast(
+                kagemushaRecursiveCompactSymbol,
+                to: KagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn.self
+            )
+        } else {
+            self.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn = nil
+        }
+        if let kagemushaRecursiveCompactVerifySymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_verify_recursive_compact_payment_token")
+        }) {
+            self.kagemushaVerifyRecursiveCompactPaymentTokenFn = unsafeBitCast(
+                kagemushaRecursiveCompactVerifySymbol,
+                to: KagemushaVerifyRecursiveCompactPaymentTokenFn.self
+            )
+        } else {
+            self.kagemushaVerifyRecursiveCompactPaymentTokenFn = nil
         }
         if let kagemushaRecursiveSpendInitSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_kagemusha_recursive_spend_init")
@@ -2795,6 +2835,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
             }
+            if let kagemushaRecursiveCompactSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
+            ) {
+                self.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn = unsafeBitCast(
+                    kagemushaRecursiveCompactSymbol,
+                    to: KagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn.self
+                )
+            } else {
+                self.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn = nil
+            }
+            if let kagemushaRecursiveCompactVerifySymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_verify_recursive_compact_payment_token"
+            ) {
+                self.kagemushaVerifyRecursiveCompactPaymentTokenFn = unsafeBitCast(
+                    kagemushaRecursiveCompactVerifySymbol,
+                    to: KagemushaVerifyRecursiveCompactPaymentTokenFn.self
+                )
+            } else {
+                self.kagemushaVerifyRecursiveCompactPaymentTokenFn = nil
+            }
             if let kagemushaRecursiveSpendInitSymbol = dlsym(
                 handle,
                 "connect_norito_kagemusha_recursive_spend_init"
@@ -3026,6 +3088,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.blake3HashFn = nil
             self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
             self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
+            self.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn = nil
+            self.kagemushaVerifyRecursiveCompactPaymentTokenFn = nil
             self.kagemushaRecursiveSpendInitFn = nil
             self.kagemushaRecursiveSpendAppendFn = nil
             self.kagemushaRecursiveSpendTransitionProfileInitFn = nil
@@ -3151,7 +3215,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         status: Int32,
         outPtr: UnsafeMutablePointer<UInt8>?,
         outLen: CUnsignedLong,
-        expectedSchemaByte: UInt8? = nil
+        expectedSchemaByte: UInt8
     ) -> Bool {
         guard status == 0,
               let outPtr,
@@ -3171,6 +3235,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         kagemushaRecursiveAggregationNativeProbeOk =
             probeKagemushaRecursiveAggregationFunction(
                 kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn
+            )
+        kagemushaRecursiveCompactPaymentTokenNativeProbeOk =
+            probeKagemushaRecursiveCompactPaymentTokenFunction(
+                kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn
+            )
+            && probeKagemushaRecursiveCompactPaymentTokenVerifierFunction(
+                kagemushaVerifyRecursiveCompactPaymentTokenFn
             )
 
         var recursiveSpendOk = true
@@ -3241,6 +3312,51 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             }
         }
         return consumeKagemushaProbeResult(status: status, outPtr: outPtr, outLen: outLen)
+    }
+
+    private func probeKagemushaRecursiveCompactPaymentTokenFunction(
+        _ function: KagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn?
+    ) -> Bool {
+        guard let function, freeFn != nil else {
+            return false
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let probeArchive = Data([0x00])
+        let status = probeArchive.withUnsafeBytes { recordBuffer -> Int32 in
+            let recordBaseAddress = recordBuffer.bindMemory(to: UInt8.self).baseAddress
+            return probeArchive.withUnsafeBytes { envelopeBuffer -> Int32 in
+                let envelopeBaseAddress = envelopeBuffer.bindMemory(to: UInt8.self).baseAddress
+                return function(
+                    recordBaseAddress,
+                    CUnsignedLong(recordBuffer.count),
+                    envelopeBaseAddress,
+                    CUnsignedLong(envelopeBuffer.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        return consumeKagemushaProbeResult(status: status, outPtr: outPtr, outLen: outLen)
+    }
+
+    private func probeKagemushaRecursiveCompactPaymentTokenVerifierFunction(
+        _ function: KagemushaVerifyRecursiveCompactPaymentTokenFn?
+    ) -> Bool {
+        guard let function else {
+            return false
+        }
+        var valid: UInt8 = 0xFF
+        let probeArchive = Data([0x00])
+        let status = probeArchive.withUnsafeBytes { tokenBuffer -> Int32 in
+            let tokenBaseAddress = tokenBuffer.bindMemory(to: UInt8.self).baseAddress
+            return function(
+                tokenBaseAddress,
+                CUnsignedLong(tokenBuffer.count),
+                &valid
+            )
+        }
+        return status == Self.expectedKagemushaProbeStatus && valid == 0
     }
 
     private func probeKagemushaLineageWitnessFromInitResultFunction(
@@ -3422,6 +3538,18 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn != nil
             && freeFn != nil
             && kagemushaRecursiveAggregationNativeProbeOk
+        #else
+        return false
+        #endif
+    }
+
+    public var isKagemushaRecursiveCompactPaymentTokenProverAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn != nil
+            && kagemushaVerifyRecursiveCompactPaymentTokenFn != nil
+            && freeFn != nil
+            && kagemushaRecursiveCompactPaymentTokenNativeProbeOk
         #else
         return false
         #endif
@@ -6322,6 +6450,72 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    func proveKagemushaVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        recordBundleArchive: Data,
+        pallasOpenEnvelopesArchive: Data
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn, let freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = recordBundleArchive.withUnsafeBytes { recordBuffer -> Int32 in
+            let recordBaseAddress = recordBuffer.bindMemory(to: UInt8.self).baseAddress
+            return pallasOpenEnvelopesArchive.withUnsafeBytes { envelopeBuffer -> Int32 in
+                let envelopeBaseAddress = envelopeBuffer.bindMemory(to: UInt8.self).baseAddress
+                return kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn(
+                    recordBaseAddress,
+                    CUnsignedLong(recordBuffer.count),
+                    envelopeBaseAddress,
+                    CUnsignedLong(envelopeBuffer.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freeFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        let data = Data(bytes: outPtr, count: Int(outLen))
+        freeFn(outPtr)
+        return data
+        #else
+        return nil
+        #endif
+    }
+
+    func verifyKagemushaRecursiveCompactPaymentToken(
+        compactTokenArchive: Data
+    ) throws -> Bool? {
+        #if canImport(Darwin)
+        guard let kagemushaVerifyRecursiveCompactPaymentTokenFn else {
+            return nil
+        }
+        var valid: UInt8 = 0
+        let status = compactTokenArchive.withUnsafeBytes { tokenBuffer -> Int32 in
+            let tokenBaseAddress = tokenBuffer.bindMemory(to: UInt8.self).baseAddress
+            return kagemushaVerifyRecursiveCompactPaymentTokenFn(
+                tokenBaseAddress,
+                CUnsignedLong(tokenBuffer.count),
+                &valid
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            throw error
+        }
+        return valid != 0
+        #else
+        return nil
+        #endif
+    }
+
     private func callKagemushaRecursiveSpend(
         requestArchive: Data,
         function: KagemushaRecursiveSpendArchiveFn?
@@ -6646,7 +6840,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     static func readPrivacyNativeOutput(
         pointer: UnsafeMutablePointer<UInt8>?,
         length: CUnsignedLong,
-        expectedSchemaByte: UInt8? = nil,
+        expectedSchemaByte: UInt8,
         free: (UnsafeMutablePointer<UInt8>?) -> Void
     ) throws -> Data {
         guard let pointer else {

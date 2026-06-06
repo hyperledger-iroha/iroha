@@ -312,9 +312,12 @@ export function deriveConfidentialNullifierV2() {
   return unsupported("deriveConfidentialNullifierV2");
 }
 
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
+export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
@@ -346,11 +349,30 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDIN
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 
 export function preferredKagemushaOfflineSpendMode(
-  recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
+  recursiveSpendAvailable,
+  recursiveCompactAvailable,
 ) {
-  return recursiveSpendAvailable
-    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
-    : KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+  if (arguments.length === 0) {
+    return preferredKagemushaOfflineSpendModeForCapabilities(
+      isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
+      isKagemushaRecursiveSpendNativeAvailable(),
+    );
+  }
+  return preferredKagemushaOfflineSpendModeForCapabilities(
+    arguments.length >= 2 ? recursiveCompactAvailable : false,
+    recursiveSpendAvailable,
+  );
+}
+
+export function preferredKagemushaOfflineSpendModeForCapabilities(
+  recursiveCompactAvailable,
+  recursiveSpendAvailable,
+) {
+  void recursiveCompactAvailable;
+  if (recursiveSpendAvailable) {
+    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
+  }
+  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
@@ -507,6 +529,38 @@ export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppe
 
 export function isKagemushaRecursiveSpendNativeAvailable() {
   return false;
+}
+
+export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable() {
+  return false;
+}
+
+export function isKagemushaCompactPaymentTokenNativeAvailable() {
+  return false;
+}
+
+export function isKagemushaRecursiveAggregationProofBundleNativeAvailable() {
+  return false;
+}
+
+export function kagemushaProveVerifiedCompactPaymentTokenWithRecords() {
+  return unsupported("kagemushaProveVerifiedCompactPaymentTokenWithRecords");
+}
+
+export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes() {
+  return unsupported(
+    "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+  );
+}
+
+export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes() {
+  return unsupported(
+    "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+  );
+}
+
+export function kagemushaVerifyRecursiveCompactPaymentToken() {
+  return unsupported("kagemushaVerifyRecursiveCompactPaymentToken");
 }
 
 export function kagemushaRecursiveSpendInit() {

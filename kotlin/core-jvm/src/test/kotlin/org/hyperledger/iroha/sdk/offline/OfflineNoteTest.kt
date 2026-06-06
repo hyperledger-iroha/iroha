@@ -133,46 +133,84 @@ class OfflineNoteTest {
 
     @Test
     fun kagemushaRecordBackedNativeProverValidatesInput() {
-        assertFailsWith<IllegalArgumentException> {
+        val empty = assertFailsWith<IllegalArgumentException> {
             KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(ByteArray(0))
         }
-        if (KagemushaCompactPaymentTokenProver.isNativeAvailable()) {
-            assertFailsWith<IllegalArgumentException> {
-                KagemushaCompactPaymentTokenProver
-                    .proveVerifiedCompactPaymentTokenWithRecords(byteArrayOf(0x01, 0x02))
-            }
+        assertTrue(empty.message.orEmpty().contains("recordBundleArchive must not be empty"))
+        val malformed = assertFailsWith<IllegalArgumentException> {
+            KagemushaCompactPaymentTokenProver
+                .proveVerifiedCompactPaymentTokenWithRecords(byteArrayOf(0x01, 0x02))
         }
+        assertTrue(malformed.message.orEmpty().contains("recordBundleArchive must be a valid Norito archive"))
+        val emptyPayload = assertFailsWith<IllegalArgumentException> {
+            KagemushaCompactPaymentTokenProver
+                .proveVerifiedCompactPaymentTokenWithRecords(kagemushaNoritoFrame(0x4b))
+        }
+        assertTrue(emptyPayload.message.orEmpty().contains("recordBundleArchive must contain a non-empty Norito payload"))
     }
 
     @Test
     fun kagemushaRecursiveAggregationNativeProverValidatesInput() {
-        assertFailsWith<IllegalArgumentException> {
+        val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
+        val emptyRecord = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
                     ByteArray(0),
-                    byteArrayOf(0x01),
+                    validArchive,
                 )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertTrue(emptyRecord.message.orEmpty().contains("recordBundleArchive must not be empty"))
+        val emptyPallas = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    byteArrayOf(0x01),
+                    validArchive,
                     ByteArray(0),
                 )
         }
-        if (KagemushaRecursiveAggregationProofBundleProver.isNativeAvailable()) {
-            assertFailsWith<IllegalArgumentException> {
-                KagemushaRecursiveAggregationProofBundleProver
-                    .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                        byteArrayOf(0x01, 0x02),
-                        byteArrayOf(0x03, 0x04),
-                    )
-            }
+        assertTrue(emptyPallas.message.orEmpty().contains("pallasOpenEnvelopesArchive must not be empty"))
+        val malformedRecord = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    byteArrayOf(0x01, 0x02),
+                    validArchive,
+                )
         }
+        assertTrue(malformedRecord.message.orEmpty().contains("recordBundleArchive must be a valid Norito archive"))
+        val malformedPallas = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    byteArrayOf(0x01, 0x02),
+                )
+        }
+        assertTrue(malformedPallas.message.orEmpty().contains("pallasOpenEnvelopesArchive must be a valid Norito archive"))
+        val emptyPayloadRecord = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    kagemushaNoritoFrame(0x4b),
+                    validArchive,
+                )
+        }
+        assertTrue(emptyPayloadRecord.message.orEmpty().contains("recordBundleArchive must contain a non-empty Norito payload"))
+        val emptyPayloadPallas = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    kagemushaNoritoFrame(0x4b),
+                )
+        }
+        assertTrue(emptyPayloadPallas.message.orEmpty().contains("pallasOpenEnvelopesArchive must contain a non-empty Norito payload"))
     }
 
     @Test
     fun kagemushaRecursiveSpendNativeProverValidatesInput() {
+        assertEquals(
+            "recursive_spend_v1",
+            KagemushaRecursiveSpendProver.preferredMode(
+                recursiveCompactAvailable = true,
+                recursiveSpendAvailable = true,
+            ).wireName,
+        )
         assertEquals(
             "recursive_spend_v1",
             KagemushaRecursiveSpendProver.preferredMode(true).wireName,
@@ -338,10 +376,27 @@ class OfflineNoteTest {
         }
         assertTrue(oversized.message!!.contains("returned oversized output"))
 
-        assertContentEquals(
-            byteArrayOf(0x01, 0x02),
+        val malformed = assertFailsWith<IllegalStateException> {
             KagemushaCompactPaymentTokenProver.requireNativeOutput(
                 byteArrayOf(0x01, 0x02),
+                "native test",
+            )
+        }
+        assertTrue(malformed.message!!.contains("returned invalid Norito archive"))
+
+        val emptyPayload = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                kagemushaNoritoFrame(0x4b),
+                "native test",
+            )
+        }
+        assertTrue(emptyPayload.message!!.contains("returned empty Norito payload"))
+
+        val output = kagemushaNoritoFrameWithPayload(0x4b)
+        assertContentEquals(
+            output,
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                output,
                 "native test",
             ),
         )
@@ -4320,6 +4375,36 @@ class OfflineNoteTest {
             offset += 2
         }
         return out
+    }
+
+    private fun kagemushaNoritoFrame(schemaByte: Int): ByteArray {
+        val frame = ByteArray(40)
+        frame[0] = 'N'.code.toByte()
+        frame[1] = 'R'.code.toByte()
+        frame[2] = 'T'.code.toByte()
+        frame[3] = '0'.code.toByte()
+        frame.fill(schemaByte.toByte(), 6, 22)
+        return frame
+    }
+
+    private fun kagemushaNoritoFrameWithPayload(schemaByte: Int): ByteArray {
+        val frame = ByteArray(45)
+        kagemushaNoritoFrame(schemaByte).copyInto(frame, 0)
+        frame[23] = 3.toByte()
+        byteArrayOf(
+            0xb9.toByte(),
+            0xd3.toByte(),
+            0xa8.toByte(),
+            0x0c.toByte(),
+            0xcd.toByte(),
+            0x5d.toByte(),
+            0x13.toByte(),
+            0x24.toByte(),
+        ).copyInto(frame, 31)
+        frame[42] = 0xa5.toByte()
+        frame[43] = 0x5a.toByte()
+        frame[44] = 0x11.toByte()
+        return frame
     }
 
     private fun assertFutureFails(future: CompletableFuture<*>) {

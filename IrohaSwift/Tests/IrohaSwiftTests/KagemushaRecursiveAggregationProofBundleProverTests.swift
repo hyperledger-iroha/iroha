@@ -8,7 +8,7 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
             try KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: Data(),
-                    pallasOpenEnvelopesArchive: Data([0x01])
+                    pallasOpenEnvelopesArchive: validKagemushaNoritoArchive()
                 )
         ) { error in
             XCTAssertEqual(
@@ -22,7 +22,7 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: Data([0x01]),
+                    recordBundleArchive: validKagemushaNoritoArchive(),
                     pallasOpenEnvelopesArchive: Data()
                 )
         ) { error in
@@ -37,8 +37,8 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: Data([0x01]),
-                    pallasOpenEnvelopesArchive: Data([0x02]),
+                    recordBundleArchive: validKagemushaNoritoArchive(),
+                    pallasOpenEnvelopesArchive: validKagemushaNoritoArchive(),
                     bridgeAvailable: true
                 ) {
                     Data()
@@ -51,12 +51,137 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
         }
     }
 
+    func testRejectsMalformedInputArchivesBeforeBridgeCall() {
+        let validArchive = validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: Data([0x01, 0x02]),
+                    pallasOpenEnvelopesArchive: validArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive aggregation body must not run for malformed record bundles")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .invalidRecordBundleArchive
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: Data([0x01, 0x02]),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive aggregation body must not run for malformed Pallas openings")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .invalidPallasOpenEnvelopesArchive
+            )
+        }
+    }
+
+    func testRejectsEmptyPayloadInputArchivesBeforeBridgeCall() {
+        let validArchive = validKagemushaNoritoArchive()
+        let emptyPayloadArchive = emptyPayloadKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: emptyPayloadArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive aggregation body must not run for empty record-bundle payloads")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .emptyRecordBundlePayload
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: emptyPayloadArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive aggregation body must not run for empty Pallas payloads")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .emptyPallasOpenEnvelopesPayload
+            )
+        }
+    }
+
+    func testRejectsMalformedNativeOutput() {
+        let validArchive = validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    bridgeAvailable: true
+                ) {
+                    Data([0x01])
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .invalidProofBundleArchive
+            )
+        }
+    }
+
+    func testRejectsEmptyPayloadNativeOutput() {
+        let validArchive = validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    bridgeAvailable: true
+                ) {
+                    emptyPayloadKagemushaNoritoArchive()
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .emptyProofBundlePayload
+            )
+        }
+    }
+
+    func testReturnsValidNativeOutput() throws {
+        let archive = validKagemushaNoritoArchive()
+        let output = try KagemushaRecursiveAggregationProofBundleProver
+            .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                recordBundleArchive: archive,
+                pallasOpenEnvelopesArchive: archive,
+                bridgeAvailable: true
+            ) {
+                archive
+            }
+
+        XCTAssertEqual(output, archive)
+    }
+
     func testNilNativeOutputIsBridgeUnavailable() {
         XCTAssertThrowsError(
             try KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: Data([0x01]),
-                    pallasOpenEnvelopesArchive: Data([0x02]),
+                    recordBundleArchive: validKagemushaNoritoArchive(),
+                    pallasOpenEnvelopesArchive: validKagemushaNoritoArchive(),
                     bridgeAvailable: true
                 ) {
                     nil
@@ -68,23 +193,18 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
             )
         }
     }
+}
 
-    func testRejectsMalformedArchivesWhenBridgeIsAvailable() throws {
-        guard KagemushaRecursiveAggregationProofBundleProver.isNativeAvailable else {
-            throw XCTSkip("Native Kagemusha recursive aggregation proof-bundle prover is unavailable.")
-        }
+private func validKagemushaNoritoArchive() -> Data {
+    noritoEncode(
+        typeName: "KagemushaRecursiveAggregationProofBundleArchiveV1",
+        payload: Data([0xa5, 0x5a, 0x11])
+    )
+}
 
-        XCTAssertThrowsError(
-            try KagemushaRecursiveAggregationProofBundleProver
-                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: Data([0x01, 0x02]),
-                    pallasOpenEnvelopesArchive: Data([0x03, 0x04])
-                )
-        ) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveAggregationProofBundleProverError,
-                .proofRejected
-            )
-        }
-    }
+private func emptyPayloadKagemushaNoritoArchive() -> Data {
+    noritoEncode(
+        typeName: "KagemushaRecursiveAggregationProofBundleArchiveV1",
+        payload: Data()
+    )
 }

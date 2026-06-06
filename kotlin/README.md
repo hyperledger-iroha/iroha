@@ -62,9 +62,15 @@ the native Kagemusha entry point rejects the empty-archive availability probe.
 admission-neutral recursive proof-bundle path. Pass the same record-bundle
 archive plus a Norito-encoded Pallas open-envelope archive to receive a
 Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
+`KagemushaRecursiveCompactPaymentTokenProver` exposes the ABI 7
+`recursive_compact_v1` compact-token surface and probes
+`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. The
+ABI 7 symbols remain source-stable but public compact proving and receiver-side
+verification fail closed until the compact proof composes the private-hop
+verifier-slice relation in-circuit.
 `KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
-surface. It reports `recursive_spend_v1` as available only after the JNI bridge
-ABI-version probe succeeds and init, append, both transition-profile helpers,
+surface. Preferred mode selection chooses `recursive_spend_v1` after the JNI
+bridge ABI-version probe succeeds and init, append, both transition-profile helpers,
 the append-boundary helper, both lineage-witness helpers, verify, and redeem
 reject the empty-archive availability probes instead of accepting permissive
 native calls.
@@ -113,6 +119,11 @@ material: Kotlin wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Verify request archives must pass the same public-binding preflight before the
+native bridge returns a `KagemushaRecursiveSpendVerifyResultV1`:
+Reserved-lineage bundles require a matching active `lineage_verifier_record`,
+semantic bundles must omit it, and unsupported proof attachments are rejected
+as malformed requests rather than soft invalid proof results.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -133,9 +144,9 @@ archive.
 archives: `capabilitiesArchive()`, `buildProof(requestArchive)`, and
 `verifyProof(requestArchive)`. The Kotlin SDK does not expose
 algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires ABI 6, the privacy capability/build/verify
-JNI symbols, and successful Norito probe outputs whose operation-specific
-result schema bytes match the called entry point.
+gated. Native availability requires ABI 6 or later, the privacy
+capability/build/verify JNI symbols, and successful Norito probe outputs whose
+operation-specific result schema bytes match the called entry point.
 
 All privacy request and response payloads must stay as raw Norito archives.
 Kotlin validates archive magic, length, CRC, the 64 MiB native size cap, and the

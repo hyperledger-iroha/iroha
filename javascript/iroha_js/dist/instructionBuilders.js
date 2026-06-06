@@ -34,6 +34,14 @@ const DEFAULT_PRIVACY_MAX_AUX_BYTES = 64 * 1024;
 const ZK_ACE_BACKEND = "stark/fri/sha256-goldilocks";
 const ZK_ACE_DOMAIN_TAG = "iroha:zk-ace:pq-authorization:v0";
 const ZK_ACE_ACTION_TRANSFER = "transparent_asset_transfer";
+const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
+const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
+const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0";
+const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
+  "native ZK-ACE prover returned PRIVACY_FFI_ERROR_PRODUCTION_DISABLED for " +
+  `${ZK_ACE_ALGORITHM_ID} ${ZK_ACE_PRODUCTION_ENTRYPOINT} ` +
+  `${ZK_ACE_PRODUCTION_VK_REF}: ` +
+  "Iroha production allowlist is not enabled for this audited row";
 const ANON_PGC_BACKEND = "stark/fri/sha256-goldilocks";
 const ANON_PGC_CIRCUIT_ID = "stark/fri/sha256-goldilocks:anonymous_pgc_k_out_of_n_v1";
 const ANON_PGC_DOMAIN_SEPARATOR = "iroha:anonymous-pgc:k-out-of-n:v1";
@@ -355,6 +363,14 @@ function asU128JsonNumber(value, name) {
     return Number(numeric);
   }
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
+}
+
+function asPositiveU128JsonNumber(value, name) {
+  const amount = asU128JsonNumber(value, name);
+  if (amount <= 0) {
+    fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than zero`, name);
+  }
+  return amount;
 }
 
 function asPositiveInteger(value, name) {
@@ -8844,7 +8860,7 @@ function normalizeZkAcePublicInputs(value, name) {
       source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
       `${name}.asset`,
     ),
-    amount: asU128JsonNumber(source.amount, `${name}.amount`),
+    amount: asPositiveU128JsonNumber(source.amount, `${name}.amount`),
     verifier_key_id: normalizeZkAceVerifierKeyId(
       source.verifierKeyId ?? source.verifier_key_id ?? source.verifyingKeyRef,
       `${name}.verifierKeyId`,
@@ -8935,6 +8951,17 @@ function normalizeZkAceNativeResult(resultJson, name) {
     );
   }
   return assertPlainObject(result, name);
+}
+
+function sanitizeZkAceNativeAuthorizationProofError(error, name) {
+  const message = error?.message ?? String(error ?? "");
+  const sanitizedMessage =
+    /PRIVACY_FFI_ERROR_PRODUCTION_DISABLED|production[- ]disabled|Iroha production allowlist/i.test(
+      message,
+    )
+      ? ZK_ACE_PRODUCTION_DISABLED_MESSAGE
+      : "native ZK-ACE prover failed";
+  fail(ValidationErrorCode.INVALID_OBJECT, sanitizedMessage, name);
 }
 
 function normalizeAccessSetHints(value, context) {
@@ -15024,12 +15051,25 @@ export function buildZkAceAuthorizationProofV1(options) {
       "zkAceAuthorizationProof.verifyingKeyCommitment",
       32,
     );
-    const nativeResult = normalizeZkAceNativeResult(
-      native.zkAceBuildAuthorizationProofV1(
+    let nativeResultJson;
+    let nativeError;
+    try {
+      nativeResultJson = native.zkAceBuildAuthorizationProofV1(
         JSON.stringify(publicInputs),
         JSON.stringify(witness),
         commitment ? Buffer.from(commitment) : undefined,
-      ),
+      );
+    } catch (error) {
+      nativeError = error;
+    }
+    if (nativeError !== undefined) {
+      sanitizeZkAceNativeAuthorizationProofError(
+        nativeError,
+        "zkAceAuthorizationProof.nativeResult",
+      );
+    }
+    const nativeResult = normalizeZkAceNativeResult(
+      nativeResultJson,
       "zkAceAuthorizationProof.nativeResult",
     );
     const proof = normalizeProofAttachment(
@@ -15130,7 +15170,7 @@ export function buildZkAceAuthorizedTransferInstruction(options) {
       source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
       "zkAceAuthorizedTransfer.asset",
     ),
-    amount: asU128JsonNumber(source.amount, "zkAceAuthorizedTransfer.amount"),
+    amount: asPositiveU128JsonNumber(source.amount, "zkAceAuthorizedTransfer.amount"),
     identity_commitment: normalizeNonZeroFixedBytes(
       source.identityCommitment ?? source.identity_commitment,
       "zkAceAuthorizedTransfer.identityCommitment",

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 public final class KagemushaRecursiveSpendProverTest {
 
@@ -11,8 +12,10 @@ public final class KagemushaRecursiveSpendProverTest {
 
   public static void main(final String[] args) {
     exposesStableModesAndCircuitIds();
+    lineageKeyArtifactPackagesValidateReleaseProfiles();
     sharedRecursiveSpendAbi6FixtureMatchesSdkSurface();
     rejectsEmptyArchivesBeforeNativeDispatch();
+    rejectsMalformedAndEmptyPayloadArchivesBeforeNativeDispatch();
     nativeProbeRequiresAbiSixAndAllSymbols();
     rejectsNullAndEmptyNativeRedeemOutput();
     System.out.println("[IrohaAndroid] KagemushaRecursiveSpendProverTest passed.");
@@ -267,14 +270,150 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1);
+    assert "recursive_compact_v1"
+        .equals(KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName());
     assert "recursive_spend_v1"
         .equals(KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName());
     assert "checked_prefold_v1"
         .equals(KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName());
+    assert KagemushaRecursiveSpendProver.preferredMode(true, true)
+        == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1;
+    assert KagemushaRecursiveSpendProver.preferredMode(true, false)
+        == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1;
     assert KagemushaRecursiveSpendProver.preferredMode(true)
         == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1;
     assert KagemushaRecursiveSpendProver.preferredMode(false)
         == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1;
+    assert KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_BRIDGE_ABI_VERSION == 7;
+    assert "kagemusha-recursive-compact-v1"
+        .equals(KagemushaRecursiveCompactPaymentTokenProver.RECURSIVE_COMPACT_CIRCUIT_ID_V1);
+    final byte[] validRecursiveCompactInput = kagemushaNoritoFrameWithPayload(0x4b);
+    assertThrows(
+        "recordBundleArchive must not be empty",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    new byte[0], validRecursiveCompactInput));
+    assertThrows(
+        "pallasOpenEnvelopesArchive must not be empty",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput, new byte[0]));
+    assertThrows(
+        "recordBundleArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    new byte[] {1, 2}, validRecursiveCompactInput));
+    assertThrows(
+        "pallasOpenEnvelopesArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput, new byte[] {1, 2}));
+    assertThrows(
+        "recordBundleArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    kagemushaNoritoFrame(0x4b), validRecursiveCompactInput));
+    assertThrows(
+        "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput, kagemushaNoritoFrame(0x4b)));
+    assertThrows(
+        () -> KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(new byte[0]));
+    assertThrows(
+        "compactTokenArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                new byte[] {1, 2}));
+    assertThrows(
+        "compactTokenArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                kagemushaNoritoFrame(0x4b)));
+  }
+
+  private static void lineageKeyArtifactPackagesValidateReleaseProfiles() {
+    assert KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(2);
+    assert KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(128);
+    assert !KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(3);
+    assert !KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(0);
+
+    final byte[] verifierKey = repeat((byte) 0xE7, 64);
+    final byte[] provingKeyArchive = repeat((byte) 0xE8, 64);
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts initArtifacts =
+        KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+            2,
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            verifierKey,
+            provingKeyArchive);
+    assert initArtifacts.isInitArtifact();
+    assert !initArtifacts.isAppendArtifact();
+    assert Arrays.equals(verifierKey, initArtifacts.lineageVerifierKey());
+    assert Arrays.equals(provingKeyArchive, initArtifacts.lineageProvingKeyArchive());
+    assert KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(initArtifacts)
+        == initArtifacts;
+
+    verifierKey[0] = 0;
+    provingKeyArchive[0] = 0;
+    assert initArtifacts.lineageVerifierKey()[0] == (byte) 0xE7;
+    assert initArtifacts.lineageProvingKeyArchive()[0] == (byte) 0xE8;
+    final byte[] exposedVerifierKey = initArtifacts.lineageVerifierKey();
+    exposedVerifierKey[0] = 0;
+    assert initArtifacts.lineageVerifierKey()[0] == (byte) 0xE7;
+
+    final KagemushaRecursiveSpendProver.LineageKeyArtifacts appendArtifacts =
+        KagemushaRecursiveSpendProver.lineageKeyArtifactsForAppend(
+            2,
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            repeat((byte) 0xA7, 64),
+            repeat((byte) 0xA8, 64));
+    assert !appendArtifacts.isInitArtifact();
+    assert appendArtifacts.isAppendArtifact();
+
+    assertThrows(
+        "proof_circuit_id",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifacts(
+                "kagemusha-recursive-spend-lineage-forged-circuit",
+                2,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                repeat((byte) 0xE7, 64),
+                repeat((byte) 0xE8, 64)));
+    assertThrows(
+        "verifier_opening_len",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                3,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                repeat((byte) 0xE7, 64),
+                repeat((byte) 0xE8, 64)));
+    assertThrows(
+        "lineage_verifier_key",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                2, "halo2/kzg", repeat((byte) 0xE7, 64), repeat((byte) 0xE8, 64)));
+    assertThrows(
+        "lineage_verifier_key",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                2,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                new byte[0],
+                repeat((byte) 0xE8, 64)));
+    assertThrows(
+        "lineage_proving_key_archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                2,
+                KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                repeat((byte) 0xE7, 64),
+                new byte[0]));
   }
 
   private static void sharedRecursiveSpendAbi6FixtureMatchesSdkSurface() {
@@ -388,8 +527,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assertContains(archives, "\"type\": \"Option<u64>\"");
     assertContains(archives, "\"norito_default\": true");
     assertContains(archives, "\"semantics\": \"verifier_record_activation_height\"");
-    assertContains(archives, "\"sha256_hex\": \"b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2\"");
-    assertContains(archives, "\"sha256_hex\": \"a598660cbfe91a207b64a69b7a9dbdc985fd901c60fe886aecb4dead4115169e\"");
+    assertContains(archives, "\"sha256_hex\": \"f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e\"");
+    assertContains(archives, "\"sha256_hex\": \"88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03\"");
     assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
         KagemushaRecursiveSpendProver.preferredAppendOutputCircuitId(1));
     assert KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
@@ -406,6 +545,8 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void rejectsEmptyArchivesBeforeNativeDispatch() {
+    final byte[] validArchive = kagemushaNoritoFrameWithPayload(0x4b);
+
     assertThrows(() -> KagemushaRecursiveSpendProver.initSpend(new byte[0]));
     assertThrows(() -> KagemushaRecursiveSpendProver.appendSpend(new byte[0]));
     assertThrows(() -> KagemushaRecursiveSpendProver.transitionProfileInit(new byte[0]));
@@ -414,25 +555,126 @@ public final class KagemushaRecursiveSpendProverTest {
     assertThrows(
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
-                new byte[0], new byte[] {1}));
+                new byte[0], validArchive));
     assertThrows(
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
-                new byte[] {1}, new byte[0]));
+                validArchive, new byte[0]));
     assertThrows(
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                new byte[0], new byte[] {1}, new byte[] {2}));
+                new byte[0], validArchive, validArchive));
     assertThrows(
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                new byte[] {1}, new byte[0], new byte[] {2}));
+                validArchive, new byte[0], validArchive));
     assertThrows(
         () ->
             KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                new byte[] {1}, new byte[] {2}, new byte[0]));
+                validArchive, validArchive, new byte[0]));
     assertThrows(() -> KagemushaRecursiveSpendProver.verifySpend(new byte[0]));
     assertThrows(() -> KagemushaRecursiveSpendProver.redeemSpend(new byte[0]));
+  }
+
+  private static void rejectsMalformedAndEmptyPayloadArchivesBeforeNativeDispatch() {
+    final byte[] validArchive = kagemushaNoritoFrameWithPayload(0x4b);
+    final byte[] malformedArchive = new byte[] {1, 2};
+    final byte[] emptyPayloadArchive = kagemushaNoritoFrame(0x4b);
+
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.initSpend(malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.initSpend(emptyPayloadArchive));
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.appendSpend(malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.appendSpend(emptyPayloadArchive));
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.transitionProfileInit(malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.transitionProfileInit(emptyPayloadArchive));
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.transitionProfileAppend(malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.transitionProfileAppend(emptyPayloadArchive));
+    assertThrows(
+        "profileArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.lineageAppendBoundary(malformedArchive));
+    assertThrows(
+        "profileArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.lineageAppendBoundary(emptyPayloadArchive));
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.verifySpend(malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.verifySpend(emptyPayloadArchive));
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.redeemSpend(malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.redeemSpend(emptyPayloadArchive));
+
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                malformedArchive, validArchive));
+    assertThrows(
+        "bundleArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                validArchive, malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                emptyPayloadArchive, validArchive));
+    assertThrows(
+        "bundleArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                validArchive, emptyPayloadArchive));
+
+    assertThrows(
+        "previousWitnessArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                malformedArchive, validArchive, validArchive));
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                validArchive, malformedArchive, validArchive));
+    assertThrows(
+        "bundleArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                validArchive, validArchive, malformedArchive));
+    assertThrows(
+        "previousWitnessArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                emptyPayloadArchive, validArchive, validArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                validArchive, emptyPayloadArchive, validArchive));
+    assertThrows(
+        "bundleArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                validArchive, validArchive, emptyPayloadArchive));
   }
 
   private static void nativeProbeRequiresAbiSixAndAllSymbols() {
@@ -451,6 +693,10 @@ public final class KagemushaRecursiveSpendProverTest {
 
     assert KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> {}, () -> 6, () -> true);
+    assert KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> {}, () -> 7, () -> true);
+    assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
+        () -> {}, () -> 6, () -> true, 7);
     assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
         () -> {}, () -> 5, () -> true);
     assert !KagemushaRecursiveSpendProver.detectNativeAvailability(
@@ -512,7 +758,19 @@ public final class KagemushaRecursiveSpendProverTest {
                 new byte[KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1],
                 "redeem"),
         "native redeem returned oversized output");
-    final byte[] output = new byte[] {1, 2};
+
+    assertIllegalState(
+        () ->
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                new byte[] {1, 2}, "redeem"),
+        "native redeem returned invalid Norito archive");
+    assertIllegalState(
+        () ->
+            KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(
+                kagemushaNoritoFrame(0x4b), "redeem"),
+        "native redeem returned empty Norito payload");
+
+    final byte[] output = kagemushaNoritoFrameWithPayload(0x4b);
     assert KagemushaRecursiveSpendProver.requireRecursiveSpendOutput(output, "redeem") == output;
   }
 
@@ -550,6 +808,52 @@ public final class KagemushaRecursiveSpendProverTest {
     } catch (final IllegalArgumentException expected) {
       // Expected.
     }
+  }
+
+  private static void assertThrows(final String message, final Runnable runnable) {
+    try {
+      runnable.run();
+      throw new AssertionError("expected IllegalArgumentException");
+    } catch (final IllegalArgumentException expected) {
+      assert message.equals(expected.getMessage());
+    }
+  }
+
+  private static byte[] repeat(final byte value, final int count) {
+    final byte[] bytes = new byte[count];
+    Arrays.fill(bytes, value);
+    return bytes;
+  }
+
+  private static byte[] kagemushaNoritoFrame(final int schemaByte) {
+    final byte[] frame = new byte[40];
+    frame[0] = (byte) 'N';
+    frame[1] = (byte) 'R';
+    frame[2] = (byte) 'T';
+    frame[3] = (byte) '0';
+    Arrays.fill(frame, 6, 22, (byte) schemaByte);
+    return frame;
+  }
+
+  private static byte[] kagemushaNoritoFrameWithPayload(final int schemaByte) {
+    final byte[] frame = new byte[45];
+    System.arraycopy(kagemushaNoritoFrame(schemaByte), 0, frame, 0, 40);
+    frame[23] = 3;
+    final byte[] crc = new byte[] {
+      (byte) 0xb9,
+      (byte) 0xd3,
+      (byte) 0xa8,
+      0x0c,
+      (byte) 0xcd,
+      0x5d,
+      0x13,
+      0x24
+    };
+    System.arraycopy(crc, 0, frame, 31, crc.length);
+    frame[42] = (byte) 0xa5;
+    frame[43] = 0x5a;
+    frame[44] = 0x11;
+    return frame;
   }
 
   private static void assertIllegalState(final Runnable runnable, final String message) {

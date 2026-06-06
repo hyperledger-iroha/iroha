@@ -7,6 +7,7 @@ on:
       - ".github/workflows/pr_kagemusha_payload_bench.yml"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_no_tracked_python_bytecode.sh"
+      - "ci/check_kagemusha_production_readiness.sh"
       - "ci/check_kagemusha_recursive_spend_sdk_parity.sh"
       - "ci/check_kagemusha_recursive_spend_policy.sh"
       - "ci/check_kagemusha_recursive_spend_python_sdk.sh"
@@ -27,13 +28,25 @@ on:
       - "crates/iroha_js_host/Cargo.toml"
       - "crates/iroha_js_host/src/lib.rs"
       - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
       - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
       - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
       - "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
@@ -99,6 +112,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
@@ -178,6 +194,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-availability-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-stale-future-lineage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-comment-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-main-guard-workflow
@@ -228,6 +246,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-version-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-override-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-major-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-needs-workflow
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-job-workflow
@@ -249,6 +268,15 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-order-workflow
       - name: Kagemusha recursive spend SDK parity
         run: ci/check_kagemusha_recursive_spend_sdk_parity.sh
+      - name: Kagemusha production readiness negative controls
+        run: |
+          ci/check_kagemusha_production_readiness.sh --negative-control-doc-route
+          ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest
+          ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-open
+          ci/check_kagemusha_production_readiness.sh --negative-control-workflow
+      - name: Kagemusha production readiness
+        run: ci/check_kagemusha_production_readiness.sh
       - name: Kagemusha recursive spend fail-closed policy negative controls
         run: |
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control

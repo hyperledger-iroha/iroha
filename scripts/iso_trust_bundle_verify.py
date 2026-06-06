@@ -29,6 +29,7 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import stat
 import sys
 import urllib.parse
@@ -41,6 +42,14 @@ BUNDLE_VERSION = 1
 DEFAULT_POLICY = "require-verified"
 MAX_DER_BLOBS = 8
 MAX_DER_BYTES = 1024 * 1024
+MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
+MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
+MAX_SOURCE_URL_CHARS = 2048
+PLACEHOLDER_TRUST_SOURCE_MARKERS = ("placeholder", "replace-before-production")
+PLACEHOLDER_TRUST_SOURCE_HOSTS = {"example.invalid"}
+LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 POLICIES = {"record-only", "reject-unsupported", "require-verified"}
 REQUIRE_VERIFIED = "require-verified"
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
@@ -112,24 +121,37 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _read_regular_file(path: Path) -> bytes:
+def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+    if max_bytes is not None and max_bytes <= 0:
+        raise TrustBundleError("max file bytes must be positive")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
-        mode = path.lstat().st_mode
+        metadata = path.lstat()
     except FileNotFoundError as error:
         raise TrustBundleError(f"{path} does not exist") from error
+    mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise TrustBundleError(f"{path} must not be a symlink")
     if not stat.S_ISREG(mode):
         raise TrustBundleError(f"{path} must be a regular file")
+    if max_bytes is not None and metadata.st_size > max_bytes:
+        raise TrustBundleError(f"{path} exceeds {max_bytes} byte JSON limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        fd_metadata = os.fstat(fd)
+        if not stat.S_ISREG(fd_metadata.st_mode):
             raise TrustBundleError(f"{path} must be a regular file")
+        if max_bytes is not None and fd_metadata.st_size > max_bytes:
+            raise TrustBundleError(f"{path} exceeds {max_bytes} byte JSON limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            return handle.read()
+            limit = max_bytes + 1 if max_bytes is not None else -1
+            raw = handle.read(limit)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise TrustBundleError(f"{path} exceeds {max_bytes} byte JSON limit")
+        return raw
     except FileNotFoundError as error:
         raise TrustBundleError(f"{path} does not exist") from error
     except OSError as error:
@@ -141,7 +163,82 @@ def _read_regular_file(path: Path) -> bytes:
             os.close(fd)
 
 
+def _reject_output_path_smuggling(path: Path, label: str) -> None:
+    raw = str(path)
+    if not raw or not path.name:
+        raise TrustBundleError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise TrustBundleError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise TrustBundleError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise TrustBundleError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise TrustBundleError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise TrustBundleError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise TrustBundleError(f"{label} must not contain semicolon path parameters")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    if any(part.startswith("-") for part in parts if part):
+        raise TrustBundleError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in parts):
+        raise TrustBundleError(f"{label} must not contain dot or parent segments")
+
+
+def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
+    if not raw:
+        raise TrustBundleError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise TrustBundleError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise TrustBundleError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise TrustBundleError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise TrustBundleError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise TrustBundleError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise TrustBundleError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise TrustBundleError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise TrustBundleError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in checked_parts):
+        raise TrustBundleError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 < len(raw_args):
+                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
 def _write_text_output(path: Path, text: str) -> None:
+    _reject_output_path_smuggling(path, "output path")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
@@ -152,11 +249,13 @@ def _write_text_output(path: Path, text: str) -> None:
     if not stat.S_ISDIR(parent_mode):
         raise TrustBundleError(f"{path.parent} must be a directory")
     if path.exists() or path.is_symlink():
-        mode = path.lstat().st_mode
-        if stat.S_ISLNK(mode):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
             raise TrustBundleError(f"{path} must not be a symlink")
-        if not stat.S_ISREG(mode):
+        if not stat.S_ISREG(metadata.st_mode):
             raise TrustBundleError(f"{path} must be a regular file")
+        if metadata.st_nlink > 1:
+            raise TrustBundleError(f"{path} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -167,40 +266,78 @@ def _write_text_output(path: Path, text: str) -> None:
         raise TrustBundleError(f"{path.parent} must be a directory") from error
 
     fd = -1
+    leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
+    tmp_name = f".iso-{leaf_digest[:16]}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    tmp_created = False
     try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         try:
-            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+            fd = os.open(tmp_name, flags | nofollow, 0o600, dir_fd=parent_fd)
+            tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise TrustBundleError(f"{path} must not be a symlink") from error
+                raise TrustBundleError(f"{path} temp file must not be a symlink") from error
             raise TrustBundleError(
-                f"cannot open {path} for writing: {error.strerror}"
+                f"cannot open temporary output for {path}: {error.strerror}"
             ) from error
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise TrustBundleError(f"{path} must be a regular file")
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise TrustBundleError(f"{path} temp file must be a regular file")
+        if opened.st_nlink > 1:
+            raise TrustBundleError(f"{path} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        tmp_created = False
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
     finally:
         if fd >= 0:
             os.close(fd)
+        if tmp_created:
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
         os.close(parent_fd)
+
+
+def _reject_symlinked_existing_ancestors(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(mode):
+            if path.is_absolute() and current.parent == Path(path.anchor):
+                continue
+            raise TrustBundleError(f"{current} must not be a symlink")
 
 
 def _load_json(path: Path) -> Any:
     try:
-        raw = _read_regular_file(path)
+        raw = _read_regular_file(path, max_bytes=MAX_BUNDLE_JSON_BYTES)
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
         raise TrustBundleError(f"{path} is not UTF-8 JSON") from error
     try:
-        return json.loads(
+        value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise TrustBundleError(f"{path} is not valid JSON: {error}") from error
+    _reject_json_surrogates(value)
+    return value
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -212,6 +349,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         seen.add(key)
         result[key] = value
     return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise TrustBundleError(f"JSON contains non-finite numeric constant {value}")
+
+
+def _reject_json_surrogates(value: Any) -> None:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise TrustBundleError("JSON contains invalid Unicode surrogate")
+    elif isinstance(value, list):
+        for item in value:
+            _reject_json_surrogates(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_json_surrogates(key)
+            _reject_json_surrogates(item)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -305,6 +459,24 @@ def _optional_string(bundle: dict[str, Any], key: str, label: str) -> str | None
     return raw
 
 
+def _optional_positive_cli_int(value: Any, label: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise TrustBundleError(f"{label} must be a positive integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        if value != value.strip() or not value.isdecimal():
+            raise TrustBundleError(f"{label} must be a positive integer")
+        parsed = int(value)
+    else:
+        raise TrustBundleError(f"{label} must be a positive integer")
+    if parsed <= 0:
+        raise TrustBundleError(f"{label} must be a positive integer")
+    return parsed
+
+
 def _required_bool(bundle: dict[str, Any], key: str, label: str) -> bool:
     raw = bundle.get(key)
     if not isinstance(raw, bool):
@@ -393,6 +565,10 @@ def _strict_base64_der(
     allow_synthetic_der: bool,
 ) -> tuple[bytes, str]:
     raw = value.strip()
+    if len(raw) > MAX_DER_BASE64_CHARS:
+        raise TrustBundleError(
+            f"{label} must decode to no more than {MAX_DER_BYTES} bytes"
+        )
     try:
         der = base64.b64decode(raw, validate=True)
     except ValueError as error:
@@ -621,11 +797,10 @@ def _source(
         raise TrustBundleError(f"{label}.source is required")
     source = _require_object(raw, f"{label}.source")
     _reject_unknown_keys(source, SOURCE_KEYS, f"{label}.source")
-    normalized: dict[str, Any] = {}
-    for key in ["authority", "version"]:
-        value = _optional_string(source, key, f"{label}.source")
-        if value is not None:
-            normalized[key] = value
+    normalized: dict[str, Any] = {
+        "authority": _required_string(source, "authority", f"{label}.source"),
+        "version": _required_string(source, "version", f"{label}.source"),
+    }
     retrieved_at = _required_string(source, "retrieved_at", f"{label}.source")
     _validate_retrieved_at(retrieved_at, f"{label}.source.retrieved_at")
     normalized["retrieved_at"] = retrieved_at
@@ -640,6 +815,10 @@ def _source(
 
 
 def _validate_retrieved_at(value: str, label: str) -> None:
+    _parse_timestamp(value, label)
+
+
+def _parse_timestamp(value: str, label: str) -> dt.datetime:
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
         parsed = dt.datetime.fromisoformat(normalized)
@@ -647,9 +826,11 @@ def _validate_retrieved_at(value: str, label: str) -> None:
         raise TrustBundleError(f"{label} must be an ISO 8601 timestamp with timezone") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise TrustBundleError(f"{label} must include a timezone")
+    parsed_utc = parsed.astimezone(dt.UTC)
     now = dt.datetime.now(dt.UTC)
-    if parsed.astimezone(dt.UTC) > now + dt.timedelta(minutes=5):
+    if parsed_utc > now + dt.timedelta(minutes=5):
         raise TrustBundleError(f"{label} must not be in the future")
+    return parsed_utc
 
 
 def _validate_source_url(
@@ -658,6 +839,8 @@ def _validate_source_url(
     *,
     allow_insecure_source_url: bool,
 ) -> None:
+    if len(url) > MAX_SOURCE_URL_CHARS:
+        raise TrustBundleError(f"{label} must be no longer than {MAX_SOURCE_URL_CHARS} characters")
     _reject_ascii_control(url, label)
     _reject_url_percent_encoding_smuggling(url, label)
     if any(ch.isspace() for ch in url):
@@ -673,6 +856,14 @@ def _validate_source_url(
         port = parsed.port
     except ValueError as error:
         raise TrustBundleError(f"{label} has invalid port: {error}") from error
+    port_text = _raw_url_port_text(parsed)
+    if port_text == "":
+        raise TrustBundleError(f"{label} must not include an empty port")
+    if port_text is not None:
+        if len(port_text) > 1 and port_text.startswith("0"):
+            raise TrustBundleError(f"{label} port must not contain leading zeros")
+        if port == 0:
+            raise TrustBundleError(f"{label} port must be positive")
     if (parsed.scheme == "https" and port == 443) or (
         parsed.scheme == "http" and port == 80
     ):
@@ -698,12 +889,120 @@ def _validate_source_url(
     if not allow_insecure_source_url:
         if hostname == "localhost" or hostname.endswith(".localhost"):
             raise TrustBundleError(f"{label} must not use localhost")
+        if _host_uses_rebinding_suffix(hostname):
+            raise TrustBundleError(f"{label} must not use local/private rebinding hostnames")
         try:
             address = ipaddress.ip_address(hostname)
         except ValueError:
             return
         if not address.is_global:
             raise TrustBundleError(f"{label} must not use local, private, or reserved IP addresses")
+        if _address_embeds_non_global_ipv4(address):
+            raise TrustBundleError(f"{label} must not embed local, private, or reserved IPv4 addresses")
+
+
+def _host_uses_rebinding_suffix(hostname: str) -> bool:
+    return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
+    )
+
+
+def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    embedded: ipaddress.IPv4Address | None = None
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            embedded = address.ipv4_mapped
+        elif address in NAT64_WELL_KNOWN_PREFIX or address in IPV4_COMPATIBLE_IPV6_PREFIX:
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFF_FFFF)
+        elif address.sixtofour is not None:
+            embedded = address.sixtofour
+        elif address.teredo is not None:
+            embedded = address.teredo[1]
+    return embedded is not None and not embedded.is_global
+
+
+def _trust_source_text_is_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in PLACEHOLDER_TRUST_SOURCE_MARKERS)
+
+
+def _trust_source_url_uses_placeholder_host(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    return hostname in PLACEHOLDER_TRUST_SOURCE_HOSTS or any(
+        hostname.endswith("." + host) for host in PLACEHOLDER_TRUST_SOURCE_HOSTS
+    )
+
+
+def _summary_source_has_placeholder(source: dict[str, Any]) -> bool:
+    return (
+        _trust_source_text_is_placeholder(source["authority"])
+        or _trust_source_text_is_placeholder(source["version"])
+        or _trust_source_url_uses_placeholder_host(source["url"])
+    )
+
+
+def _source_retrieved_at(source: dict[str, Any]) -> dt.datetime:
+    return _parse_timestamp(source["retrieved_at"], "source.retrieved_at")
+
+
+def _summary_source_is_stale(source: dict[str, Any], max_source_age_days: int) -> bool:
+    retrieved_at = _source_retrieved_at(source)
+    return retrieved_at < dt.datetime.now(dt.UTC) - dt.timedelta(days=max_source_age_days)
+
+
+def _profile_json_emittable(args: argparse.Namespace, summaries: list[dict[str, Any]]) -> bool:
+    return (
+        not args.allow_synthetic_der
+        and not args.allow_record_only
+        and not args.allow_insecure_source_url
+        and args.max_source_age_days is not None
+        and not any(_summary_source_has_placeholder(summary["source"]) for summary in summaries)
+        and not any(
+            _summary_source_is_stale(summary["source"], args.max_source_age_days)
+            for summary in summaries
+        )
+    )
+
+
+def _reject_profile_emission_blockers(
+    args: argparse.Namespace,
+    summaries: list[dict[str, Any]],
+) -> None:
+    if args.emit_profile_json is None:
+        return
+    if args.allow_record_only:
+        raise TrustBundleError(
+            "--allow-record-only cannot be combined with --emit-profile-json; "
+            "profile overrides require production signature policy"
+        )
+    if args.allow_insecure_source_url:
+        raise TrustBundleError(
+            "--allow-insecure-source-url cannot be combined with --emit-profile-json; "
+            "profile overrides require production source provenance"
+        )
+    for offset, summary in enumerate(summaries):
+        source = summary["source"]
+        for field in ("authority", "version"):
+            if _trust_source_text_is_placeholder(source[field]):
+                raise TrustBundleError(
+                    "cannot emit profile overrides from placeholder source metadata: "
+                    f"bundles[{offset}].source.{field}"
+                )
+        if _trust_source_url_uses_placeholder_host(source["url"]):
+            raise TrustBundleError(
+                "cannot emit profile overrides from example.invalid source provenance: "
+                f"bundles[{offset}].source.url"
+            )
+    if args.max_source_age_days is None:
+        raise TrustBundleError("--max-source-age-days is required with --emit-profile-json")
+    for offset, summary in enumerate(summaries):
+        source = summary["source"]
+        if _summary_source_is_stale(source, args.max_source_age_days):
+            raise TrustBundleError(
+                f"bundles[{offset}].source.retrieved_at is older than the "
+                f"{args.max_source_age_days}-day freshness budget"
+            )
 
 
 def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
@@ -715,6 +1014,21 @@ def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
     return netloc.rsplit(":", 1)[0]
 
 
+def _raw_url_port_text(parsed: urllib.parse.ParseResult) -> str | None:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket == -1:
+            return None
+        remainder = netloc[bracket + 1 :]
+        if remainder.startswith(":"):
+            return remainder[1:]
+        return None
+    if ":" in netloc:
+        return netloc.rsplit(":", 1)[1]
+    return None
+
+
 def _validate_host_labels(raw_host: str, label: str) -> None:
     try:
         ipaddress.ip_address(raw_host)
@@ -723,6 +1037,9 @@ def _validate_host_labels(raw_host: str, label: str) -> None:
         pass
     if ":" in raw_host:
         raise TrustBundleError(f"{label} host must be a valid IP address")
+    if len(raw_host) > 253:
+        raise TrustBundleError(f"{label} host must be at most 253 characters")
+    _reject_legacy_ipv4_host_notation(raw_host, label)
     labels = raw_host.split(".")
     if any(not part for part in labels):
         raise TrustBundleError(f"{label} host must not contain empty labels")
@@ -737,6 +1054,23 @@ def _validate_host_labels(raw_host: str, label: str) -> None:
             raise TrustBundleError(
                 f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
             )
+
+
+def _reject_legacy_ipv4_host_notation(raw_host: str, label: str) -> None:
+    parts = raw_host.split(".")
+    if len(parts) > 4:
+        return
+    saw_hex_part = False
+    for part in parts:
+        if part.startswith("0x"):
+            digits = part[2:]
+            if not digits or any(ch not in "0123456789abcdef" for ch in digits):
+                return
+            saw_hex_part = True
+        elif not part.isdigit():
+            return
+    if saw_hex_part:
+        raise TrustBundleError(f"{label} host must not use legacy IPv4 numeric notation")
 
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
@@ -754,6 +1088,10 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise TrustBundleError(f"{label} path must not contain encoded dot or separator characters")
+    if "%3b" in lowered:
+        raise TrustBundleError(f"{label} path must not contain encoded semicolon parameters")
+    if any(token in lowered for token in ("%23", "%3a", "%3f", "%40", "%5b", "%5d")):
+        raise TrustBundleError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise TrustBundleError(f"{label} path must not contain encoded percent characters")
 
@@ -965,6 +1303,10 @@ def verify_bundle(
 
 
 def run(args: argparse.Namespace) -> int:
+    args.max_source_age_days = _optional_positive_cli_int(
+        args.max_source_age_days,
+        "--max-source-age-days",
+    )
     if args.allow_synthetic_der and args.emit_profile_json is not None:
         raise TrustBundleError(
             "--allow-synthetic-der cannot be combined with --emit-profile-json; "
@@ -987,8 +1329,10 @@ def run(args: argparse.Namespace) -> int:
         )
         for path in bundle_paths
     ]
+    _reject_profile_emission_blockers(args, summaries)
     _reject_duplicate_summary_field(summaries, "bundle_sha256", "bundles")
     _reject_duplicate_summary_field(summaries, "profile_id", "bundles")
+    profile_json_emittable = _profile_json_emittable(args, summaries)
     profile_text = None
     profile_json_sha256 = None
     if args.emit_profile_json is not None:
@@ -1001,8 +1345,9 @@ def run(args: argparse.Namespace) -> int:
         "allow_record_only": args.allow_record_only,
         "allow_insecure_source_url": args.allow_insecure_source_url,
         "allow_synthetic_der": args.allow_synthetic_der,
+        "max_source_age_days": args.max_source_age_days,
         "profile_json_emitted": args.emit_profile_json is not None,
-        "profile_json_emittable": not args.allow_synthetic_der,
+        "profile_json_emittable": profile_json_emittable,
         "profile_json_sha256": profile_json_sha256,
         "bundles": summaries,
     }
@@ -1052,13 +1397,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow DER SEQUENCE placeholders for checked-in templates; production bundles should omit this.",
     )
+    parser.add_argument(
+        "--max-source-age-days",
+        help=(
+            "Maximum age in days for source.retrieved_at when deciding whether "
+            "profile override JSON can be emitted."
+        ),
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        _preflight_output_cli_paths(
+            argv,
+            {"--bundle", "--emit-profile-json", "--summary-out"},
+        )
+        args = parser.parse_args(argv)
         return run(args)
     except TrustBundleError as error:
         print(f"error: {error}", file=sys.stderr)

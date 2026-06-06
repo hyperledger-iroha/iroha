@@ -110,8 +110,8 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun nativeProbeRequiresAbiAndAllPrivacySymbols() {
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { privacyNoritoFrame(0x50) })
-        assertTrue(PrivacyNativeBridge.returnsOutputProbe { privacyNoritoFrameWithPayload(0x51) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrame(0x50) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrameWithPayload(0x51) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrameWithPadding(0x50, 64) })
         assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrame(0x50) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x42) { privacyNoritoFrameWithPayload(0x42) })
@@ -120,48 +120,48 @@ class PrivacyNativeBridgeTest {
         assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrameWithPayload(0x42) })
         assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x42) { privacyNoritoFrameWithPayload(0x56) })
         assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x56) { privacyNoritoFrameWithPayload(0x50) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { byteArrayOf(1) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoFrame(0, 'X'.code) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoFrame(4, 1) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoFrame(5, 1) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoFrame(22, 1) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoDeclaredPayloadLength() })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoOversizedPayloadLength() })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoFrame(39, 0x40) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoFrame(39, 0x20) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoWithNonzeroPadding() })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoWithExcessivePadding() })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoFrame(31, 1) })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { invalidPrivacyNoritoPayloadTamper() })
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { ByteArray(0) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { byteArrayOf(1) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoFrame(0, 'X'.code) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoFrame(4, 1) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoFrame(5, 1) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoFrame(22, 1) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoDeclaredPayloadLength() })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoOversizedPayloadLength() })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoFrame(39, 0x40) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoFrame(39, 0x20) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoWithNonzeroPadding() })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoWithExcessivePadding() })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoFrame(31, 1) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidPrivacyNoritoPayloadTamper() })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { ByteArray(0) })
         assertFalse(
-            PrivacyNativeBridge.returnsOutputProbe {
+            PrivacyNativeBridge.returnsOutputProbe(0x50) {
                 ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1)
             },
         )
-        assertFalse(PrivacyNativeBridge.returnsOutputProbe { null })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { null })
         assertFalse(
-            PrivacyNativeBridge.returnsOutputProbe {
+            PrivacyNativeBridge.returnsOutputProbe(0x50) {
                 throw UnsatisfiedLinkError("missing symbol")
             },
         )
         assertFalse(
-            PrivacyNativeBridge.returnsOutputProbe {
+            PrivacyNativeBridge.returnsOutputProbe(0x50) {
                 throw IllegalArgumentException("bad probe")
             },
         )
         assertFalse(
-            PrivacyNativeBridge.returnsOutputProbe {
+            PrivacyNativeBridge.returnsOutputProbe(0x50) {
                 throw SecurityException("blocked probe")
             },
         )
         assertFalse(
-            PrivacyNativeBridge.returnsOutputProbe {
+            PrivacyNativeBridge.returnsOutputProbe(0x50) {
                 throw RuntimeException("unexpected probe failure")
             },
         )
         assertFalse(
-            PrivacyNativeBridge.returnsOutputProbe {
+            PrivacyNativeBridge.returnsOutputProbe(0x50) {
                 throw LinkageError("bad linked bridge")
             },
         )
@@ -313,6 +313,20 @@ class PrivacyNativeBridgeTest {
             )
         }
         assertTrue(emptyPayload.message.orEmpty().contains("empty privacy result payload"))
+        val emptyBuildPayload = assertFailsWith<IllegalStateException> {
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x42),
+                "privacy build proof",
+            )
+        }
+        assertTrue(emptyBuildPayload.message.orEmpty().contains("empty privacy result payload"))
+        val emptyVerifyPayload = assertFailsWith<IllegalStateException> {
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x56),
+                "privacy verify proof",
+            )
+        }
+        assertTrue(emptyVerifyPayload.message.orEmpty().contains("empty privacy result payload"))
 
         val oversized = assertFailsWith<IllegalStateException> {
             PrivacyNativeBridge.requireNativeOutput(
@@ -390,6 +404,50 @@ class PrivacyNativeBridgeTest {
                 assertTrue(error.message.orEmpty().contains("unexpected privacy result schema"))
             }
         }
+    }
+
+    @Test
+    fun privacySchemaMatcherRequiresExplicitExpectedSchema() {
+        val capabilities = privacyNoritoFrameWithPayload(0x50)
+
+        assertFalse(PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, -1))
+        assertFalse(PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, 0x42))
+        assertTrue(PrivacyNativeBridge.hasPrivacyNoritoSchema(capabilities, 0x50))
+    }
+
+    @Test
+    fun rejectsUnknownOperationSchemaNativeOutputs() {
+        val missingSchemaError = assertFailsWith<IllegalStateException> {
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrameWithPayload(0x50),
+                "privacy capabilities",
+                -1,
+            )
+        }
+        assertTrue(missingSchemaError.message.orEmpty().contains("not a supported privacy native operation"))
+
+        val outputError = assertFailsWith<IllegalStateException> {
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrameWithPayload(0x50),
+                "privacy forged operation",
+            )
+        }
+        assertTrue(outputError.message.orEmpty().contains("not a supported privacy native operation"))
+
+        var invoked = false
+        val dispatchError = assertFailsWith<IllegalStateException> {
+            PrivacyNativeBridge.call(
+                label = "forged proof",
+                requestArchive = privacyNoritoFrameWithPayload(0x52),
+                nativeCall = {
+                    invoked = true
+                    privacyNoritoFrameWithPayload(0x42)
+                },
+                bridgeAvailable = true,
+            )
+        }
+        assertTrue(dispatchError.message.orEmpty().contains("not a supported privacy native operation"))
+        assertFalse(invoked, "unsupported privacy operations must not reach native dispatch")
     }
 
     @Test
@@ -558,6 +616,34 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun rejectsInvalidNoritoRequestsBeforeNativeDispatch() {
+        val emptyBuildRequest = assertFailsWith<IllegalArgumentException> {
+            PrivacyNativeBridge.call(
+                label = "build proof",
+                requestArchive = privacyNoritoFrame(0x52),
+                nativeCall = {
+                    throw AssertionError("empty-payload build request must not reach native dispatch")
+                },
+                bridgeAvailable = true,
+            )
+        }
+        assertTrue(
+            emptyBuildRequest.message.orEmpty()
+                .contains("requestArchive must contain a non-empty privacy request payload"),
+        )
+        val emptyVerifyRequest = assertFailsWith<IllegalArgumentException> {
+            PrivacyNativeBridge.call(
+                label = "verify proof",
+                requestArchive = privacyNoritoFrame(0x52),
+                nativeCall = {
+                    throw AssertionError("empty-payload verify request must not reach native dispatch")
+                },
+                bridgeAvailable = true,
+            )
+        }
+        assertTrue(
+            emptyVerifyRequest.message.orEmpty()
+                .contains("requestArchive must contain a non-empty privacy request payload"),
+        )
         for (malformedArchive in invalidPrivacyRequestArchives()) {
             val buildError = assertFailsWith<IllegalArgumentException> {
                 PrivacyNativeBridge.call(

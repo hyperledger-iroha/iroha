@@ -29,9 +29,11 @@ __all__ = [
 
 
 NumericLike = Union[str, int, float, Decimal]
+PositiveU128Like = Union[str, int]
 MetadataLike = Optional[Mapping[str, Any]]
 FixedBytesLike = Union[str, bytes, bytearray, memoryview]
 VerifyingKeyLike = Union[str, Mapping[str, Any]]
+_U128_MAX = (1 << 128) - 1
 
 
 def _require_non_empty_string(value: Any, context: str) -> str:
@@ -90,6 +92,23 @@ def _normalize_u128_quantity(quantity: NumericLike, context: str) -> str:
     if value < 0 or value != value.to_integral_value():
         raise ValueError(f"{context} must be a non-negative whole number")
     return str(int(value))
+
+
+def _normalize_positive_u128_literal(quantity: Any, context: str) -> str:
+    if isinstance(quantity, bool):
+        raise ValueError(f"{context} must be a positive decimal u128 string")
+    if isinstance(quantity, int):
+        value = quantity
+    elif isinstance(quantity, str):
+        text = quantity.strip()
+        if not text.isdecimal():
+            raise ValueError(f"{context} must be a positive decimal u128 string")
+        value = int(text, 10)
+    else:
+        raise TypeError(f"{context} must be a positive decimal u128 string")
+    if value <= 0 or value > _U128_MAX:
+        raise ValueError(f"{context} must be a positive decimal u128 string")
+    return str(value)
 
 
 def _normalize_metadata(metadata: MetadataLike) -> Optional[Mapping[str, Any]]:
@@ -486,7 +505,7 @@ class TransactionDraft:
         from_account_id: str,
         to_account_id: str,
         asset_definition_id: str,
-        amount: NumericLike,
+        amount: PositiveU128Like,
         identity_commitment: FixedBytesLike,
         tx_digest: FixedBytesLike,
         chain_id: str,
@@ -505,7 +524,7 @@ class TransactionDraft:
                 _require_non_empty_string(from_account_id, "from_account_id"),
                 _require_non_empty_string(to_account_id, "to_account_id"),
                 _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                _normalize_u128_quantity(amount, "amount"),
+                _normalize_positive_u128_literal(amount, "amount"),
                 identity_commitment,
                 tx_digest,
                 _require_non_empty_string(chain_id, "chain_id"),

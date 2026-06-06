@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from array import array
+
 import pytest
 
 import iroha_python.crypto as crypto_module
@@ -58,6 +60,10 @@ EXPECTED_ALGORITHMS = (
     BLS_SMALL_ALGORITHM,
     SM2_ALGORITHM,
 )
+
+
+def _signed_byte_array(data: bytes) -> array[int]:
+    return array("b", (byte if byte < 128 else byte - 256 for byte in data))
 
 
 def test_supported_crypto_algorithms_include_all_rust_signature_suites() -> None:
@@ -306,7 +312,7 @@ def _malformed_privacy_request_archives() -> tuple[bytes, ...]:
 
 class _FakePrivacyNative:
     def privacy_bridge_abi_version(self) -> int:
-        return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
+        return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION + 1
 
     def privacy_capabilities_v1(self) -> bytes:
         return _PRIVACY_CAPABILITIES_ARCHIVE
@@ -396,6 +402,22 @@ class _FakeListOutputPrivacyNative:
     def privacy_verify_proof_v1(self, request_archive: bytes) -> list[int]:
         assert request_archive == _PRIVACY_REQUEST_ARCHIVE
         return [0x56]
+
+
+class _FakeTypedOutputPrivacyNative:
+    def privacy_bridge_abi_version(self) -> int:
+        return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
+
+    def privacy_capabilities_v1(self) -> array[int]:
+        return _signed_byte_array(_PRIVACY_CAPABILITIES_ARCHIVE)
+
+    def privacy_build_proof_v1(self, request_archive: bytes) -> memoryview:
+        assert request_archive == _PRIVACY_REQUEST_ARCHIVE
+        return memoryview(array("H", [0x4242] * 24))
+
+    def privacy_verify_proof_v1(self, request_archive: bytes) -> memoryview:
+        assert request_archive == _PRIVACY_REQUEST_ARCHIVE
+        return memoryview(_signed_byte_array(_PRIVACY_VERIFY_ARCHIVE))
 
 
 class _FakeMutableOutputPrivacyNative:
@@ -512,7 +534,7 @@ def test_privacy_native_capabilities_are_opaque_norito_bytes(monkeypatch: pytest
     assert PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM == 3
     assert PRIVACY_FFI_ERROR_PRODUCTION_DISABLED == 4
     assert PRIVACY_FFI_ERROR_INVALID_REQUEST == 5
-    assert privacy_bridge_abi_version() == 6
+    assert privacy_bridge_abi_version() == 7
     assert is_privacy_native_available() is True
     assert isinstance(archive, bytes)
     assert len(archive) > 0
@@ -522,7 +544,16 @@ def test_privacy_native_capabilities_are_opaque_norito_bytes(monkeypatch: pytest
 def test_privacy_native_availability_requires_abi_6(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for abi_version in (None, 5, True, "6"):
+    for abi_version in (
+        None,
+        5,
+        True,
+        "6",
+        -1,
+        6.5,
+        0x1_0000_0000,
+        10**100,
+    ):
         native = _FakePrivacyNative()
         if abi_version is None:
             native.privacy_bridge_abi_version = None  # type: ignore[method-assign]
@@ -727,6 +758,42 @@ def test_privacy_native_wrappers_reject_wrong_operation_result_schemas(
             invoke()
 
 
+def test_privacy_norito_archive_validator_requires_explicit_expected_schema() -> None:
+    with pytest.raises(TypeError, match="missing .*expected_schema_byte"):
+        crypto_module._assert_privacy_norito_archive(  # type: ignore[call-arg]
+            "privacy_capabilities_v1",
+            _PRIVACY_CAPABILITIES_ARCHIVE,
+        )
+
+    for expected_schema_byte in (None, -1, 0x100, 0x42):
+        with pytest.raises(
+            RuntimeError,
+            match="native privacy_capabilities_v1 returned unexpected privacy result schema",
+        ):
+            crypto_module._assert_privacy_norito_archive(
+                "privacy_capabilities_v1",
+                _PRIVACY_CAPABILITIES_ARCHIVE,
+                expected_schema_byte=expected_schema_byte,  # type: ignore[arg-type]
+            )
+
+    crypto_module._assert_privacy_norito_archive(
+        "privacy_capabilities_v1",
+        _PRIVACY_CAPABILITIES_ARCHIVE,
+        expected_schema_byte=0x50,
+    )
+
+
+def test_privacy_native_output_archive_rejects_unknown_operation_schema() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="native privacy_unknown_v1 is not a supported privacy native operation",
+    ):
+        crypto_module._privacy_output_archive(
+            "privacy_unknown_v1",
+            _PRIVACY_CAPABILITIES_ARCHIVE,
+        )
+
+
 def test_privacy_native_build_and_verify_reject_empty_request_archive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -781,6 +848,18 @@ def test_privacy_native_build_and_verify_reject_integer_list_request_archive(
         privacy_verify_proof_v1([1, 2, 3])  # type: ignore[arg-type]
 
 
+def test_privacy_native_build_and_verify_reject_ambiguous_typed_request_archive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(crypto_module, "_crypto", _FakePrivacyNativeMustNotDispatch())
+
+    with pytest.raises(TypeError, match="request_archive must use unsigned byte elements"):
+        privacy_build_proof_v1(_signed_byte_array(_PRIVACY_REQUEST_ARCHIVE))  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="request_archive must use unsigned byte elements"):
+        privacy_verify_proof_v1(memoryview(array("H", [0x5252] * 24)))  # type: ignore[arg-type]
+
+
 def test_privacy_native_build_and_verify_accept_max_header_padding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -827,6 +906,18 @@ def test_privacy_native_build_and_verify_reject_invalid_request_archive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(crypto_module, "_crypto", _FakePrivacyNativeMustNotDispatch())
+
+    empty_payload_request = _privacy_norito_frame(0x52)
+    with pytest.raises(
+        ValueError,
+        match="request_archive must contain a non-empty privacy request payload",
+    ):
+        privacy_build_proof_v1(empty_payload_request)
+    with pytest.raises(
+        ValueError,
+        match="request_archive must contain a non-empty privacy request payload",
+    ):
+        privacy_verify_proof_v1(bytearray(empty_payload_request))
 
     for wrong_schema_archive in (
         _PRIVACY_CAPABILITIES_ARCHIVE,
@@ -948,6 +1039,30 @@ def test_privacy_native_wrappers_reject_list_native_output(
         privacy_verify_proof_v1(_PRIVACY_REQUEST_ARCHIVE)
 
 
+def test_privacy_native_wrappers_reject_ambiguous_typed_native_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(crypto_module, "_crypto", _FakeTypedOutputPrivacyNative())
+
+    with pytest.raises(
+        TypeError,
+        match="native privacy_capabilities_v1 output must use unsigned byte elements",
+    ):
+        privacy_capabilities_v1()
+
+    with pytest.raises(
+        TypeError,
+        match="native privacy_build_proof_v1 output must use unsigned byte elements",
+    ):
+        privacy_build_proof_v1(_PRIVACY_REQUEST_ARCHIVE)
+
+    with pytest.raises(
+        TypeError,
+        match="native privacy_verify_proof_v1 output must use unsigned byte elements",
+    ):
+        privacy_verify_proof_v1(_PRIVACY_REQUEST_ARCHIVE)
+
+
 def test_privacy_native_wrappers_reject_missing_and_empty_native_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1029,6 +1144,9 @@ def test_privacy_native_wrappers_reject_invalid_norito_native_output(
     bad_checksum[31] = 0x01
     bad_payload = bytearray(_privacy_norito_frame_with_payload(0x57))
     bad_payload[44] ^= 0x7F
+    empty_payload_capabilities_result = _privacy_norito_frame(0x50)
+    empty_payload_build_result = _privacy_norito_frame(0x42)
+    empty_payload_verify_result = _privacy_norito_frame(0x56)
 
     native = _FakePrivacyNative()
     native.privacy_capabilities_v1 = lambda: bytes(bad_magic)  # type: ignore[method-assign]
@@ -1049,6 +1167,27 @@ def test_privacy_native_wrappers_reject_invalid_norito_native_output(
     with pytest.raises(
         RuntimeError,
         match="native privacy_verify_proof_v1 returned invalid Norito V1 archive",
+    ):
+        privacy_verify_proof_v1(_PRIVACY_REQUEST_ARCHIVE)
+
+    native = _FakePrivacyNative()
+    native.privacy_capabilities_v1 = lambda: empty_payload_capabilities_result  # type: ignore[method-assign]
+    native.privacy_build_proof_v1 = lambda _request: empty_payload_build_result  # type: ignore[method-assign]
+    native.privacy_verify_proof_v1 = lambda _request: empty_payload_verify_result  # type: ignore[method-assign]
+    monkeypatch.setattr(crypto_module, "_crypto", native)
+    with pytest.raises(
+        RuntimeError,
+        match="native privacy_capabilities_v1 returned empty privacy result payload",
+    ):
+        privacy_capabilities_v1()
+    with pytest.raises(
+        RuntimeError,
+        match="native privacy_build_proof_v1 returned empty privacy result payload",
+    ):
+        privacy_build_proof_v1(_PRIVACY_REQUEST_ARCHIVE)
+    with pytest.raises(
+        RuntimeError,
+        match="native privacy_verify_proof_v1 returned empty privacy result payload",
     ):
         privacy_verify_proof_v1(_PRIVACY_REQUEST_ARCHIVE)
 

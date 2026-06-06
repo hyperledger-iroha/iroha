@@ -14,10 +14,11 @@ class KagemushaRecursiveAggregationProofBundleProver private constructor() {
             recordBundleArchive: ByteArray,
             pallasOpenEnvelopesArchive: ByteArray,
         ): ByteArray {
-            require(recordBundleArchive.isNotEmpty()) { "recordBundleArchive must not be empty" }
-            require(pallasOpenEnvelopesArchive.isNotEmpty()) {
-                "pallasOpenEnvelopesArchive must not be empty"
-            }
+            KagemushaCompactPaymentTokenProver.requireNativeInput(recordBundleArchive, "recordBundleArchive")
+            KagemushaCompactPaymentTokenProver.requireNativeInput(
+                pallasOpenEnvelopesArchive,
+                "pallasOpenEnvelopesArchive",
+            )
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val proofBundleArchive =
                 nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(

@@ -200,13 +200,24 @@ profile, which proves both the previous recursive proof opening and the next
 confidential-transfer hop opening while emitting a single new recursive spend
 bundle.
 Production init requests and Reserved-lineage append-output requests must carry
-packaged lineage key artifacts: `lineage_verifier_key` and
-`lineage_proving_key_archive`. The bridge validates the proving-key archive
-against that verifier key before proving. Runtime verifier-slice key generation
-is disabled by default and is available only behind the explicit developer
-environment override used to generate artifacts, so SDKs should treat missing
-artifacts as a deterministic request-construction error rather than a fallback
-to runtime keygen.
+packaged lineage key artifacts. Release tooling can distribute the portable
+Norito `KagemushaRecursiveSpendLineageKeyArtifactsV1` package, which binds a
+profile-specific lineage circuit id, supported Pallas verifier opening length,
+`lineage_verifier_key`, and `lineage_proving_key_archive`. Init builders accept
+only the one-hop package and append builders accept only the append package;
+unknown profiles, unsupported opening lengths, wrong verifier backends, empty
+verifier keys, empty proving archives, and attempts to attach lineage artifacts
+to semantic append output fail during request construction. The bridge validates
+the proving-key archive against that verifier key before proving. Runtime
+verifier-slice key generation is disabled by default and is available only
+behind the explicit developer environment override used to generate artifacts,
+so SDKs should treat missing artifacts as a deterministic request-construction
+error rather than a fallback to runtime keygen. Swift, Kotlin/JVM, and Java
+Android expose typed `LineageKeyArtifacts` helpers for the same package shape;
+those helpers defensively copy key bytes and reject unknown profile ids,
+unsupported opening lengths, non-`halo2/ipa` verifier backends, empty verifier
+keys, and empty proving-key archives before wallet code can construct a native
+request archive.
 Receivers can verify, store, and re-spend without contacting a node while the
 D2D payload keeps only this constant-size proof-chain commitment instead of
 prior proof bundles. The final holder submits the recursive bundle, public
@@ -443,15 +454,16 @@ resulting public input hash binds chain id, asset definition, initial root,
 final root, hop count, aggregate
 nullifier/commitment digests, the ordered folded-hop transcript digest, each
 hop's proof payload hash, each hop's proof public-input statement digest, each
-hop's verifier-key binding, and the aggregation mode. The only supported
-aggregation mode in this release is
-checked transparent pre-fold v1: future recursive aggregation modes are reserved
-but rejected by token binding and by the folded circuit until their verifier
-logic exists in-tree. Folded inputs also expose a Poseidon2 aggregation
-transcript digest over the canonical hop sequence. The ordinary Iroha
-`fold_digest` remains available for host-side lineage checks, while the
-Poseidon2 digest gives future recursive verifier circuits a hash-friendly public
-accumulator without adding a trusted setup.
+hop's verifier-key binding, and the aggregation mode. Checked transparent
+pre-fold v1 remains the legacy folded-token verification mode. ABI 7 recursive
+compact mode `2` is live only through the `kagemusha-recursive-compact-v1`
+prover/verifier path, where the compact token is preverified against the
+canonical recursive compact verifier record; the legacy checked verifier still
+rejects mode `2`. Folded inputs also expose a Poseidon2 aggregation transcript
+digest over the canonical hop sequence. The ordinary Iroha `fold_digest`
+remains available for host-side lineage checks, while the Poseidon2 digest gives
+the recursive compact verifier a hash-friendly public accumulator without adding
+a trusted setup.
 The aggregation statement is exposed as
 `KagemushaPoseidonAggregationTranscriptStatement` with the canonical
 `kagemusha_poseidon_aggregation_transcript_statement` builder and
@@ -597,11 +609,21 @@ verifier metadata for every private hop before compact proof generation.
 The Python SDK exposes the same record-backed compact-token prover through the
 native PyO3 extension, so Python wallets no longer need to drop to the C bridge
 to exercise the production Kagemusha path.
-Bridge ABI 6 exposes the production recursive spendable-cash entry points:
+Bridge ABI 7 keeps the recursive compact-token entry point
+`connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`.
+The symbol is source-stable but public compact proving fails closed until the
+`kagemusha-recursive-compact-v1` proof composes the private-hop verifier-slice
+relation in-circuit. The ABI-7 compact verifier key remains CID-distinct from
+the ABI-6 recursive aggregation verifier key while reusing the semantic
+aggregation circuit shape for projection tests; those projection helpers are
+not a receiver-admission path.
+Bridge ABI 6 introduced, and ABI 6-or-later bridges expose, the production
+recursive spendable-cash entry points:
 `connect_norito_kagemusha_recursive_spend_init`,
 `connect_norito_kagemusha_recursive_spend_append`,
 `connect_norito_kagemusha_recursive_spend_transition_profile_init`,
 `connect_norito_kagemusha_recursive_spend_transition_profile_append`,
+`connect_norito_kagemusha_recursive_spend_lineage_append_boundary`,
 `connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result`,
 `connect_norito_kagemusha_recursive_spend_lineage_witness_append_result`,
 `connect_norito_kagemusha_recursive_spend_verify`, and
@@ -870,9 +892,10 @@ append output is reachable below the 64-hop cap.
 Verify requests whose received bundle uses the reserved-lineage circuit id must
 include the current lineage verifier record in `lineage_verifier_record`;
 semantic v1 verify requests must leave that field empty. Native bridge and SDK
-verifier wrappers return `valid = false` with a stable missing-record
-diagnostic when a reserved-lineage D2D payload is presented without that
-record, so receivers do not store or re-spend unverifiable witnessless cash.
+verifier wrappers reject malformed Reserved-lineage verify request archives
+before returning a diagnostic result, including requests missing the lineage
+record or carrying a forged lineage-record commitment, so receivers do not
+store or re-spend unverifiable witnessless cash.
 Init and append request archives now have the same cheap public-binding
 preflight before any recursive prover is invoked. Init preflight validates the
 one-hop record-backed fragment, Pallas envelope archive count, exact verifier
@@ -970,8 +993,11 @@ hop proof, and returns a Norito-encoded
 `KagemushaRecursiveAggregationProofBundle`. It is still admission-neutral:
 the Python native extension mirrors the same path for local proof-bundle
 generation.
-Compact-token aggregation mode `2` remains reserved until the recursive circuit
-verifies private-hop opening evidence in-circuit.
+ABI 7 reserves the same record-backed private-hop evidence for
+`kagemusha-recursive-compact-v1`, but the public compact-token prover and
+receiver verifier fail closed in this release. Wallets that need production
+offline-offline spend-again behavior should use the recursive spendable-cash
+path, while recursive aggregation proof bundles remain admission-neutral.
 Malformed bundles, oversized bundle hop counts, malformed hop shapes, root
 discontinuities, duplicate nullifiers or output commitments, tampered hop
 proofs, oversized hop proof payloads, missing or inactive records, verifier
@@ -999,14 +1025,52 @@ snake/camel-case bridge names, and C# exposes
 Python, Swift, JavaScript/Node, Kotlin/JVM, and Java Android also fail closed
 when proof-producing native calls return no archive or a zero-length archive,
 so missing native proof material cannot be coerced into a successful SDK
-result. The Swift dynamic loader now requires bridge ABI 6 and the
+result. The Swift dynamic loader now requires bridge ABI 6 or later and the
 record-backed plus complete recursive-spend Kagemusha symbols, including both
 lineage-witness assembly helpers, before probing those symbols with malformed
 Norito archives. Swift reports native compact-token, recursive-aggregation, and
 recursive-spend Kagemusha provers as available only when the loaded bridge
 returns the expected Kagemusha rejection without output bytes, and the Swift
 recursive-spend wrapper refuses to select `recursive_spend_v1` unless the full
-ABI 6 surface passes that probe.
+ABI-6-or-later surface passes that probe.
+Bridge ABI 7 exposes fail-closed reserved symbols for
+`connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`
+plus
+`connect_norito_kagemusha_verify_recursive_compact_payment_token` for the
+`kagemusha-recursive-compact-v1` compact-token circuit. The prover decodes and
+validates both input archive shapes, then returns the
+recursive-compact-unavailable error instead of emitting a token. The verifier
+clears stale output, rejects malformed archives and malformed token/public-input
+bindings through the same core preverification gate, and returns `valid = 0`
+for shape-valid compact tokens until compact-token proofs compose the
+private-hop verifier-slice relation in-circuit. The C bridge, JNI shim, Node
+host, and PyO3 host all apply this decode/preverify boundary before exposing a
+boolean receiver result.
+The C bridge clears stale output pointers before rejecting null inputs, rejects
+null output slots before writing, and does not slice adversarial input lengths
+on either ABI-7 entry point. It returns no stale output on malformed archives,
+and returns `valid = 0` for every well-formed compact token in this release.
+The data model and core pre-admission helpers now also validate the recursive
+mode-2 folded public-input projection against a recursive aggregation proof
+bundle. That check binds the folded compact-token chain id, asset, roots, hop
+count, nullifier/output digests, fold digest, and aggregation transcript digest
+to the canonical recursive evidence while leaving the legacy
+`validate_supported_context` path restricted to checked pre-fold mode `1`. Core
+also exposes raw-key, verifier-record, and height-aware record
+preverification/verification helpers for that projection, so a valid recursive
+aggregation proof can be checked against the exact compact-token public
+projection before compact-token admission.
+Recursive aggregation proof public inputs also expose the folded public-input
+hash as four public limbs. Internal expected-circuit helpers compare those limbs
+to the compact token's chain-visible folded public inputs and enforce the
+mode-2 folded context, token public-input hash, verifier-key CID/hash binding,
+recursive proof schema, folded-public-input hash limbs, aggregation-transcript
+limbs, witness count, hop count, and verifier-record height windows for
+projection tests. The exported core recursive compact prover/preverify/verify
+helpers remain fail-closed until a composed private-hop verifier-slice compact
+proof exists, semantic recursive aggregation proofs are rejected by the public
+compact verifier, and `verify_kagemusha_compact_payment_token` continues to
+reject mode `2`.
 JavaScript/Node, Python, Kotlin/JVM, Java Android, and C# apply the same
 fail-closed rule in their native availability probes: init, append, both
 transition-profile helpers, the append-boundary helper, both lineage-witness
@@ -1027,19 +1091,22 @@ A partial or permissive native bridge cannot emit an init or append bundle
 without the witness helpers needed for later redemption.
 The Swift wrapper also exports the same ABI-6 requirement for wallet-side
 capability checks.
-JavaScript/Node and Python now require an ABI-6 native version probe before
-reporting recursive spend as available or selecting `recursive_spend_v1`; the
-Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python PyO3
-extension exports `kagemusha_recursive_spend_bridge_abi_version`.
+JavaScript/Node and Python now require an ABI-6-or-later native version probe
+before reporting recursive spend as available or selecting `recursive_spend_v1`;
+the Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python
+PyO3 extension exports `kagemusha_recursive_spend_bridge_abi_version`.
 Kotlin/JVM and Java Android also call the bridge ABI-version JNI probe and
 probe the verify plus both lineage-witness JNI symbols before reporting
 recursive spend as available or defaulting to `recursive_spend_v1`. C#
-publishes the same ABI-6 requirement and probes verify plus both
+publishes the same ABI-6-or-later requirement and probes verify plus both
 lineage-witness P/Invoke symbols before its optional wrapper calls the bridge.
 All SDKs expose the same default spend-mode choice:
-`recursive_spend_v1` is selected when the recursive spend ABI 6 surface is
-available, and `checked_prefold_v1` remains the compatibility fallback for
-older runtimes that only provide the record-backed compact-token path.
+`recursive_spend_v1` is selected when the recursive spend ABI-6-or-later
+surface is available, and `checked_prefold_v1` remains the compatibility
+fallback for older runtimes that only provide the record-backed compact-token
+path. The
+`recursive_compact_v1` mode string remains reserved and source-stable, but it is
+not selected by production defaults.
 Verifier records for chain-side transfers, recursive final redeem/unshield,
 record-backed compact-token proving, and final folded-token record verification
 must live in the canonical `offline_kagemusha` namespace and publish the
@@ -1084,12 +1151,12 @@ circuit id.
 The recursive spendable-cash path above is separate from the older compact
 folded-token path. Checked pre-fold mode `1` remains available for compatibility
 and continues to verify each hop proof before emitting the folded public
-transcript. Compact-token aggregation mode `2` remains reserved for a future
-fully in-circuit private-hop verifier inside the folded-token circuit; callers
-that need spend-again-offline cash should use `KagemushaRecursiveSpendBundleV1`
-and ABI 6 instead of attempting to enable mode `2`. The final aggregation proof
-must continue to use no trusted setup and preserve the same public
-nullifier/commitment/root semantics.
+transcript. Recursive compact mode `2` is handled by the ABI-7
+`kagemusha-recursive-compact-v1` token prover/verifier; callers that need
+spend-again-offline cash should still use `KagemushaRecursiveSpendBundleV1` and
+ABI 6 because spend bundles carry lineage state for additional offline hops. The
+final aggregation proof must continue to use no trusted setup and preserve the
+same public nullifier/commitment/root semantics.
 The current tree has native Halo2 IPA proof verification and IPA polynomial
 opening code, but it does not ship a Halo2 circuit gadget that verifies another
 Halo2 IPA proof in-circuit. The first reusable recursive-verifier foundations
@@ -1249,29 +1316,27 @@ digest using the streaming Poseidon2 byte sponge. That digest binds the
 transparent parameter fingerprint, witness order, transcript projections, `b`
 reductions, accumulator folds, final terms, and proof-final scalars after every
 witness passes the single-witness preflight.
-That batch summary is the host-side evidence surface intended to feed the
-future private-hop recursive aggregation circuit while mode `2` remains
-reserved. The data model now also has a reserved-mode recursive aggregation
-evidence statement that Norito/Poseidon-binds that batch digest and parameter
+That batch summary is the host-side evidence surface feeding the private-hop
+recursive compact proof path. The data model now also has a recursive
+aggregation evidence statement that Norito/Poseidon-binds that batch digest and parameter
 fingerprint to the same ordered hop transcript and to the canonical
 `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
 profile. It validates mode `2` evidence shape, hop continuity, witness count,
 profile, verifier opening length, fixed-window table schedule/base digests, and
-non-zero batch fields without making mode `2` accepted for compact-token
-admission. The Poseidon2 aggregation transcript digest now deliberately accepts
-both checked pre-fold mode `1` and reserved recursive mode `2`, while rejecting
-unknown modes, so recursive evidence and future in-circuit verifier witnesses
-bind the same transcript shape without opening compact-token admission. Focused
+non-zero batch fields before reserved compact-token projection checks. The Poseidon2
+aggregation transcript digest deliberately accepts both checked pre-fold mode
+`1` and recursive compact mode `2`, while rejecting unknown modes, so recursive
+evidence and compact verifier witnesses bind the same transcript shape. Focused
 data-model coverage also roundtrips the evidence through Norito, validates the
 decoded profile-bound digest, rejects decoded unsupported-profile evidence,
 rejects unsupported or non-power-of-two opening lengths, rejects zero
 schedule/base commitments, and rejects truncated evidence archives.
-The reserved evidence validator also has explicit adversarial coverage for
+The recursive evidence validator also has explicit adversarial coverage for
 empty transcripts, over-cap hop lists, duplicate input nullifiers, and duplicate
 output commitments.
-Core exposes record-backed evidence builders for that reserved path. They first
+Core exposes record-backed evidence builders for that recursive path. They first
 enforce the same active WSV-style confidential-transfer-v2 hop verifier records
-used by production compact-token proving, verify every private hop proof, and
+used by record-backed compact-token proving, verify every private hop proof, and
 then bind the supplied native verifier-witness batch digest and parameter
 fingerprint to the canonical hop transcript. Witness-count mismatches and
 all-zero batch metadata are rejected before hop proof decoding. The core
@@ -1354,8 +1419,8 @@ nonzero only for Reserved-lineage append outputs. The append-boundary digest is
 nonzero only for those Reserved-lineage append proofs and must be paired with a
 nonzero append-opening preflight digest. The scalar-projection digest stays zero
 until a composed verifier-slice proof is used.
-This is still a reserved evidence binding, not the final in-circuit derivation
-from each compact-hop Halo2 proof envelope.
+This evidence binding is consumed by the ABI-7 recursive compact prover rather
+than rederived by SDKs from each compact-hop Halo2 proof envelope.
 Core preverification for that proof-carrying bundle now checks the transparent
 Halo2 IPA `OpenVerifyEnvelope`, canonical circuit id, verifier-key hash,
 public-input schema, empty auxiliary metadata, exactly 55 one-row Pasta public
@@ -1392,9 +1457,10 @@ from proving detached recursive evidence while the private-hop verifier relation
 is still being completed. The lower-level detached-evidence prover and raw
 metadata evidence builder are crate-private implementation helpers; public
 callers must use the record-backed Pallas preflight proof-bundle entry points.
-This proof path remains admission-neutral for compact tokens: aggregation mode
-`2` is still rejected until the private-hop verifier evidence is checked
-recursively.
+This proof path remains admission-neutral for compact-token receivers. The
+recursive compact-token helper verifies reserved projection shape for internal
+tests, while the public ABI-7 compact prover/verifier fail closed until that
+proof path is replaced by a composed private-hop verifier-slice circuit.
 The combined builders reject native witness-count
 mismatches before native preflight or hop proof decoding, the public preflight
 rejects empty witness batches directly, and native preflight then rejects
@@ -1449,10 +1515,11 @@ another field label. The public Kagemusha Pallas batch preflight now dispatches
 through that shared-table verifier entry point, and the
 production-width shared-table profile is checked against the 128-point manifest
 without materializing every witness object. This keeps production shape coverage
-cheap while the full recursive witness layout is being compressed; constructing
-every per-term fixed-window table for `n = 128` is not production-viable for
-normal unit tests and must be replaced by shared-table or otherwise compressed
-circuit evidence before mode `2` can be accepted.
+cheap while the full recursive witness layout is stress-tested separately;
+constructing every per-term fixed-window table for `n = 128` is not
+production-viable for normal unit tests, so those exhaustive synthesis checks
+remain opt-in heavyweight coverage rather than a prerequisite for ABI-7 compact
+token verification.
 The LEN=4 two-round shared-table verifier now also has an explicit heavyweight
 MockProver harness covering an honest synthetic statement, a real Pallas opening
 translation, and public-instance, `Q`, generator-fold, challenge, and final-MSM
@@ -1530,11 +1597,11 @@ synthesis-shape MockProver cases for omitted `b`-reduction and generator-fold
 layers are also present but ignored by default because they require the
 large-stack non-native verifier harness. Full production fixed-window Pallas
 verifier materialization and composed MockProver acceptance/splice tests are
-heavyweight and ignored by default. This moves verifier composition into the
-recursive aggregation circuit surface without accepting compact-token
-aggregation mode `2`; full mode-2 admission still requires composing the
-private-hop verifier batch and proving the complete Poseidon2 witness-batch
-digest relation in-circuit.
+heavyweight and ignored by default. The routine offline-offline production path
+uses the ABI-6 reserved-lineage recursive spend verifier and redemption surface,
+while ABI-7 recursive compact-token symbols remain fail-closed until that proof
+uses the composed private-hop verifier-slice circuit. The ignored MockProver
+cases remain deep synthesis stress coverage for future verifier-layout changes.
 The routine Rust test suite also skips real Kagemusha folded-token, recursive
 aggregation, recursive-spend, and bridge success proof generators by default;
 those cases remain available as opt-in `--ignored --test-threads=1` runs so
@@ -1556,10 +1623,11 @@ native IPA scalar/vector-fold, full `b`-vector reduction, bounded MSM,
 fixed-window final IPA MSM, IPA generator-fold, round-accumulator, and final IPA
 comparison composition plus one-round and generic multi-round verifier
 composition with transcript binding, native Pallas witness translation, batch
-preflight binding, reserved-mode recursive aggregation evidence/proof-public
-input binding, and a transparent Halo2 IPA semantic proof for that evidence are
-present. The remaining recursive-circuit work is proving the private-hop Pallas
-IPA verifier witnesses inside the recursive circuit and wiring that proof into
-compact-token admission, so aggregation mode `2` remains a reserved wire value
-with a stable rejection reason, and public prover/verifier entry points accept
-only checked pre-fold mode `1`.
+preflight binding, recursive aggregation evidence/proof-public input binding,
+folded public-input projection preverification, folded-public-input hash limbs
+in the recursive proof schema, height-aware record checks, full backend
+verification wrappers, and a transparent Halo2 IPA semantic proof for that
+evidence are present. ABI 7 keeps recursive compact entry points and mode `2`
+source-stable, but public compact-token admission fails closed until the proof
+uses a composed private-hop verifier-slice circuit. The legacy checked-folded
+entry points remain mode `1` only.

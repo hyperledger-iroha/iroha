@@ -80,6 +80,7 @@ CERT_TWO_B64 = cert_b64(2)
 CERT_THREE_B64 = cert_b64(3)
 CRL_B64 = crl_b64()
 OCSP_B64 = ocsp_b64()
+PROFILE_FRESHNESS_ARGS = ["--max-source-age-days", "36500"]
 
 
 def der_digest(der_b64):
@@ -93,10 +94,10 @@ def valid_bundle():
         "rail": "swift-cbpr-plus",
         "environment": "preprod",
         "source": {
-            "authority": "Example Rail PKI",
+            "authority": "Local Bank Rail PKI",
             "version": "2026-Q2",
             "retrieved_at": "2026-06-04T00:00:00Z",
-            "url": "https://pki.example.invalid/swift-cbpr-plus",
+            "url": "https://pki.local-bank.example.com/swift-cbpr-plus",
         },
         "embedded_signature_policy": "require-verified",
         "x509_trust_anchors": [
@@ -154,6 +155,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             path = write_bundle(root, valid_bundle())
             summary_path = root / "summary.json"
             profile_path = root / "profile.json"
+            summary_path.write_text('{"stale": true}\n' + ("x" * 4096), encoding="utf-8")
+            profile_path.write_text('[{"stale": true}]\n' + ("x" * 4096), encoding="utf-8")
 
             rc, stdout, stderr = run_verify(
                 [
@@ -163,6 +166,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     str(summary_path),
                     "--emit-profile-json",
                     str(profile_path),
+                    *PROFILE_FRESHNESS_ARGS,
                 ]
             )
 
@@ -172,12 +176,18 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertFalse(summary["allow_record_only"])
             self.assertFalse(summary["allow_insecure_source_url"])
             self.assertFalse(summary["allow_synthetic_der"])
+            self.assertEqual(summary["max_source_age_days"], 36500)
             self.assertTrue(summary["profile_json_emittable"])
             self.assertTrue(summary["profile_json_emitted"])
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(digest, VERIFIER.sha256_hex(VERIFIER._canonical_json_bytes(body)))
             self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8")), summary)
+            self.assertEqual(summary_path.stat().st_mode & 0o077, 0)
+            self.assertEqual(
+                list(summary_path.parent.glob(".iso-*.tmp")),
+                [],
+            )
             bundle_summary = summary["bundles"][0]
             self.assertEqual(bundle_summary["profile_id"], "swift-cbpr-plus")
             self.assertEqual(bundle_summary["material"]["x509_trust_anchor_pin_count"], 1)
@@ -189,6 +199,11 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 VERIFIER.sha256_hex(profile_text.encode("utf-8")),
             )
             emitted = json.loads(profile_text)
+            self.assertEqual(profile_path.stat().st_mode & 0o077, 0)
+            self.assertEqual(
+                list(profile_path.parent.glob(".iso-*.tmp")),
+                [],
+            )
             self.assertEqual(
                 emitted[0]["x509_trust_anchor_sha256_pins"],
                 [der_digest(CERT_ONE_B64)],
@@ -211,6 +226,25 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("must not be a symlink", stderr)
 
+    def test_symlinked_bundle_ancestor_is_rejected_before_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "bundle-target"
+            target_dir.mkdir()
+            target = write_bundle(target_dir, valid_bundle())
+            ancestor = root / "bundle-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            bundle = ancestor / target.name
+
+            rc, stdout, stderr = run_verify(["--bundle", str(bundle)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+
     def test_directory_bundle_is_rejected_before_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:
             bundle = Path(raw_root) / "bundle-dir"
@@ -220,6 +254,50 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("must be a regular file", stderr)
+
+    def test_oversized_bundle_is_rejected_before_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            bundle = Path(raw_root) / "oversized-trust-bundle.json"
+            old_limit = VERIFIER.MAX_BUNDLE_JSON_BYTES
+            try:
+                VERIFIER.MAX_BUNDLE_JSON_BYTES = 128
+                bundle.write_text(
+                    '{"version":1,"profile_id":"swift-cbpr-plus","padding":"'
+                    + ("a" * VERIFIER.MAX_BUNDLE_JSON_BYTES)
+                    + '"}',
+                    encoding="utf-8",
+                )
+
+                rc, stdout, stderr = run_verify(["--bundle", str(bundle)])
+            finally:
+                VERIFIER.MAX_BUNDLE_JSON_BYTES = old_limit
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("exceeds", stderr)
+
+    def test_bundle_cli_path_rejects_raw_smuggling_before_read(self):
+        cases = (
+            ("semicolon", "bundle;debug.json", "semicolon path"),
+            ("whitespace", "trust bundle.json", "whitespace"),
+            ("leading-dash", "nested/-bundle.json", "leading-dash path segments"),
+            ("parent", "nested/../bundle.json", "dot or parent"),
+            ("dot", lambda root: f"{root}/nested/./bundle.json", "dot or parent"),
+            ("empty", lambda root: f"{root}//bundle.json", "empty path"),
+        )
+        for name, bundle_arg, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    value = (
+                        bundle_arg(root) if callable(bundle_arg) else str(root / bundle_arg)
+                    )
+
+                    rc, stdout, stderr = run_verify(["--bundle", value])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
 
     def test_symlinked_output_files_are_rejected(self):
         cases = (
@@ -239,14 +317,109 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     except OSError as error:
                         self.skipTest(f"symlink creation unavailable: {error}")
 
-                    rc, stdout, stderr = run_verify(
-                        ["--bundle", str(path), flag, str(output_path)]
-                    )
+                    argv = ["--bundle", str(path), flag, str(output_path)]
+                    if flag == "--emit-profile-json":
+                        argv.extend(PROFILE_FRESHNESS_ARGS)
+                    rc, stdout, stderr = run_verify(argv)
 
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn("must not be a symlink", stderr)
                     self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_output_paths_reject_smuggled_segments(self):
+        cases = (
+            ("summary semicolon", "--summary-out", "summary;debug.json", "semicolon path"),
+            ("profile whitespace", "--emit-profile-json", "profile out.json", "whitespace"),
+            ("summary leading dash", "--summary-out", "nested/-summary.json", "leading-dash"),
+            ("profile parent", "--emit-profile-json", "nested/../profile.json", "dot or parent"),
+            (
+                "summary dot",
+                "--summary-out",
+                lambda root: f"{root}/nested/./summary.json",
+                "dot or parent",
+            ),
+            (
+                "profile empty",
+                "--emit-profile-json",
+                lambda root: f"{root}//profile.json",
+                "empty path",
+            ),
+        )
+        for name, flag, output_arg, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    path = write_bundle(root, valid_bundle())
+                    output_path = (
+                        output_arg(root) if callable(output_arg) else str(root / output_arg)
+                    )
+
+                    argv = ["--bundle", str(path), flag, output_path]
+                    if flag == "--emit-profile-json":
+                        argv.extend(PROFILE_FRESHNESS_ARGS)
+                    rc, stdout, stderr = run_verify(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_hardlinked_output_files_are_rejected(self):
+        cases = (
+            ("summary", "--summary-out"),
+            ("profile", "--emit-profile-json"),
+        )
+        for name, flag in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    path = write_bundle(root, valid_bundle())
+                    target = root / f"{name}-target.json"
+                    target.write_text("untouched\n", encoding="utf-8")
+                    output_path = root / f"{name}-hardlink.json"
+                    try:
+                        output_path.hardlink_to(target)
+                    except OSError as error:
+                        self.skipTest(f"hard link creation unavailable: {error}")
+
+                    argv = ["--bundle", str(path), flag, str(output_path)]
+                    if flag == "--emit-profile-json":
+                        argv.extend(PROFILE_FRESHNESS_ARGS)
+                    rc, stdout, stderr = run_verify(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("must not be hard-linked", stderr)
+                    self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_symlinked_output_ancestors_are_rejected(self):
+        cases = (
+            ("summary", "--summary-out"),
+            ("profile", "--emit-profile-json"),
+        )
+        for name, flag in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    path = write_bundle(root, valid_bundle())
+                    target_dir = root / f"{name}-target"
+                    target_dir.mkdir()
+                    ancestor = root / f"{name}-ancestor-link"
+                    try:
+                        ancestor.symlink_to(target_dir, target_is_directory=True)
+                    except OSError as error:
+                        self.skipTest(f"symlink creation unavailable: {error}")
+                    output_path = ancestor / "nested" / f"{name}.json"
+
+                    argv = ["--bundle", str(path), flag, str(output_path)]
+                    if flag == "--emit-profile-json":
+                        argv.extend(PROFILE_FRESHNESS_ARGS)
+                    rc, stdout, stderr = run_verify(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("must not be a symlink", stderr)
+                    self.assertFalse((target_dir / "nested").exists())
 
     def test_profile_output_failure_does_not_emit_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -269,6 +442,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     str(summary_path),
                     "--emit-profile-json",
                     str(profile_path),
+                    *PROFILE_FRESHNESS_ARGS,
                 ]
             )
 
@@ -329,6 +503,26 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
+
+    def test_non_finite_bundle_json_numbers_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "trust-bundle.json"
+            path.write_text('{"version":NaN}\n', encoding="utf-8")
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("non-finite numeric constant NaN", stderr)
+
+    def test_bundle_json_surrogate_strings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "trust-bundle.json"
+            path.write_text('{"profile_id":"\\ud800"}\n', encoding="utf-8")
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid Unicode surrogate", stderr)
 
     def test_duplicate_bundle_inputs_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -392,6 +586,20 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(f"{key}[0].sha256 must be a string", stderr)
 
+    def test_oversized_der_base64_is_rejected_before_decode(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["x509_trust_anchors"][0]["der_base64"] = (
+                "A" * (VERIFIER.MAX_DER_BASE64_CHARS + 1)
+            )
+            path = write_bundle(root, bundle)
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("must decode to no more than", stderr)
+
     def test_absent_der_labels_are_omitted_from_summary(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -411,6 +619,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     str(path),
                     "--emit-profile-json",
                     str(root / "profile.json"),
+                    *PROFILE_FRESHNESS_ARGS,
                 ]
             )
 
@@ -679,10 +888,170 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 0,
             )
 
+    def test_placeholder_source_summary_only_is_not_profile_emittable(self):
+        cases = (
+            ("authority", lambda bundle: bundle["source"].__setitem__("authority", "Rail PKI placeholder")),
+            ("version", lambda bundle: bundle["source"].__setitem__("version", "replace-before-production")),
+            (
+                "url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.example.invalid/iso20022",
+                ),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 0, stderr)
+                    summary = json.loads(stdout)
+                    self.assertFalse(summary["profile_json_emittable"])
+                    self.assertFalse(summary["profile_json_emitted"])
+
+    def test_profile_override_emission_rejects_local_and_placeholder_sources(self):
+        cases = (
+            (
+                "record-only-override",
+                lambda _bundle: None,
+                ["--allow-record-only"],
+                "--allow-record-only cannot be combined with --emit-profile-json",
+            ),
+            (
+                "insecure-source-override",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "http://pki.local/swift-cbpr-plus",
+                ),
+                ["--allow-insecure-source-url"],
+                "--allow-insecure-source-url cannot be combined with --emit-profile-json",
+            ),
+            (
+                "placeholder-authority",
+                lambda bundle: bundle["source"].__setitem__(
+                    "authority",
+                    "Rail PKI placeholder",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
+                "placeholder-version",
+                lambda bundle: bundle["source"].__setitem__(
+                    "version",
+                    "replace-before-production",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
+                "placeholder-url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.example.invalid/iso20022",
+                ),
+                [],
+                "example.invalid source provenance",
+            ),
+        )
+        for name, mutate, extra_args, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--bundle",
+                            str(path),
+                            "--emit-profile-json",
+                            str(root / "profile.json"),
+                        ]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_profile_override_emission_requires_source_freshness_budget(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = write_bundle(root, valid_bundle())
+
+            rc, stdout, stderr = run_verify(["--bundle", str(path)])
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertIsNone(summary["max_source_age_days"])
+            self.assertFalse(summary["profile_json_emittable"])
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--bundle",
+                    str(path),
+                    "--emit-profile-json",
+                    str(root / "profile.json"),
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("--max-source-age-days is required", stderr)
+
+    def test_source_freshness_budget_must_be_positive_integer(self):
+        cases = ("0", "-1", "1.5", " 7")
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = write_bundle(root, valid_bundle())
+            for value in cases:
+                with self.subTest(value=value):
+                    rc, _stdout, stderr = run_verify(
+                        ["--bundle", str(path), "--max-source-age-days", value]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("--max-source-age-days must be a positive integer", stderr)
+
+    def test_stale_source_prevents_profile_override_emission(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["source"]["retrieved_at"] = "2020-01-01T00:00:00Z"
+            path = write_bundle(root, bundle)
+
+            rc, stdout, stderr = run_verify(
+                ["--bundle", str(path), "--max-source-age-days", "7"]
+            )
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["max_source_age_days"], 7)
+            self.assertFalse(summary["profile_json_emittable"])
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--bundle",
+                    str(path),
+                    "--emit-profile-json",
+                    str(root / "profile.json"),
+                    "--max-source-age-days",
+                    "7",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("source.retrieved_at is older than the 7-day freshness budget", stderr)
+
     def test_source_provenance_is_required(self):
         cases = [
             (lambda bundle: bundle.pop("source"), ".source is required"),
-            (lambda bundle: bundle.update({"source": {}}), ".source.retrieved_at"),
+            (lambda bundle: bundle.update({"source": {}}), ".source.authority"),
+            (lambda bundle: bundle["source"].pop("authority"), ".source.authority"),
+            (lambda bundle: bundle["source"].pop("version"), ".source.version"),
             (lambda bundle: bundle["source"].pop("retrieved_at"), ".source.retrieved_at"),
             (lambda bundle: bundle["source"].pop("url"), ".source.url"),
         ]
@@ -699,22 +1068,22 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
-    def test_optional_source_identity_fields_must_be_strings_when_present(self):
+    def test_source_identity_fields_are_required_and_clean(self):
         cases = (
             (
                 "authority-null",
                 lambda bundle: bundle["source"].__setitem__("authority", None),
-                "source.authority must be a non-empty string when provided",
+                "source.authority must be a non-empty string",
             ),
             (
                 "authority-empty",
                 lambda bundle: bundle["source"].__setitem__("authority", ""),
-                "source.authority must be a non-empty string when provided",
+                "source.authority must be a non-empty string",
             ),
             (
                 "authority-numeric",
                 lambda bundle: bundle["source"].__setitem__("authority", 7),
-                "source.authority must be a non-empty string when provided",
+                "source.authority must be a non-empty string",
             ),
             (
                 "authority-control",
@@ -727,17 +1096,17 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             (
                 "version-null",
                 lambda bundle: bundle["source"].__setitem__("version", None),
-                "source.version must be a non-empty string when provided",
+                "source.version must be a non-empty string",
             ),
             (
                 "version-empty",
                 lambda bundle: bundle["source"].__setitem__("version", ""),
-                "source.version must be a non-empty string when provided",
+                "source.version must be a non-empty string",
             ),
             (
                 "version-numeric",
                 lambda bundle: bundle["source"].__setitem__("version", 2026),
-                "source.version must be a non-empty string when provided",
+                "source.version must be a non-empty string",
             ),
             (
                 "version-control",
@@ -759,6 +1128,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertIn(message, stderr)
 
     def test_source_url_rejects_credentials_query_fragment_and_local_addresses(self):
+        long_host = ".".join(["a" * 63] * 4)
+        long_url = "https://pki.example.invalid/" + ("a" * VERIFIER.MAX_SOURCE_URL_CHARS)
         cases = [
             ("https://user:pass@pki.example.invalid/swift-cbpr-plus", "credentials"),
             ("https://pki.example.invalid/swift-cbpr-plus?token=abc", "params, query, or fragment"),
@@ -766,11 +1137,16 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("https://pki.example.invalid/swift-cbpr-plus\nX-Token: abc", "ASCII control"),
             ("https://pki.example.invalid/swift cbpr plus", "must not contain whitespace"),
             ("https://pki.example.invalid:abc/swift-cbpr-plus", "invalid port"),
+            ("https://pki.example.invalid:/swift-cbpr-plus", "empty port"),
+            ("https://pki.example.invalid:0/swift-cbpr-plus", "port must be positive"),
+            ("https://pki.example.invalid:08443/swift-cbpr-plus", "leading zeros"),
             ("https://pki.example.invalid:99999/swift-cbpr-plus", "invalid port"),
             ("https://pki.example.invalid:443/swift-cbpr-plus", "default port"),
+            (long_url, "no longer than 2048 characters"),
             ("https://PKI.example.invalid/swift-cbpr-plus", "host must be lowercase"),
             ("https://pki.example.invalid./swift-cbpr-plus", "host must not end with a dot"),
             ("https://pki..example.invalid/swift-cbpr-plus", "host must not contain empty labels"),
+            (f"https://{long_host}/swift-cbpr-plus", "host must be at most 253 characters"),
             ("https://-pki.example.invalid/swift-cbpr-plus", "host labels must not start or end with hyphen"),
             ("https://pki._tcp.example.invalid/swift-cbpr-plus", "host labels must use lowercase ASCII letters, digits, or hyphens"),
             ("https://pki.example%2einvalid/swift-cbpr-plus", "host must not contain percent escapes"),
@@ -781,6 +1157,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("https://pki.example.invalid/swift%2fcbpr-plus", "path must not contain encoded dot or separator characters"),
             ("https://pki.example.invalid/swift%252fcbpr-plus", "path must not contain encoded percent characters"),
             ("https://pki.example.invalid/sources;debug/swift-cbpr-plus", "path must not contain semicolon parameters"),
+            ("https://pki.example.invalid/sources%3bdebug/swift-cbpr-plus", "path must not contain encoded semicolon parameters"),
+            ("https://pki.example.invalid/sources%23debug/swift-cbpr-plus", "path must not contain encoded URL delimiter characters"),
             (r"https://pki.example.invalid/sources\swift-cbpr-plus", "path must use forward slashes"),
             ("https://pki.example.invalid/swift%20cbpr-plus", "percent-encoded control or space characters"),
             ("https://pki.example.invalid/swift%00cbpr-plus", "percent-encoded control or space characters"),
@@ -792,6 +1170,9 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("https://127.0.0.1/swift-cbpr-plus", "local, private, or reserved IP"),
             ("https://10.1.2.3/swift-cbpr-plus", "local, private, or reserved IP"),
             ("https://[::1]/swift-cbpr-plus", "local, private, or reserved IP"),
+            ("https://127.0.0.1.nip.io/swift-cbpr-plus", "rebinding hostnames"),
+            ("https://0x7f000001/swift-cbpr-plus", "legacy IPv4 numeric notation"),
+            ("https://[64:ff9b::7f00:1]/swift-cbpr-plus", "embed local, private, or reserved IPv4"),
         ]
         for url, message in cases:
             with self.subTest(url=url):
