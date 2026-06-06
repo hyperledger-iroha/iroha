@@ -274,7 +274,7 @@ Host/sycall ჩაშენებული (რუკა SCALL-ზე; ზუს
 კომუნალური ჩაშენებები
 - `info(string|int)`: გამოსცემს სტრუქტურირებულ მოვლენას/შეტყობინებას OUTPUT-ის საშუალებით.
 - `hash(blob) -> Blob*`: აბრუნებს Norito-ში დაშიფრულ ჰეშს, როგორც Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` და `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI მშენებლები; ყველა არგუმენტი უნდა იყოს კომპილაციის დროის ლიტერალები (სტრიქონების ლიტერალები ან მაჩვენებლის კონსტრუქტორები ლიტერალებიდან). `nullifier32` და `inputs32` უნდა იყოს ზუსტად 32 ბაიტი (ნედლი სტრიქონი ან `0x` თექვსმეტობითი), ხოლო `amount` უნდა იყოს არაუარყოფითი.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` და `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: inline ISI მშენებლები; ყველა არგუმენტი უნდა იყოს კომპილაციის დროის ლიტერალები (სტრიქონების ლიტერალები ან მაჩვენებლის კონსტრუქტორები ლიტერალებიდან). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: დაშიფვრავს JSON-ს ჰოსტის სქემის რეესტრის გამოყენებით (DefaultRegistry მხარს უჭერს `QueryRequest` და `QueryResponse` შეკვეთის/გაყიდვის ნიმუშების გარდა).
 - `decode_schema(Name*, Blob|bytes) -> Json*`: დეკოდირდება Norito ბაიტი ჰოსტის სქემის რეესტრის გამოყენებით.

@@ -997,6 +997,7 @@ pub enum Instr {
         to: Temp,
         amount: Temp,
         inputs: Temp,
+        outputs: Option<Temp>,
         backend: Temp,
         proof: Temp,
         vk: Temp,
@@ -3600,9 +3601,14 @@ fn lower_surface_builtin_call(
             let to = lower_expr(ctx, &args[1], vars);
             let amount = lower_expr_as_int(ctx, &args[2], vars);
             let inputs = lower_expr(ctx, &args[3], vars);
-            let backend = lower_expr(ctx, &args[4], vars);
-            let proof = lower_expr(ctx, &args[5], vars);
-            let vk = lower_expr(ctx, &args[6], vars);
+            let (outputs, backend_idx) = if args.len() == 8 {
+                (Some(lower_expr(ctx, &args[4], vars)), 5)
+            } else {
+                (None, 4)
+            };
+            let backend = lower_expr(ctx, &args[backend_idx], vars);
+            let proof = lower_expr(ctx, &args[backend_idx + 1], vars);
+            let vk = lower_expr(ctx, &args[backend_idx + 2], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::BuildUnshieldInline {
                 dest,
@@ -3610,6 +3616,7 @@ fn lower_surface_builtin_call(
                 to,
                 amount,
                 inputs,
+                outputs,
                 backend,
                 proof,
                 vk,

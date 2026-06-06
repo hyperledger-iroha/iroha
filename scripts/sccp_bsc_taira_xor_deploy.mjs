@@ -34,6 +34,9 @@ export const DEFAULT_BSC_RPC_URL =
   "https://data-seed-prebsc-1-s1.bnbchain.org:8545";
 export const BSC_EVM_GROTH16_BACKEND = "evm-groth16-bn254-v1";
 export const SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1";
+export const SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES = new Set([
+  "0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4",
+]);
 export const DEPLOYMENT_EVIDENCE_SCHEMA =
   "iroha-sccp-bsc-taira-xor-deployment-evidence/v1";
 export const ROUTE_MANIFEST_SCHEMA =
@@ -55,6 +58,28 @@ const SECRET_KEY_PATTERN =
 const PRIVATE_KEY_PEM_PATTERN =
   /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
 const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
+const DIAGNOSTIC_TEXT_KEYS = [
+  "schema",
+  "warning",
+  "warnings",
+  "note",
+  "notes",
+  "operatorWarning",
+  "operator_warning",
+  "verifierWarning",
+  "verifier_warning",
+  "verifierMaterialWarning",
+  "verifier_material_warning",
+  "diagnosticReason",
+  "diagnostic_reason",
+];
+const DIAGNOSTIC_FLAG_KEYS = [
+  "diagnosticVerifier",
+  "diagnostic_verifier",
+  "diagnosticVerifierMaterial",
+  "diagnostic_verifier_material",
+  "diagnostic",
+];
 
 const CONTRACT_SOURCES = Object.freeze({
   "contracts/evm/sccp/ISccpMessageVerifier.sol": repoPath(
@@ -135,7 +160,7 @@ function repoPath(...segments) {
 function usage() {
   return `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --verifier <verifier-key.json> --broadcast true --confirm-testnet ${CONFIRMATION_TEXT} [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --verifier <verifier-key.json> --broadcast true --confirm-testnet ${CONFIRMATION_TEXT} [--allow-diagnostic-verifier true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
@@ -195,6 +220,16 @@ function hexToBytes(value, label, byteLength = null, { allowZero = false } = {})
 
 export function normalizeHex32(value, label = "value") {
   return bytesToHex(hexToBytes(value, label, 32));
+}
+
+export function isKnownDiagnosticBscVerifierKeyHash(value) {
+  try {
+    return SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES.has(
+      normalizeHex32(value, "BSC verifier key hash"),
+    );
+  } catch (_error) {
+    return false;
+  }
 }
 
 export function normalizeEvmAddress(value, label = "address") {
@@ -366,6 +401,16 @@ export function normalizeVerifierMaterial(material) {
   if (sourceDomain !== SCCP_DOMAIN_SORA || targetDomain !== SCCP_DOMAIN_BSC) {
     throw new Error("destination verifier domains must be SORA -> BSC.");
   }
+  const expectedVerifierKeyHash = normalizeHex32(
+    material.expectedVerifierKeyHash ?? material.verifierKeyHash ?? material.verifyingKeyHash,
+    "expectedVerifierKeyHash",
+  );
+  const diagnosticVerifierReasons = [
+    diagnosticFlagReason(material, "verifier material"),
+    isKnownDiagnosticBscVerifierKeyHash(expectedVerifierKeyHash)
+      ? `verifierKeyHash=${expectedVerifierKeyHash} is a known diagnostic BSC verifier key hash`
+      : "",
+  ].filter(Boolean);
   return {
     alpha1: normalizeUint256Array(
       pickField(material, ["alpha1", "configuredAlpha1", "vk_alpha_1"], "alpha1"),
@@ -392,10 +437,8 @@ export function normalizeVerifierMaterial(material) {
       "ic",
       20,
     ),
-    expectedVerifierKeyHash: normalizeHex32(
-      material.expectedVerifierKeyHash ?? material.verifierKeyHash ?? material.verifyingKeyHash,
-      "expectedVerifierKeyHash",
-    ),
+    expectedVerifierKeyHash,
+    diagnosticVerifierReasons,
     proofFamily,
     networkId,
     sourceDomain,
@@ -447,6 +490,33 @@ function readFirstValue(record, ...keys) {
     }
   }
   return undefined;
+}
+
+function diagnosticTextValue(value) {
+  if (typeof value === "string") {
+    return /\bdiagnostic\b/iu.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => diagnosticTextValue(entry));
+  }
+  return false;
+}
+
+function diagnosticFlagReason(record, pathName) {
+  if (!isRecord(record)) {
+    return "";
+  }
+  for (const key of DIAGNOSTIC_FLAG_KEYS) {
+    if (record[key] === true) {
+      return `${pathName}.${key}=true`;
+    }
+  }
+  for (const key of DIAGNOSTIC_TEXT_KEYS) {
+    if (diagnosticTextValue(record[key])) {
+      return `${pathName}.${key} mentions diagnostic verifier material`;
+    }
+  }
+  return "";
 }
 
 function normalizeNonEmptyText(value, label) {
@@ -893,6 +963,40 @@ function readRequiredString(record, keys, label) {
   return value;
 }
 
+function readConsistentString(record, keys, label) {
+  if (!isRecord(record)) {
+    return "";
+  }
+  let selected = "";
+  let selectedKey = "";
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    const normalized = value.trim();
+    if (!selected) {
+      selected = normalized;
+      selectedKey = key;
+      continue;
+    }
+    if (selected !== normalized) {
+      throw new Error(
+        `${label} aliases disagree: ${selectedKey}=${selected} but ${key}=${normalized}.`,
+      );
+    }
+  }
+  return selected;
+}
+
+function readRequiredConsistentString(record, keys, label) {
+  const value = readConsistentString(record, keys, label);
+  if (!value) {
+    throw new Error(`${label} is required.`);
+  }
+  return value;
+}
+
 function routeConfigRequiredRecord(value, label) {
   if (!isRecord(value)) {
     throw new Error(`${label} must be an object.`);
@@ -1045,7 +1149,7 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest BSC bridge address",
   );
   const sourceBridgeAddress = normalizeEvmAddress(
-    readRequiredString(
+    readRequiredConsistentString(
       record,
       [
         "sccpBscSourceBridgeAddress",
@@ -1062,14 +1166,23 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest BSC source bridge address",
   );
   const verifierAddressSource =
-    readFirstString(
+    readConsistentString(
       record,
-      "bscVerifierAddress",
-      "bsc_verifier_address",
-      "evmVerifierAddress",
-      "evm_verifier_address",
-      "tronVerifierAddress",
-      "tron_verifier_address",
+      [
+        "destinationVerifierAddress",
+        "destination_verifier_address",
+        "verifierAddress",
+        "verifier_address",
+        "sccpBscDestinationVerifierAddress",
+        "sccp_bsc_destination_verifier_address",
+        "bscVerifierAddress",
+        "bsc_verifier_address",
+        "evmVerifierAddress",
+        "evm_verifier_address",
+        "tronVerifierAddress",
+        "tron_verifier_address",
+      ],
+      "route manifest BSC verifier address",
     ) || readFirstString(destinationRollout, "verifierIdentity", "verifier_identity");
   const verifierAddress = normalizeEvmAddress(
     normalizeNonEmptyText(verifierAddressSource, "route manifest BSC verifier address"),
@@ -1108,6 +1221,51 @@ function normalizeRouteManifestForConfig(manifest) {
       readFirstString(destinationRollout, "verifierKeyHash", "verifier_key_hash"),
     "route manifest verifierKeyHash",
   );
+  const optionalRouteHash = (label, ...keys) => {
+    const value =
+      readFirstString(record, ...keys) || readFirstString(destinationRollout, ...keys);
+    return value ? normalizeHex32(value, label) : null;
+  };
+  const proofArtifactHash = optionalRouteHash(
+    "route manifest proofArtifactHash",
+    "proofArtifactHash",
+    "proof_artifact_hash",
+    "proverArtifactHash",
+    "prover_artifact_hash",
+    "circuitArtifactHash",
+    "circuit_artifact_hash",
+  );
+  const provingKeyHash = optionalRouteHash(
+    "route manifest provingKeyHash",
+    "provingKeyHash",
+    "proving_key_hash",
+  );
+  if (Boolean(proofArtifactHash) !== Boolean(provingKeyHash)) {
+    throw new Error("route manifest proofArtifactHash and provingKeyHash must be supplied together.");
+  }
+  const diagnosticVerifierReasons = [
+    diagnosticFlagReason(record, "route manifest"),
+    diagnosticFlagReason(destinationRollout, "route manifest destinationRollout"),
+    diagnosticFlagReason(destinationBinding, "route manifest destinationBinding"),
+    isKnownDiagnosticBscVerifierKeyHash(verifierKeyHash)
+      ? `verifierKeyHash=${verifierKeyHash} is a known diagnostic BSC verifier key hash`
+      : "",
+  ].filter(Boolean);
+  if (productionReady && diagnosticVerifierReasons.length > 0) {
+    throw new Error(
+      `route manifest productionReady cannot be true with diagnostic BSC verifier material: ${diagnosticVerifierReasons.join("; ")}.`,
+    );
+  }
+  if (productionReady && (!proofArtifactHash || !provingKeyHash)) {
+    throw new Error("route manifest productionReady requires proofArtifactHash and provingKeyHash.");
+  }
+  const roleSeparatedHashes = [
+    ["verifierCodeHash", verifierCodeHash],
+    ["verifierKeyHash", verifierKeyHash],
+    ["destinationBindingHash", null],
+    ["proofArtifactHash", proofArtifactHash],
+    ["provingKeyHash", provingKeyHash],
+  ];
   const expectedBindingKey = bscDestinationBindingKey({
     networkId: networkIdHex,
     verifierAddress,
@@ -1137,6 +1295,15 @@ function normalizeRouteManifestForConfig(manifest) {
   );
   if (destinationBindingHash !== expectedBindingHash) {
     throw new Error("route manifest destination binding hash does not match BSC deployment evidence.");
+  }
+  roleSeparatedHashes[2][1] = destinationBindingHash;
+  const seenRouteHashes = new Map();
+  for (const [label, value] of roleSeparatedHashes.filter(([, value]) => Boolean(value))) {
+    const previous = seenRouteHashes.get(value);
+    if (previous) {
+      throw new Error(`route manifest ${label} must not equal ${previous}.`);
+    }
+    seenRouteHashes.set(value, label);
   }
 
   const artifact = normalizeStrictBase64(
@@ -1186,6 +1353,13 @@ function normalizeRouteManifestForConfig(manifest) {
     }
     return normalizeHex32(readFirstString(postDeployLiveEvidence, ...keys), label);
   };
+  const explicitDisabledReason =
+    record.disabledReason === undefined && record.disabled_reason === undefined
+      ? null
+      : normalizeNonEmptyText(
+          readFirstValue(record, "disabledReason", "disabled_reason"),
+          "route manifest disabledReason",
+        );
 
   return {
     version: normalizeUint32(readFirstValue(record, "version") ?? 1, "route manifest version"),
@@ -1199,12 +1373,10 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierTarget,
     productionReady,
     disabledReason:
-      record.disabledReason === undefined && record.disabled_reason === undefined
-        ? null
-        : normalizeNonEmptyText(
-            readFirstValue(record, "disabledReason", "disabled_reason"),
-            "route manifest disabledReason",
-          ),
+      explicitDisabledReason ??
+      (diagnosticVerifierReasons.length > 0
+        ? "BSC verifier material is diagnostic and must be replaced before production readiness."
+        : null),
     networkIdHex,
     tokenAddress,
     bridgeAddress,
@@ -1212,6 +1384,8 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierAddress,
     verifierCodeHash,
     verifierKeyHash,
+    proofArtifactHash,
+    provingKeyHash,
     destinationBindingKey,
     destinationBindingHash,
     settlementAssetDefinitionId,
@@ -1303,7 +1477,7 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
   const lines = [
     "# Generated by scripts/sccp_bsc_taira_xor_deploy.mjs route-config.",
     "# Merge this overlay into the TAIRA Torii/Iroha runtime config for BSC testnet smoke.",
-    "# Current TAIRA config still uses legacy TRON field names for all SCCP route manifests.",
+    "# Generic BSC address fields are emitted with legacy TRON mirrors for mixed-version nodes.",
     "[zk]",
     `sccp_allow_unready_transparent_proofs = ${allowUnready ? "true" : "false"}`,
     "",
@@ -1319,13 +1493,37 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
     `production_ready = ${route.productionReady ? "true" : "false"}`,
     ...tomlOptionalStringLine("disabled_reason", route.disabledReason, "disabled_reason"),
     `network_id_hex = ${tomlString(route.networkIdHex, "network_id_hex")}`,
-    "# Legacy address field names below carry BSC EVM addresses for taira_bsc_xor.",
+    "# Generic address fields are preferred; legacy TRON field names mirror the same BSC EVM addresses.",
     `taira_xor_token_address = ${tomlString(route.tokenAddress, "taira_xor_token_address")}`,
     `taira_xor_bridge_address = ${tomlString(route.bridgeAddress, "taira_xor_bridge_address")}`,
+    `source_bridge_address = ${tomlString(route.sourceBridgeAddress, "source_bridge_address")}`,
+    `sccp_bsc_source_bridge_address = ${tomlString(route.sourceBridgeAddress, "sccp_bsc_source_bridge_address")}`,
+    `bsc_source_bridge_address = ${tomlString(route.sourceBridgeAddress, "bsc_source_bridge_address")}`,
     `sccp_tron_source_bridge_address = ${tomlString(route.sourceBridgeAddress, "sccp_tron_source_bridge_address")}`,
+    `destination_verifier_address = ${tomlString(route.verifierAddress, "destination_verifier_address")}`,
+    `verifier_address = ${tomlString(route.verifierAddress, "verifier_address")}`,
+    `sccp_bsc_destination_verifier_address = ${tomlString(route.verifierAddress, "sccp_bsc_destination_verifier_address")}`,
+    `bsc_verifier_address = ${tomlString(route.verifierAddress, "bsc_verifier_address")}`,
+    `evm_verifier_address = ${tomlString(route.verifierAddress, "evm_verifier_address")}`,
     `tron_verifier_address = ${tomlString(route.verifierAddress, "tron_verifier_address")}`,
     `verifier_code_hash = ${tomlString(route.verifierCodeHash, "verifier_code_hash")}`,
     `verifier_key_hash = ${tomlString(route.verifierKeyHash, "verifier_key_hash")}`,
+    ...tomlOptionalStringLine(
+      "proof_artifact_hash",
+      route.proofArtifactHash,
+      "proof_artifact_hash",
+    ),
+    ...tomlOptionalStringLine(
+      "prover_artifact_hash",
+      route.proofArtifactHash,
+      "prover_artifact_hash",
+    ),
+    ...tomlOptionalStringLine(
+      "circuit_artifact_hash",
+      route.proofArtifactHash,
+      "circuit_artifact_hash",
+    ),
+    ...tomlOptionalStringLine("proving_key_hash", route.provingKeyHash, "proving_key_hash"),
     `destination_binding_key = ${tomlString(route.destinationBindingKey, "destination_binding_key")}`,
     `destination_binding_hash = ${tomlString(route.destinationBindingHash, "destination_binding_hash")}`,
     `taira_burn_record_settlement_asset_definition_id = ${tomlString(route.settlementAssetDefinitionId, "taira_burn_record_settlement_asset_definition_id")}`,
@@ -1469,6 +1667,14 @@ async function commandDeploy(options) {
   const wallet = new ethers.Wallet(privateKey, provider);
   const signer = new ethers.NonceManager(wallet);
   const verifierMaterial = normalizeVerifierMaterial(await readJson(options.verifier));
+  if (
+    verifierMaterial.diagnosticVerifierReasons.length > 0 &&
+    !parseBoolean(options["allow-diagnostic-verifier"])
+  ) {
+    throw new Error(
+      `deploy refuses diagnostic BSC verifier material without --allow-diagnostic-verifier true: ${verifierMaterial.diagnosticVerifierReasons.join("; ")}.`,
+    );
+  }
   const { artifacts } = await compileBscContracts();
   const verifierArgs = [
     verifierMaterial.alpha1,

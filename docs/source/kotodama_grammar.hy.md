@@ -274,7 +274,7 @@ Host/sycall ներկառուցված (քարտեզ դեպի SCALL; ճշգրիտ 
 Կոմունալ ներկառուցվածներ
 - `info(string|int)`. թողարկում է կառուցվածքային իրադարձություն/հաղորդագրություն OUTPUT-ի միջոցով:
 - `hash(blob) -> Blob*`. վերադարձնում է Norito կոդավորված հեշը որպես Blob:
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` և `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`՝ ներկառուցված ISI կառուցողներ; բոլոր արգումենտները պետք է լինեն կոմպիլյացիոն ժամանակի բառացիներ (տառերի տառեր կամ ցուցիչի կոնստրուկտորներ բառացիներից): `nullifier32` և `inputs32` պետք է լինեն ուղիղ 32 բայթ (հում տող կամ `0x` վեցանկյուն), իսկ `amount`-ը պետք է լինի ոչ բացասական:
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` և `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`՝ ներկառուցված ISI կառուցողներ; բոլոր արգումենտները պետք է լինեն կոմպիլյացիոն ժամանակի բառացիներ (տառերի տառեր կամ ցուցիչի կոնստրուկտորներ բառացիներից): `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`. կոդավորում է JSON-ը՝ օգտագործելով հյուրընկալող սխեմայի ռեեստրը (DefaultRegistry-ն աջակցում է `QueryRequest` և `QueryResponse`՝ ի լրումն Պատվերի/Առևտրի նմուշների):
 - `decode_schema(Name*, Blob|bytes) -> Json*`. վերծանում է Norito բայթերը՝ օգտագործելով հյուրընկալող սխեմայի ռեեստրը:

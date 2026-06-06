@@ -50,7 +50,12 @@ track detailed unfinished engineering work.
   domain-separated digest over the parameter set, public key, evaluation-key
   digest, and transcript metadata, giving governance/admission code a
   canonical value to bind before the final proof-carrying bootstrap key format
-  lands. Direct crypto refresh-transcript validation/digesting and Soracloud
+  lands. The crypto layer now also exposes exact-lift and bounded-noise
+  bootstrap-key zero-refresh proof statement digests that bind parameters,
+  public key, key id, refresh-round capacity, and every public refresh
+  ciphertext under mode-separated domains; proof attachment/admission remains
+  unfinished, but future verifiers now have a canonical public statement hash
+  for this key material. Direct crypto refresh-transcript validation/digesting and Soracloud
   transcript digesting now also preflight the advertised BFV public-key shape
   before evaluation-key bundle validation, so malformed transcript key material
   cannot be masked by unrelated bundle-shape errors. The lower-level crypto
@@ -137,8 +142,13 @@ track detailed unfinished engineering work.
   source chain, verifies that the source cannot alias decomposition digits,
   basis-extends canonical key-switch digits through the digit-specific
   basis-extension helper without requiring the evaluator target to cover the
-  full source-chain product, and drives rounded multiplication, Galois, and
-  packed `RotateLeft` bridges while matching the scalar bounded-noise outputs.
+  full source-chain product, rejects basis-extended digit-count and RNS
+  limb-shape drift at validation, and drives rounded multiplication, Galois,
+  and packed `RotateLeft` bridges while matching the scalar bounded-noise
+  outputs. Direct key-switch component decomposition and digit
+  basis-extension helpers now enforce source/target decomposition-base
+  coverage before malformed polynomial shapes can mask the public chain
+  descriptor failure.
   Rounded ciphertext multiplication now also has an RNS exact raw-product
   bridge that decomposes ciphertext components as centered residues,
   reconstructs signed negacyclic products before `t/q` scale-and-rounding, and
@@ -291,15 +301,43 @@ track detailed unfinished engineering work.
   now rejects public step, key-id, round-count, and transcript seed metadata
   before rounded-capacity failures. Exact and bounded seeded keygen/encryption
   now reject public seed and plaintext metadata before exact residual or rounded
-  capacity failures. Exact and
+  capacity failures. Bounded Galois key generation now rejects public
+  automorphism and seed metadata before rounded-capacity failures. Exact and
   bounded plaintext-polynomial bound propagation now rejects oversized public
   input bounds before validating
   caller-supplied plaintext polynomial shape. Exact and bounded Galois
   key-switch bound propagation now also rejects oversized public input bounds
   before Galois-key shape checks, and exact/bounded packed `RotateLeft` bound
   propagation rejects oversized public input bounds or invalid rotation
-  schedules before validating caller-supplied Galois key sets. Packed
-  `RotateLeft` execution helpers now also preflight Galois key-set public
+  schedules before validating caller-supplied Galois key sets. Bounded Galois
+  switch and packed `RotateLeft` execution wrappers now reject public
+  Galois-key metadata, rotation schedules, and key-set metadata before
+  rounded-capacity failures. Bounded outer `RotateLeft` execution wrappers now
+  reject public rotation metadata before rounded-capacity failures. Bounded
+  affine execution wrappers now reject public circuit metadata before
+  caller-supplied RNS/capacity corridor failures. Key-authorized exact and
+  bounded bootstrap bound propagation now rejects public bootstrap key-id and
+  round-count metadata before caller input-bound failures while preserving full
+  refresh-key shape validation after public bound checks. Bounded
+  plaintext scalar and polynomial execution wrappers now reject public
+  scalar/plaintext metadata before rounded-capacity failures. Bounded scalar and
+  plaintext-polynomial bound propagation now rejects invalid public
+  scalar/plaintext metadata before rounded-capacity failures while preserving
+  oversized input-bound precedence on otherwise valid profiles. Bounded
+  ciphertext multiplication bound propagation now rejects invalid public
+  relinearization-key metadata before rounded-capacity failures while preserving
+  oversized input-bound precedence on otherwise valid profiles. Bounded Galois
+  key-switch and packed `RotateLeft` bound propagation now reject invalid public
+  Galois metadata, rotation schedules, and key-set metadata before
+  rounded-capacity failures while preserving oversized input-bound precedence on
+  otherwise valid profiles. Bounded affine, outer `RotateLeft`, and bootstrap
+  refresh bound propagation now rejects invalid public circuit, rotation,
+  round-count, and bootstrap-key-id metadata before rounded-capacity failures
+  while preserving the existing valid-profile precedence: oversized input bounds
+  remain first for affine, outer-slot, and direct bootstrap bounds, and
+  key-authorized bootstrap bounds keep key-id/round metadata ahead of full
+  bootstrap-key shape.
+  Packed `RotateLeft` execution helpers now also preflight Galois key-set public
   metadata before ciphertext shape while keeping full key-switch entry
   validation after ciphertext shape. Evaluation-key bundle validation and
   digest admission now preflight public rotation, Galois, and bootstrap
@@ -336,12 +374,17 @@ track detailed unfinished engineering work.
   derives its deterministic seed, bootstrap key-id, rotation-transcript, and
   bootstrap max-round caps from the public `iroha_crypto` constants.
   Verifier-backed bounded-noise FHE input-admission envelopes now persist
-  bounded metadata after bound-capacity, statement-hash, shared
-  `OpenVerifyEnvelope` admission-shape, active-verifier, and backend proof
-  checks; the data-model proof validator now also rejects exact and
-  bounded-noise input-admission bounds that exceed registered RAM-LFE BFV
-  capacity before runtime admission, and persisted FHE state rows now reject
-  exact or bounded bound metadata that exceeds the same registered capacity.
+  bounded metadata after statement-hash, shared `OpenVerifyEnvelope`
+  admission-shape, active-verifier, and backend proof checks; portable proof
+  validation now rejects cheap attachment metadata before BFV bound capacity
+  (backend consistency, canonical verifier id, verifier-key commitment
+  metadata, and envelope-hash presence), while retaining BFV bound-capacity
+  rejection before decoded `OpenVerifyEnvelope` admission, expensive verifier
+  dispatch, and verifier-record lookup. The data-model proof validator also
+  rejects exact and bounded-noise input-admission bounds that exceed registered
+  RAM-LFE BFV capacity before runtime admission, and persisted FHE state rows
+  now reject exact or bounded bound metadata that exceeds the same registered
+  capacity.
   FHE input-admission proof attachments now also require `vk_ref.name` to be the
   canonical v1 circuit id, a supported STARK/FRI v1 proof backend label from
   the shared data-model ZK classifier, a decoded STARK `OpenVerifyEnvelope` with
@@ -671,7 +714,9 @@ track detailed unfinished engineering work.
   programmed RAM-LFE BFV hidden-program admission now caps v1 instruction tapes
   at the canonical 64-slot, four-instruction shape before execution and rejects
   `LoadInput` indexes that exceed the encrypted envelope's advertised
-  `max_input_bytes`; the
+  `max_input_bytes`; `LoadConst`, `AddPlain`, `SubPlain`, and `MulPlain`
+  immediates must also be canonical `F_257` values before public-program
+  digests or programmed parameters are admitted; the
   feature-gated BFV acceleration selector now falls back to deterministic scalar
   schoolbook multiplication for zero or overflowed derived
   convolution lengths, and the CRT-NTT helper path now rejects invalid operand
@@ -711,7 +756,9 @@ track detailed unfinished engineering work.
   fallible API, and `KeyPair::from_private_key` uses it so length-valid but
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
   ML-DSA seeded-keygen HKDF expansion now propagates `Error::KeyGen` through
-  the existing `Result` path instead of relying on a panic-only assertion;
+  the existing `Result` path instead of relying on a panic-only assertion, and
+  its S2 nonce offset conversion now uses the same `Error::KeyGen` route
+  instead of a const-conversion `expect`;
   GOST deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components and streams the HMAC inner hash directly while preserving the
@@ -758,13 +805,47 @@ track detailed unfinished engineering work.
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
   instead of drawing a runtime dummy key;
   Private Kaigi fee-spend execution now derives its synthetic fee-payer account
-  through checked Ed25519 seed expansion from the action hash;
+  through checked Ed25519 seed expansion from the action hash; SoraFS hybrid
+  KEM derived material now binds the recipient public keys and encapsulated
+  public transcript components through length-prefixed HKDF input with checked
+  capacity accounting, and SoraNet session-key HKDF extraction now
+  domain-separates and length-prefixes IKM components before expansion, with
+  NK2/NK3 interop vectors refreshed under both checked-in fixture bundles;
+  SoraNet deterministic SHAKE expansion now also frames its domain, label, part
+  count, and every absorbed component before deriving deterministic KEM,
+  simulated ML-DSA, dual-mix, or Noise-seed material, with checked-in fixture
+  bundles regenerated from the framed outputs;
   `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
-  public/private key formatting, `Signature::try_new` now routes SM2 through
-  checked private-key rebuild/signing helpers, and ML-DSA import plus
-  `Signature::try_new` reject secrets whose recomputed public material or
-  embedded `tr = H(pk)` public hash is inconsistent before signing; SoraNet PQ
-  labeled-HKDF derivation now streams the namespace, separator, label,
+  public/private key formatting, public-key Norito serialization now routes
+  full-to-compact conversion through a checked payload extractor, and
+  `PublicKey::to_prefixed_string` now reuses the malformed compact-key marker
+  instead of unwrapping invalid internal key state, while `ExposedPrivateKey`
+  display and prefixed compatibility formatting now return a non-secret
+  invalid-private-key marker instead of unwrapping checked private-key
+  formatting; `Signature::try_new` now routes SM2 through checked private-key
+  rebuild/signing helpers and SM2 key-pair/public-key derivation now routes
+  through `try_public_key`, SM2 concrete public-key prefixed formatting now
+  returns a deterministic invalid-key marker instead of unwrapping checked
+  multihash encoding, SM2 private-key byte export now exposes
+  `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
+  through checked payload extraction, secp256k1 message signing now exposes
+  `try_sign` and routes `Signature::try_new` through the fallible helper, and
+  secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
+  flip before emitting EVM-compatible signatures; SM2 embedded-distid payload
+  decoding now returns `ParseError` for short length prefixes instead of relying
+  on a panic-only fixed-slice assertion, SM2 PEM export now wraps the already
+  encoded base64 `String` without a panic-only UTF-8 reconversion, SM2
+  DER signature export now exposes `try_as_der` with checked short-form length
+  encoding and routes the OpenSSL bridge through that fallible exporter before
+  DER parsing, SM4-CCM now checks tag, nonce, AAD, payload, and counter-block
+  length narrowing through its existing encrypt/decrypt `Result` paths, the SM
+  signature shim's SM4 self-test block now uses the infallible fixed-key
+  constructor instead of
+  `new_from_slice(...).expect(...)`, and ML-DSA import plus `Signature::try_new`
+  reject secrets whose recomputed public material or embedded `tr = H(pk)`
+  public hash is inconsistent before signing; SoraNet PQ labeled-HKDF derivation
+  now streams the namespace,
+  separator, label,
   separator, and context components through `expand_multi_info`, preserving the
   previous contiguous info layout without manual capacity arithmetic;
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
@@ -805,8 +886,10 @@ track detailed unfinished engineering work.
   BLS-enabled builds; Merkle leaf iteration now stops cleanly on an
   unexpected missing leaf slot instead of relying on panic-only internal layout
   assertions, and parent recomputation now stops if malformed in-memory state
-  lacks a computed parent slot, while decoded tree layout validation remains
-  strict; the multihash `VarUint` codec now decodes through checked `u128`
+  lacks a computed parent slot. Compact Merkle proof conversion and verification
+  now share a fixed direction-bitset depth cap instead of converting
+  `u32::BITS` through panic-only assertions, while decoded tree layout
+  validation remains strict; the multihash `VarUint` codec now decodes through checked `u128`
   accumulation plus final bounded conversion, accepts valid max-width integer
   encodings, rejects oversized canonical varints including high final-chunk
   bits above `u128::MAX`, and constructs continuation bits without unchecked

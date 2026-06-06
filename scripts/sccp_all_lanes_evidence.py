@@ -49,6 +49,21 @@ SCCP_CORE_REMOTE_DOMAINS = (
     SCCP_DOMAIN_SORA_POLKADOT,
     SCCP_DOMAIN_SORA2,
 )
+SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+)
+SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(
+    domain
+    for domain in SCCP_CORE_REMOTE_DOMAINS
+    if domain not in SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS
+)
+SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (
+    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
+)
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 
@@ -6827,6 +6842,8 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
             for gate_blocker in source_adapter_gate.get("blockers", []):
                 if gate_blocker not in blockers:
                     blockers.append(gate_blocker)
+        if domain in SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS:
+            blockers.append(SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER)
         lanes.append(
             {
                 "domain": domain,
@@ -6863,6 +6880,7 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
         all_blockers.extend(
             f"domain {lane['domain']} ({lane['chain']}): {item}"
             for item in lane["blockers"]
+            if item != SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
         )
     for section, errors in section_errors.items():
         for error in errors:
@@ -6874,6 +6892,8 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
     return {
         "production_ready": not all_blockers,
         "required_domains": list(SCCP_CORE_REMOTE_DOMAINS),
+        "supported_launch_domains": list(SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS),
+        "unsupported_launch_domains": list(SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS),
         "lanes": lanes,
         "blockers": all_blockers,
         "release_checklist": release_checklist,

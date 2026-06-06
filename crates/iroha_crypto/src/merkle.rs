@@ -13,6 +13,8 @@ use thiserror::Error;
 
 use crate::{Hash, HashOf};
 
+const COMPACT_MERKLE_PROOF_MAX_DEPTH: u8 = 32;
+
 /// Array representation of [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree)
 /// for verifying elements of type `T`.
 ///
@@ -708,18 +710,26 @@ impl<T> CompactMerkleProof<T> {
     /// Construct a compact proof from a full `MerkleProof` by deriving the
     /// direction bitset from `leaf_index` and the path depth. If the audit path
     /// is longer than 32 levels, it is truncated to fit the compact encoding.
-    #[allow(clippy::cast_possible_truncation)]
     pub fn from_full(full: MerkleProof<T>) -> Self {
-        let depth = full.audit_path.len().min(32) as u8;
+        let depth = u8::try_from(
+            full.audit_path
+                .len()
+                .min(usize::from(COMPACT_MERKLE_PROOF_MAX_DEPTH)),
+        )
+        .unwrap_or(COMPACT_MERKLE_PROOF_MAX_DEPTH);
         // Direction bits use leaf-index semantics: bit i = 0 (left), 1 (right).
         let depth_bits = u32::from(depth);
-        let mask = if depth == 32 {
+        let mask = if depth == COMPACT_MERKLE_PROOF_MAX_DEPTH {
             u32::MAX
         } else {
             (1u32 << depth_bits) - 1
         };
         let dirs = full.leaf_index & mask;
-        let siblings = full.audit_path.into_iter().take(depth as usize).collect();
+        let siblings = full
+            .audit_path
+            .into_iter()
+            .take(usize::from(depth))
+            .collect();
         CompactMerkleProof {
             depth,
             dirs,
@@ -738,11 +748,10 @@ impl<T> CompactMerkleProof<T> {
     /// reconstructing the parent hashes guided by the `dirs` bitset. Returns
     /// `false` if `depth` exceeds 32 or `siblings.len()` does not match `depth`.
     pub fn verify(self, leaf: &HashOf<T>, root: &HashOf<MerkleTree<T>>) -> bool {
-        let max_depth = u8::try_from(u32::BITS).expect("u32::BITS fits in u8");
-        if self.depth > max_depth {
+        if self.depth > COMPACT_MERKLE_PROOF_MAX_DEPTH {
             return false;
         }
-        let depth = self.depth as usize;
+        let depth = usize::from(self.depth);
         if self.siblings.len() != depth {
             return false;
         }
@@ -854,13 +863,12 @@ impl CompactMerkleProof<[u8; 32]> {
         root: &HashOf<MerkleTree<[u8; 32]>>,
     ) -> bool {
         use crate::Hash;
-        let max_depth = u8::try_from(u32::BITS).expect("u32::BITS fits in u8");
-        if self.depth > max_depth {
+        if self.depth > COMPACT_MERKLE_PROOF_MAX_DEPTH {
             return false;
         }
         let mut acc_bytes: [u8; 32] = *leaf.as_ref();
         let mut dirs = self.dirs;
-        let depth = self.depth as usize;
+        let depth = usize::from(self.depth);
         if self.siblings.len() != depth {
             return false;
         }
@@ -1689,6 +1697,15 @@ mod tests {
         let mut compact = CompactMerkleProof::from_full(tree.get_proof(idx).expect("proof"));
         compact.siblings.pop();
         assert!(!compact.verify(&leaf, &root));
+    }
+
+    #[test]
+    fn compact_proof_max_depth_matches_direction_bit_width() {
+        assert_eq!(
+            u32::from(COMPACT_MERKLE_PROOF_MAX_DEPTH),
+            u32::BITS,
+            "compact proof depth must match the u32 direction bitset width"
+        );
     }
 
     #[test]

@@ -43,6 +43,8 @@ use crate::KeyPair;
 
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
+const EXPAND_MATERIAL_DOMAIN: &[u8] = b"soranet.expand-material.v1";
+const SESSION_KEY_IKM_DOMAIN: &[u8] = b"soranet.session-key.ikm.v1";
 const STEP_DOMAIN: &[u8] = b"soranet.noise.step.v1";
 
 const HYBRID_CLIENT_HELLO_TYPE: u8 = 0x11;
@@ -1903,14 +1905,21 @@ fn derive_seed(label: &[u8], parts: &[&[u8]]) -> Result<[u8; NOISE_SECRET_LEN], 
 
 fn expand_material(label: &[u8], parts: &[&[u8]], len: usize) -> Vec<u8> {
     let mut hasher = Shake256::default();
-    Update::update(&mut hasher, label);
+    update_expand_material_component(&mut hasher, EXPAND_MATERIAL_DOMAIN);
+    update_expand_material_component(&mut hasher, label);
+    Update::update(&mut hasher, &(parts.len() as u64).to_be_bytes());
     for part in parts {
-        Update::update(&mut hasher, part);
+        update_expand_material_component(&mut hasher, part);
     }
     let mut reader = hasher.finalize_xof();
     let mut out = vec![0u8; len];
     reader.read(&mut out);
     out
+}
+
+fn update_expand_material_component(hasher: &mut Shake256, component: &[u8]) {
+    Update::update(hasher, &(component.len() as u64).to_be_bytes());
+    Update::update(hasher, component);
 }
 
 fn append_len_prefixed(buf: &mut Vec<u8>, data: &[u8]) -> Result<(), HarnessError> {
@@ -3008,7 +3017,7 @@ impl RuntimeParams<'_> {
 
 /// Shared handshake outcome containing the derived session key and metadata.
 pub struct SessionSecrets {
-    /// Session key derived from the hybrid handshake (Kyber + X25519 + HKDF).
+    /// Session key derived from the hybrid handshake via transcript-bound HKDF.
     pub session_key: Vec<u8>,
     /// Transcript hash binding descriptor, nonces, and capability TLVs.
     pub transcript_hash: [u8; 32],
@@ -4777,7 +4786,7 @@ fn derive_session_key_and_confirmation(
 
     let hk = match suite {
         HandshakeSuite::Nk2Hybrid => {
-            hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])
+            hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])?
         }
         HandshakeSuite::Nk3PqForwardSecure => {
             let forward = forward_shared.ok_or(HarnessError::NotImplemented(
@@ -4796,7 +4805,7 @@ fn derive_session_key_and_confirmation(
                     forward,
                     transcript_hash,
                 ],
-            )
+            )?
         }
     };
 
@@ -4821,12 +4830,26 @@ fn derive_session_key_and_confirmation(
     Ok((session_key, confirmation))
 }
 
-fn hkdf_sha3_256_from_ikm_parts(salt: Option<&[u8]>, ikm_parts: &[&[u8]]) -> Hkdf<Sha3_256> {
+fn hkdf_sha3_256_from_ikm_parts(
+    salt: Option<&[u8]>,
+    ikm_parts: &[&[u8]],
+) -> Result<Hkdf<Sha3_256>, HarnessError> {
     let mut extract = HkdfExtract::<Sha3_256>::new(salt);
-    for part in ikm_parts {
-        extract.input_ikm(part);
+    input_len_prefixed_hkdf_component(&mut extract, SESSION_KEY_IKM_DOMAIN)?;
+    for &part in ikm_parts {
+        input_len_prefixed_hkdf_component(&mut extract, part)?;
     }
-    extract.finalize().1
+    Ok(extract.finalize().1)
+}
+
+fn input_len_prefixed_hkdf_component(
+    extract: &mut HkdfExtract<Sha3_256>,
+    component: &[u8],
+) -> Result<(), HarnessError> {
+    let len = u64::try_from(component.len()).map_err(|_| HarnessError::Kdf)?;
+    extract.input_ikm(&len.to_be_bytes());
+    extract.input_ikm(component);
+    Ok(())
 }
 
 fn compute_kem_confirmation(
@@ -5210,6 +5233,54 @@ mod tests {
                 "session key hex should be 32 bytes (64 hex chars)"
             );
         }
+    }
+
+    #[test]
+    fn generated_interop_values_match_canonical_rust_fixtures() {
+        for spec in super::INTEROP_SPECS {
+            let fixture = match spec.id {
+                "snnet-interop-nk2-v1" => {
+                    include_str!(
+                        "../../../../tests/interop/soranet/interop/rust/snnet-interop-nk2-v1.json"
+                    )
+                }
+                "snnet-interop-nk3-v1" => {
+                    include_str!(
+                        "../../../../tests/interop/soranet/interop/rust/snnet-interop-nk3-v1.json"
+                    )
+                }
+                other => panic!("unexpected SoraNet interop spec id: {other}"),
+            };
+            let expected: Value =
+                norito::json::from_str(fixture).expect("canonical Rust interop fixture parses");
+
+            let mut generated = super::build_interop_value(spec).expect("generated interop value");
+            let Value::Object(ref mut generated_map) = generated else {
+                panic!("generated interop value should be a JSON object");
+            };
+            generated_map.insert("language".to_string(), Value::from("rust"));
+
+            assert_eq!(
+                generated, expected,
+                "generated Rust interop vector drifted from checked-in fixture {}",
+                spec.id
+            );
+        }
+    }
+
+    #[test]
+    fn expand_material_length_prefixes_label_and_parts() {
+        let baseline = expand_material(b"label", &[b"ab".as_slice(), b"c".as_slice()], 32);
+        let duplicate = expand_material(b"label", &[b"ab".as_slice(), b"c".as_slice()], 32);
+        assert_eq!(baseline, duplicate);
+
+        let changed_part_boundary =
+            expand_material(b"label", &[b"a".as_slice(), b"bc".as_slice()], 32);
+        assert_ne!(baseline, changed_part_boundary);
+
+        let changed_label_boundary =
+            expand_material(b"labe", &[b"lab".as_slice(), b"c".as_slice()], 32);
+        assert_ne!(baseline, changed_label_boundary);
     }
 
     #[test]
@@ -7541,101 +7612,26 @@ mod tests {
         assert_ne!(nk2_confirm, nk3_confirm);
     }
 
-    fn legacy_derive_session_key_and_confirmation(
-        inputs: SessionKeyInputs<'_>,
-    ) -> Result<(Vec<u8>, Vec<u8>), HarnessError> {
-        let SessionKeyInputs {
-            suite,
-            transcript_hash,
-            primary_shared,
-            forward_shared,
-        } = inputs;
-
-        let (session_label, confirm_label) = match suite {
-            HandshakeSuite::Nk2Hybrid => (
-                b"soranet.handshake.nk2.session",
-                b"soranet.handshake.nk2.confirm",
-            ),
-            HandshakeSuite::Nk3PqForwardSecure => (
-                b"soranet.handshake.nk3.session",
-                b"soranet.handshake.nk3.confirm",
-            ),
-        };
-
-        let key_material = match suite {
-            HandshakeSuite::Nk2Hybrid => {
-                let mut material = Vec::with_capacity(primary_shared.len() + transcript_hash.len());
-                material.extend_from_slice(primary_shared);
-                material.extend_from_slice(transcript_hash);
-                material
-            }
-            HandshakeSuite::Nk3PqForwardSecure => {
-                let forward = forward_shared.ok_or(HarnessError::NotImplemented(
-                    "nk3 forward-secure key schedule requires dual ML-KEM secret",
-                ))?;
-                let dual_mix = expand_material(
-                    b"soranet.kem.dual.mix",
-                    &[primary_shared, forward, transcript_hash],
-                    forward.len(),
-                );
-                let mut material = Vec::with_capacity(
-                    dual_mix.len() + primary_shared.len() + forward.len() + transcript_hash.len(),
-                );
-                material.extend_from_slice(&dual_mix);
-                material.extend_from_slice(primary_shared);
-                material.extend_from_slice(forward);
-                material.extend_from_slice(transcript_hash);
-                material
-            }
-        };
-
-        let hk = Hkdf::<Sha3_256>::new(Some(transcript_hash), &key_material);
-        let mut session_key = vec![0u8; 32];
-        hk.expand(session_label, &mut session_key)
-            .map_err(|_| HarnessError::Kdf)?;
-
-        let confirmation = if suite == HandshakeSuite::Nk2Hybrid {
-            let mut confirm = vec![0u8; 32];
-            let hk_confirm = Hkdf::<Sha3_256>::new(Some(transcript_hash), primary_shared);
-            hk_confirm
-                .expand(NK2_CONFIRM_LABEL, &mut confirm)
-                .map_err(|_| HarnessError::Kdf)?;
-            confirm
-        } else {
-            let mut confirm = vec![0u8; 32];
-            hk.expand(confirm_label, &mut confirm)
-                .map_err(|_| HarnessError::Kdf)?;
-            confirm
-        };
-
-        Ok((session_key, confirmation))
-    }
-
     #[test]
-    fn session_key_schedule_streaming_matches_legacy_contiguous_ikm() {
+    fn session_key_hkdf_length_prefixes_ikm_parts() {
         let transcript = [0xA5; 32];
-        let primary = [0x5A; 32];
-        let forward = [0xC3; 32];
+        let expand = |parts: &[&[u8]]| {
+            let hk = hkdf_sha3_256_from_ikm_parts(Some(&transcript), parts)
+                .expect("length-prefixed HKDF input derives");
+            let mut out = vec![0_u8; 32];
+            hk.expand(b"soranet.handshake.test", &mut out)
+                .expect("fixed test output length");
+            out
+        };
 
-        for inputs in [
-            SessionKeyInputs {
-                suite: HandshakeSuite::Nk2Hybrid,
-                transcript_hash: &transcript,
-                primary_shared: &primary,
-                forward_shared: None,
-            },
-            SessionKeyInputs {
-                suite: HandshakeSuite::Nk3PqForwardSecure,
-                transcript_hash: &transcript,
-                primary_shared: &primary,
-                forward_shared: Some(&forward),
-            },
-        ] {
-            assert_eq!(
-                derive_session_key_and_confirmation(inputs).expect("streaming key schedule"),
-                legacy_derive_session_key_and_confirmation(inputs).expect("legacy key schedule")
-            );
-        }
+        let left_parts: [&[u8]; 2] = [b"ab".as_ref(), b"c".as_ref()];
+        let right_parts: [&[u8]; 2] = [b"a".as_ref(), b"bc".as_ref()];
+        let left = expand(&left_parts);
+        let duplicate_left = expand(&left_parts);
+        let right = expand(&right_parts);
+
+        assert_eq!(left, duplicate_left);
+        assert_ne!(left, right);
     }
 
     #[test]

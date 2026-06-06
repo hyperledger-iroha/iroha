@@ -9,6 +9,12 @@ Torii now exposes two SCCP bundle families:
   (`asset_register`, `route_activate`, `transfer`, `token_add`, `token_pause`,
   `token_resume`)
 
+Launch scope note: SCCP does not support Substrate/Polkadot-family networks
+for now, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and SORA2.
+The Substrate/SORA2 runtime, SCALE, and relay details below are retained as
+diagnostic/backlog operator design notes only and must not be advertised as
+production network support until that launch scope is explicitly re-opened.
+
 ## Human relay model
 
 SCCP relay to the SORA2 `sccp-bridge` pallet is a manual operator flow. The

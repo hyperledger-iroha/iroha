@@ -6245,6 +6245,29 @@ fn verify_soracloud_fhe_refresh_transcript_digest(
             "fhe evaluation-key refresh transcript digest does not match the execution policy",
         ));
     }
+    if let Some(expected) = policy.bootstrap_key_zero_refresh_proof_statement_digest {
+        let actual = transcript
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                params,
+                evaluation_keys,
+                policy.refresh_transcript_mode,
+            )
+            .map_err(|err| invalid_parameter(err.to_string()))?
+            .ok_or_else(|| {
+                invalid_parameter(
+                    "fhe bootstrap-key proof statement digest requires bootstrap key material",
+                )
+            })?;
+        if actual != expected {
+            return Err(invalid_parameter(
+                "fhe bootstrap-key proof statement digest does not match the execution policy",
+            ));
+        }
+    } else if policy.max_bootstrap_count > 0 {
+        return Err(invalid_parameter(
+            "fhe bootstrap-capable policy must bind bootstrap-key proof statement digest",
+        ));
+    }
     Ok(())
 }
 
@@ -12600,6 +12623,18 @@ mod tests {
             .expect("sample refresh transcript digest")
     }
 
+    fn sample_bfv_bootstrap_key_proof_statement_digest() -> Hash {
+        let params = ram_lfe_bfv_parameters_v1();
+        sample_bfv_refresh_transcript()
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                &params,
+                &sample_bfv_evaluation_key_bundle(),
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect("sample bootstrap-key proof statement digest")
+            .expect("sample evaluation keys carry a bootstrap key")
+    }
+
     fn sample_bounded_noise_bfv_refresh_material() -> (
         BfvParameters,
         BfvEvaluationKeyBundle,
@@ -13541,6 +13576,9 @@ mod tests {
             evaluation_key_digest: sample_bfv_evaluation_key_digest(),
             evaluation_key_refresh_transcript_digest: sample_bfv_refresh_transcript_digest(),
             refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+            bootstrap_key_zero_refresh_proof_statement_digest: Some(
+                sample_bfv_bootstrap_key_proof_statement_digest(),
+            ),
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
@@ -15191,6 +15229,16 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         bounded_policy.evaluation_key_refresh_transcript_digest = bounded_digest;
         bounded_policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        bounded_policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
+            transcript
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                    &params,
+                    &evaluation_keys,
+                    BfvRefreshTranscriptModeV1::BoundedNoise,
+                )
+                .expect("bounded bootstrap-key proof statement digest")
+                .expect("bounded sample carries bootstrap key"),
+        );
         verify_soracloud_fhe_refresh_transcript_digest(
             &params,
             &bounded_policy,
@@ -15203,6 +15251,29 @@ mod tests {
             BfvCiphertextBoundModeV1::BoundedNoise,
             "bounded policy must require bounded-noise ciphertext metadata"
         );
+
+        let mut missing_bootstrap_statement = bounded_policy.clone();
+        missing_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &missing_bootstrap_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("bootstrap-capable policy must bind bootstrap proof statement digest");
+        assert_invalid_parameter_contains(err, "bootstrap-capable policy");
+
+        let mut wrong_bootstrap_statement = bounded_policy.clone();
+        wrong_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest =
+            Some(Hash::new(b"wrong-bootstrap-proof-statement"));
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &wrong_bootstrap_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("wrong bootstrap proof statement digest must fail runtime admission");
+        assert_invalid_parameter_contains(err, "bootstrap-key proof statement digest");
 
         let mut exact_mode_policy = bounded_policy.clone();
         exact_mode_policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::ExactLift;
@@ -20887,6 +20958,16 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         policy.evaluation_key_refresh_transcript_digest = refresh_digest;
         policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
+            evaluation_key_refresh_transcript
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                    &params,
+                    &evaluation_keys,
+                    BfvRefreshTranscriptModeV1::BoundedNoise,
+                )
+                .expect("bounded bootstrap-key proof statement digest")
+                .expect("bounded sample carries bootstrap key"),
+        );
         let param_set = sample_fhe_param_set();
         let governance_tx_hash = Hash::new(b"gov-fhe-bounded-add");
         iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
@@ -21105,6 +21186,16 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         policy.evaluation_key_refresh_transcript_digest = refresh_digest;
         policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
+            evaluation_key_refresh_transcript
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                    &params,
+                    &evaluation_keys,
+                    BfvRefreshTranscriptModeV1::BoundedNoise,
+                )
+                .expect("bounded bootstrap-key proof statement digest")
+                .expect("bounded sample carries bootstrap key"),
+        );
         policy.max_rotation_count =
             NonZeroU32::new(u32::from(params.polynomial_degree)).expect("nonzero rotation budget");
         policy.max_bootstrap_count = 2;

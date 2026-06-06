@@ -314,6 +314,7 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `nft_burn_asset(NftId*)`
 - `authority() -> AccountId*`
 - `trigger_event() -> Json*` (current trigger-event payload; data/by-call trigger context)
+- ZK verify helpers (`zk_verify_*`, `zk_vote_verify_*`) set host verification latches; public entrypoints that call them require `permission(...)`, and `view` functions cannot call them.
 - `register_domain(DomainId*)`
 - `unregister_domain(DomainId*)`
 - `transfer_domain(AccountId*, DomainId*, AccountId*)`
@@ -333,7 +334,7 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 Utility builtins
 - `info(string|int)`: emits a structured event/message via OUTPUT.
 - `hash(blob) -> Blob*`: returns a Norito-encoded hash as Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` and `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: inline ISI builders; all arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: encodes JSON using the host schema registry (DefaultRegistry supports `QueryRequest` and `QueryResponse` in addition to Order/Trade samples).
 - `decode_schema(Name*, Blob|bytes) -> Json*`: decodes Norito bytes using the host schema registry.

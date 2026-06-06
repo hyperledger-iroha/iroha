@@ -252,7 +252,7 @@ impl Signature {
         let signature = match private_key.0.expose_secret() {
             crate::PrivateKeyInner::Ed25519(sk) => ed25519::Ed25519Sha512::sign(payload, sk),
             crate::PrivateKeyInner::Secp256k1(sk) => {
-                secp256k1::EcdsaSecp256k1Sha256::sign(payload, sk)
+                secp256k1::EcdsaSecp256k1Sha256::try_sign(payload, sk)?
             }
             crate::PrivateKeyInner::MlDsa(sk) => sk.try_sign(payload)?,
             #[cfg(feature = "gost")]
@@ -707,6 +707,17 @@ mod tests {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
         let message = b"Test message to sign.";
         let signature = Signature::new(key_pair.private_key(), message);
+        signature.verify(key_pair.public_key(), message).unwrap();
+    }
+
+    #[test]
+    fn create_signature_secp256k1_checked_path() {
+        let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Secp256k1)
+            .expect("seeded secp256k1 keypair");
+        let message = b"Test message to sign with checked secp256k1.";
+        let signature = Signature::try_new(key_pair.private_key(), message)
+            .expect("checked secp256k1 signature");
+
         signature.verify(key_pair.public_key(), message).unwrap();
     }
 

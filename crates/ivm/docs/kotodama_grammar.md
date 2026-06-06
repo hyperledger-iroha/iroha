@@ -257,14 +257,14 @@ ArgList = Expr { "," Expr } ;
 ```
 
 Built-in calls recognized by the semantic layer (arity and types enforced):
-- ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`.
+- ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`. ZK verify helpers set host verification latches, so public entrypoints that call them require `permission(...)` and `view` functions cannot call them.
 - Vector helpers: `setvl(n)` (compile-time int `0..=255`).
 - Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(asset, symbol, quantity, mintable)`, `create_new_asset(asset, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, key, json)`, `nft_burn_asset(id)`.
 - Trigger syscalls: `create_trigger(json)`, `register_trigger(json)` (alias), `remove_trigger(name)`/`unregister_trigger(name)`, `set_trigger_enabled(name, enabled)`.
  - Iroha helpers (samples/dev): `create_nfts_for_all_users()`, `set_execution_depth(value)`, `set_account_detail(account, key, value)`.
  - Durable state helpers (host): `host::state_get(name_path) -> Blob`, `host::state_set(name_path, norito_bytes_value)`, `host::state_del(name_path)`.
  - Encoding helpers (WIP): `encode_int(int) -> Blob`, `decode_int(Blob) -> int`.
-- Inline ZK ISI builders (literal-only): `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)`, `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk)`. All arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
+- Inline ZK ISI builders (literal-only): `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)`, `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk)`. All arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - Path builder (method): `base.path(key) -> Name` builds canonical `"<base>/<key>"`.
  - VRF helpers: `vrf_verify(input, pk, proof, variant) -> Blob`, `vrf_verify_batch(batch: Blob) -> Blob` (returns 0 on failure). [Implemented]
  - Pointer utilities: `schema_info(schema: Name) -> Json {id,version}`, `pointer_to_norito(ptr)` (wrap any pointer-ABI TLV into NoritoBytes for state storage or replay). [Implemented]
@@ -291,7 +291,7 @@ Notes on helpers:
   - `struct` fields: recursively allocate per-field storage and bind `name#idx` for field access via `name.field`.
   - scalar/other: initialize to 0 and bind `name`.
 - Durable host overlay: ABI v1 programs issue `STATE_GET/SET/DEL`. CoreHost stages writes/deletes per transaction (read‑your‑writes), then flushes the TLV payloads into WSV‑backed `smart_contract_state` after execution; prepass access logging uses the same overlay without persistence.
-- Capability gating: Iroha operations are exposed as explicit syscalls; permission modeling at the language level (e.g., `permission(...)`) is planned.
+- Capability gating: Iroha operations are exposed as explicit syscalls; public entrypoints that call mutating ledger helpers or ZK verify latch helpers must declare `permission(...)`.
 - No raw pointers or references: the language intentionally avoids `*`/`&` semantics and aliasing rules to reduce foot‑guns in financial contracts. Memory is managed implicitly by the runtime.
 
 ## Examples

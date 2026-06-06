@@ -21,7 +21,9 @@ use iroha_crypto::{
         BFV_BOOTSTRAP_KEY_ID_MAX_BYTES, BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
         BFV_DETERMINISTIC_SEED_MAX_BYTES, BFV_EVALUATION_KEY_MAX_ROTATION_KEYS,
         BfvBootstrapKeyTranscriptSeed, BfvEvaluationBudget, BfvEvaluationKeyBundle, BfvPublicKey,
-        BfvRotationKeyTranscriptSeed, bfv_balanced_multiplication_depth, ram_lfe_bfv_parameters_v1,
+        BfvRotationKeyTranscriptSeed, bfv_balanced_multiplication_depth,
+        bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest,
+        bootstrap_key_zero_refresh_proof_statement_digest, ram_lfe_bfv_parameters_v1,
         validate_bfv_bounded_noise_bound, validate_bfv_exact_residual_multiple_capacity,
         validate_public_key as validate_bfv_public_key,
     },
@@ -3443,6 +3445,69 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
             reason: err.to_string(),
         })
     }
+
+    /// Derive the bootstrap-key zero-refresh proof statement digest, if present.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when transcript metadata, public-key
+    /// shape, bootstrap-key material, or canonical digesting fails.
+    pub fn bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+        &self,
+        params: &iroha_crypto::fhe_bfv::BfvParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+        mode: BfvRefreshTranscriptModeV1,
+    ) -> Result<Option<Hash>, SoracloudManifestError> {
+        self.validate_seed_bounds()?;
+        validate_bfv_public_key(params, &self.public_key).map_err(|err| {
+            SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "public_key",
+                reason: err.to_string(),
+            }
+        })?;
+        let Some(bootstrap_key) = evaluation_keys.bootstrap_key.as_ref() else {
+            return Ok(None);
+        };
+        let Some(transcript) = self.bootstrap_transcript.as_ref() else {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "bootstrap_transcript",
+                reason: "must be present when evaluation keys carry a bootstrap key".to_string(),
+            });
+        };
+        if transcript.key_id != bootstrap_key.key_id
+            || transcript.max_refresh_rounds != bootstrap_key.max_refresh_rounds
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "bootstrap_transcript",
+                reason: "must match evaluation-key bootstrap key metadata".to_string(),
+            });
+        }
+        let digest = match mode {
+            BfvRefreshTranscriptModeV1::ExactLift => {
+                bootstrap_key_zero_refresh_proof_statement_digest(
+                    params,
+                    &self.public_key,
+                    bootstrap_key,
+                )
+            }
+            BfvRefreshTranscriptModeV1::BoundedNoise => {
+                bootstrap_key_bounded_noise_zero_refresh_proof_statement_digest(
+                    params,
+                    &self.public_key,
+                    bootstrap_key,
+                )
+            }
+        };
+        digest
+            .map(Some)
+            .map_err(|err| SoracloudManifestError::InvalidField {
+                manifest: "bfv evaluation-key refresh transcript",
+                field: "bootstrap_key_zero_refresh_proof_statement_digest",
+                reason: err.to_string(),
+            })
+    }
 }
 
 /// Deterministic execution policy for validator-side ciphertext operations.
@@ -3467,6 +3532,9 @@ pub struct FheExecutionPolicyV1 {
     /// BFV refresh transcript derivation mode bound by this policy.
     #[norito(default)]
     pub refresh_transcript_mode: BfvRefreshTranscriptModeV1,
+    /// Governed proof statement digest for public bootstrap-key zero-refresh material.
+    #[norito(default)]
+    pub bootstrap_key_zero_refresh_proof_statement_digest: Option<Hash>,
     /// Maximum admitted ciphertext size in bytes.
     pub max_ciphertext_bytes: NonZeroU64,
     /// Maximum admitted plaintext input size in bytes.
@@ -3545,6 +3613,18 @@ impl FheExecutionPolicyV1 {
                     "cannot exceed exact BFV evaluator bootstrap-refresh budget ({})",
                     evaluator_budget.max_bootstrap_refresh_rounds
                 ),
+            });
+        }
+        if self.max_bootstrap_count > 0
+            && self
+                .bootstrap_key_zero_refresh_proof_statement_digest
+                .is_none()
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "fhe execution policy",
+                field: "bootstrap_key_zero_refresh_proof_statement_digest",
+                reason: "bootstrap-capable policies must bind bootstrap-key proof statement digest"
+                    .to_string(),
             });
         }
 
@@ -3681,10 +3761,6 @@ impl SoracloudFheInputAdmissionProofV1 {
                 found: self.schema_version,
             });
         }
-        validate_soracloud_fhe_input_admission_bound_capacity(
-            self.residual_multiple_bound,
-            self.bound_mode,
-        )?;
         if self.proof.backend.as_str().trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "soracloud fhe input admission proof",
@@ -3747,6 +3823,10 @@ impl SoracloudFheInputAdmissionProofV1 {
                 reason: "must be present and match proof bytes".to_string(),
             });
         }
+        validate_soracloud_fhe_input_admission_bound_capacity(
+            self.residual_multiple_bound,
+            self.bound_mode,
+        )?;
         validate_soracloud_fhe_input_admission_open_verify_envelope(
             &self.proof.proof.bytes,
             vk_commitment,
@@ -13523,6 +13603,79 @@ mod tests {
     }
 
     #[test]
+    fn fhe_input_admission_proof_validate_preflights_attachment_metadata_before_bounds() {
+        let mut wrong_backend = sample_fhe_input_admission_proof();
+        wrong_backend.residual_multiple_bound = u128::MAX;
+        wrong_backend.proof.proof.backend = "stark/fri/other".into();
+        let err = wrong_backend
+            .validate()
+            .expect_err("proof backend mismatch must be rejected before bound capacity");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.proof.backend",
+                ..
+            }
+        ));
+
+        let mut wrong_vk_backend = sample_fhe_input_admission_proof();
+        wrong_vk_backend.residual_multiple_bound = u128::MAX;
+        wrong_vk_backend.proof.vk_ref.backend = "stark/fri/other".into();
+        let err = wrong_vk_backend
+            .validate()
+            .expect_err("verifier-key backend mismatch must be rejected before bound capacity");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_ref.backend",
+                ..
+            }
+        ));
+
+        let mut wrong_vk_ref = sample_fhe_input_admission_proof();
+        wrong_vk_ref.residual_multiple_bound = u128::MAX;
+        wrong_vk_ref.proof.vk_ref.name = "soracloud_fhe_input_admission_alias_v1".to_string();
+        let err = wrong_vk_ref
+            .validate()
+            .expect_err("verifier id metadata must be rejected before bound capacity");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_ref.name",
+                ..
+            }
+        ));
+
+        let mut missing_vk_commitment = sample_fhe_input_admission_proof();
+        missing_vk_commitment.residual_multiple_bound = u128::MAX;
+        missing_vk_commitment.proof.vk_commitment = None;
+        let err = missing_vk_commitment
+            .validate()
+            .expect_err("verifier-key commitment metadata must be rejected before bound capacity");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.vk_commitment",
+                ..
+            }
+        ));
+
+        let mut missing_envelope_hash = sample_fhe_input_admission_proof();
+        missing_envelope_hash.residual_multiple_bound = u128::MAX;
+        missing_envelope_hash.proof.envelope_hash = None;
+        let err = missing_envelope_hash
+            .validate()
+            .expect_err("envelope hash metadata must be rejected before bound capacity");
+        assert!(matches!(
+            err,
+            SoracloudManifestError::InvalidField {
+                field: "proof.envelope_hash",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn fhe_input_admission_proof_validate_rejects_open_verify_envelope_drift() {
         let sample = sample_fhe_input_admission_proof();
         let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(&sample.proof.proof.bytes)
@@ -13563,7 +13716,7 @@ mod tests {
 
         let mut wrong_circuit = sample.clone();
         let mut wrong_circuit_envelope = envelope.clone();
-        wrong_circuit_envelope.circuit_id = "soracloud_fhe_input_admission_shadow_v1".to_string();
+        wrong_circuit_envelope.circuit_id = "soracloud_fhe_input_admission_v2".to_string();
         replace_fhe_input_admission_open_verify_envelope(
             &mut wrong_circuit,
             &wrong_circuit_envelope,
@@ -13578,6 +13731,11 @@ mod tests {
                 ..
             }
         ));
+        assert!(
+            err.to_string()
+                .contains("OpenVerifyEnvelope circuit id must be canonical v1"),
+            "unexpected error: {err}"
+        );
 
         let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
             .expect("decode sample STARK public-input wrapper");
@@ -14883,6 +15041,7 @@ mod tests {
             evaluation_key_digest: sample_hash(90),
             evaluation_key_refresh_transcript_digest: sample_hash(91),
             refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+            bootstrap_key_zero_refresh_proof_statement_digest: Some(sample_hash(92)),
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(16_384).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(8).expect("nonzero"),
@@ -17013,6 +17172,110 @@ mod tests {
             error,
             SoracloudManifestError::InvalidField {
                 field: "max_bootstrap_count",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest() {
+        let mut missing_digest = sample_fhe_execution_policy();
+        missing_digest.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        let error = missing_digest
+            .validate()
+            .expect_err("bootstrap-capable policies must bind bootstrap proof statement digest");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_key_zero_refresh_proof_statement_digest",
+                ..
+            }
+        ));
+
+        missing_digest.max_bootstrap_count = 0;
+        missing_digest
+            .validate()
+            .expect("policies without bootstrap budget need no bootstrap proof statement");
+    }
+
+    #[test]
+    fn bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, relinearization_key) =
+            iroha_crypto::fhe_bfv::keygen_from_seed(
+                &params,
+                b"soracloud-bootstrap-proof-statement-keygen",
+            )
+            .expect("keygen");
+        let bootstrap_seed = b"soracloud-bootstrap-proof-statement-bootstrap";
+        let bootstrap_key = iroha_crypto::fhe_bfv::bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "soracloud-bootstrap-proof",
+            2,
+            bootstrap_seed,
+        )
+        .expect("bootstrap key");
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key.clone()),
+        };
+        let transcript = BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key: public_key.clone(),
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
+                key_id: "soracloud-bootstrap-proof".to_string(),
+                max_refresh_rounds: 2,
+                seed: bootstrap_seed.to_vec(),
+            }),
+        };
+
+        let derived = transcript
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                &params,
+                &evaluation_keys,
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect("derive bootstrap proof statement")
+            .expect("bootstrap key is present");
+        let expected =
+            bootstrap_key_zero_refresh_proof_statement_digest(&params, &public_key, &bootstrap_key)
+                .expect("crypto bootstrap proof statement digest");
+        assert_eq!(derived, expected);
+
+        let bounded = transcript
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                &params,
+                &evaluation_keys,
+                BfvRefreshTranscriptModeV1::BoundedNoise,
+            )
+            .expect("derive bounded bootstrap proof statement")
+            .expect("bootstrap key is present");
+        assert_ne!(
+            derived, bounded,
+            "exact and bounded bootstrap proof statements must stay domain-separated"
+        );
+
+        let mut drifted_transcript = transcript;
+        drifted_transcript
+            .bootstrap_transcript
+            .as_mut()
+            .expect("bootstrap transcript")
+            .key_id
+            .push_str("-drift");
+        let error = drifted_transcript
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                &params,
+                &evaluation_keys,
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect_err("bootstrap transcript metadata drift must fail");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "bootstrap_transcript",
                 ..
             }
         ));
