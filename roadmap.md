@@ -13,6 +13,37 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Keep Kagemusha offline-offline payments production-routed through the
+  Reserved-lineage recursive spend path. Production packaging now has a
+  portable Norito `KagemushaRecursiveSpendLineageKeyArtifactsV1` artifact for
+  one-hop init and append verifier/proving keys, with request builders rejecting
+  wrong profiles, unsupported opening lengths, bad backends, empty artifacts,
+  and semantic append attachment; Swift, Kotlin/JVM, and Java Android expose
+  typed package validators with the same fail-closed rules. ABI-6 verify
+  request archives now fail closed at the C bridge, Node host, and PyO3 host
+  before returning a diagnostic result when Reserved-lineage verifier records,
+  proof backends, or proof attachments are malformed. The ABI-7
+  `kagemusha-recursive-compact-v1` compact-token symbols remain source-stable
+  and fail closed while core projection tests bind folded public-input hash
+  limbs, transcript limbs, witness count, hop count, verifier-key CID/hash, and
+  verifier-record windows; compact-token envelope preverification also rejects
+  noncanonical u64 public-instance limbs, unsupported verifier opening lengths,
+  zero recursive verifier metadata digest groups, and stale recursive
+  public-input hash limbs reconstructed from the envelope columns. Compact-CID
+  envelopes must also expose a non-zero recursive verifier scalar-projection
+  digest, so semantic aggregation proofs cannot be accepted merely by changing
+  their circuit id to `kagemusha-recursive-compact-v1`.
+  C/JNI/Node/PyO3 compact prover preflights decode Pallas opening archives as
+  Halo2 Pallas `OpenVerifyEnvelope` values before returning the explicit
+  unavailable code, and C/JNI/Node/PyO3 receiver verification rejects malformed
+  compact-token bindings before returning a soft invalid result.
+  Remaining compact-token release work is to replace the semantic aggregation
+  proof with a composed private-hop verifier-slice proof before enabling
+  receiver admission or SDK default selection. The production-readiness CI
+  guard now treats that as the release contract: ABI-6 Reserved-lineage may be
+  advertised as the production offline-offline route, but ABI-7 recursive
+  compact remains a blocker/default-disabled surface until the composed proof
+  exists.
 - Active BSC mainnet SCCP SDK hardening now directly gates malformed
   receipt-observed source-event logs: browser, Python, Swift, Kotlin/JVM, Java
   Android, and .NET tests reject matching BSC source-bridge logs with extra
@@ -1260,7 +1291,8 @@ and completed history lives in [`status.md`](./status.md).
   and optionally validating schema-backed XML fixtures against their checked-in
   XSDs with `xmllint --nonet`; it also
   requires canonical repository/commit/path/license/source-SHA provenance for
-  every checked-in XSD, rejects XSD files with known restricted Standards
+  every checked-in XSD with source repository URLs capped at 2048 characters,
+  rejects XSD files with known restricted Standards
   Editor redistribution terms, parses the embedded default rail profile catalog
   on demand, and records which concrete advertised message versions are
   schema-backed while rejecting unknown profile/message catalog keys before
@@ -1284,83 +1316,138 @@ and completed history lives in [`status.md`](./status.md).
   aggregate ISO production-readiness rollup now requires explicit expected
   provider/environment context, non-empty strict XSD proof, operator evidence
   summaries, and digest-bound direct receipt-archive verification with
-  unique canonical per-receipt `*.receipt.json` paths and digests into one
-  release gate; remaining readiness work is making that gate pass without
-  diagnostic overrides and with real provider evidence.
+  unique canonical per-receipt `*.receipt.json` paths, digests, and successful
+  2xx receipt status plus kind-specific notary/rail metadata into one release
+  gate; remaining readiness work is making that gate pass without diagnostic
+  overrides and with real provider evidence.
   Durable ISO state now has
   versioned per-record digests plus a local
   tamper-evident audit index exposed through the
   `GET /v1/iso20022/audit/messages` route, with config-backed age/count
   retention/compaction, an `audit_export_dir` manifest/notary-preimage spool,
 	  and an operator adapter that verifies and publishes those preimages to clean
-	  raw-whitespace-free, canonical-host/label/port/path,
-	  percent-smuggling-free, duplicate-free HTTPS archival/notary endpoints with
-	  regular non-symlink bounded exact runtime bearer-token files, symlink-free
-	  rail drop roots and inputs including explicit message leaves with
-	  whitespace/backslash/semicolon/empty-segment/dot-segment smuggling rejected
-	  before reads,
-	  regular non-symlink notary export roots/source files, and local receipts that do
-	  not persist token material while preflighting receipt output
-	  directories/leaves before publication or Torii submission, rejecting
-	  symlinked outputs, and using no-follow output opens where available; a
+		  raw-whitespace-free, canonical-host/label/port/path,
+		  percent-smuggling-free, overlong-URL/host-rejecting,
+		  localhost/private-IP/rebinding-host/legacy-IPv4/IPv6-transition-rejecting,
+		  duplicate-free HTTPS archival/notary endpoints with
+				  regular non-symlink bounded exact runtime bearer-token files, rail drop
+					  roots and inputs that reject symlink leaves and symlinked ancestors,
+					  including explicit message leaves with
+			  whitespace/leading-dash-segment/backslash/semicolon/empty-segment/dot-segment smuggling rejected
+		  before reads and duplicate payload digests or duplicate rail message ids
+		  rejected before network delivery, with live rail and notary redirects
+		  archived as failed receipts instead of followed, and with live rail, notary, and archived
+		  receipt endpoint URLs capped for full URL length and DNS-host length,
+	  bearer-token files for the live rail and notary adapters capped before
+	  decoding,
+			  regular non-symlink notary export roots/source files with symlinked
+			  ancestors rejected and 64 MiB caps per JSON artifact, and local
+			  receipts that do
+		  not persist token material, secret-looking remote response previews, or
+		  secret-looking transport errors while preflighting receipt output
+		  directories/leaves before publication or Torii submission, rejecting
+		  control characters, whitespace, leading-dash segments, backslashes,
+		  semicolon parameters, empty segments, dot/parent traversal, symlinked existing
+		  ancestors, hard-linked outputs, or symlinked outputs, and using
+		  owner-private descriptor-checked same-directory temporary files
+			  with bounded digest-derived names plus atomic replacement where
+			  available, and live rail/notary adapter timeout and byte-cap CLI
+			  values now fail closed on non-positive or non-finite inputs before
+			  local reads or network delivery; a
   read-only receipt verifier now gates those receipts for canary use and emits
   a digest-bound summary with per-receipt `receipt_sha256` entries while
-  closing raw receipt and notary source schemas including nested audit records,
+	  closing raw receipt and notary source schemas including duplicate-free nested audit records,
 	  audit record filename/message-id bindings, endpoint-digest bindings,
 	  timestamp/status consistency, bounded response
-		  metadata, canonical receipt endpoint,
-		  timestamp, canonical notary/rail source paths, and whitespace-free rail
-		  metadata identifiers, with live rail sidecars rejecting explicit `null`
-		  `profile`/`rail_message_id` values and non-canonical profile IDs before
-		  submission,
+				  metadata, canonical receipt endpoint,
+				  timestamp, canonical notary/rail source paths, including `store_dir`,
+				  that are not flag-shaped, `.xml` rail payload leaves,
+			  and whitespace-free rail
+			  metadata identifiers, with live rail sidecars rejecting explicit `null`
+			  `profile`/`rail_message_id` values, non-canonical profile IDs, and
+			  overlong or non-canonical ASCII rail-message identifiers before
+			  submission, with oversized or unknown-field sidecars rejected as
+			  malformed,
 	  rail sidecar source bindings, notary anchor-path shape checks even when
 	  source files are not required, notary anchor/index source bindings that
 	  require regular non-symlink files, notary adapter publication that requires
 	  `store_dir/messages` for non-empty anchors by default, persisted notary
-	  record-source bindings from each index row's `record_sha256` to
-	  `store_dir/messages`, production evidence rejection of the adapter's
-	  local `--allow-missing-record-sources` diagnostic override, and
-	  symlink-free receipt archive directories,
+		  record-source bindings from each index row's `record_sha256` to
+		  clean `store_dir/messages` paths, production evidence rejection of the adapter's
+		  local `--allow-missing-record-sources` diagnostic override,
+		  status-history timestamp binding for persisted record sources, and
+		  symlink-free receipt archive directories,
 	  and a strict JSON-runbook canary runner rejects
   whitespace-padded or control-bearing runbook strings, present-null optional
-  path/numeric limit fields, embedded-whitespace/backslash/semicolon/dot-segment
-  path smuggling, and duplicate endpoint and receipt inputs before
-  executing the rail/notary/verify path with one
-  bounded summary.
-  The operator scripts reject duplicate JSON object keys across runbooks,
-  sidecars, anchors/indexes, receipts, trust bundles, XSD manifests, evidence
-  summaries, readiness summaries, embedded receipt-verifier stdout, and direct
-  archive receipt-verifier stdout before semantic validation, so shadowed keys
-  cannot rewrite release evidence. Those gates also reject symlinked or
+	  path/numeric limit fields, embedded-whitespace/leading-dash-segment/backslash/semicolon/dot-segment
+	  path smuggling including encoded semicolon parameters and encoded URL
+	  delimiters, malformed bracketed hosts, overlong endpoint URLs or DNS
+	  hosts, localhost/private-IP/rebinding/legacy-IPv4/IPv6-transition endpoint URLs, and duplicate endpoint and receipt inputs before
+	  executing the rail/notary/verify path with one
+	  bounded summary, bounding each child stage with positive finite
+	  `--stage-timeout-secs`, recording `timed_out` for killed children, draining
+	  child stdout/stderr through a configured preview cap, and capping runbook
+	  JSON at 64 KiB before parsing.
+	  The operator scripts reject duplicate JSON object keys, non-standard
+	  `NaN`/`Infinity` JSON constants, and lone UTF-16 surrogate escapes across
+	  runbooks, sidecars, anchors/indexes, receipts, trust bundles, XSD
+	  manifests/profile catalogs, evidence summaries, readiness summaries,
+	  embedded receipt-verifier stdout, and direct archive receipt-verifier stdout
+	  before semantic validation, so shadowed keys, non-finite numbers, and invalid
+	  Unicode strings cannot rewrite release evidence. Those gates also reject symlinked or
   non-regular canary runbooks, trust bundles, evidence/readiness summaries, XSD
   manifests, profile catalogs, schema files, and XML fixtures before digest,
   provenance, or policy checks run, opening those inputs through no-follow file
-  descriptors where available, and reject symlinked receipt, summary, and
-  emitted profile-override outputs before writing them. Canary summary outputs
+  descriptors where available. Direct CLI artifact paths for live rail inbox
+  roots, live notary export roots, rail/notary bearer-token files, canary
+  configs, trust bundles, XSD manifests/profile catalogs, receipt
+	  files/directories, canary/trust summaries, and XSD/evidence summaries reject
+	  control characters, whitespace, leading-dash segments, backslashes, semicolon
+	  parameters, empty segments, and dot/parent traversal before argparse `Path`
+		  normalization or file discovery. Live rail/notary adapter timeouts also
+		  reject non-positive or non-finite CLI values, and byte caps reject
+		  non-positive values before local reads or network delivery. The receipt verifier caps raw receipt JSON at
+  4 MiB, notary source JSON at 64 MiB, rail source XML at 4 MiB, and rail
+	  source-sidecar JSON at 16 KiB before source replay. The evidence gate caps
+	  direct receipt-verifier stdout/stderr at 4 MiB before JSON parsing, bounds
+	  direct verifier runtime with positive finite `--receipt-verifier-timeout-secs`,
+	  and rejects control characters, whitespace, leading-dash segments, backslashes,
+  semicolon parameters, empty segments, dot/parent traversal, and symlinked
+  receipt, summary, and emitted profile-override outputs before writing them.
+  Canary summary outputs
   are preflighted before subprocess stages, and canary relative paths preserve
   final leaves after parent containment checks so child scripts can still reject
-  symlinked leaves.
+  symlinked leaves. Archived canary/trust summaries consumed by the evidence
+	  gate and XSD/evidence summaries consumed by the readiness gate are capped at
+	  4 MiB before parsing, optional `xmllint` stdout/stderr is capped at 64 KiB
+	  and runtime is bounded by positive finite `--xmllint-timeout-secs` during
+	  XSD fixture validation, operator trust-bundle JSON is capped at
+  64 MiB before trust-preflight parsing, and trust DER base64 is capped before
+  decoding to the 1 MiB DER material limit.
   An offline
   evidence gate now requires exact expected provider/environment context,
   records that context in its digest-bound policy, recomputes
   canary/trust/receipt summary digests, rejects repeated or copied
   canary/trust summaries, rejects non-canonical or duplicate receipt paths or
   receipt digests, rejects duplicate archived trust profile IDs and bundle
-  digests, and rejects
+  digests across trust summaries, and rejects
   plan-only, dry-run, control-bearing or whitespace-padded child-command entries,
   non-canonical or command-mismatched rail/notary receipt directories,
   verify commands that omit generated rail/notary receipt directories,
 	  insecure-HTTP, default-profile, secret-leaking,
-	  smuggled, raw-whitespace-bearing, malformed/default-port,
-	  non-canonical-host, invalid-label, percent-escape, numeric-host-spoofed, or
-	  traversal-bearing URLs,
+	  smuggled, raw-whitespace-bearing, empty/zero/leading-zero/malformed/default-port,
+	  non-canonical-host, invalid-label, localhost/private-IP/rebinding-host,
+	  legacy-IPv4, IPv6-transition, percent-escape, numeric-host-spoofed, or traversal-bearing URLs,
 	  non-canonical canary runbook config paths, unknown upstream summary fields,
 	  synthetic-trust, record-only, or receipt-verifier-output-free evidence before
 	  archival, and requires trust-summary and receipt-summary policy booleans,
 	  trust profile JSON emission booleans plus a digest recomputed from archived
 	  profile overrides, trust revocation booleans/counts, bundle SHA-256 values,
 	  duplicate-free supported receipt-kind lists and compact receipt entry kinds,
-	  exact direct-archive receipt digest binding to canary summaries, no copied
+	  per-receipt `ok=true` plus 2xx `status_code` success metadata,
+	  kind-specific compact notary anchor/index/count and rail
+	  message/profile/payload metadata,
+	  exact direct-archive receipt digest/kind/status/metadata binding to canary summaries, no copied
 	  receipt paths or digests reused across canary summaries,
 	  and plan-only status booleans to be
 	  present explicitly so omissions cannot become production defaults. Archived
@@ -1369,36 +1456,58 @@ and completed history lives in [`status.md`](./status.md).
   bounded canonical base64 DER SEQUENCEs, material-count agreement, CRL/OCSP DER
   digest/byte-length agreement, and non-overlapping trusted/revoked pins.
   Canary summaries must also prove the runner used
-	  `--require-explicit-policy`. The evidence gate requires explicit freshness
+	  `--require-explicit-policy`, recorded complete stdout/stderr previews for
+		  every executed child stage, and avoided duplicate singleton child-command
+		  flags, boolean child-command flags spelled with `=value`, and non-positive
+		  or non-finite numeric child-command values plus non-canonical child-command
+		  path values or missing required child-command inputs. Trust-bundle preflight
+		  now treats profile override emission as production-only: complete
+		  source authority/version provenance is required, and `--emit-profile-json`
+		  refuses local-audit record-only or insecure-source overrides plus
+		  placeholder source metadata, missing source freshness budgets, or stale
+		  source retrieval timestamps before writing profile JSON, then records the
+		  selected `max_source_age_days` budget in the trust summary. The evidence gate requires
+	  explicit freshness
 	  budgets for canary, trust-summary, and trust-source evidence plus direct
-	  receipt archive verification covering canary receipt digests and receipt
-	  kinds before archival, preserves compact trust bundle SHA-256, source
-	  authority/version and URL/retrieval provenance, revoked-certificate pin
+		  receipt archive verification covering canary receipt digests and receipt
+		  kinds before archival, preserves compact trust bundle SHA-256, source
+		  authority/version and URL/retrieval provenance, trust source freshness
+		  emission budgets, revoked-certificate pin
 	  counts, certificate-policy OID counts,
 	  and compact trust-anchor/revoked/CRL/OCSP DER proof digests and byte lengths
-	  for release review,
-  and the aggregate readiness gate rechecks that proof plus the evidence policy
-	  context, requires explicit freshness budgets for
-	  XSD/evidence/canary/trust/trust-source timestamps, blocks stale
+	  for release review, rejects profile-emittable drift and
+	  emitted-but-not-emittable contradictions against the archived trust source
+	  policy,
+	  and the aggregate readiness gate rechecks that proof plus the evidence policy
+		  context, requires explicit freshness budgets for
+		  XSD/evidence/canary/trust/trust-source timestamps, blocks stale
 	  digest-correct summaries and archive freshness policies weaker than the final
-		  release budgets, rejects stale or smuggled compact trust source provenance
-		  including invalid host labels, numeric-host spoofing, and percent-escape
-		  smuggling, and
+		  release budgets, rejects stale, placeholder, or smuggled compact trust
+		  source provenance including `placeholder`, `replace-before-production`,
+		  `example.invalid`, overlong URLs, invalid or overlong host labels,
+		  numeric-host/legacy-IPv4 spoofing, IPv6 transition embedded-IPv4
+		  smuggling, percent-escape smuggling, and omitted,
+		  malformed, or release-weaker trust source freshness budgets, rejects
+		  compact profile-emittable drift or emitted-but-not-emittable
+		  contradictions against trust source policy, and
   rechecks compact trust profile JSON emission and digest, CRL/OCSP revocation
-	  posture, direct archive/canary receipt digest/kind binding, and trust
+	  posture, direct archive/canary receipt digest/kind/status/metadata binding, and trust
 	  profile-count binding, while rejecting repeated or copied
-  XSD/evidence and compact canary/trust summaries, requiring compact
-  canary/trust source paths to be control-free, trim-free, and traversal-free, requiring
-  compact canary runbook config paths to remain traversal-free JSON pointers,
-  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
-  rejecting non-canonical compact receipt paths, rejecting duplicate compact
-  trust profile IDs or bundle digests, rejecting control-bearing or whitespace-padded
+  XSD/evidence and compact canary/trust summaries, rejecting nested
+  canary/trust/receipt/profile replay across evidence summaries, requiring compact
+  canary/trust source paths to be control-free, trim-free, not flag-shaped, and
+  traversal-free, requiring compact canary runbook config paths to remain
+  traversal-free JSON pointers, requiring compact canary stage names to remain
+  unique production stages in rail/notary/verify order,
+	  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
+	  rejecting non-canonical compact receipt paths, rejecting duplicate compact
+	  trust profile IDs or bundle digests across trust summaries, rejecting control-bearing or whitespace-padded
   compact identity strings, rejecting non-canonical compact trust profile IDs,
   and rejecting compact trust rail IDs outside `generic-iso20022`,
   `swift-cbpr-plus`, `fedwire-funds`, `sepa-sct-inst`, and `securities-csd`,
   rejecting unknown compact evidence fields,
   rechecking XSD schema/fixture summary arrays for count, digest, and
-  schema-path/message-id, fixture-path segment canonicality, canonical fixture
+  cross-summary replay, schema-path/message-id, fixture-path segment canonicality, canonical fixture
   schema-reference strings, and schema-reference consistency,
   rejecting DTD/entity declarations before schema or fixture XML parsing,
   rejecting ambiguous schema `Document` declarations or prefixed `Document`
@@ -1409,15 +1518,16 @@ and completed history lives in [`status.md`](./status.md).
   schema/`Document`/payload structures, rejecting schema roots with attributes
   beyond `elementFormDefault` and `targetNamespace`, rejecting fixture
   `Document`/payload root attributes, binding parsed XML and summary digests to
-  the same checked bytes,
+  the same checked bytes, capping manifest JSON and profile catalog source at
+  4 MiB and schema/fixture XML inputs at 8 MiB before parsing,
   requiring XML schema-validation proof for every
   schema-backed fixture, rejecting unknown XSD summary fields, recomputing
 	  schema-only flags/reasons and reviewed gap lists from the schema/fixture
 	  relationship while rejecting padded or control-bearing reviewed reason
 	  strings plus present empty/non-string archived reviewed reasons in both the
 	  XSD preflight and readiness rollup, rejecting stale missing-schema reasons
-	  on schema-backed archived fixtures, rejecting embedded
-	  whitespace or semicolon path parameters in checked-in XSD source provenance,
+		  on schema-backed archived fixtures, rejecting embedded
+		  whitespace, leading-dash path segments, or semicolon path parameters in checked-in XSD source provenance,
 	  manifest schema, fixture, fixture schema-reference, and archived
 	  profile-catalog paths during preflight and archived-summary readiness
 	  rechecks, requiring
@@ -1436,8 +1546,8 @@ and completed history lives in [`status.md`](./status.md).
   match the recorded stage sequence, and compact stage names are rechecked as
   unique production rail/notary/verify stages. Compact canary/trust summary
   paths, canary config paths, receipt paths, and child receipt-directory
-  arguments reject embedded whitespace, semicolon path parameters, empty
-  segments, raw backslashes, and traversal segments before aggregation. The repository also
+  arguments reject embedded whitespace, leading-dash path segments, semicolon
+  path parameters, empty segments, raw backslashes, and traversal segments before aggregation. The repository also
   carries plan-valid templates for Swift CBPR+, Fedwire Funds, SEPA SCT Inst,
   and securities CSD operator canaries. Remaining persistence work is
   provider-specific live service canaries and vendor evidence that passes the
@@ -1445,8 +1555,10 @@ and completed history lives in [`status.md`](./status.md).
 	  ISO rail ingress now has
 	  an operator file-drop adapter that verifies sidecar-pinned message
 	  type/profile/payload digests, rejects non-canonical sidecar profile IDs
-	  before submitting to clean Torii base URLs and writing receipts, plus the
-	  same receipt verifier and runbook runner for canary evidence.
+	  and non-canonical rail-message IDs, and closes the live sidecar schema
+	  while bounding sidecar JSON before submitting to clean Torii base URLs and
+	  writing receipts, plus the same receipt verifier and runbook runner for
+	  canary evidence.
   Remaining rail-connectivity work is provider-specific live gateway canaries
   and archived rail evidence. Live
   securities lifecycle profile admission now checks
@@ -2691,11 +2803,11 @@ and completed history lives in [`status.md`](./status.md).
   bounded private hops, rejects duplicate nullifiers/commitments and root
   discontinuities, and binds chain id, asset definition, roots, hop count, and
   aggregate folded-hop digests. The folded statement now carries a proved
-  aggregation-mode column; checked transparent pre-fold v1 is accepted, while
-  reserved recursive aggregation modes are rejected until their in-circuit
-  verifier exists. A Poseidon2 aggregation transcript digest is now derived from
-  the same canonical hop sequence as a hash-friendly public accumulator for that
-  future recursive verifier. Checked fold construction verifies each private hop
+  aggregation-mode column; checked transparent pre-fold v1 remains supported
+  while ABI-7 recursive compact mode `2` remains reserved behind the
+  fail-closed `kagemusha-recursive-compact-v1` proof/verifier surface. A Poseidon2
+  aggregation transcript digest is derived from the same canonical hop sequence
+  as the recursive verifier's public accumulator. Checked fold construction verifies each private hop
   proof and binds its verified public-input statement plus verifier-key
   id/commitment and a Poseidon2 digest of the verifier-key backend/bytes before
   hashing it into the transcript; optional envelope-hash metadata must match
@@ -2906,9 +3018,12 @@ and completed history lives in [`status.md`](./status.md).
   Norito/Poseidon-binds that batch digest, parameter fingerprint, and canonical
   `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
   profile plus the declared verifier opening length to the same ordered hop
-  transcript while keeping mode `2` rejected for compact-token admission, with
-  a Poseidon2 aggregation transcript digest that accepts checked mode `1` and
-  reserved mode `2` but rejects unknown modes, plus Norito roundtrip,
+  transcript. Reserved compact projection checks validate mode `2` against that
+  recursive evidence and the compact token's folded public inputs, but public
+  compact-token admission stays disabled until the composed verifier-slice proof
+  replaces the semantic aggregation proof. The
+  Poseidon2 aggregation transcript digest accepts checked mode `1` and
+  recursive compact mode `2` but rejects unknown modes, plus Norito roundtrip,
   decoded-profile/opening-length/schedule/base, and truncated-archive negative
   coverage plus unsupported or non-power-of-two opening length, zero table
   commitments, empty-transcript, over-cap, duplicate-nullifier, and
@@ -3235,9 +3350,10 @@ and completed history lives in [`status.md`](./status.md).
   missing records, semantic verifier records, malformed records, and tampered
   previous proofs fail closed before the next hop is folded. Recursive spend
   verify requests likewise carry an optional `lineage_verifier_record` for the
-  received bundle: reserved-lineage D2D payloads require it, semantic v1
-  payloads must omit it, and the bridge, JavaScript host, and Python PyO3 host
-  return diagnostic `valid = false` archives for missing or mismatched records.
+  received bundle: reserved-lineage D2D payloads require a matching active
+  record, semantic v1 payloads must omit it, and the bridge, JavaScript host,
+  and Python PyO3 host reject malformed verify request archives before returning
+  a diagnostic result.
   Data-model init/append request validation now runs before the recursive
   prover in the C bridge, JavaScript host, and Python PyO3 host. Init preflight
   rejects malformed one-hop fragments, Pallas envelope archive count mismatches,
@@ -3359,12 +3475,13 @@ and completed history lives in [`status.md`](./status.md).
   Swift, Kotlin/JVM, Java Android, JavaScript,
   Python, and C# now also expose stable constants for the semantic
   v1 and reserved lineage circuit ids. Swift, JavaScript/Node, Python, and C#
-  now expose the recursive-spend bridge ABI-6 requirement beside those
-  constants; Swift bridge-loader tests pin packaged artifacts to ABI 6, the
-  Node NAPI host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3
-  extension exports `kagemusha_recursive_spend_bridge_abi_version`. The
-  SDK surfaces also expose a common preferred offline spend-mode selector:
-  `recursive_spend_v1` when the ABI-6 recursive spend surface is available and
+  now expose the recursive-spend minimum bridge ABI-6 requirement beside those
+  constants while accepting additive ABI-7 bridge advertisements; Swift
+  bridge-loader tests pin packaged artifacts to at least ABI 6, the Node NAPI
+  host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3 extension
+  exports `kagemusha_recursive_spend_bridge_abi_version`. The SDK surfaces also
+  expose a common preferred offline spend-mode selector: `recursive_spend_v1`
+  when the ABI-6-or-later recursive spend surface is available and
   `checked_prefold_v1` as the compatibility fallback; Kotlin/JVM and Java
   Android probe the native bridge ABI version plus verify and both lineage
   witness JNI symbols, C# probes the matching P/Invoke symbols, and

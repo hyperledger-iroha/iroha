@@ -32,9 +32,13 @@ that need to point at an alternate `native/` folder.
 ## Native Recursive Kagemusha Spend
 
 Native builds expose ABI-6 recursive Kagemusha spend helpers from the crypto
-surface. `preferredKagemushaOfflineSpendMode()` returns `recursive_spend_v1`
-only when the native host reports bridge ABI 6 and every required method
-rejects the malformed availability probe: `kagemushaRecursiveSpendInit`,
+surface. ABI 7 keeps the reserved `recursive_compact_v1` compact-token symbols
+source-stable, but public compact proving and receiver verification fail closed
+until that token proof composes the private-hop verifier-slice relation
+in-circuit. `preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
+when the native host reports bridge ABI 6 or later and every required
+recursive-spend method rejects the malformed availability probe, and otherwise
+falls back to `checked_prefold_v1`: `kagemushaRecursiveSpendInit`,
 `kagemushaRecursiveSpendAppend`,
 `kagemushaRecursiveSpendTransitionProfileInit`,
 `kagemushaRecursiveSpendTransitionProfileAppend`,
@@ -64,6 +68,11 @@ Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
 rejected before runtime key generation.
+Verify request archives must pass the same public-binding preflight before the
+native host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
+bundles require a matching active `lineage_verifier_record`, semantic bundles
+must omit it, and unsupported proof attachments are rejected as malformed
+requests rather than soft invalid proof results.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
@@ -86,9 +95,9 @@ archive bridge: `isPrivacyNativeAvailable()`, `privacyCapabilitiesV1()`,
 `privacyBuildProofV1(requestArchive)`, and
 `privacyVerifyProofV1(requestArchive)`. The JS SDK does not expose
 algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires bridge ABI 6 plus successful `capabilities`,
-`build`, and `verify` probes whose operation-specific result schema bytes match
-the called entry point.
+gated. Native availability requires bridge ABI 6 or later plus successful
+`capabilities`, `build`, and `verify` probes whose operation-specific result
+schema bytes match the called entry point.
 
 All privacy request and response payloads must stay as raw Norito archives.
 JavaScript validates archive magic, length, CRC, the 64 MiB native size cap, and

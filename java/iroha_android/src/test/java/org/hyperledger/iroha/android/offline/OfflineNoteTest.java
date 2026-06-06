@@ -691,42 +691,67 @@ public final class OfflineNoteTest {
   }
 
   private static void kagemushaRecordBackedNativeProverValidatesInput() {
-    assertThrows(
+    assertIllegalArgumentContains(
         () -> KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
             new byte[0]),
-        "Kagemusha record-backed native prover must reject empty archives before JNI");
-    if (KagemushaCompactPaymentTokenProver.isNativeAvailable()) {
-      assertThrows(
-          () -> KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
-              new byte[] {0x01, 0x02}),
-          "Kagemusha record-backed native prover must reject malformed archives");
-    }
+        "recordBundleArchive must not be empty");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
+                new byte[] {0x01, 0x02}),
+        "recordBundleArchive must be a valid Norito archive");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
+                kagemushaNoritoFrame(0x4b)),
+        "recordBundleArchive must contain a non-empty Norito payload");
   }
 
   private static void kagemushaRecursiveAggregationNativeProverValidatesInput() {
-    assertThrows(
+    final byte[] validArchive = kagemushaNoritoFrameWithPayload(0x4b);
+    assertIllegalArgumentContains(
         () ->
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    new byte[0], new byte[] {0x01}),
-        "Kagemusha recursive aggregation native prover must reject empty record archives before JNI");
-    assertThrows(
+                    new byte[0], validArchive),
+        "recordBundleArchive must not be empty");
+    assertIllegalArgumentContains(
         () ->
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    new byte[] {0x01}, new byte[0]),
-        "Kagemusha recursive aggregation native prover must reject empty Pallas envelope archives before JNI");
-    if (KagemushaRecursiveAggregationProofBundleProver.isNativeAvailable()) {
-      assertThrows(
-          () ->
-              KagemushaRecursiveAggregationProofBundleProver
-                  .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                      new byte[] {0x01, 0x02}, new byte[] {0x03, 0x04}),
-          "Kagemusha recursive aggregation native prover must reject malformed archives");
-    }
+                    validArchive, new byte[0]),
+        "pallasOpenEnvelopesArchive must not be empty");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    new byte[] {0x01, 0x02}, validArchive),
+        "recordBundleArchive must be a valid Norito archive");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive, new byte[] {0x01, 0x02}),
+        "pallasOpenEnvelopesArchive must be a valid Norito archive");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    kagemushaNoritoFrame(0x4b), validArchive),
+        "recordBundleArchive must contain a non-empty Norito payload");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive, kagemushaNoritoFrame(0x4b)),
+        "pallasOpenEnvelopesArchive must contain a non-empty Norito payload");
   }
 
   private static void kagemushaRecursiveSpendNativeProverValidatesInput() {
+    assertTrue(
+        KagemushaRecursiveSpendProver.preferredMode(true, true)
+            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
+        "recursive spend should remain the production default when compact ABI is present");
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(true)
             == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
@@ -735,6 +760,10 @@ public final class OfflineNoteTest {
         KagemushaRecursiveSpendProver.preferredMode(false)
             == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
         "checked pre-fold should remain the compatibility fallback");
+    assertEquals(
+        "recursive_compact_v1",
+        KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName(),
+        "recursive compact Kagemusha wire mode");
     assertEquals(
         "recursive_spend_v1",
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName(),
@@ -899,11 +928,31 @@ public final class OfflineNoteTest {
           "native output guard reports oversized output");
     }
 
-    final byte[] output = new byte[] {0x01, 0x02};
+    try {
+      KagemushaCompactPaymentTokenProver.requireNativeOutput(
+          new byte[] {0x01, 0x02}, "native test");
+      throw new AssertionError("native output guard must reject malformed Norito output");
+    } catch (final IllegalStateException expected) {
+      assertTrue(
+          expected.getMessage().contains("returned invalid Norito archive"),
+          "native output guard reports malformed Norito output");
+    }
+
+    try {
+      KagemushaCompactPaymentTokenProver.requireNativeOutput(
+          kagemushaNoritoFrame(0x4b), "native test");
+      throw new AssertionError("native output guard must reject empty Norito payloads");
+    } catch (final IllegalStateException expected) {
+      assertTrue(
+          expected.getMessage().contains("returned empty Norito payload"),
+          "native output guard reports empty Norito payload");
+    }
+
+    final byte[] output = kagemushaNoritoFrameWithPayload(0x4b);
     assertTrue(
         Arrays.equals(
             output, KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native test")),
-        "native output guard returns valid proof archives unchanged");
+        "native output guard returns valid Norito proof archives unchanged");
   }
 
   private static void kagemushaNativeAvailabilityRequiresJniEntrypoint() {
@@ -4976,6 +5025,37 @@ public final class OfflineNoteTest {
     return out;
   }
 
+  private static byte[] kagemushaNoritoFrame(final int schemaByte) {
+    final byte[] frame = new byte[40];
+    frame[0] = (byte) 'N';
+    frame[1] = (byte) 'R';
+    frame[2] = (byte) 'T';
+    frame[3] = (byte) '0';
+    Arrays.fill(frame, 6, 22, (byte) schemaByte);
+    return frame;
+  }
+
+  private static byte[] kagemushaNoritoFrameWithPayload(final int schemaByte) {
+    final byte[] frame = new byte[45];
+    System.arraycopy(kagemushaNoritoFrame(schemaByte), 0, frame, 0, 40);
+    frame[23] = 3;
+    final byte[] crc = new byte[] {
+      (byte) 0xb9,
+      (byte) 0xd3,
+      (byte) 0xa8,
+      0x0c,
+      (byte) 0xcd,
+      0x5d,
+      0x13,
+      0x24
+    };
+    System.arraycopy(crc, 0, frame, 31, crc.length);
+    frame[42] = (byte) 0xa5;
+    frame[43] = 0x5a;
+    frame[44] = 0x11;
+    return frame;
+  }
+
   private static void assertEquals(
       final String expected, final String actual, final String message) {
     if (!expected.equals(actual)) {
@@ -5002,6 +5082,19 @@ public final class OfflineNoteTest {
       return;
     }
     throw new AssertionError(message);
+  }
+
+  private static void assertIllegalArgumentContains(
+      final Runnable action, final String expectedMessage) {
+    try {
+      action.run();
+    } catch (final IllegalArgumentException expected) {
+      assertTrue(
+          expected.getMessage().contains(expectedMessage),
+          "expected IllegalArgumentException to contain: " + expectedMessage);
+      return;
+    }
+    throw new AssertionError("expected IllegalArgumentException: " + expectedMessage);
   }
 
   private static void assertFutureFails(final CompletableFuture<?> future, final String message) {

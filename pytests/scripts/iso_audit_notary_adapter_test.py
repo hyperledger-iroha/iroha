@@ -214,12 +214,68 @@ def capture_server(status=200, body=b'{"receipt":"ok"}'):
         server.server_close()
 
 
+@contextlib.contextmanager
+def capture_redirect_server(body=b"redirect"):
+    requests = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler API
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = self.rfile.read(length)
+            requests.append(
+                {
+                    "method": "POST",
+                    "path": self.path,
+                    "headers": dict(self.headers),
+                    "body": payload,
+                }
+            )
+            location = f"http://127.0.0.1:{self.server.server_address[1]}/redirected"
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
+            requests.append(
+                {
+                    "method": "GET",
+                    "path": self.path,
+                    "headers": dict(self.headers),
+                    "body": b"",
+                }
+            )
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"followed")
+
+        def log_message(self, *_args):
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/notary", requests
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 class IsoAuditNotaryAdapterTest(unittest.TestCase):
     def test_publish_posts_verified_anchor_and_writes_receipt(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
             index, anchor, _digest_anchor = write_export(export_dir)
             with capture_server() as (endpoint, requests):
+                receipt_dir = export_dir / "receipts"
+                receipt_dir.mkdir()
+                receipt_path = receipt_dir / (
+                    f"{index[ADAPTER.INDEX_DIGEST_FIELD]}."
+                    f"{ADAPTER._endpoint_sha256(endpoint)}.receipt.json"
+                )
+                receipt_path.write_text('{"stale": true}\n' + ("x" * 4096), encoding="utf-8")
                 rc, _stdout, _stderr = run_main(
                     [
                         "--export-dir",
@@ -227,6 +283,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                         "--endpoint",
                         endpoint,
                         "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_dir),
                     ]
                 )
 
@@ -255,6 +313,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 ),
                 receipt[ADAPTER.RECEIPT_DIGEST_FIELD],
             )
+            self.assertEqual(receipts[0].stat().st_mode & 0o077, 0)
+            self.assertEqual(list(receipt_dir.glob(".iso-*.tmp")), [])
 
     def test_available_persisted_record_sources_are_verified_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -350,6 +410,83 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 0, stderr)
                     self.assertEqual(len(requests), 1)
 
+    def test_malformed_anchor_store_dir_is_rejected_before_network_delivery(self):
+        def rewrite_anchor_store_dir(export_dir, store_dir):
+            latest = export_dir / ADAPTER.LATEST_ANCHOR_FILE
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["store_dir"] = store_dir
+            anchor = with_digest(anchor, ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            digest_anchor = (
+                export_dir
+                / ADAPTER.ANCHOR_DIR
+                / f"{anchor[ADAPTER.INDEX_DIGEST_FIELD]}.notary.json"
+            )
+            digest_anchor.write_text(anchor_text, encoding="utf-8")
+
+        cases = [
+            (
+                "embedded-whitespace",
+                "/ops/iso store",
+                "store_dir must not contain whitespace",
+            ),
+            (
+                "leading-dash",
+                "--store",
+                "store_dir must not start with a dash",
+            ),
+            (
+                "segment-leading-dash",
+                "/ops/--store",
+                "store_dir must not contain leading-dash path segments",
+            ),
+            (
+                "backslash",
+                r"C:\\ops\\iso",
+                "store_dir must use forward slashes",
+            ),
+            (
+                "semicolon",
+                "/ops/iso;debug",
+                "store_dir must not contain semicolon path parameters",
+            ),
+            (
+                "empty-segment",
+                "/ops//iso",
+                "store_dir must not contain empty path segments",
+            ),
+            (
+                "parent-segment",
+                "/ops/../iso",
+                "store_dir must not contain dot or parent segments",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            for name, store_dir, expected in cases:
+                with self.subTest(name=name):
+                    export_dir = root / name / "export"
+                    export_dir.mkdir(parents=True)
+                    write_export(export_dir)
+                    rewrite_anchor_store_dir(export_dir, store_dir)
+
+                    with capture_server() as (endpoint, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                                "--allow-missing-record-sources",
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertEqual(requests, [])
+
     def test_tampered_persisted_record_source_is_rejected_before_network_delivery(self):
         def rewrite_export_from_index(export_dir, index, store_dir):
             write_export(
@@ -379,6 +516,34 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             index = with_digest(index, ADAPTER.INDEX_DIGEST_FIELD)
             rewrite_export_from_index(export_dir, index, store_dir)
 
+        def rewrite_digest_correct_record_source(export_dir, index, store_dir, mutate):
+            record_path = next((store_dir / ADAPTER.RECORDS_DIR).glob("*.json"))
+            source = json.loads(record_path.read_text(encoding="utf-8"))
+            mutate(source)
+            source = with_digest(source, ADAPTER.PERSISTED_RECORD_DIGEST_FIELD)
+            record_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+            index["records"][0]["record_sha256"] = source[
+                ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+            ]
+            index = with_digest(index, ADAPTER.INDEX_DIGEST_FIELD)
+            rewrite_export_from_index(export_dir, index, store_dir)
+
+        def status_history_current_timestamp_mismatch(export_dir, index, store_dir):
+            def mutate(source):
+                source["status_history"][-1]["updated_at_ms"] = (
+                    source["updated_at_ms"] - 1
+                )
+
+            rewrite_digest_correct_record_source(export_dir, index, store_dir, mutate)
+
+        def status_history_timestamp_moves_backwards(export_dir, index, store_dir):
+            def mutate(source):
+                earlier_entry = dict(source["status_history"][-1])
+                earlier_entry["updated_at_ms"] = source["updated_at_ms"] + 1
+                source["status_history"].insert(0, earlier_entry)
+
+            rewrite_digest_correct_record_source(export_dir, index, store_dir, mutate)
+
         cases = [
             (
                 "digest_correct_source_mismatch",
@@ -389,6 +554,16 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "digest_correct_metadata_mismatch",
                 digest_correct_metadata_mismatch,
                 "metadata.profile_id does not match audit index record",
+            ),
+            (
+                "status_history_current_timestamp_mismatch",
+                status_history_current_timestamp_mismatch,
+                "status_history does not end at current updated_at_ms",
+            ),
+            (
+                "status_history_timestamp_moves_backwards",
+                status_history_timestamp_moves_backwards,
+                "status_history[1].updated_at_ms must not move backwards",
             ),
             (
                 "missing_record_source",
@@ -495,6 +670,20 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(requests, [])
                     self.assertIn(message, stderr)
 
+    def test_bearer_token_reader_enforces_configured_file_cap(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            token_file = Path(raw_export) / "token.txt"
+            token_file.write_bytes(b"a" * 9)
+            original_limit = ADAPTER.MAX_BEARER_TOKEN_BYTES
+            ADAPTER.MAX_BEARER_TOKEN_BYTES = 8
+            try:
+                with self.assertRaises(ADAPTER.AdapterError) as raised:
+                    ADAPTER._load_bearer_token(token_file)
+            finally:
+                ADAPTER.MAX_BEARER_TOKEN_BYTES = original_limit
+
+            self.assertIn("exceeds 8 byte input limit", str(raised.exception))
+
     def test_non_regular_bearer_token_files_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -530,6 +719,118 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(requests, [])
                     self.assertIn(message, stderr)
+
+    def test_bearer_token_file_symlinked_ancestor_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            target_dir = export_dir / "token-target"
+            target_dir.mkdir()
+            token_target = target_dir / "token.txt"
+            token_target.write_text("notary-token-123", encoding="utf-8")
+            ancestor = export_dir / "token-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            token_file = ancestor / token_target.name
+
+            with capture_server() as (endpoint, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--bearer-token-file",
+                        str(token_file),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+
+    def test_input_cli_paths_reject_raw_smuggling_before_read(self):
+        cases = (
+            ("export semicolon", "--export-dir", "export;debug", "semicolon path"),
+            ("export whitespace", "--export-dir", "export dir", "whitespace"),
+            ("export leading-dash", "--export-dir", "nested/-export", "leading-dash"),
+            ("export parent", "--export-dir", "nested/../export", "dot or parent"),
+            (
+                "export dot",
+                "--export-dir",
+                lambda root: f"{root}/nested/./export",
+                "dot or parent",
+            ),
+            (
+                "token empty",
+                "--bearer-token-file",
+                lambda root: f"{root}//token.txt",
+                "empty path",
+            ),
+            (
+                "token backslash",
+                "--bearer-token-file",
+                r"nested\token.txt",
+                "forward slashes",
+            ),
+        )
+        for name, flag, raw_path, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    value = raw_path(root) if callable(raw_path) else str(root / raw_path)
+                    export_dir = root / "export"
+                    export_dir.mkdir()
+                    argv = [
+                        "--export-dir",
+                        str(export_dir),
+                        "--dry-run",
+                        flag,
+                        value,
+                    ]
+                    if flag == "--export-dir":
+                        argv = ["--export-dir", value, "--dry-run"]
+
+                    rc, stdout, stderr = run_main(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_numeric_cli_limits_reject_nonpositive_and_nonfinite_before_network_delivery(self):
+        cases = (
+            ("timeout nan", "--timeout-secs", "nan", "positive finite number"),
+            ("timeout inf", "--timeout-secs", "inf", "positive finite number"),
+            ("timeout zero", "--timeout-secs", "0", "positive finite number"),
+            ("response zero", "--response-limit-bytes", "0", "positive integer"),
+            ("response negative", "--response-limit-bytes", "-1", "positive integer"),
+        )
+        for name, flag, value, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_export:
+                    export_dir = Path(raw_export)
+                    write_export(export_dir)
+                    with capture_server() as (endpoint, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                                flag,
+                                value,
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(requests, [])
+                    self.assertIn(message, stderr)
+                    self.assertFalse((export_dir / "receipts").exists())
 
     def test_symlinked_receipt_output_paths_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -592,6 +893,108 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertIn("must not be a symlink", stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
 
+    def test_receipt_output_paths_reject_smuggled_segments_before_network_delivery(self):
+        cases = (
+            ("semicolon", "receipts;debug", "must not contain semicolon path parameters"),
+            ("whitespace", "receipt dir", "must not contain whitespace"),
+            ("leading-dash", "nested/-receipts", "must not contain leading-dash path segments"),
+            ("parent", "nested/../receipts", "must not contain dot or parent segments"),
+            ("dot", lambda root: f"{root}/nested/./receipts", "dot or parent segments"),
+            ("empty", lambda root: f"{root}//receipts", "empty path segments"),
+        )
+        for name, receipt_dir_arg, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_export:
+                    export_dir = Path(raw_export)
+                    write_export(export_dir)
+                    receipt_dir = (
+                        receipt_dir_arg(export_dir)
+                        if callable(receipt_dir_arg)
+                        else str(export_dir / receipt_dir_arg)
+                    )
+
+                    with capture_server() as (endpoint, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                                "--receipt-dir",
+                                receipt_dir,
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(requests, [])
+                    self.assertIn(message, stderr)
+
+    def test_hardlinked_receipt_output_leaf_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            _index, anchor, _digest_anchor = write_export(export_dir)
+            receipt_dir = export_dir / "receipts"
+            receipt_dir.mkdir()
+            target = export_dir / "receipt-target.json"
+            target.write_text("untouched\n", encoding="utf-8")
+            with capture_server() as (endpoint, requests):
+                receipt_path = receipt_dir / (
+                    f"{anchor[ADAPTER.INDEX_DIGEST_FIELD]}."
+                    f"{ADAPTER._endpoint_sha256(endpoint)}.receipt.json"
+                )
+                try:
+                    receipt_path.hardlink_to(target)
+                except OSError as error:
+                    self.skipTest(f"hard link creation unavailable: {error}")
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be hard-linked", stderr)
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_symlinked_receipt_output_ancestor_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            target_dir = export_dir / "receipt-target"
+            target_dir.mkdir()
+            ancestor = export_dir / "receipt-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            receipt_dir = ancestor / "nested" / "receipts"
+
+            with capture_server() as (endpoint, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                        "--receipt-dir",
+                        str(receipt_dir),
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+            self.assertFalse((target_dir / "nested").exists())
+
     def test_symlinked_export_dir_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -603,6 +1006,32 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 export_dir.symlink_to(target_export, target_is_directory=True)
             except OSError as error:
                 self.skipTest(f"symlink creation unavailable: {error}")
+            with capture_server() as (endpoint, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("must not be a symlink", stderr)
+
+    def test_symlinked_export_dir_ancestor_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_export = root / "export-target"
+            target_export.mkdir()
+            ancestor = root / "export-ancestor-link"
+            try:
+                ancestor.symlink_to(target_export, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            export_dir = ancestor / "nested"
             with capture_server() as (endpoint, requests):
                 rc, _stdout, stderr = run_main(
                     [
@@ -643,31 +1072,45 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("https://notary.example/anc\nhor", False),
             ("https://notary.example/iso anchor", False),
             ("https://notary.example:abc/anchor", False),
+            ("https://notary.example:/anchor", False),
+            ("https://notary.example:0/anchor", False),
+            ("https://notary.example:08443/anchor", False),
             ("https://notary.example:99999/anchor", False),
             ("https://notary.example:443/anchor", False),
             ("https://Notary.example/anchor", False),
             ("https://notary.example./anchor", False),
             ("https://notary..example/anchor", False),
+            ("https://localhost/anchor", False),
+            ("https://10.1.2.3/anchor", False),
+            ("https://10.1.2.3.sslip.io/anchor", False),
+            ("https://0x7f.0.0.1/anchor", False),
+            ("https://[::127.0.0.1]/anchor", False),
             ("https://-notary.example/anchor", False),
             ("https://notary-.example/anchor", False),
             ("https://notary._tcp.example/anchor", False),
             ("https://notary.example%2einvalid/anchor", False),
             ("https://123.000.000.001/anchor", False),
             ("https://notary.example/../anchor", False),
+            ("https://notary.example/archive//anchor", False),
             ("https://notary.example/%2e%2e/anchor", False),
             ("https://notary.example/archive%2fanchor", False),
             ("https://notary.example/archive%252fanchor", False),
             ("https://notary.example/archive;debug/anchor", False),
+            ("https://notary.example/archive%3bdebug/anchor", False),
+            ("https://notary.example/archive%23debug/anchor", False),
             (r"https://notary.example/archive\anchor", False),
             ("https://notary.example/archive%20anchor", False),
             ("https://notary.example/archive%00anchor", False),
             ("https://notary.example/archive%7fanchor", False),
             ("https://notary.example/archive%zzanchor", False),
+            ("https://notary.example/" + ("a" * ADAPTER.MAX_HTTP_URL_CHARS), False),
+            ("https://" + ".".join(["a" * 63] * 5) + "/anchor", False),
             ("http://127.0.0.1/anchor ", True),
             ("http://user:pass@127.0.0.1/anchor", True),
             ("http://127.0.0.1/anchor?token=abc", True),
             ("http://127.0.0.1:80/anchor", True),
             ("http://127.000.000.001/anchor", True),
+            ("http://127.0.0.1/archive//anchor", True),
         ]
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -681,6 +1124,21 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn("error:", stderr)
+
+    def test_rejected_endpoint_does_not_echo_secret_query(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            secret_endpoint = "https://notary.example/anchor?token=notary-secret"
+            rc, _stdout, stderr = run_main(
+                ["--export-dir", str(export_dir), "--endpoint", secret_endpoint]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("params, query, or fragment", stderr)
+            self.assertNotIn(secret_endpoint, stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("notary-secret", stderr)
 
     def test_duplicate_endpoint_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -725,6 +1183,103 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
             self.assertIn("duplicate key", stderr)
+
+    def test_non_finite_anchor_json_numbers_are_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            (export_dir / ADAPTER.LATEST_ANCHOR_FILE).write_text(
+                '{"version": NaN}\n',
+                encoding="utf-8",
+            )
+            with capture_server() as (endpoint, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("non-finite numeric constant NaN", stderr)
+
+    def test_anchor_json_surrogate_strings_are_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            (export_dir / ADAPTER.LATEST_ANCHOR_FILE).write_text(
+                '{"version":"\\ud800"}\n',
+                encoding="utf-8",
+            )
+            with capture_server() as (endpoint, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("invalid Unicode surrogate", stderr)
+
+    def test_oversized_audit_json_inputs_are_rejected_before_network_delivery(self):
+        cases = ("latest-anchor", "audit-index", "record-source")
+        for name in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    export_dir = root / "export"
+                    store_dir = root / "store"
+                    export_dir.mkdir()
+                    _index, _anchor, _digest_anchor = write_export(
+                        export_dir,
+                        store_dir=store_dir,
+                        write_record_sources_flag=True,
+                    )
+                    old_limit = ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES
+                    try:
+                        ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES = 128
+                        oversized = '{"version":1,"padding":"' + ("a" * 128) + '"}'
+                        if name == "latest-anchor":
+                            (export_dir / ADAPTER.LATEST_ANCHOR_FILE).write_text(
+                                oversized,
+                                encoding="utf-8",
+                            )
+                        elif name == "audit-index":
+                            (export_dir / ADAPTER.INDEX_FILE).write_text(
+                                oversized,
+                                encoding="utf-8",
+                            )
+                        else:
+                            record_path = next(
+                                (store_dir / ADAPTER.RECORDS_DIR).glob("*.json")
+                            )
+                            record_path.write_text(oversized, encoding="utf-8")
+
+                        with capture_server() as (endpoint, requests):
+                            rc, _stdout, stderr = run_main(
+                                [
+                                    "--export-dir",
+                                    str(export_dir),
+                                    "--endpoint",
+                                    endpoint,
+                                    "--allow-insecure-http",
+                                ]
+                            )
+                    finally:
+                        ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES = old_limit
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(requests, [])
+                    self.assertIn("exceeds", stderr)
 
     def test_symlinked_latest_anchor_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -877,6 +1432,26 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
 
+    def test_duplicate_audit_index_records_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            record = sample_record("msg-1")
+            index = {
+                "version": 1,
+                "record_count": 2,
+                "records": [record, dict(record)],
+            }
+            index = with_digest(index, ADAPTER.INDEX_DIGEST_FIELD)
+            anchor = sample_anchor(index)
+            write_export(export_dir, index=index, anchor=anchor)
+
+            rc, _stdout, stderr = run_main(
+                ["--export-dir", str(export_dir), "--dry-run"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("records[1].message_id duplicates", stderr)
+
     def test_digest_addressed_filename_must_match_index_digest(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -913,6 +1488,67 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertFalse(receipt["ok"])
             self.assertEqual(receipt["status_code"], 503)
             self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(b"not ready"))
+
+    def test_remote_redirect_response_is_not_followed(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            with capture_redirect_server() as (endpoint, requests):
+                rc, _stdout, _stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 1)
+            self.assertEqual([request["method"] for request in requests], ["POST"])
+            receipts = list((export_dir / "receipts").glob("*.receipt.json"))
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertFalse(receipt["ok"])
+            self.assertEqual(receipt["status_code"], 302)
+            self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(b"redirect"))
+
+    def test_secret_looking_remote_response_preview_is_redacted(self):
+        body = b'{"error":"private_key=notary-secret"}'
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            with capture_server(status=500, body=body) as (endpoint, requests):
+                rc, _stdout, _stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(len(requests), 1)
+            receipts = list((export_dir / "receipts").glob("*.receipt.json"))
+            self.assertEqual(len(receipts), 1)
+            receipt_text = receipts[0].read_text(encoding="utf-8")
+            receipt = json.loads(receipt_text)
+            self.assertEqual(receipt["status_code"], 500)
+            self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(body))
+            self.assertEqual(
+                receipt["response_body_preview"],
+                ADAPTER.REDACTED_RESPONSE_PREVIEW,
+            )
+            self.assertNotIn("notary-secret", receipt_text)
+
+    def test_secret_looking_url_error_is_redacted(self):
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream secret=notary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")
 
 
 if __name__ == "__main__":

@@ -35,16 +35,18 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                 NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                     status: 0,
                     outPtr: pointer,
-                    outLen: length
+                    outLen: length,
+                    expectedSchemaByte: 0x50
                 )
             )
         }
         withPrivacyOutputPointer(privacyNoritoFrameWithPayload(0x51)) { pointer, length in
-            XCTAssertTrue(
+            XCTAssertFalse(
                 NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                     status: 0,
                     outPtr: pointer,
-                    outLen: length
+                    outLen: length,
+                    expectedSchemaByte: 0x50
                 )
             )
         }
@@ -113,7 +115,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                 NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                     status: 0,
                     outPtr: pointer,
-                    outLen: length
+                    outLen: length,
+                    expectedSchemaByte: 0x50
                 )
             )
         }
@@ -136,7 +139,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                     NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                         status: 0,
                         outPtr: pointer,
-                        outLen: length
+                        outLen: length,
+                        expectedSchemaByte: 0x50
                     )
                 )
             }
@@ -145,28 +149,32 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                 status: -311,
                 outPtr: nil,
-                outLen: 0
+                outLen: 0,
+                expectedSchemaByte: 0x50
             )
         )
         XCTAssertFalse(
             NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                 status: 0,
                 outPtr: nil,
-                outLen: 1
+                outLen: 1,
+                expectedSchemaByte: 0x50
             )
         )
         XCTAssertFalse(
             NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                 status: 0,
                 outPtr: nil,
-                outLen: 0
+                outLen: 0,
+                expectedSchemaByte: 0x50
             )
         )
         XCTAssertFalse(
             NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                 status: 0,
                 outPtr: nil,
-                outLen: CUnsignedLong(PrivacyNativeBridge.privacyNativeArchiveMaxBytes + 1)
+                outLen: CUnsignedLong(PrivacyNativeBridge.privacyNativeArchiveMaxBytes + 1),
+                expectedSchemaByte: 0x50
             )
         )
         #endif
@@ -235,7 +243,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try PrivacyNativeBridge.call(
                 requestArchive: oversized,
-                bridgeAvailable: true
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x42
             ) { _ in
                 XCTFail("oversized request must not reach native dispatch")
                 return Data([0x01])
@@ -247,7 +256,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
 
     func testCapabilitiesNilNativeOutputIsRejected() {
         XCTAssertThrowsError(
-            try PrivacyNativeBridge.call(bridgeAvailable: true) {
+            try PrivacyNativeBridge.call(
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x50
+            ) {
                 nil
             }
         ) { error in
@@ -257,7 +269,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
 
     func testCapabilitiesEmptyNativeOutputIsRejected() {
         XCTAssertThrowsError(
-            try PrivacyNativeBridge.call(bridgeAvailable: true) {
+            try PrivacyNativeBridge.call(
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x50
+            ) {
                 Data()
             }
         ) { error in
@@ -271,7 +286,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         }
 
         XCTAssertThrowsError(
-            try PrivacyNativeBridge.call(bridgeAvailable: true) {
+            try PrivacyNativeBridge.call(
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x50
+            ) {
                 throw LocalError.rejected
             }
         ) { error in
@@ -289,7 +307,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         let requestArchive = privacyNoritoFrameWithPayload(0x52)
 
         XCTAssertThrowsError(
-            try PrivacyNativeBridge.call(bridgeAvailable: true) {
+            try PrivacyNativeBridge.call(
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x50
+            ) {
                 throw leakingError
             }
         ) { error in
@@ -299,7 +320,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try PrivacyNativeBridge.call(
                 requestArchive: requestArchive,
-                bridgeAvailable: true
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x42
             ) { request in
                 XCTAssertEqual(request, requestArchive)
                 throw leakingError
@@ -313,7 +335,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try PrivacyNativeBridge.call(
                 requestArchive: privacyNoritoFrameWithPayload(0x52),
-                bridgeAvailable: false
+                bridgeAvailable: false,
+                expectedSchemaByte: 0x42
             ) { _ in
                 Data([0x02])
             }
@@ -324,7 +347,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try PrivacyNativeBridge.call(
                 requestArchive: privacyNoritoFrameWithPayload(0x52),
-                bridgeAvailable: true
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x42
             ) { _ in
                 nil
             }
@@ -335,7 +359,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try PrivacyNativeBridge.call(
                 requestArchive: privacyNoritoFrameWithPayload(0x52),
-                bridgeAvailable: true
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x42
             ) { _ in
                 Data()
             }
@@ -346,7 +371,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try PrivacyNativeBridge.call(
                 requestArchive: privacyNoritoFrameWithPayload(0x52),
-                bridgeAvailable: true
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x42
             ) { _ in
                 privacyNoritoFrame(0x42)
             }
@@ -360,7 +386,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         let requestArchive = privacyNoritoFrameWithFlags(0x52, flags: 0x26)
         let archive = try PrivacyNativeBridge.call(
             requestArchive: requestArchive,
-            bridgeAvailable: true
+            bridgeAvailable: true,
+            expectedSchemaByte: 0x42
         ) { request in
             XCTAssertEqual(request, requestArchive)
             return nativeOutput
@@ -369,6 +396,19 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     }
 
     func testRejectsInvalidNoritoRequestArchivesBeforeBridgeCall() {
+        XCTAssertThrowsError(
+            try PrivacyNativeBridge.call(
+                requestArchive: privacyNoritoFrame(0x52),
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x42
+            ) { _ in
+                XCTFail("empty-payload request must not reach native dispatch")
+                return privacyNoritoFrameWithPayload(0x42)
+            }
+        ) { error in
+            XCTAssertEqual(error as? PrivacyNativeBridgeError, .nativeRejected)
+        }
+
         let malformedArchives = [
             Data([0x01]),
             invalidPrivacyNoritoFrame(offset: 0, value: 0x58),
@@ -389,7 +429,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             XCTAssertThrowsError(
                 try PrivacyNativeBridge.call(
                     requestArchive: malformedArchive,
-                    bridgeAvailable: true
+                    bridgeAvailable: true,
+                    expectedSchemaByte: 0x42
                 ) { _ in
                     XCTFail("invalid request must not reach native dispatch")
                     return privacyNoritoFrameWithPayload(0x42)
@@ -413,7 +454,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             XCTAssertThrowsError(
                 try PrivacyNativeBridge.call(
                     requestArchive: forgedRequest,
-                    bridgeAvailable: true
+                    bridgeAvailable: true,
+                    expectedSchemaByte: 0x42
                 ) { _ in
                     XCTFail("wrong-schema request must not reach native dispatch")
                     return privacyNoritoFrameWithPayload(0x42)
@@ -426,7 +468,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
 
     func testRejectsInvalidNoritoNativeOutput() {
         XCTAssertThrowsError(
-            try PrivacyNativeBridge.call(bridgeAvailable: true) {
+            try PrivacyNativeBridge.call(
+                bridgeAvailable: true,
+                expectedSchemaByte: 0x50
+            ) {
                 Data([0x01])
             }
         ) { error in
@@ -434,6 +479,9 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         }
 
         for invalidArchive in [
+            privacyNoritoFrame(0x50),
+            privacyNoritoFrame(0x42),
+            privacyNoritoFrame(0x56),
             invalidPrivacyNoritoFrame(offset: 0, value: 0x58),
             invalidPrivacyNoritoFrame(offset: 4, value: 1),
             invalidPrivacyNoritoFrame(offset: 5, value: 1),
@@ -448,7 +496,10 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             invalidPrivacyNoritoPayloadTamper()
         ] {
             XCTAssertThrowsError(
-                try PrivacyNativeBridge.call(bridgeAvailable: true) {
+                try PrivacyNativeBridge.call(
+                    bridgeAvailable: true,
+                    expectedSchemaByte: 0x42
+                ) {
                     invalidArchive
                 }
             ) { error in
@@ -681,7 +732,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
 
         let archive = try NoritoNativeBridge.readPrivacyNativeOutput(
             pointer: pointer,
-            length: CUnsignedLong(bytes.count)
+            length: CUnsignedLong(bytes.count),
+            expectedSchemaByte: 0x50
         ) { freedPointer in
             XCTAssertEqual(freedPointer, Optional(pointer))
             freedPointer?.deinitialize(count: bytes.count)
@@ -707,7 +759,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
 
         let archive = try NoritoNativeBridge.readPrivacyNativeOutput(
             pointer: pointer,
-            length: CUnsignedLong(bytes.count)
+            length: CUnsignedLong(bytes.count),
+            expectedSchemaByte: 0x50
         ) { freedPointer in
             XCTAssertEqual(freedPointer, Optional(pointer))
             freedPointer?.update(repeating: 0x7F, count: bytes.count)
@@ -735,7 +788,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try NoritoNativeBridge.readPrivacyNativeOutput(
                 pointer: pointer,
-                length: CUnsignedLong(bytes.count)
+                length: CUnsignedLong(bytes.count),
+                expectedSchemaByte: 0x50
             ) { freedPointer in
                 XCTAssertEqual(freedPointer, Optional(pointer))
                 freedPointer?.deinitialize(count: bytes.count)
@@ -763,7 +817,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try NoritoNativeBridge.readPrivacyNativeOutput(
                 pointer: pointer,
-                length: CUnsignedLong(bytes.count)
+                length: CUnsignedLong(bytes.count),
+                expectedSchemaByte: 0x50
             ) { freedPointer in
                 XCTAssertEqual(freedPointer, Optional(pointer))
                 freedPointer?.deinitialize(count: bytes.count)
@@ -819,7 +874,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try NoritoNativeBridge.readPrivacyNativeOutput(
                 pointer: pointer,
-                length: 0
+                length: 0,
+                expectedSchemaByte: 0x50
             ) { freedPointer in
                 XCTAssertEqual(freedPointer, Optional(pointer))
                 freedPointer?.deinitialize(count: 1)
@@ -846,7 +902,8 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertThrowsError(
             try NoritoNativeBridge.readPrivacyNativeOutput(
                 pointer: pointer,
-                length: CUnsignedLong(PrivacyNativeBridge.privacyNativeArchiveMaxBytes + 1)
+                length: CUnsignedLong(PrivacyNativeBridge.privacyNativeArchiveMaxBytes + 1),
+                expectedSchemaByte: 0x50
             ) { freedPointer in
                 XCTAssertEqual(freedPointer, Optional(pointer))
                 freedPointer?.deinitialize(count: 1)

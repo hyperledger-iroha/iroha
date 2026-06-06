@@ -31,6 +31,7 @@ PRIVACY_FFI_ERROR_MALFORMED_NORITO: Final[int] = 2
 PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM: Final[int] = 3
 PRIVACY_FFI_ERROR_PRODUCTION_DISABLED: Final[int] = 4
 PRIVACY_FFI_ERROR_INVALID_REQUEST: Final[int] = 5
+_PRIVACY_MAX_BRIDGE_ABI_VERSION: Final[int] = 0xFFFF_FFFF
 _PRIVACY_NORITO_HEADER_BYTES: Final[int] = 40
 _PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES: Final[int] = 64
 _PRIVACY_NORITO_SUPPORTED_FLAGS_MASK: Final[int] = 0x27
@@ -926,6 +927,47 @@ def hash_blake2b_32(data: bytes) -> bytes:
     return _crypto.hash_blake2b_32(data)
 
 
+_ZK_ACE_ALGORITHM_ID: Final[str] = "zk-ace-pq-authorization-v0"
+_ZK_ACE_PRODUCTION_ENTRYPOINT: Final[str] = "buildZkAceAuthorizationProofV1"
+_ZK_ACE_PRODUCTION_VK_REF: Final[str] = "stark-fri:zk_ace_pq_authorization_v0"
+_ZK_ACE_PRODUCTION_DISABLED_MESSAGE: Final[str] = (
+    "native ZK-ACE prover returned PRIVACY_FFI_ERROR_PRODUCTION_DISABLED for "
+    f"{_ZK_ACE_ALGORITHM_ID} {_ZK_ACE_PRODUCTION_ENTRYPOINT} "
+    f"{_ZK_ACE_PRODUCTION_VK_REF}: "
+    "Iroha production allowlist is not enabled for this audited row"
+)
+_U128_MAX: Final[int] = (1 << 128) - 1
+
+
+def _zk_ace_sanitized_native_prover_error(error: Exception) -> RuntimeError:
+    message = str(error)
+    if (
+        "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED" in message
+        or "production disabled" in message.lower()
+        or "production-disabled" in message.lower()
+        or "Iroha production allowlist" in message
+    ):
+        return RuntimeError(_ZK_ACE_PRODUCTION_DISABLED_MESSAGE)
+    return RuntimeError("native ZK-ACE prover failed")
+
+
+def _normalize_positive_u128_literal(value: int | str, name: str) -> str:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a positive decimal u128 string")
+    if isinstance(value, int):
+        amount = value
+    elif isinstance(value, str):
+        normalized = value.strip()
+        if not normalized.isdecimal():
+            raise ValueError(f"{name} must be a positive decimal u128 string")
+        amount = int(normalized, 10)
+    else:
+        raise TypeError(f"{name} must be a positive decimal u128 string")
+    if amount <= 0 or amount > _U128_MAX:
+        raise ValueError(f"{name} must be a positive decimal u128 string")
+    return str(amount)
+
+
 def zk_ace_build_transfer_authorization_v1(
     *,
     from_account_id: str,
@@ -946,11 +988,11 @@ def zk_ace_build_transfer_authorization_v1(
         raise RuntimeError(
             "iroha_python._crypto is missing ZK-ACE prover support; rebuild the extension"
         )
-    result = _crypto.zk_ace_build_transfer_authorization_v1(
+    native_args = (
         str(from_account_id),
         str(to_account_id),
         str(asset_definition_id),
-        str(amount),
+        _normalize_positive_u128_literal(amount, "amount"),
         str(chain_id),
         identity_root,
         identity_blinding,
@@ -959,6 +1001,14 @@ def zk_ace_build_transfer_authorization_v1(
         verifier_key_id,
         vk_commitment,
     )
+    native_error: Exception | None = None
+    try:
+        result = _crypto.zk_ace_build_transfer_authorization_v1(*native_args)
+    except Exception as error:
+        native_error = error
+        result = ""
+    if native_error is not None:
+        raise _zk_ace_sanitized_native_prover_error(native_error)
     parsed = json.loads(result)
     if not isinstance(parsed, dict):
         raise RuntimeError("ZK-ACE prover returned a non-object payload")
@@ -974,10 +1024,11 @@ def build_zk_ace_authorization_proof_v1(**kwargs: Any) -> Dict[str, Any]:
 def _privacy_request_archive(request_archive: bytes | bytearray | memoryview) -> bytearray:
     if isinstance(request_archive, str):
         raise TypeError("request_archive must be Norito V1 bytes, not a string")
-    try:
-        view = memoryview(request_archive)
-    except TypeError as exc:
-        raise TypeError("request_archive must be bytes-like") from exc
+    view = _privacy_unsigned_byte_view(
+        request_archive,
+        bytes_like_message="request_archive must be bytes-like",
+        typed_message="request_archive must use unsigned byte elements",
+    )
     if view.nbytes == 0:
         raise ValueError("request_archive must not be empty")
     if view.nbytes > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES:
@@ -997,6 +1048,21 @@ def _clear_privacy_request_archive(request_archive: bytearray) -> None:
     request_archive[:] = b"\x00" * len(request_archive)
 
 
+def _privacy_unsigned_byte_view(
+    value: object,
+    *,
+    bytes_like_message: str,
+    typed_message: str,
+) -> memoryview:
+    try:
+        view = memoryview(value)
+    except TypeError as exc:
+        raise TypeError(bytes_like_message) from exc
+    if view.format != "B" or view.itemsize != 1:
+        raise TypeError(typed_message)
+    return view
+
+
 def _privacy_output_archive(operation: str, result: object) -> bytes:
     if result is None:
         raise RuntimeError(f"native {operation} returned no output")
@@ -1004,10 +1070,11 @@ def _privacy_output_archive(operation: str, result: object) -> bytes:
         raise RuntimeError(
             f"native {operation} returned text instead of Norito V1 bytes"
         )
-    try:
-        view = memoryview(result)
-    except TypeError as exc:
-        raise TypeError(f"native {operation} returned non-byte output") from exc
+    view = _privacy_unsigned_byte_view(
+        result,
+        bytes_like_message=f"native {operation} returned non-byte output",
+        typed_message=f"native {operation} output must use unsigned byte elements",
+    )
     if view.nbytes == 0:
         raise RuntimeError(f"native {operation} returned empty output")
     if view.nbytes > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES:
@@ -1051,7 +1118,7 @@ def _assert_privacy_norito_archive(
     archive: bytes | memoryview,
     *,
     native_output: bool = True,
-    expected_schema_byte: int | None = None,
+    expected_schema_byte: int,
 ) -> None:
     archive_view = memoryview(archive)
 
@@ -1059,6 +1126,18 @@ def _assert_privacy_norito_archive(
         if not native_output:
             raise ValueError(f"{operation} must be a valid Norito V1 archive")
         raise RuntimeError(f"native {operation} returned invalid Norito V1 archive")
+
+    if (
+        isinstance(expected_schema_byte, bool)
+        or not isinstance(expected_schema_byte, int)
+        or expected_schema_byte < 0
+        or expected_schema_byte > 0xFF
+    ):
+        if not native_output:
+            raise ValueError(f"{operation} must use the privacy request schema")
+        raise RuntimeError(
+            f"native {operation} returned unexpected privacy result schema"
+        )
 
     if archive_view.nbytes < _PRIVACY_NORITO_HEADER_BYTES:
         fail()
@@ -1078,6 +1157,14 @@ def _assert_privacy_norito_archive(
     ):
         fail()
     payload_length = int.from_bytes(archive_view[23:31], "little")
+    if payload_length == 0:
+        if not native_output:
+            raise ValueError(
+                f"{operation} must contain a non-empty privacy request payload"
+            )
+        raise RuntimeError(
+            f"native {operation} returned empty privacy result payload"
+        )
     minimum_length = _PRIVACY_NORITO_HEADER_BYTES + payload_length
     if archive_view.nbytes < minimum_length:
         fail()
@@ -1092,10 +1179,7 @@ def _assert_privacy_norito_archive(
     expected_crc = int.from_bytes(archive_view[31:39], "little")
     if _privacy_crc64(payload) != expected_crc:
         fail()
-    if (
-        expected_schema_byte is not None
-        and any(byte != expected_schema_byte for byte in archive_view[6:22])
-    ):
+    if any(byte != expected_schema_byte for byte in archive_view[6:22]):
         if not native_output:
             raise ValueError(f"{operation} must use the privacy request schema")
         raise RuntimeError(
@@ -1103,12 +1187,17 @@ def _assert_privacy_norito_archive(
         )
 
 
-def _privacy_expected_result_schema_byte(operation: str) -> int | None:
-    return {
-        "privacy_capabilities_v1": _PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-        "privacy_build_proof_v1": _PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
-        "privacy_verify_proof_v1": _PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
-    }.get(operation)
+def _privacy_expected_result_schema_byte(operation: str) -> int:
+    try:
+        return {
+            "privacy_capabilities_v1": _PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
+            "privacy_build_proof_v1": _PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
+            "privacy_verify_proof_v1": _PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
+        }[operation]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"native {operation} is not a supported privacy native operation"
+        ) from exc
 
 
 _PRIVACY_NATIVE_METHODS: Final[tuple[str, ...]] = (
@@ -1134,7 +1223,12 @@ def _privacy_bridge_abi_version(module: object) -> int | None:
         return None
     except Exception:
         return None
-    if isinstance(version, bool) or not isinstance(version, int):
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version < 0
+        or version > _PRIVACY_MAX_BRIDGE_ABI_VERSION
+    ):
         return None
     return version
 

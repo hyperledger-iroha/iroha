@@ -26,12 +26,15 @@ import datetime as dt
 import errno
 import hashlib
 import json
+import math
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
 import sys
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -73,6 +76,13 @@ PROFILE_ADDRESS_MODES = {"permissive", "require-structured", "forbid-unstructure
 MAX_PROFILE_DER_BLOBS = 8
 MAX_PROFILE_DER_BYTES = 1024 * 1024
 MAX_PROFILE_DER_BASE64_CHARS = ((MAX_PROFILE_DER_BYTES + 2) // 3) * 4
+MAX_MANIFEST_JSON_BYTES = 4 * 1024 * 1024
+MAX_PROFILE_CATALOG_BYTES = 4 * 1024 * 1024
+MAX_SCHEMA_BYTES = 8 * 1024 * 1024
+MAX_FIXTURE_XML_BYTES = 8 * 1024 * 1024
+MAX_XMLLINT_OUTPUT_BYTES = 64 * 1024
+MAX_SOURCE_REPOSITORY_CHARS = 2048
+DEFAULT_XMLLINT_TIMEOUT_SECS = 30.0
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 DEFAULT_MANIFEST = (
     Path(__file__).resolve().parents[1]
@@ -161,24 +171,37 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _read_regular_file(path: Path) -> bytes:
+def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+    if max_bytes is not None and max_bytes <= 0:
+        raise FixtureManifestError("max file bytes must be positive")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
-        mode = path.lstat().st_mode
+        metadata = path.lstat()
     except FileNotFoundError as error:
         raise FixtureManifestError(f"{path} does not exist") from error
+    mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise FixtureManifestError(f"{path} must not be a symlink")
     if not stat.S_ISREG(mode):
         raise FixtureManifestError(f"{path} must be a regular file")
+    if max_bytes is not None and metadata.st_size > max_bytes:
+        raise FixtureManifestError(f"{path} exceeds {max_bytes} byte input limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        fd_metadata = os.fstat(fd)
+        if not stat.S_ISREG(fd_metadata.st_mode):
             raise FixtureManifestError(f"{path} must be a regular file")
+        if max_bytes is not None and fd_metadata.st_size > max_bytes:
+            raise FixtureManifestError(f"{path} exceeds {max_bytes} byte input limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            return handle.read()
+            limit = max_bytes + 1 if max_bytes is not None else -1
+            raw = handle.read(limit)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise FixtureManifestError(f"{path} exceeds {max_bytes} byte input limit")
+        return raw
     except FileNotFoundError as error:
         raise FixtureManifestError(f"{path} does not exist") from error
     except OSError as error:
@@ -190,7 +213,82 @@ def _read_regular_file(path: Path) -> bytes:
             os.close(fd)
 
 
+def _reject_output_path_smuggling(path: Path, label: str) -> None:
+    raw = str(path)
+    if not raw or not path.name:
+        raise FixtureManifestError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise FixtureManifestError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise FixtureManifestError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise FixtureManifestError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    if any(part.startswith("-") for part in parts if part):
+        raise FixtureManifestError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in parts):
+        raise FixtureManifestError(f"{label} must not contain dot or parent segments")
+
+
+def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
+    if not raw:
+        raise FixtureManifestError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise FixtureManifestError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise FixtureManifestError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise FixtureManifestError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise FixtureManifestError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise FixtureManifestError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in checked_parts):
+        raise FixtureManifestError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 < len(raw_args):
+                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
 def _write_text_output(path: Path, text: str) -> None:
+    _reject_output_path_smuggling(path, "output path")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
@@ -201,11 +299,13 @@ def _write_text_output(path: Path, text: str) -> None:
     if not stat.S_ISDIR(parent_mode):
         raise FixtureManifestError(f"{path.parent} must be a directory")
     if path.exists() or path.is_symlink():
-        mode = path.lstat().st_mode
-        if stat.S_ISLNK(mode):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
             raise FixtureManifestError(f"{path} must not be a symlink")
-        if not stat.S_ISREG(mode):
+        if not stat.S_ISREG(metadata.st_mode):
             raise FixtureManifestError(f"{path} must be a regular file")
+        if metadata.st_nlink > 1:
+            raise FixtureManifestError(f"{path} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -216,29 +316,69 @@ def _write_text_output(path: Path, text: str) -> None:
         raise FixtureManifestError(f"{path.parent} must be a directory") from error
 
     fd = -1
+    leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
+    tmp_name = f".iso-{leaf_digest[:16]}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    tmp_created = False
     try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         try:
-            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+            fd = os.open(tmp_name, flags | nofollow, 0o600, dir_fd=parent_fd)
+            tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise FixtureManifestError(f"{path} must not be a symlink") from error
+                raise FixtureManifestError(
+                    f"{path} temp file must not be a symlink"
+                ) from error
             raise FixtureManifestError(
-                f"cannot open {path} for writing: {error.strerror}"
+                f"cannot open temporary output for {path}: {error.strerror}"
             ) from error
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise FixtureManifestError(f"{path} must be a regular file")
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise FixtureManifestError(f"{path} temp file must be a regular file")
+        if opened.st_nlink > 1:
+            raise FixtureManifestError(f"{path} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        tmp_created = False
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
     finally:
         if fd >= 0:
             os.close(fd)
+        if tmp_created:
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
         os.close(parent_fd)
 
 
+def _reject_symlinked_existing_ancestors(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(mode):
+            if path.is_absolute() and current.parent == Path(path.anchor):
+                continue
+            raise FixtureManifestError(f"{current} must not be a symlink")
+
+
 def _load_json(path: Path) -> Any:
-    return _load_json_bytes(_read_regular_file(path), path)
+    return _load_json_bytes(
+        _read_regular_file(path, max_bytes=MAX_MANIFEST_JSON_BYTES),
+        path,
+    )
 
 
 def _load_json_bytes(raw: bytes, path: Path) -> Any:
@@ -247,12 +387,100 @@ def _load_json_bytes(raw: bytes, path: Path) -> Any:
     except UnicodeDecodeError as error:
         raise FixtureManifestError(f"{path} is not UTF-8 JSON") from error
     try:
-        return json.loads(
+        value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise FixtureManifestError(f"{path} is not valid JSON: {error}") from error
+    _reject_json_surrogates(value)
+    return value
+
+
+def _read_limited_pipe(pipe: Any, limit_bytes: int) -> tuple[bytes, bool]:
+    chunks: list[bytes] = []
+    remaining = limit_bytes
+    truncated = False
+    while True:
+        chunk = pipe.read(8192)
+        if not chunk:
+            break
+        if remaining > 0:
+            keep = min(remaining, len(chunk))
+            chunks.append(chunk[:keep])
+            remaining -= keep
+            if keep < len(chunk):
+                truncated = True
+        else:
+            truncated = True
+    return b"".join(chunks), truncated
+
+
+def _run_command_bounded(
+    argv: list[str],
+    output_limit_bytes: int,
+    timeout_secs: float,
+) -> tuple[int, str, bool, str, bool, bool]:
+    if output_limit_bytes <= 0:
+        raise FixtureManifestError("output limit bytes must be positive")
+    timeout_secs = _require_positive_finite_number(timeout_secs, "xmllint timeout seconds")
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    outputs: dict[str, tuple[bytes, bool]] = {}
+
+    def read_stream(name: str, pipe: Any) -> None:
+        try:
+            outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
+        finally:
+            pipe.close()
+
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_thread = threading.Thread(
+        target=read_stream,
+        args=("stdout", process.stdout),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=read_stream,
+        args=("stderr", process.stderr),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    timed_out = False
+    try:
+        returncode = process.wait(timeout=timeout_secs)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait()
+        returncode = 124
+    stdout_thread.join()
+    stderr_thread.join()
+    stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
+    stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
+    return (
+        returncode,
+        stdout_raw.decode("utf-8", errors="replace"),
+        stdout_truncated,
+        stderr_raw.decode("utf-8", errors="replace"),
+        stderr_truncated,
+        timed_out,
+    )
+
+
+def _require_positive_finite_number(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FixtureManifestError(f"{label} must be a positive finite number")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise FixtureManifestError(f"{label} must be a positive finite number")
+    return parsed
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -262,6 +490,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise FixtureManifestError(f"duplicate key {key!r} in JSON object")
         result[key] = value
     return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise FixtureManifestError(f"JSON contains non-finite numeric constant {value}")
+
+
+def _reject_json_surrogates(value: Any) -> None:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise FixtureManifestError("JSON contains invalid Unicode surrogate")
+    elif isinstance(value, list):
+        for item in value:
+            _reject_json_surrogates(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_json_surrogates(key)
+            _reject_json_surrogates(item)
 
 
 def _rust_raw_string_end(text: str, start: int) -> int | None:
@@ -350,7 +595,7 @@ def _profile_catalog_match(text: str, path: Path) -> re.Match[str]:
 
 
 def _load_profile_catalog(path: Path) -> tuple[list[Any], str, str]:
-    raw = _read_regular_file(path)
+    raw = _read_regular_file(path, max_bytes=MAX_PROFILE_CATALOG_BYTES)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -361,11 +606,13 @@ def _load_profile_catalog(path: Path) -> tuple[list[Any], str, str]:
         catalog = json.loads(
             catalog_json,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise FixtureManifestError(
             f"{path} DEFAULT_PROFILES_JSON is not valid JSON: {error}"
         ) from error
+    _reject_json_surrogates(catalog)
     return (
         _require_array(catalog, f"{path}.DEFAULT_PROFILES_JSON"),
         sha256_hex(raw),
@@ -381,7 +628,10 @@ def _reject_xml_dtd_or_entities(raw: bytes, path: Path) -> None:
 
 
 def _parse_xml(path: Path) -> ET.Element:
-    return _parse_xml_bytes(_read_regular_file(path), path)
+    return _parse_xml_bytes(
+        _read_regular_file(path, max_bytes=MAX_FIXTURE_XML_BYTES),
+        path,
+    )
 
 
 def _parse_xml_bytes(raw: bytes, path: Path) -> ET.Element:
@@ -744,11 +994,15 @@ def _validate_source_path(raw: str, label: str) -> str:
         raise FixtureManifestError(f"{label} must not contain control characters")
     if any(ch.isspace() for ch in raw):
         raise FixtureManifestError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise FixtureManifestError(f"{label} must not start with a dash")
     if ";" in raw:
         raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    if any(part.startswith("-") for part in raw.split("/") if part):
+        raise FixtureManifestError(f"{label} must not contain leading-dash path segments")
     path = Path(raw)
     if path.is_absolute():
-        raise FixtureManifestError(f"{label} must be relative, got {raw}")
+        raise FixtureManifestError(f"{label} must be relative")
     if not raw.endswith(".xsd"):
         raise FixtureManifestError(f"{label} must point to an .xsd file")
     if any(part in {"", ".", ".."} for part in path.parts):
@@ -766,6 +1020,11 @@ def _verify_schema_source(
     source = _require_object(value, label)
     _reject_unknown_keys(source, SCHEMA_SOURCE_KEYS, label)
     repository = _required_string(source, "repository", label)
+    if len(repository) > MAX_SOURCE_REPOSITORY_CHARS:
+        raise FixtureManifestError(
+            f"{label}.repository must be no longer than "
+            f"{MAX_SOURCE_REPOSITORY_CHARS} characters"
+        )
     if SOURCE_REPOSITORY_RE.fullmatch(repository) is None or repository.endswith(".git"):
         raise FixtureManifestError(
             f"{label}.repository must be a canonical https://github.com/<org>/<repo> URL"
@@ -984,11 +1243,15 @@ def _validate_relative_path(
         raise FixtureManifestError(f"{label} must not contain control characters")
     if any(ch.isspace() for ch in raw):
         raise FixtureManifestError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise FixtureManifestError(f"{label} must not start with a dash")
     if ";" in raw:
         raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    if any(part.startswith("-") for part in raw.split("/") if part):
+        raise FixtureManifestError(f"{label} must not contain leading-dash path segments")
     path = Path(raw)
     if path.is_absolute():
-        raise FixtureManifestError(f"{label} must be relative, got {raw}")
+        raise FixtureManifestError(f"{label} must be relative")
     parts = raw.split("/")
     if any(part in {"", "."} for part in parts):
         raise FixtureManifestError(f"{label} must not contain empty or dot segments")
@@ -1035,7 +1298,7 @@ def verify_schema_entry(
     )
     if Path(rel_path).stem != message_def_id:
         raise FixtureManifestError(f"{label}.path stem must equal message_def_id")
-    schema_bytes = _read_regular_file(path)
+    schema_bytes = _read_regular_file(path, max_bytes=MAX_SCHEMA_BYTES)
     _reject_restricted_schema_terms(schema_bytes, path)
     schema_sha256 = sha256_hex(schema_bytes)
     source = _verify_schema_source(
@@ -1092,13 +1355,25 @@ def _require_no_xml_attributes(element: ET.Element, path: Path, label: str) -> N
         raise FixtureManifestError(f"{path} {label} must not declare attributes")
 
 
-def _validate_fixture_xml_schema(schema_path: Path, fixture_path: Path, label: str) -> None:
+def _validate_fixture_xml_schema(
+    schema_path: Path,
+    fixture_path: Path,
+    label: str,
+    xmllint_timeout_secs: float,
+) -> None:
     xmllint = shutil.which("xmllint")
     if xmllint is None:
         raise FixtureManifestError(
             "--validate-xml-schema requires xmllint on PATH for offline XSD validation"
         )
-    completed = subprocess.run(
+    (
+        returncode,
+        stdout,
+        stdout_truncated,
+        stderr,
+        stderr_truncated,
+        timed_out,
+    ) = _run_command_bounded(
         [
             xmllint,
             "--noout",
@@ -1107,15 +1382,28 @@ def _validate_fixture_xml_schema(schema_path: Path, fixture_path: Path, label: s
             str(schema_path),
             str(fixture_path),
         ],
-        capture_output=True,
-        text=True,
-        check=False,
+        MAX_XMLLINT_OUTPUT_BYTES,
+        xmllint_timeout_secs,
     )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
+    if timed_out:
+        raise FixtureManifestError(
+            f"{label} xmllint timed out after {xmllint_timeout_secs:g} seconds"
+        )
+    output_truncated = stdout_truncated or stderr_truncated
+    if returncode != 0:
+        detail = (stderr or stdout).strip()
         if detail:
             detail = ": " + detail[:4096]
+        if output_truncated:
+            detail = (
+                f"{detail} [xmllint output truncated at "
+                f"{MAX_XMLLINT_OUTPUT_BYTES} bytes]"
+            )
         raise FixtureManifestError(f"{label} failed XML schema validation{detail}")
+    if output_truncated:
+        raise FixtureManifestError(
+            f"{label} xmllint output exceeded {MAX_XMLLINT_OUTPUT_BYTES} byte limit"
+        )
 
 
 def verify_fixture_entry(
@@ -1125,6 +1413,7 @@ def verify_fixture_entry(
     schemas_by_path: dict[str, dict[str, Any]],
     *,
     validate_xml_schema: bool,
+    xmllint_timeout_secs: float,
 ) -> dict[str, Any]:
     """Verify one XML fixture manifest entry and return normalized metadata."""
 
@@ -1151,7 +1440,7 @@ def verify_fixture_entry(
         f"{label}.path",
         allow_parent_segments=True,
     )
-    fixture_bytes = _read_regular_file(path)
+    fixture_bytes = _read_regular_file(path, max_bytes=MAX_FIXTURE_XML_BYTES)
     root = _parse_xml_bytes(fixture_bytes, path)
     namespace, local = _split_xml_name(root.tag)
     if local != "Document":
@@ -1196,10 +1485,15 @@ def verify_fixture_entry(
             raise FixtureManifestError(
                 f"{label}.schema payload root {schema['payload_root']!r} "
                 f"does not match fixture {expected_payload_root!r}"
-            )
+        )
         schema_backed = True
         if validate_xml_schema:
-            _validate_fixture_xml_schema(schema_path, path, label)
+            _validate_fixture_xml_schema(
+                schema_path,
+                path,
+                label,
+                xmllint_timeout_secs,
+            )
             schema_validated = True
 
     return {
@@ -1356,7 +1650,11 @@ def verify_profile_catalog(
 def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     """Verify the ISO fixture manifest and return a digest-bound summary."""
 
-    manifest_bytes = _read_regular_file(path)
+    xmllint_timeout_secs = _require_positive_finite_number(
+        getattr(args, "xmllint_timeout_secs", DEFAULT_XMLLINT_TIMEOUT_SECS),
+        "--xmllint-timeout-secs",
+    )
+    manifest_bytes = _read_regular_file(path, max_bytes=MAX_MANIFEST_JSON_BYTES)
     manifest = _require_object(_load_json_bytes(manifest_bytes, path), str(path))
     _reject_unknown_keys(manifest, TOP_LEVEL_KEYS, str(path))
     if manifest.get("version") != MANIFEST_VERSION:
@@ -1401,6 +1699,7 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
             manifest_dir,
             schemas_by_path,
             validate_xml_schema=args.validate_xml_schema,
+            xmllint_timeout_secs=xmllint_timeout_secs,
         )
         for offset, entry in enumerate(raw_fixtures)
     ]
@@ -1562,13 +1861,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate every schema-backed XML fixture against its checked-in XSD with xmllint.",
     )
+    parser.add_argument(
+        "--xmllint-timeout-secs",
+        type=float,
+        default=DEFAULT_XMLLINT_TIMEOUT_SECS,
+        help="Maximum wall-clock seconds allowed for each xmllint validation.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        _preflight_output_cli_paths(
+            argv,
+            {"--manifest", "--profile-catalog", "--summary-out"},
+        )
+        args = parser.parse_args(argv)
         return run(args)
     except FixtureManifestError as error:
         print(f"error: {error}", file=sys.stderr)

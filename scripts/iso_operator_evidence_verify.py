@@ -29,11 +29,14 @@ import errno
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
+import secrets
 import stat
 import subprocess
 import sys
+import threading
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -42,6 +45,7 @@ from typing import Any
 EVIDENCE_VERSION = 1
 REQUIRE_VERIFIED = "require-verified"
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
 KNOWN_RAILS = {
     "generic-iso20022",
     "swift-cbpr-plus",
@@ -49,13 +53,24 @@ KNOWN_RAILS = {
     "sepa-sct-inst",
     "securities-csd",
 }
-REQUIRED_CANARY_STAGES = {"rail", "notary", "verify"}
+EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
+REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
 SUMMARY_DIGEST_FIELD = "summary_sha256"
+LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
 MAX_TRUST_DER_BASE64_CHARS = ((MAX_TRUST_DER_BYTES + 2) // 3) * 4
+MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
+MAX_RECEIPT_VERIFIER_OUTPUT_BYTES = 4 * 1024 * 1024
+MAX_HTTP_URL_CHARS = 2048
+DEFAULT_RECEIPT_VERIFIER_TIMEOUT_SECS = 300.0
+PLACEHOLDER_TRUST_SOURCE_MARKERS = ("placeholder", "replace-before-production")
+PLACEHOLDER_TRUST_SOURCE_HOSTS = {"example.invalid"}
+LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 EXPECTED_STAGE_SCRIPTS = {
@@ -98,6 +113,88 @@ EXPECTED_STAGE_FLAGS = {
         "--require-source-files",
     },
 }
+STAGE_SINGLETON_FLAGS = {
+    "rail": set(EXPECTED_STAGE_FLAGS["rail"]),
+    "notary": set(EXPECTED_STAGE_FLAGS["notary"]) - {"--endpoint"},
+    "verify": {
+        "--allow-failed",
+        "--allow-insecure-http",
+        "--allow-legacy-colr007",
+        "--require-source-files",
+    },
+}
+STAGE_BOOLEAN_FLAGS = {
+    "rail": {
+        "--allow-default-profile",
+        "--allow-insecure-http",
+        "--allow-legacy-colr007",
+        "--dry-run",
+    },
+    "notary": {
+        "--all",
+        "--allow-insecure-http",
+        "--dry-run",
+    },
+    "verify": {
+        "--allow-failed",
+        "--allow-insecure-http",
+        "--allow-legacy-colr007",
+        "--require-source-files",
+    },
+}
+STAGE_POSITIVE_INT_FLAGS = {
+    "rail": {
+        "--max-payload-bytes",
+        "--response-limit-bytes",
+    },
+    "notary": {
+        "--response-limit-bytes",
+    },
+}
+STAGE_POSITIVE_NUMBER_FLAGS = {
+    "rail": {
+        "--timeout-secs",
+    },
+    "notary": {
+        "--timeout-secs",
+    },
+}
+STAGE_ARTIFACT_PATH_FLAGS = {
+    "rail": {
+        "--inbox-dir",
+    },
+    "notary": {
+        "--export-dir",
+    },
+    "verify": {
+        "--receipt-dir",
+    },
+}
+STAGE_XML_PATH_FLAGS = {
+    "rail": {
+        "--message",
+    },
+}
+STAGE_RECEIPT_PATH_FLAGS = {
+    "verify": {
+        "--receipt",
+    },
+}
+STAGE_REQUIRED_FLAGS = {
+    "rail": {
+        "--inbox-dir",
+        "--torii-base-url",
+    },
+    "notary": {
+        "--endpoint",
+        "--export-dir",
+    },
+}
+STAGE_REQUIRED_ONE_OF_FLAGS = {
+    "verify": (
+        ("--receipt", "--receipt-dir"),
+    ),
+}
 LOCAL_DIAGNOSTIC_STAGE_FLAGS = {
     "notary": {"--allow-missing-record-sources"},
 }
@@ -127,6 +224,7 @@ CANARY_STAGE_KEYS = {
     "stdout_truncated",
     "stderr_truncated",
     "receipt_dir",
+    "timed_out",
     "skipped",
     "reason",
 }
@@ -154,12 +252,15 @@ RECEIPT_ENTRY_KEYS = {
     "payload_sha256",
     "profile",
 }
+NOTARY_RECEIPT_METADATA_KEYS = {"anchor_sha256", "index_sha256", "record_count"}
+RAIL_RECEIPT_METADATA_KEYS = {"message_type", "payload_sha256", "profile"}
 TRUST_SUMMARY_KEYS = {
     "verified_at",
     "verified_bundles",
     "allow_record_only",
     "allow_insecure_source_url",
     "allow_synthetic_der",
+    "max_source_age_days",
     "profile_json_emitted",
     "profile_json_emittable",
     "profile_json_sha256",
@@ -245,24 +346,37 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _read_regular_file(path: Path) -> bytes:
+def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
+    if max_bytes is not None and max_bytes <= 0:
+        raise EvidenceError("max file bytes must be positive")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
-        mode = path.lstat().st_mode
+        metadata = path.lstat()
     except FileNotFoundError as error:
         raise EvidenceError(f"{path} does not exist") from error
+    mode = metadata.st_mode
     if stat.S_ISLNK(mode):
         raise EvidenceError(f"{path} must not be a symlink")
     if not stat.S_ISREG(mode):
         raise EvidenceError(f"{path} must be a regular file")
+    if max_bytes is not None and metadata.st_size > max_bytes:
+        raise EvidenceError(f"{path} exceeds {max_bytes} byte JSON limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        fd_metadata = os.fstat(fd)
+        if not stat.S_ISREG(fd_metadata.st_mode):
             raise EvidenceError(f"{path} must be a regular file")
+        if max_bytes is not None and fd_metadata.st_size > max_bytes:
+            raise EvidenceError(f"{path} exceeds {max_bytes} byte JSON limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            return handle.read()
+            limit = max_bytes + 1 if max_bytes is not None else -1
+            raw = handle.read(limit)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise EvidenceError(f"{path} exceeds {max_bytes} byte JSON limit")
+        return raw
     except FileNotFoundError as error:
         raise EvidenceError(f"{path} does not exist") from error
     except OSError as error:
@@ -274,7 +388,82 @@ def _read_regular_file(path: Path) -> bytes:
             os.close(fd)
 
 
+def _reject_output_path_smuggling(path: Path, label: str) -> None:
+    raw = str(path)
+    if not raw or not path.name:
+        raise EvidenceError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise EvidenceError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise EvidenceError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise EvidenceError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    if any(part.startswith("-") for part in parts if part):
+        raise EvidenceError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in parts):
+        raise EvidenceError(f"{label} must not contain dot or parent segments")
+
+
+def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
+    if not raw:
+        raise EvidenceError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise EvidenceError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise EvidenceError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise EvidenceError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise EvidenceError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise EvidenceError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise EvidenceError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in checked_parts):
+        raise EvidenceError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 < len(raw_args):
+                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
 def _write_text_output(path: Path, text: str) -> None:
+    _reject_output_path_smuggling(path, "output path")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except FileExistsError as error:
@@ -285,11 +474,13 @@ def _write_text_output(path: Path, text: str) -> None:
     if not stat.S_ISDIR(parent_mode):
         raise EvidenceError(f"{path.parent} must be a directory")
     if path.exists() or path.is_symlink():
-        mode = path.lstat().st_mode
-        if stat.S_ISLNK(mode):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
             raise EvidenceError(f"{path} must not be a symlink")
-        if not stat.S_ISREG(mode):
+        if not stat.S_ISREG(metadata.st_mode):
             raise EvidenceError(f"{path} must be a regular file")
+        if metadata.st_nlink > 1:
+            raise EvidenceError(f"{path} must not be hard-linked")
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -300,38 +491,157 @@ def _write_text_output(path: Path, text: str) -> None:
         raise EvidenceError(f"{path.parent} must be a directory") from error
 
     fd = -1
+    leaf_digest = hashlib.sha256(path.name.encode("utf-8", "surrogatepass")).hexdigest()
+    tmp_name = f".iso-{leaf_digest[:16]}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    tmp_created = False
     try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         try:
-            fd = os.open(path.name, flags | nofollow, 0o666, dir_fd=parent_fd)
+            fd = os.open(tmp_name, flags | nofollow, 0o600, dir_fd=parent_fd)
+            tmp_created = True
         except OSError as error:
             if error.errno == errno.ELOOP:
-                raise EvidenceError(f"{path} must not be a symlink") from error
-            raise EvidenceError(f"cannot open {path} for writing: {error.strerror}") from error
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise EvidenceError(f"{path} must be a regular file")
+                raise EvidenceError(f"{path} temp file must not be a symlink") from error
+            raise EvidenceError(
+                f"cannot open temporary output for {path}: {error.strerror}"
+            ) from error
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise EvidenceError(f"{path} temp file must be a regular file")
+        if opened.st_nlink > 1:
+            raise EvidenceError(f"{path} temp file must not be hard-linked")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        tmp_created = False
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
     finally:
         if fd >= 0:
             os.close(fd)
+        if tmp_created:
+            try:
+                os.unlink(tmp_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
         os.close(parent_fd)
+
+
+def _reject_symlinked_existing_ancestors(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(mode):
+            if path.is_absolute() and current.parent == Path(path.anchor):
+                continue
+            raise EvidenceError(f"{current} must not be a symlink")
 
 
 def _load_json(path: Path) -> Any:
     try:
-        raw = _read_regular_file(path)
+        raw = _read_regular_file(path, max_bytes=MAX_SUMMARY_JSON_BYTES)
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
         raise EvidenceError(f"{path} is not UTF-8 JSON") from error
     try:
-        return json.loads(
+        value = json.loads(
             text,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise EvidenceError(f"{path} is not valid JSON: {error}") from error
+    _reject_json_surrogates(value)
+    return value
+
+
+def _read_limited_pipe(pipe: Any, limit_bytes: int) -> tuple[bytes, bool]:
+    chunks: list[bytes] = []
+    remaining = limit_bytes
+    truncated = False
+    while True:
+        chunk = pipe.read(8192)
+        if not chunk:
+            break
+        if remaining > 0:
+            keep = min(remaining, len(chunk))
+            chunks.append(chunk[:keep])
+            remaining -= keep
+            if keep < len(chunk):
+                truncated = True
+        else:
+            truncated = True
+    return b"".join(chunks), truncated
+
+
+def _run_command_bounded(
+    argv: list[str],
+    output_limit_bytes: int,
+    timeout_secs: float,
+) -> tuple[int, str, bool, str, bool, bool]:
+    if output_limit_bytes <= 0:
+        raise EvidenceError("output limit bytes must be positive")
+    timeout_secs = _required_positive_finite_cli_number(
+        timeout_secs,
+        "receipt verifier timeout seconds",
+    )
+    process = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    outputs: dict[str, tuple[bytes, bool]] = {}
+
+    def read_stream(name: str, pipe: Any) -> None:
+        try:
+            outputs[name] = _read_limited_pipe(pipe, output_limit_bytes)
+        finally:
+            pipe.close()
+
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_thread = threading.Thread(
+        target=read_stream,
+        args=("stdout", process.stdout),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=read_stream,
+        args=("stderr", process.stderr),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    timed_out = False
+    try:
+        returncode = process.wait(timeout=timeout_secs)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait()
+        returncode = 124
+    stdout_thread.join()
+    stderr_thread.join()
+    stdout_raw, stdout_truncated = outputs.get("stdout", (b"", False))
+    stderr_raw, stderr_truncated = outputs.get("stderr", (b"", False))
+    return (
+        returncode,
+        stdout_raw.decode("utf-8", errors="replace"),
+        stdout_truncated,
+        stderr_raw.decode("utf-8", errors="replace"),
+        stderr_truncated,
+        timed_out,
+    )
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -341,6 +651,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise EvidenceError(f"duplicate key {key!r} in JSON object")
         result[key] = value
     return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise EvidenceError(f"JSON contains non-finite numeric constant {value}")
+
+
+def _reject_json_surrogates(value: Any) -> None:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise EvidenceError("JSON contains invalid Unicode surrogate")
+    elif isinstance(value, list):
+        for item in value:
+            _reject_json_surrogates(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_json_surrogates(key)
+            _reject_json_surrogates(item)
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -372,6 +699,13 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
+def _required_positive_int_field(value: dict[str, Any], key: str, label: str) -> int:
+    raw = value.get(key)
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        raise EvidenceError(f"{label}.{key} must be a positive integer")
+    return raw
+
+
 def _required_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(value, key, label)
     if PROFILE_ID_RE.fullmatch(raw) is None:
@@ -386,6 +720,76 @@ def _required_rail(value: dict[str, Any], key: str, label: str) -> str:
             f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
         )
     return raw
+
+
+def _required_message_type(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(value, key, label)
+    if MESSAGE_TYPE_RE.fullmatch(raw) is None:
+        raise EvidenceError(f"{label}.{key} must be lowercase ISO family id")
+    return raw
+
+
+def _reject_forbidden_receipt_metadata(
+    receipt_entry: dict[str, Any],
+    forbidden_keys: set[str],
+    entry_label: str,
+    receipt_kind: str,
+) -> None:
+    for key in sorted(forbidden_keys & set(receipt_entry)):
+        raise EvidenceError(f"{entry_label}.{key} is not valid for {receipt_kind}")
+
+
+def _verify_receipt_entry_metadata(
+    receipt_entry: dict[str, Any],
+    entry_label: str,
+    *,
+    receipt_kind: str,
+    allow_legacy_colr007: bool,
+) -> None:
+    if receipt_kind == "iso-audit-notary":
+        _reject_forbidden_receipt_metadata(
+            receipt_entry,
+            RAIL_RECEIPT_METADATA_KEYS,
+            entry_label,
+            receipt_kind,
+        )
+        _required_sha256(receipt_entry, "anchor_sha256", entry_label)
+        _required_sha256(receipt_entry, "index_sha256", entry_label)
+        record_count = receipt_entry.get("record_count")
+        if (
+            isinstance(record_count, bool)
+            or not isinstance(record_count, int)
+            or record_count < 0
+        ):
+            raise EvidenceError(f"{entry_label}.record_count must be a non-negative integer")
+    elif receipt_kind == "iso-rail-gateway":
+        _reject_forbidden_receipt_metadata(
+            receipt_entry,
+            NOTARY_RECEIPT_METADATA_KEYS,
+            entry_label,
+            receipt_kind,
+        )
+        message_type = _required_message_type(receipt_entry, "message_type", entry_label)
+        if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
+            raise EvidenceError(
+                f"{entry_label}.message_type uses legacy rail message type {message_type!r}"
+            )
+        _required_sha256(receipt_entry, "payload_sha256", entry_label)
+        _required_rail(receipt_entry, "profile", entry_label)
+    else:  # pragma: no cover - supported kinds are checked before this helper.
+        raise EvidenceError(f"{entry_label}.receipt_kind is unsupported: {receipt_kind!r}")
+
+
+def _receipt_entry_content_metadata(receipt_entry: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    receipt_kind = receipt_entry["receipt_kind"]
+    generic_keys = ("ok", "status_code")
+    if receipt_kind == "iso-audit-notary":
+        keys = ("anchor_sha256", "index_sha256", "record_count")
+    elif receipt_kind == "iso-rail-gateway":
+        keys = ("message_type", "payload_sha256", "profile")
+    else:  # pragma: no cover - supported kinds are checked before this helper.
+        raise EvidenceError(f"unsupported receipt_kind {receipt_kind!r}")
+    return tuple((key, receipt_entry.get(key)) for key in (*generic_keys, *keys))
 
 
 def _required_cli_string(value: str | None, label: str) -> str:
@@ -404,6 +808,15 @@ def _required_positive_cli_int(value: int | None, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise EvidenceError(f"{label} must be a positive integer")
     return value
+
+
+def _required_positive_finite_cli_number(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EvidenceError(f"{label} must be a positive finite number")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise EvidenceError(f"{label} must be a positive finite number")
+    return parsed
 
 
 def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
@@ -735,6 +1148,13 @@ def _validate_config_path(raw: str, label: str) -> str:
     return raw
 
 
+def _validate_xml_path(raw: str, label: str) -> str:
+    _reject_path_smuggling(raw, label)
+    if not raw.endswith(".xml"):
+        raise EvidenceError(f"{label} must point to a .xml file")
+    return raw
+
+
 def _validate_artifact_path(raw: str, label: str) -> str:
     if not raw.strip():
         raise EvidenceError(f"{label} must be a non-empty path")
@@ -749,12 +1169,16 @@ def _reject_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in raw):
         raise EvidenceError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise EvidenceError(f"{label} must not start with a dash")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
         raise EvidenceError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise EvidenceError(f"{label} must not contain leading-dash path segments")
     normalized_parts = [part for part in raw.replace("\\", "/").split("/") if part]
     if any(part in {".", ".."} for part in normalized_parts):
         raise EvidenceError(f"{label} must not contain dot or parent segments")
@@ -875,6 +1299,27 @@ def _verify_receipt_verifier_summary(
                 f"{receipt_sha256}"
             )
         seen_receipt_digests[receipt_sha256] = offset
+        ok = receipt_entry.get("ok")
+        if not isinstance(ok, bool):
+            raise EvidenceError(f"{entry_label}.ok must be a boolean")
+        status_code = receipt_entry.get("status_code")
+        if (
+            isinstance(status_code, bool)
+            or not isinstance(status_code, int)
+            or status_code < 100
+        ):
+            raise EvidenceError(f"{entry_label}.status_code must be an HTTP status integer")
+        status_success = 200 <= status_code <= 299
+        if ok != status_success:
+            raise EvidenceError(f"{entry_label}.ok does not match status_code success state")
+        if not ok:
+            raise EvidenceError(f"{entry_label} did not succeed")
+        _verify_receipt_entry_metadata(
+            receipt_entry,
+            entry_label,
+            receipt_kind=entry_kind,
+            allow_legacy_colr007=args.allow_legacy_colr007,
+        )
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
     if receipt_kind_set != receipt_entry_kinds:
@@ -922,6 +1367,25 @@ def _command_has_flag(command: list[str], flag: str) -> bool:
     return any(item == flag or item.startswith(flag + "=") for item in command)
 
 
+def _command_flag_count(command: list[str], flag: str) -> int:
+    prefix = flag + "="
+    return sum(1 for item in command if item == flag or item.startswith(prefix))
+
+
+def _command_separate_value_offsets(
+    command: list[str],
+    flags: set[str],
+    label: str,
+) -> set[int]:
+    offsets: set[int] = set()
+    for offset, item in enumerate(command):
+        if item in flags:
+            if offset + 1 >= len(command):
+                raise EvidenceError(f"{label}.command has {item} without a value")
+            offsets.add(offset + 1)
+    return offsets
+
+
 def _command_flag_values(
     command: list[str],
     flag: str,
@@ -937,6 +1401,50 @@ def _command_flag_values(
         elif item.startswith(prefix):
             values.append((offset, item[len(prefix):]))
     return values
+
+
+def _check_numeric_command_flags(stage_name: str, command: list[str], label: str) -> None:
+    for flag in sorted(STAGE_POSITIVE_INT_FLAGS.get(stage_name, set())):
+        for offset, value in _command_flag_values(command, flag, label):
+            if re.fullmatch(r"[1-9][0-9]*", value) is None:
+                raise EvidenceError(
+                    f"{label}.command[{offset}] {flag} must be a positive decimal integer"
+                )
+    for flag in sorted(STAGE_POSITIVE_NUMBER_FLAGS.get(stage_name, set())):
+        for offset, value in _command_flag_values(command, flag, label):
+            try:
+                parsed = float(value)
+            except ValueError as error:
+                raise EvidenceError(
+                    f"{label}.command[{offset}] {flag} must be a positive finite number"
+                ) from error
+            if not math.isfinite(parsed) or parsed <= 0:
+                raise EvidenceError(
+                    f"{label}.command[{offset}] {flag} must be a positive finite number"
+                )
+
+
+def _check_path_command_flags(stage_name: str, command: list[str], label: str) -> None:
+    for flag in sorted(STAGE_ARTIFACT_PATH_FLAGS.get(stage_name, set())):
+        for offset, value in _command_flag_values(command, flag, label):
+            _validate_artifact_path(value, f"{label}.command[{offset}]")
+    for flag in sorted(STAGE_XML_PATH_FLAGS.get(stage_name, set())):
+        for offset, value in _command_flag_values(command, flag, label):
+            _validate_xml_path(value, f"{label}.command[{offset}]")
+    for flag in sorted(STAGE_RECEIPT_PATH_FLAGS.get(stage_name, set())):
+        for offset, value in _command_flag_values(command, flag, label):
+            _validate_receipt_path(value, f"{label}.command[{offset}]")
+
+
+def _check_required_command_flags(stage_name: str, command: list[str], label: str) -> None:
+    for flag in sorted(STAGE_REQUIRED_FLAGS.get(stage_name, set())):
+        if _command_flag_count(command, flag) == 0:
+            raise EvidenceError(f"{label}.command must contain {flag}")
+    for choices in STAGE_REQUIRED_ONE_OF_FLAGS.get(stage_name, ()):
+        if not any(_command_flag_count(command, flag) > 0 for flag in choices):
+            raise EvidenceError(
+                f"{label}.command must contain one of {', '.join(choices)}"
+            )
 
 
 def _command_has_http_url(command: list[str]) -> bool:
@@ -957,6 +1465,7 @@ def _check_command_urls(
                 command[offset + 1],
                 f"{label}.command[{offset + 1}]",
                 allow_insecure_http=allow_insecure_http,
+                reject_local_hosts=True,
             )
             continue
         for flag in COMMAND_URL_FLAGS:
@@ -966,6 +1475,7 @@ def _check_command_urls(
                     item[len(prefix):],
                     f"{label}.command[{offset}]",
                     allow_insecure_http=allow_insecure_http,
+                    reject_local_hosts=True,
                 )
                 break
         else:
@@ -974,6 +1484,7 @@ def _check_command_urls(
                     item,
                     f"{label}.command[{offset}]",
                     allow_insecure_http=allow_insecure_http,
+                    reject_local_hosts=True,
                 )
 
 
@@ -1037,12 +1548,39 @@ def _check_stage_script(stage_name: str, command: list[str], label: str) -> None
         raise EvidenceError(f"{label}.command does not invoke {expected}")
 
 
+def _check_canary_stage_sequence(stage_names: list[str], label: str) -> None:
+    stage_name_set = set(stage_names)
+    unsupported = sorted(stage_name_set - REQUIRED_CANARY_STAGES)
+    if unsupported:
+        raise EvidenceError(
+            f"{label} contains unsupported canary stages: " + ", ".join(unsupported)
+        )
+    expected = [
+        stage_name
+        for stage_name in EXPECTED_CANARY_STAGE_ORDER
+        if stage_name in stage_name_set
+    ]
+    if stage_names != expected:
+        raise EvidenceError(
+            f"{label} stages must follow canary order: "
+            + ", ".join(EXPECTED_CANARY_STAGE_ORDER)
+        )
+
+
 def _check_stage_command_flags(stage_name: str, command: list[str], label: str) -> None:
     allowed = EXPECTED_STAGE_FLAGS.get(stage_name)
     if allowed is None:
         raise EvidenceError(f"{label}.name has unsupported canary stage {stage_name!r}")
     local_only = LOCAL_DIAGNOSTIC_STAGE_FLAGS.get(stage_name, set())
+    boolean_flags = STAGE_BOOLEAN_FLAGS.get(stage_name, set())
+    value_offsets = _command_separate_value_offsets(
+        command,
+        allowed - boolean_flags,
+        label,
+    )
     for offset, item in enumerate(command):
+        if offset in value_offsets:
+            continue
         if not item.startswith("--"):
             continue
         flag = item.split("=", 1)[0]
@@ -1053,6 +1591,16 @@ def _check_stage_command_flags(stage_name: str, command: list[str], label: str) 
             )
         if flag not in allowed:
             raise EvidenceError(f"{label}.command[{offset}] uses unsupported flag {flag!r}")
+        if item.startswith(flag + "=") and flag in boolean_flags:
+            raise EvidenceError(
+                f"{label}.command[{offset}] boolean flag {flag} must not use =value"
+            )
+    for flag in sorted(STAGE_SINGLETON_FLAGS.get(stage_name, set())):
+        if _command_flag_count(command, flag) > 1:
+            raise EvidenceError(f"{label}.command must contain at most one {flag}")
+    _check_numeric_command_flags(stage_name, command, label)
+    _check_path_command_flags(stage_name, command, label)
+    _check_required_command_flags(stage_name, command, label)
 
 
 def _check_receipt_dir_binding(command: list[str], receipt_dir: str, label: str) -> None:
@@ -1083,11 +1631,20 @@ def _verify_receipt_stdout(
         receipt_summary = json.loads(
             stdout,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise EvidenceError(f"{label}.stdout_preview is not valid receipt verifier JSON") from error
+    _reject_json_surrogates(receipt_summary)
     receipt_obj = _require_object(receipt_summary, f"{label}.stdout_preview")
     return _verify_receipt_verifier_summary(receipt_obj, f"{label}.stdout_preview", args)
+
+
+def _check_stage_output_not_truncated(stage: dict[str, Any], label: str) -> None:
+    if _required_bool(stage, "stdout_truncated", label):
+        raise EvidenceError(f"{label}.stdout_preview is truncated")
+    if _required_bool(stage, "stderr_truncated", label):
+        raise EvidenceError(f"{label}.stderr_preview is truncated")
 
 
 def _stage_summary(
@@ -1109,11 +1666,14 @@ def _stage_summary(
     skipped = _required_bool(stage, "skipped", label)
     if skipped:
         raise EvidenceError(f"{label} was skipped")
+    if _required_bool(stage, "timed_out", label):
+        raise EvidenceError(f"{label} timed out")
     returncode = stage.get("returncode")
     if isinstance(returncode, bool) or not isinstance(returncode, int):
         raise EvidenceError(f"{label}.returncode must be an integer")
     if returncode != 0:
         raise EvidenceError(f"{label} failed with returncode {returncode}")
+    _check_stage_output_not_truncated(stage, label)
     command = _require_list(stage.get("command"), f"{label}.command")
     if not all(isinstance(item, str) for item in command):
         raise EvidenceError(f"{label}.command must contain strings")
@@ -1127,12 +1687,12 @@ def _stage_summary(
         allow_legacy_colr007=args.allow_legacy_colr007,
     )
     _check_stage_script(name, command, label)
-    _check_stage_command_flags(name, command, label)
     if name in {"rail", "notary"}:
         receipt_dir = stage.get("receipt_dir")
         if not isinstance(receipt_dir, str) or not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
+    _check_stage_command_flags(name, command, label)
     if name == "verify":
         receipt_dirs = [
             _validate_artifact_path(value, f"{label}.command[{offset}]")
@@ -1189,12 +1749,18 @@ def _planned_stage_summary(
         allow_legacy_colr007=args.allow_legacy_colr007,
     )
     _check_stage_script(name, command, label)
-    _check_stage_command_flags(name, command, label)
     if name in {"rail", "notary"}:
         receipt_dir = stage.get("receipt_dir")
         if not isinstance(receipt_dir, str) or not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
+    _check_stage_command_flags(name, command, label)
+    if (
+        name == "verify"
+        and not _command_has_flag(command, "--require-source-files")
+        and not args.allow_receipt_source_missing
+    ):
+        raise EvidenceError(f"{label} did not require receipt source files")
     return name
 
 
@@ -1271,6 +1837,7 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
 
     if len(stage_names) != len(set(stage_names)):
         raise EvidenceError(f"{path} contains duplicate canary stages")
+    _check_canary_stage_sequence(stage_names, str(path))
     previous_finished_at: dt.datetime | None = None
     for offset, stage in enumerate(stage_results):
         if previous_finished_at is not None and stage["_started_at"] < previous_finished_at:
@@ -1345,6 +1912,8 @@ def _check_clean_http_url(
     allow_insecure_http: bool,
     reject_local_hosts: bool = False,
 ) -> None:
+    if len(url) > MAX_HTTP_URL_CHARS:
+        raise EvidenceError(f"{label} must be no longer than {MAX_HTTP_URL_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
         raise EvidenceError(f"{label} must not contain control characters")
     _reject_url_percent_encoding_smuggling(url, label)
@@ -1365,6 +1934,14 @@ def _check_clean_http_url(
         port = parsed.port
     except ValueError as error:
         raise EvidenceError(f"{label} has invalid port: {error}") from error
+    port_text = _raw_url_port_text(parsed)
+    if port_text == "":
+        raise EvidenceError(f"{label} must not include an empty port")
+    if port_text is not None:
+        if len(port_text) > 1 and port_text.startswith("0"):
+            raise EvidenceError(f"{label} port must not contain leading zeros")
+        if port == 0:
+            raise EvidenceError(f"{label} port must be positive")
     if (parsed.scheme == "https" and port == 443) or (
         parsed.scheme == "http" and port == 80
     ):
@@ -1388,12 +1965,36 @@ def _check_clean_http_url(
     if reject_local_hosts and not allow_insecure_http:
         if hostname == "localhost" or hostname.endswith(".localhost"):
             raise EvidenceError(f"{label} must not use localhost")
+        if _host_uses_rebinding_suffix(hostname):
+            raise EvidenceError(f"{label} must not use local/private rebinding hostnames")
         try:
             address = ipaddress.ip_address(hostname)
         except ValueError:
             return
         if not address.is_global:
             raise EvidenceError(f"{label} must not use local, private, or reserved IP addresses")
+        if _address_embeds_non_global_ipv4(address):
+            raise EvidenceError(f"{label} must not embed local, private, or reserved IPv4 addresses")
+
+
+def _host_uses_rebinding_suffix(hostname: str) -> bool:
+    return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
+    )
+
+
+def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    embedded: ipaddress.IPv4Address | None = None
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            embedded = address.ipv4_mapped
+        elif address in NAT64_WELL_KNOWN_PREFIX or address in IPV4_COMPATIBLE_IPV6_PREFIX:
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFF_FFFF)
+        elif address.sixtofour is not None:
+            embedded = address.sixtofour
+        elif address.teredo is not None:
+            embedded = address.teredo[1]
+    return embedded is not None and not embedded.is_global
 
 
 def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
@@ -1403,6 +2004,21 @@ def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
         if bracket != -1:
             return netloc[1:bracket]
     return netloc.rsplit(":", 1)[0]
+
+
+def _raw_url_port_text(parsed: urllib.parse.ParseResult) -> str | None:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket == -1:
+            return None
+        remainder = netloc[bracket + 1 :]
+        if remainder.startswith(":"):
+            return remainder[1:]
+        return None
+    if ":" in netloc:
+        return netloc.rsplit(":", 1)[1]
+    return None
 
 
 def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
@@ -1430,6 +2046,9 @@ def _validate_host_labels(raw_host: str, label: str) -> None:
         pass
     if ":" in raw_host:
         raise EvidenceError(f"{label} host must be a valid IP address")
+    if len(raw_host) > 253:
+        raise EvidenceError(f"{label} host must be at most 253 characters")
+    _reject_legacy_ipv4_host_notation(raw_host, label)
     labels = raw_host.split(".")
     if any(not part for part in labels):
         raise EvidenceError(f"{label} host must not contain empty labels")
@@ -1444,6 +2063,23 @@ def _validate_host_labels(raw_host: str, label: str) -> None:
             raise EvidenceError(
                 f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
             )
+
+
+def _reject_legacy_ipv4_host_notation(raw_host: str, label: str) -> None:
+    parts = raw_host.split(".")
+    if len(parts) > 4:
+        return
+    saw_hex_part = False
+    for part in parts:
+        if part.startswith("0x"):
+            digits = part[2:]
+            if not digits or any(ch not in "0123456789abcdef" for ch in digits):
+                return
+            saw_hex_part = True
+        elif not part.isdigit():
+            return
+    if saw_hex_part:
+        raise EvidenceError(f"{label} host must not use legacy IPv4 numeric notation")
 
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
@@ -1461,6 +2097,10 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise EvidenceError(f"{label} path must not contain encoded dot or separator characters")
+    if "%3b" in lowered:
+        raise EvidenceError(f"{label} path must not contain encoded semicolon parameters")
+    if any(token in lowered for token in ("%23", "%3a", "%3f", "%40", "%5b", "%5d")):
+        raise EvidenceError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise EvidenceError(f"{label} path must not contain encoded percent characters")
 
@@ -1472,6 +2112,29 @@ def _check_https_url(url: str, label: str, *, allow_insecure_http: bool) -> None
         allow_insecure_http=allow_insecure_http,
         reject_local_hosts=True,
     )
+
+
+def _trust_source_text_is_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in PLACEHOLDER_TRUST_SOURCE_MARKERS)
+
+
+def _reject_placeholder_trust_source_text(value: str, label: str) -> None:
+    if _trust_source_text_is_placeholder(value):
+        raise EvidenceError(f"{label} must not contain placeholder production metadata")
+
+
+def _trust_source_url_uses_placeholder_host(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    return hostname in PLACEHOLDER_TRUST_SOURCE_HOSTS or any(
+        hostname.endswith("." + host) for host in PLACEHOLDER_TRUST_SOURCE_HOSTS
+    )
+
+
+def _reject_placeholder_trust_source_url(url: str, label: str) -> None:
+    if _trust_source_url_uses_placeholder_host(url):
+        raise EvidenceError(f"{label} must not use example.invalid placeholder provenance")
 
 
 def _parse_timestamp(value: Any, label: str) -> dt.datetime:
@@ -1504,6 +2167,50 @@ def _check_retrieved_at(value: str, label: str, args: argparse.Namespace) -> Non
         max_age_days=args.max_trust_source_age_days,
         label=label,
     )
+
+
+def _trust_source_is_stale_for_budget(
+    source: dict[str, str],
+    *,
+    max_age_days: int,
+    label: str,
+) -> bool:
+    retrieved_at = _parse_timestamp(source["retrieved_at"], f"{label}.retrieved_at")
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=max_age_days)
+    return retrieved_at < cutoff
+
+
+def _computed_profile_json_emittable(
+    *,
+    allow_synthetic_der: bool,
+    allow_record_only: bool,
+    allow_insecure_source_url: bool,
+    max_source_age_days: int | None,
+    bundle_summaries: list[dict[str, Any]],
+) -> bool:
+    if allow_synthetic_der or allow_record_only or allow_insecure_source_url:
+        return False
+    if max_source_age_days is None:
+        return False
+    if not bundle_summaries:
+        return False
+    for offset, bundle in enumerate(bundle_summaries):
+        source = bundle.get("source")
+        if source is None:
+            return False
+        if (
+            _trust_source_text_is_placeholder(source["authority"])
+            or _trust_source_text_is_placeholder(source["version"])
+            or _trust_source_url_uses_placeholder_host(source["url"])
+        ):
+            return False
+        if _trust_source_is_stale_for_budget(
+            source,
+            max_age_days=max_source_age_days,
+            label=f"bundles[{offset}].source",
+        ):
+            return False
+    return True
 
 
 def _check_trust_bundle(
@@ -1548,6 +2255,9 @@ def _check_trust_bundle(
             f"{label}.source.url",
             allow_insecure_http=args.allow_insecure_http,
         )
+        _reject_placeholder_trust_source_text(authority, f"{label}.source.authority")
+        _reject_placeholder_trust_source_text(version, f"{label}.source.version")
+        _reject_placeholder_trust_source_url(url, f"{label}.source.url")
         retrieved_at = source_obj.get("retrieved_at")
         if not isinstance(retrieved_at, str):
             raise EvidenceError(f"{label}.source.retrieved_at must be recorded")
@@ -1827,6 +2537,16 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
     allow_insecure_source_url = _required_bool(summary, "allow_insecure_source_url", str(path))
     profile_json_emitted = _required_bool(summary, "profile_json_emitted", str(path))
     profile_json_emittable = _required_bool(summary, "profile_json_emittable", str(path))
+    if "max_source_age_days" not in summary:
+        raise EvidenceError(f"{path}.max_source_age_days must be recorded")
+    if summary["max_source_age_days"] is None:
+        max_source_age_days = None
+    else:
+        max_source_age_days = _required_positive_int_field(
+            summary,
+            "max_source_age_days",
+            str(path),
+        )
     if profile_json_emitted:
         profile_json_sha256 = _required_sha256(summary, "profile_json_sha256", str(path))
     else:
@@ -1843,6 +2563,14 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         raise EvidenceError(f"{path} was verified with --allow-insecure-source-url")
     if not profile_json_emittable and not args.allow_synthetic_trust:
         raise EvidenceError(f"{path} cannot emit production profile JSON")
+    if profile_json_emittable:
+        if max_source_age_days is None:
+            raise EvidenceError(f"{path}.max_source_age_days must be a positive integer")
+        if max_source_age_days > args.max_trust_source_age_days:
+            raise EvidenceError(
+                f"{path}.max_source_age_days is weaker than "
+                "--max-trust-source-age-days"
+            )
     if not profile_json_emitted and not args.allow_profile_json_not_emitted:
         raise EvidenceError(f"{path} did not emit profile JSON")
 
@@ -1864,6 +2592,25 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         )
         for offset, bundle in enumerate(bundle_objects)
     ]
+    computed_profile_json_emittable = _computed_profile_json_emittable(
+        allow_synthetic_der=allow_synthetic_der,
+        allow_record_only=allow_record_only,
+        allow_insecure_source_url=allow_insecure_source_url,
+        max_source_age_days=max_source_age_days,
+        bundle_summaries=bundle_summaries,
+    )
+    if profile_json_emittable != computed_profile_json_emittable:
+        raise EvidenceError(
+            f"{path}.profile_json_emittable does not match trust source policy"
+        )
+    if profile_json_emitted and not profile_json_emittable:
+        raise EvidenceError(
+            f"{path}.profile_json_emitted cannot be true when profile_json_emittable is false"
+        )
+    if profile_json_emitted and not computed_profile_json_emittable:
+        raise EvidenceError(
+            f"{path}.profile_json_emitted cannot be true when trust source policy is not emittable"
+        )
     if profile_json_emitted:
         profile_config = [bundle["profile_overrides"] for bundle in bundle_objects]
         expected_profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
@@ -1894,6 +2641,7 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         "path": str(path),
         "verified_at": verified_at_raw,
         "verified_bundles": verified_bundles,
+        "max_source_age_days": max_source_age_days,
         "profile_json_emitted": profile_json_emitted,
         "profile_json_emittable": profile_json_emittable,
         "profile_json_sha256": profile_json_sha256,
@@ -1920,24 +2668,50 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         command.append("--allow-legacy-colr007")
     if not args.allow_receipt_source_missing:
         command.append("--require-source-files")
-    completed = subprocess.run(
+    (
+        returncode,
+        stdout,
+        stdout_truncated,
+        stderr,
+        stderr_truncated,
+        timed_out,
+    ) = _run_command_bounded(
         command,
-        capture_output=True,
-        text=True,
-        check=False,
+        MAX_RECEIPT_VERIFIER_OUTPUT_BYTES,
+        args.receipt_verifier_timeout_secs,
     )
-    if completed.returncode != 0:
+    if timed_out:
         raise EvidenceError(
-            "receipt verification failed: "
-            + completed.stderr.strip()[:4096]
+            "receipt verifier timed out after "
+            f"{args.receipt_verifier_timeout_secs:g} seconds"
+        )
+    if returncode != 0:
+        detail = stderr.strip()[:4096]
+        if stderr_truncated:
+            detail = (
+                f"{detail} [stderr truncated at "
+                f"{MAX_RECEIPT_VERIFIER_OUTPUT_BYTES} bytes]"
+            )
+        raise EvidenceError("receipt verification failed: " + detail)
+    if stdout_truncated:
+        raise EvidenceError(
+            "receipt verifier stdout exceeded "
+            f"{MAX_RECEIPT_VERIFIER_OUTPUT_BYTES} byte limit"
+        )
+    if stderr_truncated:
+        raise EvidenceError(
+            "receipt verifier stderr exceeded "
+            f"{MAX_RECEIPT_VERIFIER_OUTPUT_BYTES} byte limit"
         )
     try:
         receipt_summary = json.loads(
-            completed.stdout,
+            stdout,
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise EvidenceError("receipt verifier emitted invalid JSON") from error
+    _reject_json_surrogates(receipt_summary)
     receipt_obj = _require_object(receipt_summary, "receipt verifier summary")
     return _verify_receipt_verifier_summary(receipt_obj, "receipt verifier summary", args)
 
@@ -1948,8 +2722,8 @@ def _verify_direct_receipts_cover_canaries(
 ) -> None:
     """Require direct receipt archive verification to match canary receipt digests."""
 
-    direct_receipt_kinds_by_digest = {
-        receipt["receipt_sha256"]: receipt["receipt_kind"]
+    direct_receipts_by_digest = {
+        receipt["receipt_sha256"]: receipt
         for receipt in receipt_summary["receipts"]
     }
     canary_receipt_kinds_by_digest: dict[str, str] = {}
@@ -1960,19 +2734,29 @@ def _verify_direct_receipts_cover_canaries(
         for receipt_offset, receipt in enumerate(canary_receipt_summary["receipts"]):
             receipt_sha256 = receipt["receipt_sha256"]
             canary_receipt_kinds_by_digest[receipt_sha256] = receipt["receipt_kind"]
-            direct_kind = direct_receipt_kinds_by_digest.get(receipt_sha256)
-            if direct_kind is None:
+            direct_receipt = direct_receipts_by_digest.get(receipt_sha256)
+            if direct_receipt is None:
                 raise EvidenceError(
                     "direct receipt archive verification does not include "
                     f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                     f"[{receipt_offset}].receipt_sha256 {receipt_sha256}"
                 )
+            direct_kind = direct_receipt["receipt_kind"]
             if direct_kind != receipt["receipt_kind"]:
                 raise EvidenceError(
                     "direct receipt archive verification binds "
                     f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                     f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
                     f"receipt_kind {direct_kind!r}, not {receipt['receipt_kind']!r}"
+                )
+            direct_metadata = _receipt_entry_content_metadata(direct_receipt)
+            canary_metadata = _receipt_entry_content_metadata(receipt)
+            if direct_metadata != canary_metadata:
+                raise EvidenceError(
+                    "direct receipt archive verification binds "
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
+                    f"metadata {direct_metadata!r}, not {canary_metadata!r}"
                 )
     for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
         receipt_sha256 = receipt["receipt_sha256"]
@@ -2016,6 +2800,33 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
             seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
 
 
+def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
+    """Reject trust profile material reused across distinct trust summaries."""
+
+    seen_profile_ids: dict[str, tuple[int, int]] = {}
+    seen_bundle_digests: dict[str, tuple[int, int]] = {}
+    for trust_offset, trust in enumerate(trusts):
+        for profile_offset, profile in enumerate(trust["profiles"]):
+            profile_id = profile["profile_id"]
+            if profile_id in seen_profile_ids:
+                first_trust, first_profile = seen_profile_ids[profile_id]
+                raise EvidenceError(
+                    f"trust_summaries[{trust_offset}].profiles[{profile_offset}].profile_id "
+                    f"duplicates trust_summaries[{first_trust}].profiles"
+                    f"[{first_profile}].profile_id: {profile_id}"
+                )
+            seen_profile_ids[profile_id] = (trust_offset, profile_offset)
+            bundle_sha256 = profile["bundle_sha256"]
+            if bundle_sha256 in seen_bundle_digests:
+                first_trust, first_profile = seen_bundle_digests[bundle_sha256]
+                raise EvidenceError(
+                    f"trust_summaries[{trust_offset}].profiles[{profile_offset}].bundle_sha256 "
+                    f"duplicates trust_summaries[{first_trust}].profiles"
+                    f"[{first_profile}].bundle_sha256: {bundle_sha256}"
+                )
+            seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
+
+
 def run(args: argparse.Namespace) -> int:
     if not args.canary_summary:
         raise EvidenceError("provide at least one --canary-summary")
@@ -2035,6 +2846,10 @@ def run(args: argparse.Namespace) -> int:
         args.max_trust_source_age_days,
         "--max-trust-source-age-days",
     )
+    args.receipt_verifier_timeout_secs = _required_positive_finite_cli_number(
+        args.receipt_verifier_timeout_secs,
+        "--receipt-verifier-timeout-secs",
+    )
 
     canary_paths = list(args.canary_summary)
     trust_paths = list(args.trust_summary)
@@ -2046,6 +2861,7 @@ def run(args: argparse.Namespace) -> int:
     _reject_duplicate_summary_digests(canaries, "canary_summaries")
     _reject_duplicate_summary_digests(trusts, "trust_summaries")
     _reject_cross_canary_receipt_reuse(canaries)
+    _reject_cross_trust_profile_reuse(trusts)
     receipt_summary = verify_receipts(args)
     if receipt_summary is None and not args.allow_canary_stage_receipts_only:
         raise EvidenceError(
@@ -2196,6 +3012,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not require receipt verifier commands to use --require-source-files.",
     )
     parser.add_argument(
+        "--receipt-verifier-timeout-secs",
+        type=float,
+        default=DEFAULT_RECEIPT_VERIFIER_TIMEOUT_SECS,
+        help="Maximum wall-clock seconds allowed for direct receipt archive verification.",
+    )
+    parser.add_argument(
         "--allow-record-only-trust",
         action="store_true",
         help="Allow trust summaries produced with record-only signature policy.",
@@ -2220,8 +3042,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        _preflight_output_cli_paths(
+            argv,
+            {
+                "--canary-summary",
+                "--receipt",
+                "--receipt-dir",
+                "--summary-out",
+                "--trust-summary",
+            },
+        )
+        args = parser.parse_args(argv)
         return run(args)
     except EvidenceError as error:
         print(f"error: {error}", file=sys.stderr)

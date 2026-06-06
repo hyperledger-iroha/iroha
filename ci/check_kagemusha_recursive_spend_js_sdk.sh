@@ -63,7 +63,8 @@ case "${NODE_VERSION}" in
     ;;
 esac
 
-"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha .* SDK runner" \
+"${NODE_BIN}" --test --test-name-pattern "Kagemusha recursive spend|Kagemusha record-backed|Kagemusha .* SDK runner|browser crypto exposes native-only helpers as safe stubs" \
+  test/crypto.browser.test.js \
   test/kagemushaFfiContractParity.test.js \
   test/kagemushaRecursiveSpend.test.js \
   test/package_dist.test.js

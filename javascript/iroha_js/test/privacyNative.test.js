@@ -11,6 +11,7 @@ import {
   PRIVACY_FFI_VERSION_V1,
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
+  buildZkAceTransferAuthorizationV1,
   isPrivacyNativeAvailable,
   privacyBuildProofV1,
   privacyCapabilitiesV1,
@@ -260,7 +261,16 @@ test("privacy native availability requires all raw archive methods", () => {
       assert.equal(isPrivacyNativeAvailable(), false);
     },
   );
-  for (const abiVersion of ["6", true]) {
+  for (const abiVersion of [
+    "6",
+    true,
+    -1,
+    6.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+    0x1_0000_0000,
+  ]) {
     withNativeBinding(
       completePrivacyBinding({
         connectNoritoBridgeAbiVersion() {
@@ -300,6 +310,173 @@ test("privacy FFI deterministic error constants are public", () => {
   assert.equal(PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM, 3);
   assert.equal(PRIVACY_FFI_ERROR_PRODUCTION_DISABLED, 4);
   assert.equal(PRIVACY_FFI_ERROR_INVALID_REQUEST, 5);
+});
+
+function validZkAceAuthorizationPayload() {
+  return JSON.stringify({
+    public_inputs: { ok: true },
+    proof: {
+      backend: "stark/fri",
+      proof_b64: "AA==",
+      vk_ref: {
+        backend: "stark/fri",
+        name: "zk_ace_pq_authorization_v0",
+      },
+    },
+    identity_commitment: "11",
+    tx_digest: "22",
+    replay_nullifier: "33",
+    policy_hash: "44",
+    verifier_key_id: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+  });
+}
+
+function validZkAceTransferAuthorizationOptions(overrides = {}) {
+  return {
+    fromAccountId: "alice@wonderland",
+    toAccountId: "bob@wonderland",
+    assetDefinitionId: "xor#wonderland",
+    amount: "17",
+    chainId: "wonderland",
+    identityRoot: Buffer.alloc(32, 0x31),
+    identityBlinding: Buffer.alloc(32, 0x32),
+    replaySecret: Buffer.alloc(32, 0x33),
+    policyHash: Buffer.alloc(32, 0x34),
+    verifierKeyId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+    ...overrides,
+  };
+}
+
+test("ZK-ACE transfer authorization rejects malformed amounts before native dispatch", () => {
+  let nativeCalls = 0;
+  let stringified = false;
+  const hostileAmount = {
+    toString() {
+      stringified = true;
+      return "17";
+    },
+  };
+  const invalidAmounts = [
+    undefined,
+    null,
+    "",
+    " ",
+    "0",
+    "0000",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    0n,
+    -1n,
+    1n << 128n,
+    true,
+    [],
+    hostileAmount,
+  ];
+
+  withNativeBinding(
+    {
+      zkAceBuildTransferAuthorizationV1() {
+        nativeCalls += 1;
+        return validZkAceAuthorizationPayload();
+      },
+    },
+    () => {
+      for (const amount of invalidAmounts) {
+        const error = captureThrown(() =>
+          buildZkAceTransferAuthorizationV1(
+            validZkAceTransferAuthorizationOptions({ amount }),
+          ),
+        );
+        assert.match(error.message, /amount must be a positive decimal u128 string/);
+      }
+    },
+  );
+
+  assert.equal(nativeCalls, 0);
+  assert.equal(stringified, false);
+});
+
+test("ZK-ACE transfer authorization canonicalizes positive u128 amounts before native dispatch", () => {
+  const capturedAmounts = [];
+  const u128Max = (1n << 128n) - 1n;
+
+  withNativeBinding(
+    {
+      zkAceBuildTransferAuthorizationV1(_from, _to, _asset, amount) {
+        capturedAmounts.push(amount);
+        return validZkAceAuthorizationPayload();
+      },
+    },
+    () => {
+      buildZkAceTransferAuthorizationV1(
+        validZkAceTransferAuthorizationOptions({ amount: "00017" }),
+      );
+      buildZkAceTransferAuthorizationV1(
+        validZkAceTransferAuthorizationOptions({ amount: 23 }),
+      );
+      buildZkAceTransferAuthorizationV1(
+        validZkAceTransferAuthorizationOptions({ amount: u128Max }),
+      );
+    },
+  );
+
+  assert.deepEqual(capturedAmounts, ["17", "23", u128Max.toString(10)]);
+});
+
+test("ZK-ACE transfer authorization sanitizes production-disabled native errors", () => {
+  const secret = Buffer.from("js-zk-ace-private-secret-1234567", "utf8");
+  const proof = "candidate-zk-ace-proof";
+  const capturedCalls = [];
+
+  withNativeBinding(
+    {
+      zkAceBuildTransferAuthorizationV1(...args) {
+        capturedCalls.push(args);
+        throw new Error(
+          `PRIVACY_FFI_ERROR_PRODUCTION_DISABLED zk-ace-pq-authorization-v0 ` +
+            `buildZkAceAuthorizationProofV1 ` +
+            `stark-fri:zk_ace_pq_authorization_v0 ` +
+            `Iroha production allowlist ${secret.toString("utf8")} ${proof}`,
+        );
+      },
+    },
+    () => {
+      const error = captureThrown(() =>
+        buildZkAceTransferAuthorizationV1(
+          validZkAceTransferAuthorizationOptions({ replaySecret: secret }),
+        ),
+      );
+
+      assert.match(error.message, /PRIVACY_FFI_ERROR_PRODUCTION_DISABLED/);
+      assert.match(error.message, /zk-ace-pq-authorization-v0/);
+      assert.match(error.message, /buildZkAceAuthorizationProofV1/);
+      assert.match(error.message, /stark-fri:zk_ace_pq_authorization_v0/);
+      assert.match(error.message, /Iroha production allowlist/);
+      assert.equal(error.message.includes(secret.toString("utf8")), false);
+      assert.equal(error.message.includes(proof), false);
+      assert.equal(String(error.stack).includes(secret.toString("utf8")), false);
+      assert.equal(String(error.stack).includes(proof), false);
+      assert.equal(error.cause, undefined);
+    },
+  );
+
+  assert.equal(capturedCalls.length, 1);
+  assert.equal(capturedCalls[0][0], "alice@wonderland");
+  assert.equal(capturedCalls[0][5].length, 32);
+  assert.deepEqual(capturedCalls[0][7], secret);
+  assert.equal(
+    capturedCalls[0][9],
+    "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+  );
+  assert.deepEqual(capturedCalls[0][10], Buffer.alloc(32, 0x55));
 });
 
 test("privacy native availability probes build and verify with Norito request archives", () => {
@@ -863,6 +1040,34 @@ test("privacy native wrappers reject oversized native output archives", () => {
       );
     },
   );
+});
+
+test("privacy native wrappers reject wrong-operation result schemas", () => {
+  for (const [operation, override, invoke] of [
+    [
+      "privacyCapabilitiesV1",
+      { privacyCapabilitiesV1: () => privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42) },
+      () => privacyCapabilitiesV1(),
+    ],
+    [
+      "privacyBuildProofV1",
+      { privacyBuildProofV1: () => privacyNoritoFrameWithSchemaOverride(0x42, 6, 0x56) },
+      () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+    ],
+    [
+      "privacyVerifyProofV1",
+      { privacyVerifyProofV1: () => privacyNoritoFrameWithSchemaOverride(0x56, 21, 0x50) },
+      () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
+    ],
+  ]) {
+    withNativeBinding(completePrivacyBinding(override), () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        invoke,
+        new RegExp(`native ${operation} returned unexpected privacy result schema`),
+      );
+    });
+  }
 });
 
 test("privacy native wrappers reject invalid Norito-framed native output", () => {

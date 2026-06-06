@@ -2,6 +2,1132 @@
 
 Last updated: 2026-06-06
 
+## 2026-06-06 C# Kagemusha record-backed prover parity
+
+- Added C# archive types and public wrappers for record-backed Kagemusha compact
+  payment-token proving and recursive aggregation proof-bundle proving.
+- Wired both wrappers to the existing `connect_norito_bridge` C symbols with
+  exact P/Invoke imports, ABI/symbol availability probes, pre-dispatch Norito
+  input validation, and post-copy native output Norito validation.
+- Added C# adversarial tests for malformed and empty-payload compact-token and
+  recursive aggregation inputs before native bridge loading, plus availability
+  probe gating for the new surfaces.
+- Pinned the C# methods, P/Invoke symbols, availability probes, and negative
+  input tests in the SDK parity guard and JS parity contract test.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`21` tests passed)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` could not run locally:
+    `.NET SDK 8.0.x` is required and `dotnet` was not found
+
+## 2026-06-06 Swift Kagemusha recursive aggregation Norito boundary
+
+- Tightened the Swift recursive aggregation proof-bundle prover so record-bundle
+  and Pallas open-envelope inputs must be valid non-empty Norito archives before
+  bridge availability checks or native dispatch.
+- Tightened Swift recursive aggregation native outputs so malformed, oversized,
+  and empty-payload Norito outputs fail closed before returning to SDK callers,
+  while preserving the explicit empty-output prover-rejection path.
+- Added Swift tests for malformed and empty-payload inputs across both input
+  positions, malformed and empty-payload native outputs, and valid native output
+  pass-through.
+- Pinned the Swift recursive aggregation input/output boundary in the JS parity
+  contract test, SDK parity guard, native-output policy guard, and Kagemusha
+  workflow paths.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`21` tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --filter KagemushaRecursiveAggregationProofBundleProverTests`
+    (`9` tests passed)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no cache files
+
+## 2026-06-06 JVM/Android Kagemusha recursive aggregation input boundary
+
+- Tightened the Kotlin/JVM and Android Java recursive aggregation proof-bundle
+  prover wrappers so record-bundle and Pallas open-envelope inputs must be
+  valid non-empty Norito archives before native availability checks or JNI
+  dispatch.
+- Reused the shared compact-token Norito input validator for both recursive
+  aggregation inputs, preserving direct malformed native probes used for
+  availability detection.
+- Updated JVM and Android Java offline-note tests to cover empty, malformed,
+  and empty-payload recursive aggregation inputs across both input positions
+  without requiring a native bridge to be present.
+- Added the Android recursive aggregation wrapper to the JVM script `javac`
+  coverage and pinned the source/test coverage in the JS parity contract test,
+  SDK parity guard, native-output policy guard, and Kagemusha workflow paths.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`20` tests passed)
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew --no-daemon -q :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveAggregationNativeProverValidatesInput'`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no cache files
+
+## 2026-06-06 JVM/Android Kagemusha compact-token input boundary
+
+- Tightened the Kotlin/JVM and Android Java non-recursive compact-token prover
+  wrappers so record-bundle inputs must be valid non-empty Norito archives
+  before native availability checks or JNI dispatch.
+- Reused the shared compact-token Norito archive validator for the input guard,
+  preserving direct malformed native probes used for availability detection.
+- Updated JVM and Android Java offline-note tests to cover empty, malformed,
+  and empty-payload compact-token record-bundle inputs without requiring a
+  native bridge to be present.
+- Pinned the mobile compact-token input boundary in the JS parity contract
+  test, SDK parity guard, and native-output policy guard.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`20` tests passed)
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+    passed; `javac` emitted only source/target 8 deprecation warnings before
+    `[IrohaAndroid] KagemushaRecursiveSpendProverTest passed.`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew --no-daemon -q :core-jvm:test --tests 'org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecordBackedNativeProverValidatesInput'`
+  - Plain full-tree `javac` for Android Java tests is not a useful local
+    validation path here; it fails before the touched test on missing external
+    BouncyCastle and Norito classes.
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no cache files
+
+## 2026-06-06 Kagemusha ABI-7 compact token verifier-context hardening
+
+- Tightened the fail-closed ABI-7 recursive compact token preverification path
+  so proof-envelope public instance columns must be canonical u64 limbs before
+  any receiver admission decision.
+- Mirrored the recursive aggregation public-input corridor that is visible in
+  compact-token envelopes: supported verifier opening lengths are enforced, and
+  zero public-input, evidence, folded-hash, transcript, verifier-parameter,
+  fixed-window table, shared-manifest, table-base, and verifier-witness batch
+  digest groups now reject before the production-unavailable gate.
+- Reconstructs the recursive aggregation public-input object from envelope
+  columns and rejects stale `recursive_public_inputs_hash` limbs before
+  backend verification.
+- ABI-7 compact-circuit preverification now rejects semantic aggregation proofs
+  renamed to `kagemusha-recursive-compact-v1` unless the envelope binds a
+  non-zero `recursive_verifier_scalar_projection_digest` public channel.
+- Fixed the C/JNI/Node ABI-7 recursive compact prover preflight so the
+  `pallasOpenEnvelopesArchive` is decoded as `iroha_zkp_halo2::OpenVerifyEnvelope`
+  Pallas opening envelopes, not the unrelated chain proof `OpenVerifyEnvelope`
+  schema, before returning the explicit compact-unavailable code; PyO3 already
+  used the correct Pallas schema and is now pinned by the policy guard.
+- Added adversarial compact-token shape coverage for forged
+  `verifier_witness_batch_digest` groups, unsupported verifier opening length,
+  non-u64 verifier metadata limbs, and stale recursive public-input hash limbs
+  plus compact-CID proofs missing scalar projection while keeping public ABI-7
+  recursive compact verification fail-closed.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-compact-token-context cargo test -p iroha_core kagemusha_recursive_compact_payment_token_preverify_binds_token_shape --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-bridge-smoke cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-doc-route`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-open`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-06 Swift Kagemusha compact-token Norito boundary
+
+- Tightened the Swift non-recursive compact-token prover so record-bundle
+  inputs must be valid non-empty Norito archives before bridge availability
+  checks or native dispatch.
+- Tightened Swift compact-token native outputs so malformed, oversized, and
+  empty-payload Norito outputs fail closed before returning to SDK callers,
+  while preserving the explicit empty-output prover-rejection path.
+- Added Swift tests for malformed and empty-payload record-bundle inputs,
+  malformed and empty-payload native outputs, and valid native output
+  pass-through.
+- Pinned the Swift compact-token input/output boundary in the JS parity
+  contract test, SDK parity guard, native-output policy guard, and Kagemusha
+  workflow path triggers.
+- Tightened the recursive compact-token Rust policy test assertion so
+  `verifier_witness_batch_digest` zero-digest rejection is pinned to the exact
+  non-zero public-instance diagnostic required by the policy guard.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`20` tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --filter KagemushaCompactPaymentTokenProverTests` (`8` tests passed)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no cache files
+
+## 2026-06-06 JVM/Android Kagemusha recursive compact input boundary
+
+- Tightened the Kotlin/JVM and Android Java ABI-7 recursive compact prover
+  wrappers so record-bundle and Pallas open-envelope inputs must be valid
+  non-empty Norito archives before native availability checks or JNI dispatch.
+- Reused the shared compact-token Norito archive validators for both input
+  positions, preserving direct malformed native probes used for availability
+  detection.
+- Added JVM and Android Java tests for empty, malformed, and empty-payload
+  recursive compact prover inputs across both input positions.
+- Pinned the JVM/Android compact prover input boundary in the JS parity
+  contract test, SDK parity guard, and native-output policy guard.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`19` tests passed)
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+    passed; `javac` emitted only source/target 8 deprecation warnings before
+    `[IrohaAndroid] KagemushaRecursiveSpendProverTest passed.`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no cache files
+
+## 2026-06-06 Swift Kagemusha native output Norito boundary
+
+- Tightened the Swift ABI-6 recursive spend wrapper so native bridge outputs
+  must be valid Norito V1 archives with non-empty payloads before the wrapper
+  returns them to SDK callers.
+- Reused the existing native archive cap and Norito padding bound for output
+  validation, preserving the explicit empty-output rejection path.
+- Added Swift tests for malformed native output, empty-payload native output,
+  and valid native output return behavior.
+- Pinned the Swift output boundary in the JS parity contract test, SDK parity
+  guard, and native-output policy guard.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`18` tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no cache files
+
+## 2026-06-06 Swift/C# Kagemusha native input Norito boundary
+
+- Tightened Swift and C# ABI-6 recursive spend wrappers so app-facing request,
+  profile, bundle, and previous-witness archives must be valid non-empty Norito
+  archives before bridge availability checks or native dispatch.
+- Tightened Swift and C# ABI-7 recursive compact prover inputs so record-bundle
+  and Pallas open-envelope archives are also preflighted as valid non-empty
+  Norito archives before native prover availability checks.
+- Preserved native availability probes by keeping their direct malformed-probe
+  bridge calls separate from app-facing wrapper validation.
+- Added Swift and C# malformed-Norito and zero-payload input coverage for
+  recursive spend and recursive compact prover entrypoints, updating native
+  output tests to use deterministic valid Norito input frames.
+- Pinned the Swift/C# input boundary in the JS parity contract test, SDK parity
+  guard, and native-output policy guard.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`17` tests passed)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_csharp_sdk.sh` failed before tests
+    because `dotnet` is not installed locally; the runner requires .NET SDK
+    `8.0.x`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    found `python/iroha_python/.pytest_cache`; after cleanup the rescan
+    returned no cache files
+
+## 2026-06-06 Kotlin/Android Kagemusha recursive spend Norito input boundary
+
+- Tightened the Kotlin/JVM and Android Java ABI-6 recursive spend native
+  wrappers so app-facing request, profile, bundle, and previous-witness
+  archives must be valid non-empty Norito archives before JNI/native dispatch.
+- Reused the existing compact-token Norito V1 validators for the recursive
+  spend input preflight, preserving native availability probes that still call
+  the bridge directly with malformed probe bytes.
+- Added adversarial malformed-Norito and zero-payload input tests for every
+  one-, two-, and three-archive recursive spend entrypoint, with deterministic
+  valid Norito frames for non-target arguments.
+- Pinned the JVM/mobile input boundary in the JS parity contract test, SDK
+  parity guard, and native-output policy guard.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`16` tests passed)
+  - `ci/check_kagemusha_recursive_spend_jvm_sdk.sh` failed before tests
+    because the inherited `JAVA_HOME` pointed at JDK 25, which the guard
+    intentionally rejects
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+    passed; `javac` emitted only source/target 8 deprecation warnings before
+    `[IrohaAndroid] KagemushaRecursiveSpendProverTest passed.`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no cache files
+
+## 2026-06-06 JS/Python Kagemusha prover Norito input boundary
+
+- Tightened JS ABI-7 recursive compact prover inputs and Python Kagemusha
+  compact-token, recursive aggregation, and recursive compact prover inputs so
+  record-bundle and Pallas open-envelope archives must be valid non-empty
+  Norito archives before native bridge dispatch.
+- Preserved native availability probes by keeping their direct malformed-probe
+  native calls separate from app-facing wrapper validation.
+- Added malformed-Norito and zero-payload adversarial input coverage for the
+  JS recursive compact prover and Python compact/aggregation/compact prover
+  wrappers, while updating native-output tests to pass deterministic valid
+  Norito input frames when they intend to reach native behavior.
+- Pinned the prover input boundary in the Kagemusha parity test, SDK parity
+  guard, native-output policy guard, and package dist unavailable-path test.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`21` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`16` tests passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`70` tests passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - isolated Python import-level prover input guard check for malformed
+    record bundle, zero-payload record bundle, malformed Pallas open-envelope,
+    and zero-payload Pallas open-envelope archives
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh && bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh && bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    after cleanup returned no cache files
+  - `git diff --check -- javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js javascript/iroha_js/test/package_dist.test.js python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- Note: `python3 -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+  could not run locally because the default Python 3.14 environment has no
+  `pytest` module installed.
+
+## 2026-06-06 Kagemusha production readiness guard
+
+- Added `ci/check_kagemusha_production_readiness.sh` to codify the current
+  offline-offline production contract: ABI-6 Reserved-lineage recursive spend
+  is the production-routed mobile payment path, while ABI-7 recursive compact
+  remains fail-closed and default-disabled until the composed private-hop
+  verifier-slice proof lands.
+- The guard checks the ABI-6 fixture manifest schema, operation count, bridge
+  ABI, exported symbol list, key limits, and expected modes; it also pins SDK
+  default selectors across Rust/data model, JavaScript, Python, Swift,
+  Kotlin/JVM, Java Android, and C# so recursive compact cannot become the
+  default route by accident.
+- Added adversarial negative controls for production-route documentation drift,
+  ABI-6 manifest drift, SDK default selection drift, ABI-7 compact fail-open
+  drift, and workflow coverage drift, then wired the guard and its controls
+  into the Kagemusha payload benchmark workflow.
+- Aligned the existing policy and SDK-parity guard needles with the wrapped
+  Python recursive compact Pallas-open-envelope validation assignment, so the
+  guards continue to prove the Norito boundary without depending on line
+  wrapping.
+- Made the C# recursive-spend SDK CI script build `connect_norito_bridge`
+  before running P/Invoke tests and export the native bridge target directory
+  on `DYLD_LIBRARY_PATH`, `LD_LIBRARY_PATH`, and `PATH`; the Kagemusha workflow
+  now also gives that job a Rust cache because the C# tests exercise native
+  bridge output handling. The SDK parity guard and JS parity meta-test now
+  include a negative control for removing that native bridge build step.
+- Fixed the Python Kagemusha empty-request regression so tests that intend to
+  validate an empty Pallas-open-envelope archive pass a valid Norito
+  record-bundle archive first.
+- Validation:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-doc-route`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-abi6-manifest`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-compact-open`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh && bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh && bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-helper-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-native-bridge-script`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected"`
+  - `ci/check_kagemusha_recursive_spend_js_sdk.sh` (`27` matching tests
+    passed, `80` skipped by test-name filters)
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `ci/check_kagemusha_recursive_spend_payload_bench.sh --self-test`
+  - `ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-payload-baseline`
+  - `ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-reserved-lineage-payload-baseline`
+  - `ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-unexpected-reserved-lineage-payload-hop`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-bridge-smoke cargo test -p connect_norito_bridge kagemusha_recursive_spend_ffi_rejects_invalid_archives_without_output --lib -- --test-threads=1`
+    (`1` passed)
+  - `ci/check_kagemusha_recursive_spend_python_sdk.sh` (`569` passed after
+    fixing the stale empty-request fixture)
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME="$(/usr/libexec/java_home -v 21)" ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+    (Kotlin/JVM targeted tests and Java Android parse/run passed; `javac`
+    emitted source/target 8 deprecation warnings)
+  - `KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`17` passed after the script built and exposed the native bridge)
+  - `git diff --check`
+
+## 2026-06-06 JS/Python Kagemusha recursive spend Norito input boundary
+
+- Tightened JS and Python ABI-6 recursive spend helper wrappers so
+  app-supplied request, profile, bundle, and previous-witness archives must be
+  valid non-empty Norito archives before native bridge dispatch.
+- Preserved the native availability probes: they still call the native bridge
+  directly with malformed probe bytes, so permissive native implementations are
+  still rejected while app-facing wrappers fail before native on malformed
+  inputs.
+- Added JS and Python malformed-input plus zero-payload input tests, and
+  updated native-output/native-error regression fixtures to use deterministic
+  valid Norito input frames when they intend to reach native behavior.
+- Pinned the JS/Python input boundary in the Kagemusha parity test, SDK parity
+  guard, and native-output policy guard coverage table.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`21` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`16` tests passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`70` tests passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - isolated Python import-level recursive-spend input guard check for
+    malformed request, zero-payload request, and malformed bundle archives
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh && bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh && bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    after cleanup returned no cache files
+  - `git diff --check -- javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- Note: `python3 -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+  could not run locally because the default Python 3.14 environment has no
+  `pytest` module installed.
+
+## 2026-06-06 JS/Python Kagemusha native Norito output boundary
+
+- Tightened JS and Python Kagemusha native-output readers so compact-token,
+  recursive aggregation, recursive compact, and recursive spend bridge outputs
+  must be valid non-empty Norito archives before SDK callers receive bytes.
+- Kept the existing empty, text, missing, and oversized output failures, then
+  added malformed-Norito and zero-payload Norito rejection with deterministic
+  valid-frame fixtures for successful native stubs.
+- Pinned the JS/Python output boundary in the Kagemusha parity test, SDK parity
+  guard, and native-output policy guard so removing the Norito validation or
+  adversarial tests is detected by CI.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`19` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`15` tests passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`70` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh && bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - isolated Python import-level native-output guard check for malformed,
+    empty-payload, and valid Norito frames
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    after cleanup returned no cache files
+  - `git diff --check -- javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- Note: `python3 -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+  could not run locally because the default Python 3.14 environment has no
+  `pytest` module installed.
+
+## 2026-06-06 ISO receipt-summary success and metadata hardening
+
+- Hardened `scripts/iso_operator_evidence_verify.py` so embedded receipt
+  verifier summaries must prove each compact receipt entry succeeded: `ok` must
+  be a boolean, `status_code` must be an HTTP status integer, `ok` must match
+  the 2xx success state, and non-2xx/redirect/failed entries are rejected even
+  if the summary's `allow_failed` policy flag is false.
+- Applied the same invariant in `scripts/iso_production_readiness.py` for both
+  canary-captured receipt summaries and direct archive receipt verification,
+  adding production blocker codes for status mismatches and unsuccessful
+  canary/archive receipt entries.
+- Added kind-specific compact metadata validation at the same aggregation
+  boundaries: notary receipts must retain canonical `anchor_sha256`,
+  `index_sha256`, and non-negative `record_count`; rail receipts must retain
+  canonical `message_type`, `payload_sha256`, and known production profile
+  metadata; cross-kind metadata and forged legacy `colr.007` compact entries
+  fail closed outside explicit local diagnostics.
+- Bound direct archive receipt verification to canary-captured receipt status
+  and metadata as well as digest and kind, so a compact canary summary cannot
+  relabel the status code, notary anchor/index/count, or rail
+  message/profile/payload metadata for a receipt digest that the direct archive
+  verifier rechecked from disk.
+- Required canary stage names to follow the canary runner's rail/notary/verify
+  sequence at both archival and readiness time, including plan-only local
+  diagnostics, so a digest-correct summary cannot reorder causality while still
+  naming every required stage.
+- Required trust profile IDs and bundle digests to remain unique across all
+  archived trust summaries, so distinct trust-summary envelopes cannot
+  double-count copied profile material in the final evidence rollup.
+- Required XSD schema and fixture paths, digests, and schema source references
+  to remain unique across all XSD summaries in the readiness rollup, while
+  keeping the replay metadata internal to the verifier output.
+- Required nested canary summaries, trust summaries, canary/archive receipt
+  entries, and trust-profile material to remain unique across all evidence
+  summaries in the readiness rollup.
+- Sanitized rail/notary adapter and receipt-verifier URL validation failures so
+  rejected secret-bearing URLs report label-only structural errors instead of
+  echoing raw URL strings, and added adversarial stderr no-leak coverage for
+  query-token URL rejection.
+- Sanitized XSD manifest and archived XSD summary absolute-path rejections so
+  they no longer echo raw untrusted path values, and added adversarial stderr
+  no-leak coverage for secret-looking absolute path segments.
+- Updated ISO evidence/readiness test fixtures to mirror real
+  `iso_operator_receipt_verify.py` output by carrying `ok`, `status_code`, and
+  per-kind metadata in compact receipt entries, and added adversarial tests for
+  missing, malformed, mismatched, redirect, failed, stripped, cross-kind,
+  archive/canary status or metadata drift, and legacy receipt metadata.
+- Validation:
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`184` tests passed)
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+    (`106` tests passed)
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (`131` tests passed)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`409` tests passed)
+
+## 2026-06-06 C# Kagemusha native Norito output boundary
+
+- Tightened the C# `KagemushaRecursiveSpendNative.ReadBridgeOutput` shared
+  native-output reader so recursive spend and recursive compact prover outputs
+  must be valid non-empty Norito archives before they are returned to SDK
+  callers.
+- Reused the SDK's internal `PrivacyNative` Norito V1 archive validation for
+  magic, header, flags, payload length, padding, and CRC checks.
+- Added C# unmanaged-buffer tests for malformed native output, zero-payload
+  native output, and valid Norito output pass-through through the actual bridge
+  output reader.
+- Pinned the C# output boundary in the Kagemusha parity test, SDK parity guard,
+  and native-output policy guard, including a recursive compact negative-control
+  mutation for the C# output validator.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`14` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet bash ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`11` tests passed)
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs javascript/iroha_js/test/kagemushaFfiContractParity.test.js ci/check_kagemusha_recursive_spend_sdk_parity.sh ci/check_kagemusha_recursive_spend_policy.sh status.md`
+
+## 2026-06-06 Swift recursive compact prover Norito output boundary
+
+- Tightened the Swift ABI-7 recursive compact prover wrapper so native compact
+  token outputs must be valid non-empty Norito archives before they are
+  returned to SDK callers.
+- Reused the existing Swift Norito frame parser and the 64-byte max header
+  padding cap already used for recursive compact verifier inputs.
+- Added Swift tests for malformed native output, zero-payload native output,
+  and valid Norito output pass-through while preserving the existing empty
+  native-output rejection behavior.
+- Pinned the Swift output preflight and tests in the Kagemusha parity test plus
+  SDK parity guard, including recursive compact verifier negative-control
+  mutations.
+- Validation:
+  - `swift test --filter KagemushaRecursiveCompactPaymentTokenProverTests`
+    from `IrohaSwift/` (`13` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`14` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift javascript/iroha_js/test/kagemushaFfiContractParity.test.js ci/check_kagemusha_recursive_spend_sdk_parity.sh status.md`
+
+## 2026-06-06 C#/Swift recursive compact verifier Norito input boundary
+
+- Tightened the C# and Swift ABI-7 recursive compact verifier wrappers so
+  compact-token verifier inputs must be valid non-empty Norito archives before
+  native bridge dispatch.
+- C# now reuses the SDK's internal Norito V1 archive validator before calling
+  `connect_norito_kagemusha_verify_recursive_compact_payment_token`.
+- Swift now uses the shared Norito frame parser, enforces the same 64-byte max
+  header padding cap, and exposes explicit malformed and zero-payload SDK
+  errors.
+- Updated C# and Swift recursive compact verifier tests with malformed-byte and
+  zero-payload archive rejection, and switched Swift native-stub verifier tests
+  to deterministic valid Norito frames.
+- Pinned the C#/Swift preflight calls and negative tests in the Kagemusha parity
+  test and SDK parity guard, including recursive compact verifier
+  negative-control mutations.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`14` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `swift test --filter KagemushaRecursiveCompactPaymentTokenProverTests`
+    from `IrohaSwift/` (`10` tests passed)
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs javascript/iroha_js/test/kagemushaFfiContractParity.test.js ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+- Note: `dotnet` is not installed in this environment, so the focused C# test
+  command could not be executed locally.
+
+## 2026-06-06 JS/Python recursive compact verifier Norito input boundary
+
+- Tightened JS and Python ABI-7
+  `kagemushaVerifyRecursiveCompactPaymentToken` wrappers so recursive compact
+  verifier inputs must be valid non-empty Norito archives before native
+  verifier dispatch.
+- Added SDK-side Norito header, flags, payload-length, padding, and CRC64
+  preflight checks without imposing a privacy schema byte on Kagemusha archives.
+- Updated JS package/dist tests and Python Kagemusha tests to use deterministic
+  valid Norito frames when exercising native verifier stubs, and added
+  malformed-byte plus zero-payload rejection coverage.
+- Pinned the new JS/Python preflight calls and negative tests in the Kagemusha
+  parity test and SDK parity guard, including recursive compact verifier
+  negative-control mutations.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`17` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`14` tests passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`70` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `PYTHONPATH=python/iroha_python/src python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - direct isolated Python verifier-boundary script with a stub `_native`
+    module (`python recursive compact verifier preflight passed`)
+  - `git diff --check -- javascript/iroha_js/src/crypto.js javascript/iroha_js/dist/crypto.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' -o -name '.pytest_cache' \) -print`
+    returned no files after cleanup.
+- Note: the local default Python is `3.14.5` and does not have `pytest`
+  installed, so the targeted `python3 -m pytest` run could not be completed in
+  this environment.
+
+## 2026-06-06 Kagemusha recursive compact mobile verifier input boundary
+
+- Tightened the Java Android and Kotlin/JVM ABI-7
+  `KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken`
+  wrappers so compact-token verifier input must be a valid non-empty Norito
+  archive before JNI dispatch.
+- Reused the shared mobile Kagemusha Norito archive validator, adding
+  fail-closed SDK errors for malformed compact-token archives and zero-payload
+  Norito frames before the native verifier is called.
+- Extended Java and Kotlin recursive spend tests with malformed-byte and
+  empty-payload recursive compact verifier inputs, and pinned the source/test
+  contract in the Kagemusha JS parity test plus SDK parity guard.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`14` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest.exposesStableModesAndCircuitIds --console=plain`
+    from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android/`
+  - `git diff --check -- java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt javascript/iroha_js/test/kagemushaFfiContractParity.test.js ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-06 Kagemusha recursive spend mobile Norito output boundary
+
+- Tightened the Java Android and Kotlin/JVM
+  `KagemushaRecursiveSpendProver.requireRecursiveSpendOutput` helpers so ABI-6
+  recursive spend native outputs must be valid non-empty Norito archives, not
+  arbitrary non-empty byte arrays.
+- Reused the shared mobile Kagemusha Norito archive validator added for compact
+  tokens, so recursive spend native outputs now fail closed on malformed
+  headers, unsupported flags, bad padding, CRC mismatch, and zero-payload
+  frames before returning to SDK callers.
+- Extended Java and Kotlin recursive spend tests with malformed-byte,
+  empty-payload, and deterministic valid Norito output fixtures, and pinned the
+  contract in the Kagemusha JS parity test plus policy guard native-output-cap
+  coverage.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`14` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest.rejectsNullAndEmptyNativeRedeemOutput --console=plain`
+    from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android/`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `git diff --check -- java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt javascript/iroha_js/test/kagemushaFfiContractParity.test.js ci/check_kagemusha_recursive_spend_policy.sh`
+
+## 2026-06-06 Kagemusha compact-token mobile Norito output boundary
+
+- Tightened the Java Android and Kotlin/JVM
+  `KagemushaCompactPaymentTokenProver.requireNativeOutput` helpers so native
+  compact-token and recursive-aggregation outputs must be valid non-empty
+  Norito archives, not merely non-null byte arrays.
+- Added local Norito header, padding, payload-length, and CRC64 validation to
+  both mobile helpers, with fail-closed errors for malformed native archives and
+  zero-payload Norito frames.
+- Extended the Java and Kotlin offline tests with malformed-byte, empty-payload,
+  and deterministic valid Norito output fixtures, and pinned the contract in the
+  Kagemusha JS parity test plus policy guard native-output-cap coverage.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`14` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-native-output-cap`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaNativeProversRejectMissingAndEmptyNativeOutputs --console=plain`
+    from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    from `java/iroha_android/`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `git diff --check -- java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt javascript/iroha_js/test/kagemushaFfiContractParity.test.js ci/check_kagemusha_recursive_spend_policy.sh`
+
+## 2026-06-06 C# privacy output schema explicit boundary
+
+- Tightened the C# privacy native output decoder so successful native outputs
+  require explicit operation-specific expected schema bytes instead of
+  inferring schemas from the FFI symbol.
+- `CallCapabilities` and `CallProof` now resolve supported result schemas
+  before native dispatch and pass them into the decoder, while the decoder
+  rejects schema-less calls, unknown operation symbols, and mismatched expected
+  schema sets fail-closed.
+- Added C# adversarial tests for schema-less decoder calls and deliberate
+  expected-schema confusion, and extended JS parity plus guard snippets to pin
+  the explicit-schema contract.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs javascript/iroha_js/test/privacyFfiContractParity.test.js ci/check_privacy_sdk_guard.sh`
+  - C# unit tests were not run locally because `dotnet` is not installed in
+    this environment.
+
+## 2026-06-06 Kagemusha recursive spend verify request fail-closed boundary
+
+- Tightened ABI-6 recursive spend verify archive handling in the C bridge,
+  Node host, and PyO3 host so decoded
+  `KagemushaRecursiveSpendVerifyRequestV1` values must pass the same
+  request-level public-binding validation as init, append, and redeem before a
+  native verify result is returned.
+- Malformed verify requests now fail at the ABI boundary, including
+  Reserved-lineage bundles missing `lineage_verifier_record`, forged
+  lineage-record commitments, unsupported proof backends, and empty proof
+  attachments. Attachment-valid bundles with invalid proof envelopes still
+  return a diagnostic `KagemushaRecursiveSpendVerifyResultV1`.
+- Updated the public C header, SDK READMEs, offline Kagemusha docs, and
+  recursive spend policy guard to pin the hard malformed-request boundary
+  separately from diagnostic proof-result handling, document ABI-6-or-later
+  native availability, and list the complete nine-entry recursive spend ABI.
+- Added the missing Kagemusha payload workflow path triggers for the Kotlin/JVM
+  and Java Android `OfflineNoteTest` native-output fail-closed coverage so those
+  adversarial tests rerun when touched.
+- Extended the Swift and JVM focused Kagemusha SDK guard scripts to parse/compile
+  the recursive compact wrapper files that are now part of the ABI-7
+  source-stable surface.
+- Tightened the C# focused Kagemusha SDK guard script so missing local .NET 8
+  tooling reports an explicit prerequisite error instead of a raw shell
+  `dotnet: command not found` failure.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo build --workspace`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-build cargo build -p connect_norito_bridge`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-build cargo build -p iroha_js_host`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo clippy -p connect_norito_bridge -p iroha_js_host --all-targets --no-deps -- -D warnings`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-target cargo test -p connect_norito_bridge kagemusha_recursive_spend_verify_ --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-target cargo test -p iroha_js_host kagemusha_recursive_spend_verify_ --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo test -p connect_norito_bridge kagemusha_native_archive_writer_rejects_empty_and_oversized_outputs --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_rejects_backend_invalid_lineage --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-python-rs-target cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_recursive_spend_verify_python_function --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-core-kagemusha-target cargo test -p iroha_core kagemusha_recursive_spend_verify_result_requires_matching_lineage_record --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-core-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_spend_rejects_malformed_notes_and_lineage --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-core-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --test-threads=1`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=$(/usr/libexec/java_home -v 21) bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh` (`23` matched tests
+    passed; `78` unrelated tests skipped by name pattern)
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh` (`563 passed`)
+  - `bash -n ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN=/tmp/iroha-dotnet/sdk/dotnet bash ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+    (`11` tests passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew --no-daemon :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet`
+    from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --console=plain`
+    from `java/iroha_android/` (`BUILD SUCCESSFUL`, `91` actionable tasks)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check`
+
+## 2026-06-06 Kotlin privacy output schema non-null boundary
+
+- Tightened the Kotlin/JVM privacy native output decoder so its internal
+  `requireNativeOutput` boundary accepts a concrete `Int` expected schema byte
+  instead of a nullable schema marker.
+- The decoder now rejects explicit negative expected schema markers as
+  unsupported privacy operations before validating or copying any native output
+  archive, matching the fail-closed Java/Swift/C# behavior.
+- Extended Kotlin tests, JS parity assertions, and SDK guard snippets so the
+  cross-SDK operation-schema negative control pins the non-null output schema
+  contract and explicit `-1` rejection.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --console=plain`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `git diff --check` on the touched Kotlin/privacy guard files
+  - Python bytecode/cache scan under `python/iroha_python`
+  - Lockfile status check for Cargo, npm/yarn/pnpm, Python, and Swift
+- No lockfiles were modified. Existing long-running Rust/JVM/Python processes
+  were not interrupted.
+
+## 2026-06-06 JS/Python privacy schema helper no-wildcard boundary
+
+- Tightened JavaScript `src`/`dist` and Python privacy Norito archive
+  validators so missing, `None`, negative, out-of-range, or unknown expected
+  schema markers fail closed instead of acting as all-schema wildcards.
+- Made JS and Python operation-schema resolvers reject unsupported privacy
+  native operations with deterministic unsupported-operation errors before a
+  valid-looking native archive can be accepted.
+- Added JS wrapper coverage for wrong-operation native result schemas and
+  Python helper-level tests for missing, `None`, negative, oversized, wrong,
+  and matching schema markers plus unknown operation-schema rejection.
+- Extended the parity test and SDK guard snippets so cross-SDK operation-schema
+  negative controls pin the JS/Python no-wildcard helper behavior.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyNative.test.js`
+    (`27` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `PYTHONPATH=python/iroha_python/src:python/norito_py/src /Users/mtakemiya/Library/Caches/pypoetry/virtualenvs/iroha-torii-tests-vJArI1oY-py3.11/bin/python -m pytest -q python/iroha_python/tests/crypto_algorithms_test.py -k 'privacy_norito_archive_validator_requires_explicit_expected_schema or privacy_native_output_archive_rejects_unknown_operation_schema or privacy_native_wrappers_reject_wrong_operation_result_schemas'`
+    (`3` tests passed, `35` deselected)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh` (completed JS/privacy guard suites and
+    `903` Python SDK tests)
+  - `git diff --check` on the touched JS/Python privacy guard files
+  - Python bytecode/cache scan and cleanup under `python/iroha_python`
+  - Lockfile status check for Cargo, npm/yarn/pnpm, Python, and Swift
+- No lockfiles were modified. Existing long-running Rust/JVM/Python processes
+  were not interrupted.
+
+## 2026-06-06 Java/Kotlin privacy schema matcher no-wildcard boundary
+
+- Tightened Android Java and Kotlin/JVM privacy Norito schema matchers so
+  missing or negative expected schema markers fail closed instead of matching
+  every privacy result schema.
+- Added direct Java and Kotlin schema-matcher tests proving valid capability
+  archives are rejected with `-1` expected schema markers, rejected under wrong
+  schemas, and accepted only under the explicit matching schema.
+- Extended the JS parity test and SDK guard snippets so the cross-SDK
+  operation-schema negative control pins the Java/Kotlin no-wildcard schema
+  matcher behavior and direct tests.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `tmpdir=$(mktemp -d /tmp/iroha-java-privacy-test.XXXXXX) && javac -d "$tmpdir" java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java && java -ea -cp "$tmpdir" org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --console=plain`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `git diff --check` on the touched Java/Kotlin privacy guard files
+  - Python bytecode/cache scan under `python/iroha_python`
+  - Lockfile status check for Cargo, npm/yarn/pnpm, Python, and Swift
+- No lockfiles were modified. Existing long-running Rust/JVM/Python processes
+  were not interrupted.
+
+## 2026-06-06 Kagemusha ABI-7 recursive compact bridge preverification
+
+- Tightened the fail-closed ABI-7 recursive compact bridge without enabling
+  compact admission. The C bridge, JNI shim, Node host, and PyO3 host now decode
+  the Pallas opening archive before returning the unavailable diagnostic, and
+  receiver verification runs the core recursive compact preverification gate
+  before returning a result.
+- Malformed compact-token archives, malformed token/public-input bindings, and
+  malformed Pallas opening archives now reject as malformed input; only
+  shape-valid but production-disabled ABI-7 compact tokens return `valid = 0`.
+- Extended the recursive Kagemusha policy and SDK parity guards so the Pallas
+  archive decode, core preverify call, and tightened public C header contract
+  cannot drift.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-target cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-target cargo test -p iroha_js_host kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-python-rs-target cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle --lib`
+
+## 2026-06-06 C# privacy schema matcher no-wildcard boundary
+
+- Tightened the C# privacy Norito schema matcher so an empty expected-schema
+  set fails closed instead of matching every privacy result schema.
+- Added a direct C# unit test proving valid capability archives are rejected
+  when no expected schema is supplied, rejected under a wrong schema, and
+  accepted only under explicit matching or allowed result schemas.
+- Extended the JS parity test and SDK guard snippets so the cross-SDK
+  operation-schema negative control pins the C# no-wildcard schema matcher and
+  its explicit-schema test coverage.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `git diff --check` on the touched C#/privacy guard files
+  - Python bytecode/cache scan under `python/iroha_python`
+  - Lockfile status check for Cargo, npm/yarn/pnpm, Python, and Swift
+- `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~PrivacyNativeSchemaMatcherRequiresExplicitExpectedSchemas --no-restore`
+  could not run in this shell because `dotnet` was not installed. Existing
+  long-running Rust/JVM/Python processes were not interrupted.
+
+## 2026-06-06 Swift privacy output schema compile-time boundary
+
+- Tightened Swift privacy output helpers so `PrivacyNativeBridge.call`,
+  `NoritoNativeBridge.readPrivacyNativeOutput`, and the Swift privacy schema
+  validators require concrete result schema bytes instead of accepting optional
+  or defaulted schema arguments.
+- Removed the Swift schema wildcard path where a missing expected schema could
+  be treated as an all-schema match inside privacy output validation.
+- Updated Swift privacy tests to keep explicit expected schemas on request and
+  native-output rejection paths, while relying on the stricter helper
+  signatures to prevent schema-less calls from compiling.
+- Extended the JS parity test and SDK guard snippets so the cross-SDK
+  operation-schema negative control pins the Swift no-wildcard/no-default
+  contract.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `swift test --package-path IrohaSwift --filter PrivacyNativeBridgeTests/testRejectsWrongOperationSchemaNativeOutputs`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `git diff --check` on the touched Swift privacy/schema files
+  - Python bytecode/cache scan under `python/iroha_python`
+  - Lockfile status check for Cargo, npm/yarn/pnpm, Python, and Swift
+- No lockfiles were modified. Existing long-running Rust/JVM/Python processes
+  were not interrupted.
+
+## 2026-06-06 Kagemusha mobile lineage key artifact packages
+
+- Added typed portable lineage key artifact package helpers to Swift,
+  Kotlin/JVM, and Java Android recursive spend SDKs. The helpers build init and
+  append packages for the release Reserved-lineage profiles, defensively copy
+  key material, and expose a shared validator for preflight use by wallet code.
+- The SDK validators reject unknown profile ids, unsupported Pallas verifier
+  opening lengths, non-`halo2/ipa` verifier backends, empty verifier keys, and
+  empty proving-key archives before a native request archive can be built.
+- Extended focused mobile SDK tests and recursive Kagemusha policy/parity
+  guards so the portable package helpers and negative coverage are pinned.
+- Validation:
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --console=plain`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home) ./gradlew :core:testClasses --console=plain --stacktrace`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home); "$JAVA_HOME/bin/java" -ea -cp 'core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest`
+  - `cd IrohaSwift && swift test --filter KagemushaRecursiveSpendProverTests`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-06 Cross-SDK privacy probe schema hardening
+
+- Hardened privacy native availability probes so Swift, Android Java,
+  Kotlin/JVM, and C# helpers require an explicit expected Norito result schema
+  before accepting a native probe output archive.
+- Removed the Android Java schema-less `returnsOutputProbe` overload, changed
+  Kotlin/JVM probe validation to require a non-null schema, and made the C#
+  probe validator reject otherwise valid success archives when no expected
+  schema is supplied.
+- Updated Swift, Java, Kotlin, and C# probe tests to reject valid non-empty
+  Norito archives under the wrong or missing schema while preserving positive
+  coverage for capabilities, build, and verify result schemas.
+- Extended the JS parity test and SDK guard snippets so the cross-SDK
+  operation-schema negative control now covers explicit probe schema
+  requirements and the schema-less regression cases.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `git diff --check` on the touched privacy probe/schema files
+  - Python bytecode/cache scan under `python/iroha_python`
+  - `Cargo.lock` status check
+- No lockfiles were modified. The pre-existing long-running Rust `cargo test`
+  process was still active and was not interrupted.
+
+## 2026-06-06 Cross-SDK privacy operation-schema fail-closed boundary
+
+- Hardened Swift, Android Java, Kotlin/JVM, and C# privacy native output
+  wrappers so managed SDK helpers cannot accept a valid Norito privacy result
+  under an unknown or missing operation schema. Unknown operation labels now
+  fail closed instead of falling through to "any privacy schema" behavior.
+- Moved Java/Kotlin generic proof dispatch schema lookup before native callback
+  invocation, and added the equivalent C# `RequireKnownPrivacyResultSymbol`
+  gate before native proof/capabilities dispatch.
+- Added adversarial mobile/C#/Swift tests proving unknown operation labels are
+  rejected, native callbacks are not invoked for unsupported operations, and
+  Swift native output pointer buffers are still freed when the expected schema
+  is missing.
+- Extended the privacy FFI parity test and SDK guard snippets so the
+  cross-SDK operation-schema negative control catches regressions in the new
+  unknown-operation fail-closed checks.
+- Validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh` (completed JS guard stages, built the
+    Python native extension through `maturin`, and finished with
+    `901 passed` in the Python suite)
+  - `git diff --check` on the touched privacy operation-schema files
+  - Python bytecode/cache scan under `python/iroha_python`; generated
+    `.pytest_cache` was removed after the full guard
+  - Lockfile status check for Cargo, npm, yarn, pnpm, and Python lockfiles
+- No lockfiles were modified. A pre-existing long-running Rust `cargo test` and
+  a separate Python unittest process were still active after validation and were
+  not interrupted.
+
+## 2026-06-06 Kagemusha recursive spend portable lineage key artifacts
+
+- Added `KagemushaRecursiveSpendLineageKeyArtifactsV1`, a Norito-encoded
+  Reserved-lineage key package that binds the one-hop or append circuit id,
+  supported Pallas verifier opening length, lineage verifier key, and lineage
+  proving-key archive for release/mobile bundles.
+- Added init and append request builders that accept the package while rejecting
+  wrong profile packages, unsupported opening lengths, non-`halo2/ipa`
+  backends, empty verifier keys, empty proving archives, and semantic append
+  attachment.
+- Refreshed the shared ABI-6 recursive-spend archive fixture after the branch's
+  recursive proof public inputs gained the folded public-input hash limb group,
+  and updated the policy guard's public-instance width and archive hash pins.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib -- --nocapture`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-06 Kagemusha recursive ABI probe bounds
+
+- Hardened the JS and Python recursive Kagemusha bridge ABI probes so malformed
+  managed/native bindings cannot advertise support with strings, bools,
+  fractional values, negative values, unsafe JS integers, or over-`u32`
+  versions. The same clamp protects ABI 6 recursive spend and ABI 7 recursive
+  compact payment-token availability checks.
+- Extended JS source/dist and Python Kagemusha tests with adversarial ABI probe
+  values, including `Number.NaN`, `Number.POSITIVE_INFINITY`,
+  `Number.MAX_SAFE_INTEGER + 1`, `0x1_0000_0000`, `6.5`, `"6"`, and
+  `10**100`.
+- Extended the recursive Kagemusha FFI parity suite, source-only SDK parity
+  guard, workflow negative-control inventory, and guard negative control so the
+  u32 upper-bound check cannot be weakened without detection.
+- Rebuilt `javascript/iroha_js/dist/crypto.js`; the dist build also refreshed
+  `javascript/iroha_js/dist/crypto.browser.js` from existing JS source changes.
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3` source compile check
+    for `python/iroha_python/src/iroha_python/kagemusha.py` and
+    `python/iroha_python/tests/kagemusha_test.py`
+  - `node --test --test-name-pattern 'Kagemusha recursive spend availability requires bridge ABI 6' javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern 'package dist Kagemusha recursive spend availability rejects coerced ABI versions' javascript/iroha_js/test/package_dist.test.js`
+  - `node --test --test-name-pattern 'recursive Kagemusha ABI probes reject unsafe and out-of-range versions' javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (`17` tests passed)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`13` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_kagemusha_recursive_spend_sdk_parity.sh | sed '$d')`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds`
+  - `git diff --check` on the touched Kagemusha ABI-probe JS/Python/guard/workflow files
+  - Python bytecode cache scan under `python/iroha_python`; generated caches
+    were removed after the pytest attempt.
+  - Lockfile status check for Cargo, npm, yarn, and pnpm lockfiles
+- Focused Python pytest for the Kagemusha ABI probe test could not be run
+  locally because `/opt/homebrew/bin/python3` has no `pytest` module installed.
+  No packages were added.
+
+## 2026-06-06 JS/Python privacy ABI probe bounds
+
+- Hardened JS and Python privacy native availability probes so bridge ABI
+  versions must be non-negative native-width integers before any FFI surface is
+  treated as available. JS now requires safe integer `Number` values within the
+  `u32` ABI range, and Python rejects bool, non-int, negative, and over-`u32`
+  probe results.
+- Added adversarial SDK tests for negative, fractional, NaN/infinite, unsafe,
+  and over-`u32` ABI probe values, plus parity coverage across JS source/dist
+  and Python source/tests.
+- Extended the source-only privacy SDK guard, workflow negative-control
+  inventory, and guard negative control so regressing from
+  `Number.isSafeInteger` back to a weaker integer check is caught before the
+  aggregate guard runs.
+- Rebuilt `javascript/iroha_js/dist/crypto.js`; the dist build also refreshed
+  `javascript/iroha_js/dist/crypto.browser.js` from the already-modified JS
+  sources.
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3` source compile check
+    for `python/iroha_python/src/iroha_python/crypto.py` and
+    `python/iroha_python/tests/crypto_algorithms_test.py`
+  - `node --test --test-name-pattern 'privacy native availability requires all raw archive methods' javascript/iroha_js/test/privacyNative.test.js`
+  - `node --test --test-name-pattern 'privacy native ABI probes reject unsafe and out-of-range versions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyNative.test.js` (`26` tests
+    passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`59` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_privacy_sdk_guard.sh | sed '$d')`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-privacy-abi-probe-bounds-coverage`
+  - `git diff --check` on the touched ABI-probe JS/Python/guard/workflow files
+  - Python bytecode cache scan under `python/iroha_python`
+  - Lockfile status check for Cargo, npm, yarn, and pnpm lockfiles
+- Focused Python pytest for the ABI probe tests could not be run locally
+  because `/opt/homebrew/bin/python3` has no `pytest` module installed. No
+  packages were added.
+
 ## 2026-06-06 Sumeragi finality-source certified source-stack proof
 
 - Added `FinalitySourceActionMatchesCertifiedSourceStackStep` and
@@ -11155,6 +12281,4032 @@ Last updated: 2026-06-06
   - `git diff --exit-code -- Cargo.lock` (passed)
   - `rg -n "^(<<<<<<<|=======|>>>>>>>)" ...` across touched crypto, core,
     fixture, SDK validator, status, roadmap, and backlog files (no matches)
+## 2026-06-05 Python privacy typed-buffer Norito boundary
+
+- Hardened the Python privacy native bridge so request archives and native
+  result archives must be backed by unsigned byte-element buffers before Norito
+  header validation. Ambiguous typed buffers such as signed-byte `array("b")`
+  and wide `array("H")` views now fail before native proof dispatch or native
+  output admission.
+- Added adversarial Python tests for signed-byte and wide typed-buffer request
+  archives, with a must-not-dispatch native stub, and for typed native outputs
+  across capability, build-proof, and verify-proof result paths.
+- Extended the JS FFI parity suite and source-only SDK guard so the Python
+  unsigned-byte-view helper and typed-buffer rejection tests are pinned with the
+  existing sliced byte-view coverage.
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3` source compile check
+    for `python/iroha_python/src/iroha_python/crypto.py` and
+    `python/iroha_python/tests/crypto_algorithms_test.py`
+  - `node --test --test-name-pattern 'JS and Python privacy native tests pin sliced byte-view request handling|JS and Python privacy native tests pin sliced byte-view native output handling' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`58` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_privacy_sdk_guard.sh | sed '$d')`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-sliced-view-boundary-coverage`
+- Focused Python pytest for the new `ambiguous_typed` tests could not be run
+  locally because `/opt/homebrew/bin/python3` has no `pytest` module installed.
+  No packages were added.
+
+## 2026-06-05 Cross-SDK privacy Norito zero-payload coverage
+
+- Extended Swift, Kotlin/JVM, Java Android, and C# privacy native bridge tests
+  so structurally valid Norito V1 archives with declared payload length `0`
+  are rejected before proof native dispatch for request schema `0x52`.
+- Extended native-output rejection coverage across the result schemas
+  `0x50`/`0x42`/`0x56`, keeping capability, build-proof, and verify-proof
+  result handling fail-closed on empty privacy result payloads.
+- Tightened the JS FFI contract parity test and source-only privacy SDK guard
+  so mobile, Swift, C#, Python, and JS tests must keep explicit zero-payload
+  Norito request/result coverage.
+- Validation:
+  - `node --test --test-name-pattern 'Swift privacy native tests reject malformed request archives before dispatch|mobile and C# privacy native tests reject adversarial malformed request archives before dispatch|SDK privacy native tests reject malformed native output archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`58` tests passed)
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_privacy_sdk_guard.sh | sed '$d')`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-malformed-request-no-dispatch-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-native-output-boundary-coverage`
+  - JDK 21 standalone Java compile/run for
+    `org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest`
+    (`[IrohaAndroid] PrivacyNativeBridgeTest passed.`)
+  - `swift test --package-path IrohaSwift --filter PrivacyNativeBridgeTests/testRejectsInvalidNoritoRequestArchivesBeforeBridgeCall`
+  - `swift test --package-path IrohaSwift --filter PrivacyNativeBridgeTests/testRejectsInvalidNoritoNativeOutput`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:clean :core-jvm:test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest --console=plain`
+- The first Kotlin/JVM focused test run without `clean` failed with stale
+  module-metadata `NoSuchMethodError` entries from previous build outputs; the
+  clean scoped run passed. C# runtime tests were not run because `dotnet`,
+  `csc`, and `mcs` are not available on `PATH`.
+
+## 2026-06-05 Python privacy Norito zero-payload rejection
+
+- Hardened the Python privacy FFI Norito archive validator so a caller-supplied
+  request archive with declared payload length `0` is rejected as an empty
+  privacy request before native dispatch, and native capability/build/verify
+  result archives with declared payload length `0` are rejected as empty privacy
+  result payloads.
+- Added adversarial Python test coverage for empty request payload archives and
+  empty native result payload archives across all three public privacy FFI
+  operations: `privacy_capabilities_v1`, `privacy_build_proof_v1`, and
+  `privacy_verify_proof_v1`.
+- Extended the JS FFI contract parity suite and source-only privacy SDK guard so
+  Python cannot drift back to accepting zero-payload Norito request/result
+  frames while JS remains fail-closed.
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3` source compile check
+    for `python/iroha_python/src/iroha_python/crypto.py` and
+    `python/iroha_python/tests/crypto_algorithms_test.py`
+  - `node --test --test-name-pattern 'Python privacy native tests reject adversarial malformed request archives before dispatch|SDK privacy native tests reject malformed native output archives|privacy native availability proof probes use shared Norito request archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`58` tests passed)
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_privacy_sdk_guard.sh | sed '$d')`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-malformed-request-no-dispatch-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-native-output-boundary-coverage`
+- Focused Python runtime/pytest execution could not be run locally because the
+  available Python interpreters lack `pytest` and the import-time `norito`
+  module. No packages were added.
+
+## 2026-06-05 Python ZK-ACE transaction amount preflight
+
+- Hardened the Python high-level transaction draft path for
+  `zk_ace_authorized_transfer()` so the SDK rejects amounts that are not
+  positive decimal `u128` literals before calling the lower-level native
+  instruction constructor. The draft now rejects zero, negatives, floats,
+  `Decimal`, bools, exponent/signed/fractional strings, over-`u128` values,
+  missing values, lists, and arbitrary objects while canonicalizing accepted
+  values such as `00017`, safe integers, and `u128::MAX`.
+- Kept generic shield/unshield amount helpers unchanged; this stricter
+  boundary is specific to ZK-ACE and matches the Python proof-builder amount
+  contract.
+- Added Python client/draft regression coverage and extended the JS catalog
+  parity test plus the source-only privacy SDK guard to pin the Python
+  transaction/client annotation, normalizer, and adversarial cases.
+- Validation:
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/tx.py python/iroha_python/src/iroha_python/client.py python/iroha_python/tests/client_ledger_helpers_test.py`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs stay fail-closed and in parity across JS and Python' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_privacy_sdk_guard.sh | sed '$d')`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage`
+- Focused pytest for `tests/client_ledger_helpers_test.py` could not be run
+  locally because none of the available Python interpreters had `pytest`
+  installed, and no packages were added.
+
+## 2026-06-05 ZK-ACE authorized-transfer typed amount preflight
+
+- Hardened the JS typed ZK-ACE proof and authorized-transfer instruction
+  builders so `amount` must normalize to a positive JSON-safe `u128` before
+  producing proof public inputs or `zk::SubmitZkAceAuthorizedTransfer` payloads.
+  Zero, negative, fractional, exponent/signed strings, unsafe JS numbers,
+  over-safe BigInts, booleans, arrays, missing values, and hostile stringifier
+  objects now fail before instruction assembly.
+- Added source-only adversarial JS coverage for the typed builders and made the
+  malformed amount/replay test run through the plain descriptor test runner so
+  this coverage is not skipped when the optional native JS host binding is
+  unavailable.
+- Extended the JS catalog parity test and source-only privacy SDK guard to pin
+  the positive-amount helper in JS source/dist, the non-native test runner, and
+  the malformed/canonical amount cases.
+- Validation:
+  - `npm run build:dist --prefix javascript/iroha_js`
+  - `node --test --test-name-pattern 'ZK-ACE builders reject malformed proof and replay inputs' javascript/iroha_js/test/instructionBuilders.test.js`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs stay fail-closed and in parity across JS and Python' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/instructionBuilders.test.js`
+    (`49` passed, `93` native-gated skips)
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_privacy_sdk_guard.sh | sed '$d')`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage`
+- Full native privacy guard/cargo tests were not rerun because the long ignored
+  `iroha_core` cargo test was still active and was not interrupted.
+
+## 2026-06-05 ZK-ACE proof-builder amount preflight
+
+- Hardened the JS and Python ZK-ACE transfer authorization proof-builder
+  wrappers so transfer `amount` is normalized as a positive decimal `u128`
+  before native dispatch. Zero, negative, fractional, exponent, signed,
+  out-of-range, missing, boolean, bytes/array/object, and hostile stringifier
+  inputs now fail in the public SDK wrapper without reaching native proof code.
+- Fixed a wrapper-ordering bug exposed by the new tests: JS and Python now
+  perform local ZK-ACE argument normalization before entering the native-error
+  sanitizer, so local validation failures keep precise input errors instead of
+  being rewritten as generic native prover failures.
+- Added JS and Python adversarial coverage for malformed amount rejection,
+  hostile stringification non-use, no native dispatch on invalid amounts, and
+  canonical dispatch of positive amounts such as `00017`, safe numeric values,
+  and `u128::MAX`.
+- Extended the JS parity test and source-only privacy SDK guard so JS
+  source/dist and Python source/tests must keep the positive-u128 preflight and
+  validation-before-native-dispatch ordering.
+- Validation:
+  - `npm run build:dist --prefix javascript/iroha_js`
+  - `node --test --test-name-pattern 'ZK-ACE transfer authorization rejects malformed amounts|ZK-ACE transfer authorization canonicalizes positive u128 amounts|ZK-ACE transfer authorization sanitizes production-disabled native errors' javascript/iroha_js/test/privacyNative.test.js`
+  - `node --test javascript/iroha_js/test/privacyNative.test.js`
+    (`26` tests passed)
+  - `node --test --test-name-pattern 'ZK-ACE public proof builders sanitize production-disabled native errors' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`58` tests passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3` source compile check
+    for `python/iroha_python/src/iroha_python/crypto.py` and
+    `python/iroha_python/tests/privacy_catalog_test.py`
+  - `PYTHONDONTWRITEBYTECODE=1 /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest tests/privacy_catalog_test.py`
+    from `python/iroha_python` (`497` tests passed)
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 - "$(pwd)" "" < <(sed -n '/^import re$/,/^PY$/p' ci/check_privacy_sdk_guard.sh | sed '$d')`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-public-proof-builder-native-error-sanitizer-coverage`
+- Full native privacy guard/cargo tests were not rerun because the long ignored
+  `iroha_core` cargo test was still active and was not interrupted.
+
+## 2026-06-05 ZK-ACE public proof-builder error sanitizer
+
+- Hardened the JS and Python ZK-ACE public proof-builder paths so native
+  `PRIVACY_FFI_ERROR_PRODUCTION_DISABLED` failures preserve the stable
+  production-disabled/profile/allowlist diagnostic while dropping any native
+  witness or candidate-proof text from the public error, stack, and cause
+  surfaces.
+- Added JS runtime and Python regressions for hostile native ZK-ACE prover
+  errors, including checks that the public builders still pass the exact
+  `stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0` verifier key
+  profile into the native call.
+- Extended `privacyFfiContractParity.test.js`, `ci/check_privacy_sdk_guard.sh`,
+  and the PR privacy SDK guard workflow with
+  `--negative-control-zk-ace-public-proof-builder-native-error-sanitizer-coverage`
+  so JS source/dist, instruction-builder, Python, and runtime sanitizer
+  coverage cannot drift.
+- Fixed a Python privacy catalog validation ordering regression uncovered by
+  the full guard attempt: required production rows now report the missing
+  planned production proof-builder gate before the stricter exact planned SDK
+  entrypoint inventory mismatch.
+- Validation:
+  - `npm run build:dist --prefix javascript/iroha_js`
+  - `node --test --test-name-pattern 'ZK-ACE transfer authorization sanitizes production-disabled native errors' javascript/iroha_js/test/privacyNative.test.js`
+  - `node --test javascript/iroha_js/test/privacyNative.test.js`
+    (`24` tests passed)
+  - `node --test --test-name-pattern 'ZK-ACE public proof builders sanitize production-disabled native errors' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`58` tests passed)
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3` source compile check
+    for `python/iroha_python/src/iroha_python/crypto.py` and
+    `python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-public-proof-builder-native-error-sanitizer-coverage`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test --test-name-pattern 'ZK-ACE builders encode identity lifecycle and authorized transfers|ZK-ACE builders reject malformed proof and replay inputs' javascript/iroha_js/test/instructionBuilders.test.js`
+    (selected tests skipped because no native binding is available)
+  - `PYTHONDONTWRITEBYTECODE=1 /private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-sdk-guard-venv/bin/python -m pytest tests/privacy_catalog_test.py`
+    from `python/iroha_python` (`495` tests passed)
+- A full `bash ci/check_privacy_sdk_guard.sh` run was started accidentally and
+  completed the release `maturin develop` build, then failed on the Python
+  catalog ordering regression fixed above (`886` passed, `11` failed before the
+  fix). It was not rerun after the fix to avoid starting another native guard
+  while the long ignored `iroha_core` cargo test remained active.
+
+## 2026-06-05 Kagemusha ABI-7 recursive compact fail-closed production gate
+
+- Wired `kagemusha-recursive-compact-v1` into the native Halo2/Pasta corridor as
+  a CID-distinct reserved compact projection using the existing recursive
+  aggregation semantic circuit shape. Core still exposes compact verifier-key,
+  verifier-record, proving-key, and projection helpers so tests can bind folded
+  public-input hash limbs, transcript limbs, witness count, hop count,
+  verifier-key CID/hash, and verifier-record windows.
+- Corrected the production gate after auditing the circuit: the semantic
+  aggregation proof binds private-hop verifier preflight metadata but does not
+  yet compose the private-hop verifier-slice relation in-circuit. Public ABI-7
+  compact proving now fails closed with the recursive-compact-unavailable error.
+  Core Rust public recursive-compact prover/preverify/verify helpers also stay
+  fail-closed, while internal expected-circuit helpers keep projection tests
+  available. Public C/JNI/Node/PyO3 receiver verification decodes well-formed
+  compact tokens but returns `valid = 0` until the composed verifier-slice
+  compact proof replaces the semantic proof. Malformed archives still fail
+  before admission.
+- Updated Rust, JS, Python, Swift, Kotlin/JVM, Java Android, and C# preferred
+  spend-mode helpers so production defaults choose `recursive_spend_v1` when the
+  complete ABI-6 recursive spend surface is available, otherwise
+  `checked_prefold_v1`. The `recursive_compact_v1` mode string and symbols stay
+  source-stable but are not selected by production defaults.
+- Extended the source-only SDK parity guard, workflow path inventory, and JS
+  parity meta-test to pin the ABI-7 recursive compact prover/verifier surface
+  across C, JNI, Node, Python/PyO3, Swift, Kotlin/JVM, Java Android,
+  JavaScript/browser, C#, and focused SDK tests, with a negative control that
+  removes receiver-verifier entry points across wrappers and requires CI to
+  detect the drift.
+- Closed the Swift validation blockers found by the full package run: the
+  pinned macOS bridge fallback hash now matches the current packaged bridge, the
+  verifying-key list decoder propagates malformed `id` objects instead of
+  retrying them as flat list items, identifier-receipt tests assert the
+  canonical fixed-`u64` signature vector framing used by the native/JS surfaces,
+  and the Offline Note signed-envelope test decodes native transaction JSON
+  before falling back to the older Swift-only byte offsets.
+- Updated the JS, Python, Swift, Kotlin/JVM, Java Android, C#, and bridge
+  documentation plus `offline_kagemusha.md` and `roadmap.md` to describe
+  recursive compact mode `2` as a reserved fail-closed surface pending a
+  composed private-hop verifier-slice proof.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-core-target cargo test -p iroha_core kagemusha_recursive_compact --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-core-target cargo test -p iroha_core kagemusha_recursive_aggregation_proof_vk_record_from_box_canonicalizes_record --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-core-target cargo test -p iroha_core kagemusha_recursive_compact_payment_token_preverify_binds_token_shape --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-target cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-js-host-target cargo test -p iroha_js_host kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-python-rs-target cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle --lib`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js --test-name-pattern 'crypto|Kagemusha|dist'`
+  - `node --test javascript/iroha_js/test/crypto.browser.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+  - `cd IrohaSwift && swift test --filter KagemushaRecursiveCompactPaymentTokenProverTests`
+  - `cd IrohaSwift && swift test --filter KagemushaRecursiveSpendProverTests`
+  - `ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `cd IrohaSwift && swift test` (`1109` tests, `12` skipped, `0` failures)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest --console=plain` from `kotlin/`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet` from `kotlin/`
+    (passed with Java 8 source/target deprecation warnings)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android/`
+  - `DOTNET_ROOT=/tmp/iroha-dotnet8 PATH=/tmp/iroha-dotnet8:$PATH /tmp/iroha-dotnet8/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter KagemushaRecursiveSpendNativeTests`
+    (`11` tests passed after installing the temporary .NET `8.0.421` SDK under
+    `/tmp/iroha-dotnet8`)
+  - `git diff --check`
+
+## 2026-06-05 Privacy required production allowlist backend guard
+
+- Tied the public required-plan production allowlist backend exception
+  `stark-fri` to Rust chain admission evidence by mapping it to the concrete
+  Rust verifier backend label `stark/fri` and requiring the
+  `production_verify_backend_allowlist_is_explicit` Rust test to cover it as
+  `BackendTag::Stark`.
+- Added/workflow-wired
+  `--negative-control-required-production-allowlist-backend-coverage`, which
+  mutates the JS guard assertion and verifies the SDK guard rejects the coverage
+  drift.
+- Tightened the source-only SDK guard to require the exact `stark-fri` ->
+  `stark/fri` family and `stark/fri/sha256-goldilocks` concrete profile
+  mapping tuple, and added/workflow-wired
+  `--negative-control-required-production-allowlist-rust-backend-mapping` so a
+  stale or overbroad Rust verifier backend label is rejected without native
+  builds.
+- Added a source-only parser for the public production-allowlist backend
+  exception inventory, requiring it to remain exactly `["stark-fri"]`, plus
+  workflow coverage through
+  `--negative-control-required-production-allowlist-public-backends`.
+- Scoped the production-allowlisted public required-row inventory to exactly
+  `zk-ace-pq-authorization-v0` with backend `stark-fri` in both the JS parity
+  test and the source-only SDK guard, with workflow coverage through
+  `--negative-control-required-production-allowlist-row-scope`.
+- Cross-checked native required production rows against the Rust allowlist
+  mapping so the ZK-ACE row must use the concrete
+  `stark/fri/sha256-goldilocks` verifier profile, not only the broader
+  `stark/fri` family, with workflow coverage through
+  `--negative-control-native-required-production-allowlist-profile-coverage`.
+- Strengthened the public ZK-ACE descriptor-shape parity test so the
+  STARK/FRI verifier profile allowlist cannot open the production gate:
+  audit references must remain empty, every gate bit must stay false, and the
+  missing reasons must still include the Iroha production allowlist blocker.
+  Added/workflow-wired
+  `--negative-control-zk-ace-production-gate-fail-closed-coverage`.
+- Routed the Python public catalog descriptor through the same ZK-ACE
+  descriptor-shape guard by adapting the snake_case Python metadata to the JS
+  parity helper shape, ensuring Python also proves the allowlisted ZK-ACE row
+  stays fail-closed. Added/workflow-wired
+  `--negative-control-python-zk-ace-production-gate-fail-closed-coverage`.
+- Added a direct Python catalog regression that pins ZK-ACE to
+  `stark/fri/sha256-goldilocks` plus backend family `stark-fri`, and asserts
+  `production_ready`, gate readiness, audit references, and all production gate
+  bits remain fail-closed. Added/workflow-wired
+  `--negative-control-python-direct-zk-ace-production-gate-fail-closed-coverage`.
+- Added Python capability-surface coverage for the same ZK-ACE row when native
+  bridge availability is reported: the capability descriptor must still pin the
+  concrete STARK/FRI profile and keep production readiness, audit references,
+  and all gate bits fail-closed. Added/workflow-wired
+  `--negative-control-python-zk-ace-capability-production-gate-fail-closed-coverage`.
+- Added JS capability-surface coverage for `getPrivacyCapabilities()` so the
+  aggregate source/dist SDK API must expose the ZK-ACE row with the concrete
+  `stark/fri/sha256-goldilocks` profile while keeping production readiness,
+  audit references, missing reasons, and gate bits fail-closed. Added workflow
+  coverage through
+  `--negative-control-js-zk-ace-capability-production-gate-fail-closed-coverage`.
+- Added native capability-surface regressions across the C bridge, JS NAPI host,
+  and Python PyO3 bridge so the emitted ZK-ACE capability row must keep the
+  concrete `stark/fri/sha256-goldilocks` profile, backend family `stark-fri`,
+  and production gate blockers despite the verifier-profile allowlist. Added
+  workflow coverage through
+  `--negative-control-native-zk-ace-capability-fail-closed-coverage`.
+- Added native FFI build/verify request-path regressions for ZK-ACE across the
+  C bridge, JS NAPI host, and Python PyO3 bridge: requests using
+  `buildZkAceAuthorizationProofV1` and `stark-fri:zk_ace_pq_authorization_v0`
+  must return `PRIVACY_FFI_ERROR_PRODUCTION_DISABLED`, keep the Iroha allowlist
+  blocker in the message, and avoid witness/proof reflection. Added workflow
+  coverage through
+  `--negative-control-ffi-zk-ace-production-disabled-request-coverage`.
+- Extended the coarse Swift, Kotlin, Android Java, and C# privacy capability
+  model quarantine so SDKs cannot add direct ZK-ACE readiness fields such as
+  `zkAceProductionReady` while the native gate is still fail-closed. Added
+  workflow coverage through
+  `--negative-control-mobile-zk-ace-capability-quarantine-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-production-gate-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-zk-ace-production-gate-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-direct-zk-ace-production-gate-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-zk-ace-capability-production-gate-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-js-zk-ace-capability-production-gate-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-zk-ace-capability-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-zk-ace-production-disabled-request-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-mobile-zk-ace-capability-quarantine-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-backend-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-rust-backend-mapping`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-public-backends`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-required-production-allowlist-row-scope`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-allowlist-profile-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 -m py_compile python/iroha_python/tests/privacy_catalog_test.py`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Full native cargo privacy tests were not rerun because the long
+  `iroha_core` cargo test was still active.
+
+## 2026-06-05 Privacy required pending backend parity guard
+
+- Linked the pending privacy backend label inventory in
+  `privacyFfiContractParity.test.js` to the public
+  `REQUIRED_PRIVACY_PLAN_ROWS`: every required backend family except the
+  explicitly allowlisted `stark-fri` chain backend must remain in
+  `EXPECTED_PENDING_PRIVACY_BACKEND_LABELS` across SDK backend-tag surfaces.
+- Added/workflow-wired
+  `--negative-control-required-pending-backend-parity-coverage`, which mutates
+  the public-required-to-pending assertion and verifies the SDK guard rejects
+  the coverage drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-required-pending-backend-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Full native cargo privacy tests were not rerun because the long
+  `iroha_core` cargo test was still active.
+
+## 2026-06-05 Privacy native required plan public parity guard
+
+- Added an explicit JS parity check that parses the public
+  `REQUIRED_PRIVACY_PLAN_ROWS`, derives native required-row tuples from JS
+  source, JS dist, and Python public descriptors, and requires them to match the
+  native FFI `PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS` inventory exactly.
+- Extended the SDK guard workflow with
+  `--negative-control-native-required-production-plan-public-parity-coverage`
+  so native required-row coverage cannot drift away from the public production
+  plan inventory.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-public-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+
+## 2026-06-05 Privacy native required plan duplicate-row guard
+
+- Tightened the native privacy FFI required-production-plan helper in the C
+  bridge, JS host, and Python PyO3 binding to require exactly one row per
+  required algorithm id, with the pinned proof family, backend family, and a
+  planned production proof builder.
+- Added native negative tests that duplicate the Anonymous PGC required row and
+  verify the required-plan helper rejects the duplicate instead of treating
+  presence-only matching as sufficient.
+- Extended the JS source parity test and SDK guard workflow with
+  `--negative-control-native-required-production-plan-duplicate-row-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-duplicate-row-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-row-completeness-coverage`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+- Full native cargo privacy tests were not rerun because the long
+  `iroha_core` cargo test was still active.
+
+## 2026-06-05 Privacy public required plan row order guard
+
+- Tightened the SDK guard's `REQUIRED_PRIVACY_PLAN_ROWS` source check to require
+  the exact required-row algorithm-id sequence across JS parity tests, JS source,
+  JS dist, and Python. The guard now rejects extra, duplicate, missing, or
+  reordered required rows instead of only checking that every expected tuple is
+  present somewhere.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-row-order-coverage`, which
+  duplicates the Anonymous PGC required row in the JS parity inventory and
+  verifies the source guard rejects row order/cardinality drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-row-order-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-exact-row-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-display-text-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan exact display-text guard
+
+- Added exact public required-plan display-text inventories to JS source, JS
+  dist, Python, and the JS parity test. Required rows now pin `name`,
+  `shortName`/`short_name`, and `summary` separately from classification,
+  recommendation, proof, and backend metadata.
+- JS and Python catalog validation now rejects required-row display-text drift,
+  preventing SDK capability UIs from renaming, softening, or reframing required
+  production-plan rows without an explicit production-inventory update.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-display-text-coverage`,
+  which mutates Anonymous PGC from `Anonymous PGC k-out-of-n payments v1` to
+  `Anonymous PGC pilot payments v1` and verifies the SDK guard rejects the
+  source inventory drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - Direct Python module-load validator check for required-row display-text
+    baseline and drift rejection.
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-display-text-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-exact-row-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest was not rerun because this checkout has no repo `.venv`
+  and Homebrew Python 3.14 has no pytest installed.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan exact row guard
+
+- Tightened the SDK guard's public required-plan row inventory check from
+  component-string presence to exact row tuple matching across JS parity tests,
+  JS source, JS dist, and Python. The guard now rejects row-pairing drift where
+  the algorithm id, implementation stage, and backend family strings still all
+  appear somewhere in the block.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-exact-row-coverage`, which
+  mutates Anonymous PGC from `sdk-builder` to `component` while preserving
+  otherwise-present strings and verifies the source guard rejects the exact-row
+  drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-exact-row-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan exact recommendation guard
+
+- Added exact public required-plan `recommendedFor` inventories to JS source, JS
+  dist, Python, and the JS parity test. Required rows now pin their
+  user-visible recommendation guidance separately from classification and proof
+  metadata.
+- JS and Python catalog validation now rejects required-row recommendation
+  drift, preventing SDK capability UIs from claiming or reframing production
+  use cases without an explicit production-inventory update.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-recommended-for-coverage`,
+  which mutates Anonymous PGC from `account-based private payments` to
+  `claimed production rollout` and verifies the SDK guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - Direct Python module-load validator check for required-row
+    `recommended_for` baseline and drift rejection.
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-recommended-for-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-category-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-maturity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest was not rerun because this checkout has no repo `.venv`
+  and Homebrew Python 3.14 has no pytest installed.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan category and maturity guard
+
+- Added exact public required-plan category and maturity inventories to JS
+  source, JS dist, Python, and the JS parity test. Required rows now pin their
+  user-visible classification fields separately from proof and backend
+  metadata.
+- JS and Python catalog validation now rejects required-row category or
+  maturity drift, preventing SDK capability UIs from reclassifying planned
+  rows without an explicit production-inventory update.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-category-coverage` and
+  `--negative-control-public-required-production-plan-maturity-coverage`, which
+  mutate Anonymous PGC from `payment` to `authorization` and from
+  `accepted_conference` to `specification` and verify the SDK guard rejects
+  both drifts.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - Direct Python module-load validator check for required-row category and
+    maturity baseline and drift rejection.
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-category-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-maturity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest was not rerun because this checkout has no repo `.venv`
+  and Homebrew Python 3.14 has no pytest installed.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan exact source-reference guard
+
+- Tightened required-row source-reference validation in JS source, JS dist, and
+  Python. Required production-plan rows now reject appended, removed, or
+  reordered source references after first retaining the required exact
+  protocol URLs.
+- Added JS parity coverage that deep-compares each required row's
+  `source_references` list against the required inventory, plus a Python
+  negative test that appends `https://example.com/forged-extra-source` and
+  verifies the catalog rejects the row.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-source-reference-exact-coverage`,
+  which appends a forged Anonymous PGC source in the JS parity inventory and
+  verifies the SDK guard rejects the extra source-reference count.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - Direct Python module-load validator check for required-row
+    source-reference baseline and extra-source rejection.
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-exact-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-security-notes-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest was not rerun because this checkout has no repo `.venv`
+  and Homebrew Python 3.14 has no pytest installed.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan exact SDK-entrypoint guard
+
+- Added exact public required-plan executable SDK-entrypoint inventories to JS
+  source, JS dist, Python, and the JS parity test. Required rows now pin the
+  advertised dev-fixture/local-verifier builders, the ZK-ACE executable proof
+  surface, and the empty executable surface for planned-only research rows.
+- JS and Python catalog validation now rejects required-row `sdkEntrypoints`
+  drift separately from planned production SDK entrypoints, preserving the
+  fail-closed rule that dev fixtures remain explicit and non-production until
+  production gates pass.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-sdk-entrypoint-coverage`,
+  which mutates the Anonymous PGC executable dev-fixture row to
+  `buildForgedAnonymousPgcProductionProof` and verifies the SDK guard rejects
+  the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - Direct Python module-load validator check for required-row SDK-entrypoint
+    baseline and drift rejection.
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-security-notes-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-modes-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-execution-step-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest was not rerun because this checkout has no repo `.venv`
+  and Homebrew Python 3.14 has no pytest installed.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan exact security-note guard
+
+- Added exact public required-plan security-note inventories to JS source, JS
+  dist, Python, and the JS parity test. Required rows now pin their concrete
+  wallet-local witness, restart-persistence, dev-fixture non-production,
+  parameter-governance, note-encryption review, parser-fuzzing,
+  performance-gate, and external-audit caveats.
+- JS and Python catalog validation now rejects required-row security-note list
+  drift before looser token checks, preventing rows from weakening production
+  gate wording while retaining broad audit/fuzz/performance keywords.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-security-notes-coverage`,
+  which mutates the Anonymous PGC hardening note from `performance gates` to
+  `latency gates` and verifies the SDK guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-security-notes-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-modes-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-execution-step-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row security-note,
+    failure-mode, execution-step, setup-step, required-state, and PQ-layer
+    accept/reject paths.
+- Focused Python pytest was not rerun because this checkout has no repo `.venv`
+  and Homebrew Python 3.14 has no pytest installed.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan exact failure-mode guard
+
+- Added exact public required-plan failure-mode inventories to JS source, JS
+  dist, Python, and the JS parity test. Required rows now pin the complete
+  stale-root, duplicate-nullifier/link-tag, substitution, mismatch, malformed
+  proof, wrong-verifier-key, and wrong-public-input rejection lists.
+- JS and Python catalog validation now rejects required-row failure-mode list
+  drift before the looser failure-token checks, preventing a row from keeping a
+  few keywords while dropping concrete adversarial rejection cases.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-failure-modes-coverage`,
+  which mutates the Anonymous PGC exact failure-mode list to accept a forged
+  replay tag and verifies the SDK guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-modes-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-execution-step-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row failure-mode,
+    execution-step, setup-step, required-state, and PQ-layer accept/reject
+    paths.
+- Focused Python pytest was not rerun because this checkout has no repo `.venv`
+  and Homebrew Python 3.14 has no pytest installed.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan execution-step guard
+
+- Added exact public required-plan execution-step inventories to JS source, JS
+  dist, Python, and the JS parity test. Required rows now pin the concrete
+  spend selection, witness/proof generation, side-effect commitment, nullifier,
+  typed submission, and verifier-admission steps for each planned protocol.
+- JS and Python catalog validation now rejects required-row execution-step
+  drift, preventing rows from silently changing a real ledger/proof flow into a
+  forged proof-only placeholder while keeping their production-plan identity.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-execution-step-coverage`,
+  which mutates the Anonymous PGC final execution step into a forged proof-only
+  envelope and verifies the SDK guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-execution-step-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-setup-step-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-required-state-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-chain-requirement-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-pq-layer-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row execution-step,
+    setup-step, required-state, and PQ-layer accept/reject paths.
+- Focused Python pytest still could not run locally because Homebrew Python
+  3.14 has no pytest installed and no repo `.venv` is present in this checkout.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because a long cargo
+  privacy test process was still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan setup-step guard
+
+- Added exact public required-plan setup-step inventories to JS source, JS
+  dist, Python, and the JS parity test. Required rows now pin verifier-key
+  registration, parameter setup, wallet witness persistence, domain binding,
+  benchmark, and audit-preparation setup text exactly.
+- JS and Python catalog validation now rejects required-row setup-step drift,
+  preventing rows from silently dropping real protocol setup prerequisites while
+  retaining their production-plan identity.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-setup-step-coverage`,
+  which mutates the Anonymous PGC verifier setup step and verifies the SDK
+  guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-setup-step-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-required-state-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-chain-requirement-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-pq-layer-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row setup-step,
+    required-state, covered-criteria, and PQ-layer accept/reject paths.
+- Focused Python pytest still could not run locally because Homebrew Python
+  3.14 has no pytest installed and the full package import needs the local
+  Norito Python dependency in this environment.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because cargo privacy
+  test processes were still active; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan required-state guard
+
+- Added exact public required-plan required-state inventories to JS source, JS
+  dist, Python, and the JS parity test. Required rows now pin the precise
+  wallet witness stores, verifier-key registries, accumulators, commitment
+  roots, nullifier sets, and replay state needed by each planned protocol.
+- JS and Python catalog validation now rejects required-row required-state
+  drift, preventing rows from silently dropping or changing wallet/state support
+  while keeping their production-plan identity.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-required-state-coverage`,
+  which mutates the Anonymous PGC wallet recovery state and verifies the SDK
+  guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-required-state-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-chain-requirement-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-pq-layer-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row
+    covered-criteria, PQ-layer, chain-requirement, and required-state
+    accept/reject paths.
+- Focused Python pytest still could not run locally because Homebrew Python
+  3.14 has no pytest installed and the full package import needs the local
+  Norito Python dependency in this environment.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because long cargo
+  privacy test processes were still active; the full guard proceeds into native
+  SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan chain-requirement guard
+
+- Added exact public required-plan chain-requirement inventories to JS source,
+  JS dist, Python, and the JS parity test. Required rows now pin their precise
+  proof-only verifier registry/state requirements or typed ledger-admission
+  instruction requirements.
+- JS and Python catalog validation now rejects required-row chain-requirement
+  drift, preventing rows from silently weakening typed admission paths into
+  proof-only placeholders or changing verifier/state requirements while keeping
+  the same production-plan identity.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-chain-requirement-coverage`,
+  which mutates the Anonymous PGC typed transfer admission requirement and
+  verifies the SDK guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-chain-requirement-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-pq-layer-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row
+    covered-criteria, PQ-layer, and chain-requirement accept/reject paths.
+- Focused Python pytest still could not run locally because Homebrew Python
+  3.14 has no pytest installed and the full package import needs the local
+  Norito Python dependency in this environment.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because the long
+  cargo privacy test process was still active; the full guard proceeds into
+  native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan covered-criteria guard
+
+- Added exact public required-plan covered-criteria inventories to JS source,
+  JS dist, Python, and the JS parity test. Required rows now pin their precise
+  privacy-claim list, including empty lists for proof-only component/builder
+  rows and `post_quantum` only on PQ-MASP.
+- JS and Python catalog validation now rejects required-row covered-criteria
+  drift, preventing rows from silently gaining or losing claims such as
+  `hide_asset_type` while keeping their production-plan id/backend/proof shape.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-covered-criteria-coverage`,
+  which mutates the Anonymous PGC criteria inventory and verifies the SDK guard
+  rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-covered-criteria-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-pq-layer-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row covered-criteria
+    and PQ-layer accept/reject paths.
+- Focused Python pytest still could not run locally because Homebrew Python
+  3.14 has no pytest installed and the full package import needs the local
+  Norito Python dependency in this environment.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because the long
+  cargo privacy test processes were still active; the full guard proceeds into
+  native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan PQ-layer guard
+
+- Added exact public required-plan PQ-layer inventories to JS source, JS dist,
+  Python, and the JS parity test. Every required production-plan row now pins
+  whether proof, authorization, and note-encryption PQ layers are enabled,
+  including explicit `false` values for non-PQ and partial-PQ rows.
+- JS and Python catalog validation now rejects required-row PQ-layer drift,
+  preventing overclaims such as changing Anonymous PGC from non-PQ to
+  proof-PQ, or weakening full PQ-MASP proof/authorization/note-encryption
+  coverage, without a deliberate inventory update.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-pq-layer-coverage`,
+  which mutates a required row from `proof: false` to `proof: true` and
+  verifies the SDK guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-pq-layer-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-comment-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+  - Direct Python module-load validator check for required-row PQ-layer accept
+    and mutated rejection paths.
+- Focused Python pytest could not run locally: Homebrew Python 3.14 does not
+  have pytest installed, and importing the full `iroha_python` package also
+  requires the local Norito Python dependency in this environment.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because the long
+  cargo privacy test processes were still active; the full guard proceeds into
+  native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan planned SDK entrypoint guard
+
+- Added public required-plan planned SDK entrypoint inventories to JS source,
+  JS dist, Python, and the JS parity test. Every required production-plan row
+  now pins the exact planned proof-builder and typed admission/helper entrypoint
+  list expected for that algorithm.
+- JS and Python catalog validation now rejects required-row planned entrypoint
+  drift, preventing public SDK catalogs from silently dropping builders or
+  typed ledger-admission entrypoints while keeping the row in the production
+  plan.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`,
+  which mutates a required planned proof-builder entrypoint and verifies the
+  SDK guard rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-planned-sdk-entrypoint-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest could not run locally: `/usr/bin/python3` has pytest
+  but is Python 3.9 and cannot import the SDK's `typing.TypeAlias` use, while
+  Homebrew Python 3.14 can compile the files but does not have pytest.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because the long
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan public-input schema guard
+
+- Added public required-plan public-input schema inventories to JS source, JS
+  dist, Python, and the JS parity test. Every required production-plan row now
+  pins the exact comma-separated verifier public-input schema expected by its
+  proof family and verifier-key id.
+- JS and Python catalog validation now rejects required-row public-input schema
+  drift, preventing public SDK catalogs from silently changing verifier public
+  inputs while keeping the same algorithm/proof/verifier identifiers.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-public-input-schema-coverage`,
+  which mutates a required schema token and verifies the SDK guard rejects the
+  drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-public-input-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest could not run locally: `/usr/bin/python3` has pytest
+  but is Python 3.9 and cannot import the SDK's `typing.TypeAlias` use, while
+  Homebrew Python 3.14 can compile the files but does not have pytest.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because active
+  cargo tests were still running; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan source-reference guard
+
+- Added public required-plan source-reference inventories to JS source, JS dist,
+  Python, and the JS parity test. Every required production-plan row now pins
+  the exact `(label, url)` protocol references used as source material,
+  including Orchard/ZIP-224, Penumbra MASP, Monero FCMP++, Miden, Aztec, NIST
+  FIPS 203/204/205, and the SDK-builder research rows.
+- JS and Python catalog validation now rejects required-row source-reference
+  drift, preventing public SDK catalogs from swapping, weakening, or dropping
+  authoritative protocol references while staying in the production-plan
+  inventory.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-source-reference-coverage`,
+  which mutates a required source-reference URL and verifies the SDK guard
+  rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-source-reference-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest could not run locally: `/usr/bin/python3` has pytest
+  but is Python 3.9 and cannot import the SDK's `typing.TypeAlias` use, while
+  Homebrew Python 3.14 can compile the files but does not have pytest.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because active
+  cargo tests were still running; the full guard proceeds into native SDK
+  build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan failure-mode guard
+
+- Added public required-plan failure-mode inventories to JS source, JS dist,
+  Python, and the JS parity test. Every required production-plan row now pins
+  common adversarial rejection markers for malformed proof bytes, wrong verifier
+  keys, and public-input mismatches, plus row-specific stale-root, duplicate
+  nullifier/link-tag, replay, substitution, and parameter-mismatch failures.
+- JS and Python catalog validation now rejects required-row failure-mode drift,
+  preventing public SDK catalogs from weakening negative/adversarial coverage
+  while still remaining in the production-plan inventory.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-failure-mode-coverage`,
+  which mutates a required failure-mode mapping and verifies the SDK guard
+  rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-failure-mode-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest could not run locally: `/usr/bin/python3` has pytest
+  but is Python 3.9 and cannot import the SDK's `typing.TypeAlias` use, while
+  Homebrew Python 3.14 can compile the files but does not have pytest.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 ISO CLI path-smuggling and output hard-link guard
+
+- Tightened ISO operator output preflights so existing rail/notary receipt
+  leaves, canary/evidence/XSD/readiness summaries, and trust summary/profile
+  output files are rejected when they are hard-linked before any output
+  replacement.
+- Receipt output directories and summary/profile output leaves now also reject
+  lexical path smuggling before directory creation or temp-file creation,
+  including control characters, whitespace, leading-dash segments, backslashes,
+  semicolon path parameters, empty path segments, and dot/parent traversal
+  segments.
+- Direct CLI artifact inputs now get the same raw pre-`Path` smuggling guard
+  before file discovery or reads. This covers live rail inbox roots, live
+  notary export roots, rail/notary bearer-token files, canary configs, trust
+  bundles, XSD manifests/profile catalogs, receipt files/directories,
+  canary/trust summaries, and XSD/evidence summaries, including `--flag=value`
+  forms that argparse would otherwise normalize before semantic validation.
+- Live rail and notary adapter numeric CLI limits now fail closed before local
+  reads or network delivery: `--timeout-secs` must be positive and finite, and
+  response/payload byte caps must be positive integers.
+- Live rail Torii URLs, audit-notary publication endpoints, operator canary
+  rail/notary runbook endpoints, and archived receipt endpoint URLs now reject
+  values longer than 2048 characters, DNS hosts longer than 253 characters,
+  localhost or local/private IP literals, and known local/private rebinding
+  hostnames (`nip.io`, `sslip.io`, `localtest.me`, `lvh.me`, `vcap.me`), plus
+  legacy IPv4 numeric notation such as hex-form loopback hosts and IPv6
+  transition addresses embedding non-global IPv4 addresses before canary
+  planning, network delivery, receipt verification, or receipt archival.
+- Live rail and audit-notary network delivery now uses no-redirect openers, so
+  HTTP redirects are written as failed receipts with the 3xx status instead of
+  being followed to an unvalidated scheme, host, port, or path.
+- Live rail and audit-notary response previews now redact secret-looking remote
+  response text (`authorization`, bearer, token, secret, or private-key markers)
+  and transport errors before receipt persistence, while receipt/evidence
+  verification rejects forged archived previews or receipt errors that still
+  contain those markers.
+- The ISO operator canary runner now bounds every child stage with positive
+  finite `--stage-timeout-secs`, kills timed-out children, records `timed_out`
+  in the canary summary, and the evidence verifier rejects timed-out archived
+  canary stages.
+- The ISO operator canary runner now converts malformed bracketed rail/notary
+  endpoint URLs into fail-closed runbook validation errors before planning.
+- Optional XSD fixture validation now bounds `xmllint` with positive finite
+  `--xmllint-timeout-secs`, kills a timed-out validator child, and fails closed
+  with a schema-validation error instead of waiting indefinitely.
+- The evidence verifier now bounds direct receipt archive verification with
+  positive finite `--receipt-verifier-timeout-secs`, kills a timed-out local
+  receipt-verifier child, and fails closed before trusting archive coverage.
+- Archived canary child command URL rechecks now reject localhost and
+  local/private IP literals plus known local/private rebinding hostnames unless
+  the evidence verifier is explicitly run in local-test HTTP mode, and they
+  reject legacy IPv4 numeric notation and IPv6 transition addresses embedding
+  non-global IPv4 addresses unconditionally, so production evidence cannot
+  point at loopback or RFC 1918 rail/notary endpoints over HTTPS.
+- ISO JSON loaders now reject Python's non-standard `NaN`, `Infinity`, and
+  `-Infinity` constants plus lone UTF-16 surrogate escapes before semantic
+  validation across rail sidecars, notary anchors/indexes/record sources,
+  canary runbooks, receipts, trust bundles, XSD manifests/profile catalogs,
+  evidence summaries, readiness summaries, embedded receipt-verifier stdout, and
+	  direct archive receipt-verifier stdout.
+- Rail gateway batches now reject duplicate payload digests or duplicate
+  `rail_message_id` values before any Torii submission or receipt write, so one
+  operator run cannot overwrite a digest-addressed receipt or reuse an external
+  rail identifier.
+- Evidence/readiness now reject trust-source placeholder provenance
+  (`placeholder`, `replace-before-production`, and `example.invalid`) so
+  template metadata cannot pass production archive/readiness gates even when the
+  DER material is real.
+- Trust-source URL validation now rejects DNS hosts longer than 253 characters
+  and URLs longer than 2048 characters in trust-bundle preflight, evidence
+  verification, and production-readiness rechecks, closing another path for
+  digest-correct but non-routable provenance.
+- XSD source provenance now caps canonical GitHub repository URLs at 2048
+  characters in both fixture preflight and production-readiness rechecks, so
+  digest-correct summaries cannot carry operationally unusable repository
+  metadata.
+- Trust-bundle preflight now requires `source.authority` and `source.version`,
+  reports profile JSON as non-emittable when local-audit or placeholder
+  provenance is present, and refuses `--emit-profile-json` when
+  `--allow-record-only`, `--allow-insecure-source-url`, `placeholder`,
+	  `replace-before-production`, or `example.invalid` source metadata is still in
+	  the bundle. Profile emission also requires an explicit
+	  `--max-source-age-days` budget and rejects stale `source.retrieved_at` values
+	  under that budget. Trust summaries now record `max_source_age_days`, and
+	  evidence/readiness reject omitted, malformed, evidence-weaker, or
+	  release-weaker compact trust source freshness budgets plus
+	  profile-emittable drift or emitted-but-not-emittable contradictions against
+	  archived trust source policy.
+- Output writers now create exclusive same-directory owner-private temporary
+  files with bounded digest-derived names through the already-open parent
+  directory, recheck the temp descriptor for regular-file and single-link
+  status, fsync the content, atomically replace the target by directory fd, and
+  remove temporary files after successful replacement.
+- Added adversarial hard-link tests for the rail gateway, audit notary, canary,
+  evidence, XSD fixture, readiness, and trust bundle verifier output surfaces,
+  including trust profile-override emission, plus stale pre-existing output
+  files that prove atomic replacement still replaces normal outputs. Positive
+  output tests also pin receipt, summary, and profile-output files to
+  owner-private mode, and a long-output-leaf regression proves bounded temp names
+  do not exceed filesystem leaf limits. Additional negative tests cover
+  semicolon, whitespace, leading-dash, empty-segment, and dot/parent output
+  paths across rail, notary, canary, evidence, XSD, readiness, and trust profile
+  emission. New input-path adversarial cases cover the same smuggling classes
+  across rail, notary, receipt verifier, canary, evidence, readiness,
+  trust-bundle, and XSD CLIs before they open or discover artifacts. Additional
+  negative tests cover `NaN`/`Infinity` JSON constants and invalid Unicode
+  surrogate escapes at every ISO JSON loader, canary child-stage timeout
+  recording and evidence rejection, optional `xmllint` timeout rejection,
+  direct receipt-verifier timeout rejection, malformed-bracket canary runbook
+  endpoint URLs, localhost/private archived canary command URLs, localhost/private
+  live adapter/canary/receipt endpoint URLs, local/private rebinding hostnames
+  across live adapters, canary planning, receipt verification, trust-source
+  evidence, and readiness rollup, legacy IPv4 numeric notation across those
+  same URL surfaces, and overlong canary runbook, live rail/notary, and archived
+  receipt endpoint URLs/hosts. XSD provenance adversarial cases now cover
+  overlong source repository URLs. New trust-source adversarial cases
+  cover placeholder authority/version metadata and `example.invalid` provenance
+  at both evidence verification and production-readiness rollup, plus overlong
+  URLs and DNS hosts across trust-bundle, evidence, and readiness URL
+	  validation. Trust-bundle tests now also cover missing source identity,
+	  summary-only placeholder bundles being non-emittable, and profile-emission
+	  rejection for local-audit or placeholder provenance modes, missing/invalid
+	  source freshness budgets, stale source retrieval timestamps, and compact
+	  evidence/readiness rejection for missing, malformed, or weaker trust source
+	  freshness budgets plus profile-emittable drift and
+	  emitted-but-not-emittable contradictions. Rail gateway tests now also cover
+	  duplicate payload and duplicate rail-message-id batches rejected before
+	  network delivery.
+- Validation:
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`387` tests passed)
+
+## 2026-06-05 Privacy public required plan state-token guard
+
+- Added public required-plan state-token inventories to JS source, JS dist,
+  Python, and the JS parity test. Each required production-plan row now pins
+  critical state markers across `requiredState` and `chainRequirements`,
+  including roots, nullifier/link-tag/replay state, verifier-key registries,
+  wallet witness stores, and typed admission metadata.
+- JS and Python catalog validation now rejects required-row state-token drift,
+  preventing public SDK catalogs from weakening chain/wallet state requirements
+  while still remaining in the production-plan inventory.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-state-token-coverage`,
+  which mutates a required state-token mapping and verifies the SDK guard
+  rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-state-token-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest could not run locally: `/usr/bin/python3` has pytest
+  but is Python 3.9 and cannot import the SDK's `typing.TypeAlias` use, while
+  Homebrew Python 3.14 can compile the files but does not have pytest.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy public required plan verifier-key guard
+
+- Added public required-plan verifier-key inventories to JS source, JS dist,
+  Python, and the JS parity test so every production-plan row now pins the
+  exact verifier-key id expected by the native FFI verifier-key name map.
+- JS and Python catalog validation now rejects required-row verifier-key drift,
+  preventing a public SDK catalog from advertising a production row with a
+  mismatched verifier-key record.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-verifier-key-coverage`,
+  which mutates a required verifier-key mapping and verifies the SDK guard
+  rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-verifier-key-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest could not run locally: `/usr/bin/python3` has pytest
+  but is Python 3.9 and cannot import the SDK's `typing.TypeAlias` use, while
+  Homebrew Python 3.14 can compile the files but does not have pytest.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 ISO input ancestor symlink hardening
+
+- Tightened ISO regular-file and receipt-directory input handling so canary
+  runbooks, trust bundles, evidence/readiness summaries, XSD manifests, profile
+  catalogs, schema files, XML fixtures, rail/notary source inputs, and receipt
+  archive directories reject symlinked existing ancestors before digest,
+  provenance, discovery, or policy checks run.
+- Kept the root-level filesystem-alias exception needed for normal macOS temp
+  paths while rejecting symlinked ancestors inside caller-controlled archive,
+  runbook, manifest, and drop-root trees.
+- Added adversarial tests for symlinked input ancestors across the rail gateway,
+  audit notary, canary, evidence, receipt, XSD fixture, readiness, and trust
+  bundle verifier surfaces, including direct bearer-token and receipt-file
+  inputs.
+- Validation:
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (`22` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+    (`79` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`320` tests passed)
+
+## 2026-06-05 Privacy public required plan proof-family guard
+
+- Added public required-plan proof-family inventories to JS source, JS dist,
+  Python, and the JS parity test so every production-plan row now pins
+  algorithm id, implementation stage, backend family, proof family, and a
+  planned production proof builder.
+- JS and Python catalog validation now rejects required-row proof-family drift,
+  matching the native FFI required production plan row guard.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-proof-family-coverage`,
+  which mutates a required proof-family mapping and verifies the SDK guard
+  rejects the drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-proof-family-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `/opt/homebrew/bin/python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Focused Python pytest could not run locally: `/usr/bin/python3` has pytest
+  but is Python 3.9 and cannot import the SDK's `typing.TypeAlias` use, while
+  Homebrew Python 3.14 can compile the files but does not have pytest.
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Kagemusha recursive compact ABI-7 scaffold
+
+- Added the `kagemusha-recursive-compact-v1` circuit id,
+  `recursive_compact_v1` SDK spend mode, and reserved ABI-7 native symbols.
+  This scaffold is superseded by the fail-closed production gate above:
+  `recursive_compact_v1` remains source-stable for future rollout, but SDKs now
+  prefer ABI-6 `recursive_spend_v1` when it is available and otherwise fall back
+  to checked pre-fold mode.
+- Bumped the native bridge ABI advertisement to 7 and added
+  `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`.
+  The symbol is fail-closed with
+  `CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE` until the
+  production compact circuit composes private-hop Pallas IPA verifier evidence
+  into compact-token admission.
+- Hardened the ABI-7 C bridge boundary so null inputs clear stale output
+  pointers/lengths, null output slots fail before writes, and adversarial
+  `c_ulong::MAX` input lengths are never sliced while the prover is unavailable.
+  The fail-closed test also feeds a syntactically valid one-hop verified record
+  bundle and matching current-hop Pallas open-envelope archive, proving the
+  bridge cannot silently advertise a one-hop-only implementation as production
+  recursive compact support.
+- Mirrored the ABI-7 availability surface through JavaScript/Node, Python,
+  C#, Kotlin/JVM, Java Android, and Swift while keeping mode-2 compact-token
+  public inputs unsupported by chain admission until the circuit-backed prover
+  exists.
+- Added SDK adversarial coverage proving permissive native compact symbols that
+  return bytes for malformed probe archives are not treated as available and
+  cannot make clients prefer `recursive_compact_v1`.
+- Added reserved mode-2 folded public-input projection validation in the data
+  model and core preverification helpers. Recursive aggregation proof bundles
+  can now be checked against the exact folded compact-token projection they
+  claim, including chain id, asset, roots, hop count, nullifier/output digests,
+  fold digest, and aggregation transcript digest, while
+  `validate_supported_context()` still rejects mode `2` for public compact-token
+  admission.
+- Added raw-key, verifier-record, and height-aware record preverification and
+  full backend verification helpers for reserved recursive compact projections.
+  Default tests cover dummy-proof rejection, forged projection rejection,
+  checked-mode rejection, and verifier-record height-window behavior; the
+  ignored real Halo2 IPA proof test covers positive backend verification and
+  forged projection rejection with a valid recursive aggregation proof.
+- Extended the recursive aggregation proof public-input schema to 59 columns by
+  adding four `folded_public_inputs_hash` limbs. Data-model validation now
+  derives those limbs from the reserved mode-2 folded projection, recursive
+  spend public inputs derive the same hash from their accumulator projection,
+  and the core preverification wrappers require recursive proof public inputs
+  to match the folded public inputs they claim.
+- Added recursive compact-token shape/projection checks in core. Internal
+  expected-circuit helpers enforce reserved mode-2 folded public inputs, token
+  public-input hash binding, verifier-key CID/hash binding, recursive proof
+  schema, folded-public-input hash limbs, aggregation transcript limbs, witness
+  count, hop count, and verifier-record height windows. The exported core
+  recursive compact prover/preverify/verify helpers remain fail-closed, the
+  current semantic recursive aggregation proof only verifies through the
+  internal expected-circuit test helper, and
+  `verify_kagemusha_compact_payment_token` remains closed for mode `2`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-target cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_is_fail_closed_until_circuit_backed --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_js_host kagemusha_recursive_compact_payment_token_js_host_is_fail_closed --lib`
+  - `cargo test -p iroha_data_model kagemusha_compact_token_binds_folded_proof_public_inputs --lib`
+  - `cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_hop_bound_pallas_preflight_mismatch --lib`
+  - `cargo test -p iroha_data_model kagemusha_recursive_evidence_validates_reserved_folded_projection_without_opening_admission --lib`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_data_model kagemusha_recursive_evidence_validates_reserved_folded_projection_without_opening_admission --lib`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_data_model kagemusha_recursive_spend_bundle_rejects_public_input_tampering --lib`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_core kagemusha_recursive_compact_payment_token_preverify_binds_token_shape --lib`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_core kagemusha_recursive_compact_projection_preverify_binds_folded_public_inputs --lib`
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_core kagemusha_recursive_aggregation_real_halo2_ipa_proof_verifies --lib -- --ignored --test-threads=1`
+  - `cargo test -p iroha_data_model kagemusha_folded_public_inputs_reject_transcript_projection_mismatches --lib`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `python3 -m py_compile python/iroha_python/tests/kagemusha_test.py python/iroha_python/src/iroha_python/kagemusha.py`
+  - `python3.11 -m py_compile python/iroha_python/tests/kagemusha_test.py python/iroha_python/src/iroha_python/kagemusha.py`
+- The first incremental `cargo test -p iroha_core kagemusha_recursive_compact_projection_preverify_binds_folded_public_inputs --lib`
+  attempt failed before test execution while copying an incremental object file
+  (`os error 2`); the non-incremental rerun above passed.
+- The default-target bridge rerun first failed before test execution because
+  stale `target/debug/deps` extern artifacts were missing; the isolated
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-target` rerun above passed.
+- After the 59-column recursive proof schema update, the first incremental
+  `cargo test -p iroha_data_model kagemusha_recursive_evidence_validates_reserved_folded_projection_without_opening_admission --lib`
+  attempt failed before test execution while moving Cargo incremental cache
+  files (`os error 2`); the non-incremental rerun above passed.
+- Focused Python pytest could not run locally because Homebrew Python 3.14
+  does not have `pytest` installed.
+
+## 2026-06-05 ISO output ancestor symlink hardening
+
+- Tightened ISO operator output writers so rail/notary receipt directories,
+  receipt leaves, canary/evidence/XSD/readiness summaries, and trust-bundle
+  summary/profile outputs reject symlinked existing ancestors before creating
+  nested parents or writing output files.
+- Preserved normal macOS root-level filesystem aliases such as `/var` while
+  still rejecting symlinked ancestors inside the caller-controlled output tree.
+- Added adversarial tests for symlinked output ancestors across the rail
+  gateway, audit notary, canary, evidence, XSD fixture, readiness, and trust
+  bundle verifier surfaces.
+- Validation:
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py scripts/iso_trust_bundle_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_trust_bundle_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_trust_bundle_verify_test`
+    (`288` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`309` tests passed)
+
+## 2026-06-05 Privacy public required plan row parity guard
+
+- Aligned the public JS/Python catalog parity inventory with the native
+  required production plan rows by adding the `zk-ace-pq-authorization-v0`
+  chain-executable row to the JS parity test's `REQUIRED_PRIVACY_PLAN_ROWS`.
+- Added/workflow-wired
+  `--negative-control-public-required-production-plan-rows-coverage`, which
+  rejects removal of a single row from the public required-plan inventory and
+  checks JS source, JS dist, Python, and parity-test row blocks.
+- Adjusted the FFI ABI parity assertion so privacy SDKs require minimum bridge
+  ABI 6 while accepting native bridge ABI 7 advertisements from unrelated
+  non-privacy bridge surface growth; error/status/Norito constants remain exact.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs require proof builders on required production plan rows' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-zk-ace-proof-builder-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-error-contract-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`7` tests passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy required production plan row completeness guard
+
+- Tightened native privacy FFI parity coverage so
+  `PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS` must exactly match the 16-row
+  production cryptography plan across the C bridge, JS NAPI host, and Python
+  PyO3 host.
+- The exact guard now covers SDK-builder/component rows and research/missing
+  rows, including VeRange, zkAt, ZK-AMS, Vega, Silent Threshold, ZK-X.509,
+  Jindo, SIS-with-hints, Orchard, Penumbra MASP, Monero FCMP++, Miden, Aztec,
+  and PQ MASP STARK with their proof and backend families.
+- Added/workflow-wired
+  `--negative-control-native-required-production-plan-row-completeness-coverage`
+  so dropping or renaming a single required algorithm row is rejected.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI catalogs pin required production plan rows' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-row-completeness-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy request text-field enumerator guard
+
+- Added explicit parity coverage for the native privacy
+  `privacy_request_text_fields` helper so all Rust FFI hosts keep
+  `algorithm_id`, `entrypoint`, and `vk_ref` inside the shared text-field
+  validation path.
+- Added/workflow-wired
+  `--negative-control-ffi-request-text-field-enumerator-coverage`, which
+  rejects drift that drops `vk_ref` from the enumerated request text fields.
+- This protects the existing oversized, control-character, non-ASCII,
+  unportable-punctuation, catalog-shape, required-field, and production-claim
+  guards from silently narrowing to only some request text fields.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-text-field-enumerator-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 ISO XSD readiness path-segment recheck hardening
+
+- Tightened `scripts/iso_production_readiness.py` so digest-bound XSD summaries
+  cannot reintroduce schema, fixture, fixture-schema, or source-provenance paths
+  with leading-dash segments after the XSD preflight has rejected them. The final
+  readiness rollup now independently fails forged paths such as
+  `iso/--fooo.001.001.01.xsd` and `../fixtures/--foo_fixture.xml`.
+- Added adversarial readiness tests for forged schema paths, fixture schema
+  references, fixture paths, and schema source provenance paths that carry
+  leading-dash segments.
+- Validation:
+  - `python3 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`72` tests, `79.634s`)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`302` tests, `157.045s`)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+
+## 2026-06-05 Privacy production-claim request-field guard split
+
+- Split production/mainnet/audit request-field non-reflection coverage into
+  algorithm_id/entrypoint and `vk_ref` checks.
+- Added a dedicated workflow/inventory negative control for `vk_ref`
+  production-claim coverage and retargeted the existing production-claim
+  negative control to entrypoint claim fixtures.
+- Tightened the JS parity test to scope production-claim assertions to the
+  native Rust host regression bodies while allowing hosts to use equivalent
+  byte-absence assertions.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-production-claim-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-vk-ref-production-claim-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (`57` tests passed)
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy catalog-shape guard rollup validation
+
+- Re-ran the full source-only privacy FFI parity suite after the catalog-shape
+  request-field guard split; all 57 tests passed.
+- Final validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs status.md`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 ISO notary endpoint URL path canonicality
+
+- Tightened `scripts/iso_audit_notary_adapter.py` endpoint URL validation to
+  reject empty interior URL path segments such as `/archive//anchor`, matching
+  the rail gateway, canary, receipt, evidence, readiness, and trust-source URL
+  validators. Both HTTPS publication endpoints and local HTTP test endpoints now
+  fail before network delivery when repeated separators are present.
+- Validation:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py pytests/scripts/iso_audit_notary_adapter_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
+    (`24` tests, `20.779s`)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`302` tests, `156.396s`)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+
+## 2026-06-05 Privacy catalog-shape request-field guard split
+
+- Split catalog-shape request-field non-reflection coverage into algorithm_id
+  and entrypoint checks.
+- Added explicit entrypoint anchors for colon, hyphen, leading underscore,
+  trailing underscore, and malformed dotted namespace segments.
+- Retargeted
+  `--negative-control-ffi-request-catalog-shape-nonreflection-coverage` to the
+  algorithm_id fixtures and added/workflow-wired
+  `--negative-control-ffi-request-entrypoint-catalog-shape-nonreflection-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-catalog-shape-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-entrypoint-catalog-shape-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy printable request-field rollup validation
+
+- Re-ran the full source-only privacy FFI parity suite after the non-ASCII and
+  unportable-punctuation request-field guard splits; all 57 tests passed.
+- Final validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs status.md`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy unportable request-field guard split
+
+- Split unportable-punctuation request text-field non-reflection coverage into
+  algorithm_id/entrypoint and `vk_ref` checks.
+- Added explicit fixture anchors for algorithm_id spaces, entrypoint quotes,
+  and `vk_ref` path traversal.
+- Retargeted
+  `--negative-control-ffi-unportable-request-field-nonreflection-coverage` to
+  the algorithm_id/entrypoint fixtures and added/workflow-wired
+  `--negative-control-ffi-unportable-vk-ref-nonreflection-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-unportable-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-unportable-vk-ref-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 ISO leading-dash path-segment hardening
+
+- Tightened ISO path validators so flag-shaped path segments such as
+  `dir/--leaf.xml` now fail closed, not only whole path strings that start with
+  a dash. The rule now covers rail gateway `--message` paths, notary anchor
+  `store_dir` values, receipt verifier rail/notary source paths, canary runbook
+  paths, evidence/readiness config and artifact paths, and XSD manifest source,
+  schema, fixture, and fixture-schema paths.
+- Added adversarial coverage across rail adapter, notary adapter, receipt
+  verifier, canary, evidence, readiness, and XSD fixture tests for nested
+  leading-dash leaves before network delivery, archive acceptance, or release
+  rollup.
+- Validation:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`267` tests, `156.145s`)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`302` tests, `156.843s`)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+
+## 2026-06-05 Privacy non-ASCII request-field guard split
+
+- Split non-ASCII request text-field non-reflection coverage into
+  algorithm_id/entrypoint and `vk_ref` checks.
+- Added explicit Unicode-confusable fixture anchors for zero-width,
+  word-joiner, and fullwidth-colon request-field regressions.
+- Retargeted
+  `--negative-control-ffi-non-ascii-request-field-nonreflection-coverage` to
+  the algorithm_id/entrypoint fixtures and added/workflow-wired
+  `--negative-control-ffi-non-ascii-vk-ref-nonreflection-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-ascii-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-ascii-vk-ref-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request-field guard rollup validation
+
+- Re-ran the full source-only privacy FFI parity suite after the required-field
+  and control-character request-field guard splits; all 57 tests passed.
+- Final validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs status.md`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy control-character request-field guard split
+
+- Split control-character request text-field non-reflection coverage into
+  algorithm_id/entrypoint and `vk_ref` checks.
+- Retargeted
+  `--negative-control-ffi-control-request-field-nonreflection-coverage` to the
+  algorithm_id/entrypoint control-character fixture and added/workflow-wired
+  `--negative-control-ffi-control-vk-ref-nonreflection-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-control-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-control-vk-ref-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy required request-field guard split
+
+- Split required request text-field non-reflection coverage into
+  algorithm_id/entrypoint and `vk_ref` admission checks.
+- Retargeted
+  `--negative-control-ffi-required-request-fields-nonreflection-coverage` to
+  the algorithm_id/entrypoint requirement and added/workflow-wired
+  `--negative-control-ffi-required-vk-ref-nonreflection-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-required-request-fields-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-required-vk-ref-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI adversarial guard rollup validation
+
+- Re-ran the full source-only privacy FFI parity suite after the
+  empty-public-input and oversized-payload guard splits; all 57 tests passed.
+- Final validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs status.md`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy oversized payload non-reflection guard split
+
+- Split oversized byte-payload non-reflection coverage into public-input,
+  witness, and proof checks.
+- Kept `--negative-control-ffi-oversized-request-payload-nonreflection-coverage`
+  focused on oversized witness leakage and added/workflow-wired
+  `--negative-control-ffi-oversized-public-inputs-nonreflection-coverage` and
+  `--negative-control-ffi-oversized-proof-nonreflection-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-public-inputs-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-request-payload-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-proof-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy empty-public-input operation guard split
+
+- Split empty-public-input fail-closed coverage into build and verify
+  operation-specific native regressions across the C bridge, JS NAPI host, and
+  Python PyO3 host.
+- Retargeted `--negative-control-ffi-adversarial-fail-closed-coverage` to the
+  build-side empty-public-input regression and added/workflow-wired
+  `--negative-control-ffi-verify-empty-public-inputs-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts reject empty public inputs before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-adversarial-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-verify-empty-public-inputs-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy SDK guard split rollup validation
+
+- Ran the full source-only privacy FFI parity suite after the latest guard
+  splits; all 57 tests passed.
+- Final validation:
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs status.md`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun because an existing
+  `cargo test -p iroha_core ... --ignored` process was still active; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy verifier-key backend guard split
+
+- Split verifier-key backend coverage into malformed `vk_ref` shape/order
+  hardening and backend-family binding.
+- Retargeted `--negative-control-ffi-vk-ref-backend-binding-coverage` to the
+  backend-match helper and added/workflow-wired
+  `--negative-control-ffi-vk-ref-shape-hardening-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts reject verifier-key backend drift before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-backend-binding-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-shape-hardening-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI operation-boundary guard split
+
+- Split proof/witness operation-confusion coverage into shadow-material
+  rejection, required-material rejection, and non-proof entrypoint rejection.
+- Retargeted
+  `--negative-control-ffi-operation-confusion-fail-closed-coverage` to the
+  build proof-shadow rule, and added/workflow-wired
+  `--negative-control-ffi-operation-required-material-coverage` and
+  `--negative-control-ffi-non-proof-entrypoint-rejection-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts reject proof/witness operation confusion before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-operation-confusion-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-operation-required-material-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-proof-entrypoint-rejection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy ledger-mutation catalog guard split
+
+- Split native ledger-mutation catalog coverage into component proof-only rows,
+  planned ledger-mutation proof-builder pairing, and proofed SDK
+  typed/proof-paired ledger mutations.
+- Added/workflow-wired
+  `--negative-control-native-component-proof-only-coverage` and
+  `--negative-control-native-planned-ledger-mutation-proof-builder-coverage`;
+  kept `--negative-control-native-ledger-mutation-proof-pairing-coverage`
+  focused on proofed SDK ledger mutation pairing.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI catalogs keep component rows proof-only|native privacy FFI catalogs pair planned ledger mutations with production proof builders|native privacy FFI catalogs keep proofed SDK ledger mutations typed and proof-paired' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-component-proof-only-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-planned-ledger-mutation-proof-builder-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-ledger-mutation-proof-pairing-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native catalog structure guard split
+
+- Split native catalog-structure coverage into identifier/fixture structure,
+  required production plan rows, verifier-key registration, and public catalog
+  parity checks.
+- Retargeted
+  `--negative-control-native-catalog-structure-coverage` to identifier
+  portability, and added/workflow-wired
+  `--negative-control-native-required-production-plan-rows-coverage`,
+  `--negative-control-native-verifier-key-registration-coverage`, and
+  `--negative-control-native-public-catalog-parity-coverage`.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI catalogs keep algorithm rows unique and portable|native privacy FFI catalogs keep dev fixtures explicit and non-production|native privacy FFI catalogs pin required production plan rows|native privacy FFI catalogs require explicit verifier-key name maps|native privacy FFI catalog rows match public SDK catalogs|native privacy FFI verifier-key maps match public SDK catalogs' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-catalog-structure-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-required-production-plan-rows-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-verifier-key-registration-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-public-catalog-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy planned-entrypoint dispatch guard split
+
+- Split native planned-entrypoint FFI dispatch coverage into executable
+  allowlist coverage and planned-entrypoint rejection-path coverage.
+- Retargeted the existing
+  `--negative-control-native-planned-entrypoint-dispatch-coverage` to mutate
+  `sdk_entrypoints` allowlist coverage, and added/workflow-wired
+  `--negative-control-native-planned-entrypoint-rejection-coverage` for the
+  `planned but not executable` invalid-request path.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'native privacy FFI hosts keep planned entrypoints non-executable' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-planned-entrypoint-dispatch-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-planned-entrypoint-rejection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy binary-only Norito guard split
+
+- Split binary-only privacy FFI coverage into public SDK wrapper byte/archive
+  API checks and native host Norito-only/JSON-free checks.
+- Kept the existing binary-only negative control focused on public JS, Python,
+  Swift, Java, Kotlin, and C# SDK wrappers exposing byte-oriented archives and
+  rejecting JSON payload surfaces.
+- Added and workflow-wired
+  `--negative-control-native-host-norito-only-ffi-coverage` so C bridge, JS
+  NAPI, Python PyO3, and Java JNI Norito encode/decode boundaries fail
+  independently from SDK wrapper API drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy FFI SDK wrappers remain binary-only and JSON-free|native privacy FFI hosts remain Norito-only and JSON-free' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-binary-only-norito-ffi-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-host-norito-only-ffi-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI ABI surface guard split
+
+- Split the FFI ABI surface guard into C exported symbol/header/free-buffer
+  dispatch coverage and binding loader/JNI/native declaration coverage.
+- Retargeted the existing ABI negative control to mutate the Rust no-mangle
+  export assertion instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-ffi-binding-loader-surface-coverage` so Swift `dlsym`,
+  C# `EntryPoint`, Kotlin/JVM JNI wrappers, Android JNI wrappers, and
+  Java/Kotlin native method declarations fail independently from C symbol
+  export/header drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy FFI public symbol names stay stable across native bindings' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-abi-surface-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-binding-loader-surface-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI error/archive contract guard split
+
+- Split deterministic FFI error contract coverage from
+  `PRIVACY_NATIVE_ARCHIVE_MAX_BYTES` parity coverage so status/error-code drift
+  and archive-size boundary drift fail independently.
+- Retargeted the existing FFI error contract negative control to mutate the
+  malformed-Norito error marker instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-native-archive-max-parity-coverage` so JS, Python, Swift,
+  C bridge, JS host, Python host, Java, Kotlin, and C# archive cap drift is
+  caught as its own security-boundary regression.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy FFI ABI and deterministic error constants stay in parity' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-error-contract-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-archive-max-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy Norito schema operation guard split
+
+- Split the Norito schema/operation parity guard into native struct schema
+  field parity and proof operation enum variant parity.
+- Retargeted the existing Norito schema operation negative control to mutate a
+  request struct field constant instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-norito-operation-variant-parity-coverage` so
+  `PrivacyProofOperationV1` `Build`/`Verify` drift fails independently from
+  Norito struct schema field drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'privacy FFI Norito schema and proof operation set stay in parity' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-norito-schema-operation-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-norito-operation-variant-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy capability metadata guard split
+
+- Split mobile/C#/Swift/Kotlin/Java privacy capability metadata coverage into
+  coarse field-shape parity and fail-closed production metadata defaults.
+- Retargeted the existing capability metadata parity negative control to mutate
+  the expected Swift field-shape constant instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-capability-fail-closed-metadata-coverage` so
+  `productionReady = false`, fail-closed gate defaults, and Android Java
+  missing/audit reference defaults fail independently from field-shape drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'mobile and C# privacy capability models stay coarse and fail-closed' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-capability-metadata-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-capability-fail-closed-metadata-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy production-gate missing-reason guard split
+
+- Split production-gate missing-reason parity coverage into JS/Python catalog
+  extraction parity and native bridge constant parity.
+- Retargeted the existing production-gate missing-reason negative control to
+  mutate a required catalog reason instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-native-production-gate-missing-reason-parity-coverage`
+  so Swift, Kotlin, Android Java, and C# native bridge missing-reason constants
+  fail independently from JS/Python catalog drift.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'SDK privacy production gate missing reasons stay in cross-SDK parity' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-production-gate-missing-reason-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-production-gate-missing-reason-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request-decoder bounds guard split
+
+- Split request decoder bounds coverage into SDK request-archive decoder bounds,
+  C bridge output-buffer/null-pointer precedence, and native adversarial Norito
+  request frame fixture coverage.
+- Retargeted the existing request-decoder negative control to mutate the SDK
+  max-archive-size check instead of the C bridge output-buffer precedence
+  assertion.
+- Added and workflow-wired
+  `--negative-control-c-bridge-output-buffer-precedence-coverage` and
+  `--negative-control-native-adversarial-request-frame-coverage` so C bridge
+  stale-output clearing/null-pointer ordering and native malformed frame
+  fixture coverage fail independently.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy native availability proof probes use shared Norito request archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-request-decoder-bounds-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-c-bridge-output-buffer-precedence-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-adversarial-request-frame-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request-copy isolation guard split
+
+- Split request-copy isolation coverage into request-copy zeroization after
+  native/probe failures, Python complete native method-surface checks, hostile
+  native request mutation isolation, and malformed request no-dispatch fixtures.
+- Retargeted the existing request-copy isolation negative control to the
+  hostile mutation archive-equality marker instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-request-copy-zeroization-coverage`,
+  `--negative-control-python-native-method-surface-coverage`, and
+  `--negative-control-malformed-request-no-dispatch-coverage` so zeroization,
+  missing-method fail-closed behavior, and malformed request dispatch rejection
+  fail independently.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'clear request copies after native failures|availability probes clear request copies|complete FFI method surface|hostile native request mutation|malformed request archives before dispatch' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-request-copy-isolation-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-request-copy-zeroization-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-python-native-method-surface-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-malformed-request-no-dispatch-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy Norito request schema guard split
+
+- Split the Norito request schema hardening aggregate guard into header padding,
+  complete field-bitset flag, and wrong-schema-before-dispatch coverage
+  families.
+- Retargeted the existing Norito request schema negative control to mutate the
+  padding boundary marker instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-norito-request-field-bitset-coverage` and
+  `--negative-control-norito-wrong-schema-request-coverage` so complete
+  field-bitset acceptance and wrong-schema dispatch rejection fail independently.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'pin Norito header padding boundaries|accept complete Norito field-bitset flags|reject wrong-schema request archives before dispatch' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-norito-request-schema-hardening-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-norito-request-field-bitset-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-norito-wrong-schema-request-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request-boundary guard split
+
+- Split the cross-SDK privacy request-boundary aggregate guard into malformed
+  request dispatch rejection, sliced byte-view handling, and native-output
+  copy/malformed-boundary coverage families.
+- Retargeted the existing request-boundary negative control to mutate the
+  malformed request padding case rather than a shared test title.
+- Added and workflow-wired
+  `--negative-control-cross-sdk-sliced-view-boundary-coverage` and
+  `--negative-control-cross-sdk-native-output-boundary-coverage` so sliced
+  buffer/memoryview handling and native output archive boundaries fail under
+  independent adversarial controls.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'reject adversarial malformed request archives before dispatch|pin sliced byte-view|defensively copy native output archives|reject malformed native output archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-request-boundary-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-sliced-view-boundary-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-native-output-boundary-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native availability guard split
+
+- Split native privacy availability hardening coverage into malformed/oversized
+  output archive checks and successful nonempty probe-gating checks.
+- Retargeted the existing native availability output negative control to mutate
+  a malformed native output archive marker instead of a shared test title.
+- Added and workflow-wired
+  `--negative-control-native-availability-probe-gating-coverage` so SDK probe
+  success, nonempty output, operation-specific Norito schema, and final
+  availability gating drift fail independently from malformed archive coverage.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --test --test-name-pattern 'SDK privacy native availability probes reject adversarial native output archives|Swift privacy native availability requires valid Norito proof probes' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-availability-output-hardening-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-availability-probe-gating-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native capability guard split
+
+- Split the broad native capability fail-closed aggregate check into three
+  source-only guard families: production-gate state invariants, exposed
+  production-claim label quarantine, and capability archive/version/duplicate
+  row invariants.
+- Retargeted the existing native capability fail-closed negative control to the
+  gate-state `!gate.ready` invariant instead of the shared test title.
+- Added and workflow-wired
+  `--negative-control-native-capability-claim-quarantine-coverage` and
+  `--negative-control-native-capability-archive-invariant-coverage` so exposed
+  mainnet/audit/production claims and archive duplicate/version attacks fail
+  independently.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI capabilities keep production gates fail-closed' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-capability-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-capability-claim-quarantine-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-capability-archive-invariant-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy production-disabled build/verify gate guards
+
+- Split privacy production-disabled operation gate-message coverage into
+  independent build and verify aggregate guard checks so either side can drift
+  without being masked by the other operation's test regex.
+- Retargeted the existing gate-message negative control to mutate only the
+  build proof coverage marker and added
+  `--negative-control-ffi-production-disabled-verify-gate-message-coverage` for
+  the verify proof marker; both are wired into the PR privacy SDK workflow.
+- Tightened the JS parity regex for verify to require the native verify
+  operation/export path, `PRIVACY_FFI_ERROR_PRODUCTION_DISABLED`, every public
+  production gate fragment, and proof non-reflection in the same verify
+  production-disabled test block.
+- Updated C bridge, JS host, and Python host verify disabled tests to use a
+  secret-bearing proof input and assert the public failure message does not
+  reflect that proof material.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI production-disabled responses enumerate all gates' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-gate-message-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-verify-gate-message-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-message-constant-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-proof-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy production-disabled message constant guard
+
+- Split the privacy production-disabled public message constant into a
+  dedicated aggregate guard check so C bridge, JS NAPI, and Python PyO3 keep
+  the shared failure message enumerating exact protocol implementation, proving,
+  verification, chain admission, SDK parity, wallet/state, deterministic tests,
+  fuzzing, performance gates, external audit, real engine enablement, and Iroha
+  allowlist evidence.
+- Tightened the JS parity test to pin exact message text fragments around
+  `privacy production is disabled until exact protocol implementation`, real
+  protocol engine enablement, and Iroha production allowlist evidence.
+- Kept the neighboring production-disabled gate-message guard focused on
+  build/verify operation tests and result-message assertions so constant text
+  drift and operation coverage drift fail independently.
+- Added `--negative-control-ffi-production-disabled-message-constant-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI production-disabled responses enumerate all gates' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-message-constant-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-gate-message-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-failure-result-invariant-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy witness helper non-reflection guard
+
+- Split privacy witness non-reflection helper coverage into a dedicated
+  aggregate guard check so C bridge, JS NAPI, and Python PyO3 keep the shared
+  assertion helper proof-free and checking both failure messages and encoded
+  Norito result archives for witness leakage.
+- Tightened the JS parity test to extract bounded witness helper and witness
+  failure-matrix blocks, pinning helper proof emptiness, message/archive
+  `assert_subslice_absent` checks, and matrix cases for unsupported rows, bad
+  entrypoints, wrong verifier-key backend/name, empty public inputs,
+  production-disabled build/verify, and verify witness-shadow rejection.
+- Kept witness material failure scenarios under the witness non-reflection
+  guard, proof-marker leakage under the proof non-reflection guard, and
+  failure status/error semantics under the failure-result invariant guard.
+- Added `--negative-control-ffi-witness-helper-nonreflection-coverage` and
+  wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI hosts keep failure results non-successful and proof-free' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-witness-helper-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-witness-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-proof-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-failure-result-invariant-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy proof non-reflection guard
+
+- Split privacy FFI proof-marker non-reflection into a dedicated aggregate guard
+  check so C bridge, JS NAPI, and Python PyO3 reject proof-shadow and
+  disabled-verify proof failures without reflecting attacker-controlled proof
+  bytes in messages or encoded Norito result archives.
+- Tightened the JS parity test to extract the proof non-reflection regression
+  block and pin `proof-never-echo`, `build-proof-shadow`,
+  `disabled-verify-proof`, build/verify operation directions, failure-result
+  invariants, message non-reflection, and encoded-result non-reflection.
+- Kept witness material leakage under the witness non-reflection guard and
+  failure status/error semantics under the failure-result invariant guard, so
+  all three controls now fail independently.
+- Added `--negative-control-ffi-proof-nonreflection-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI hosts keep failure results non-successful and proof-free' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-proof-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-witness-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-failure-result-invariant-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy failure-result invariant guard
+
+- Split deterministic privacy FFI failure-result invariants into a dedicated
+  aggregate guard check so C bridge, JS NAPI, and Python PyO3 keep every
+  failure result non-successful, error-coded, proof-free, and unverified.
+- Pinned existing parity coverage for `privacy_failure_result_invariants_hold`,
+  `PRIVACY_FFI_STATUS_ERROR`, nonzero error codes, empty proof bytes,
+  `!verified`, and the constructor-side debug assertion.
+- Retargeted the neighboring witness non-reflection negative control to mutate
+  the witness serialization regression directly, so failure-result invariants
+  and witness/proof non-reflection fail under independent controls.
+- Added `--negative-control-ffi-failure-result-invariant-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI hosts keep failure results non-successful and proof-free' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-failure-result-invariant-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-witness-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-gate-message-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy oversized request byte-payload non-reflection guard
+
+- Split privacy proof request byte-payload size validation into a dedicated
+  aggregate guard check so C bridge, JS NAPI, and Python PyO3 reject oversized
+  `public_inputs`, `witness`, and `proof` bytes before dispatch without
+  reflecting attacker-controlled payload markers.
+- Tightened the JS parity test to extract the public-input, witness, and proof
+  overflow regressions and pin the `+ 1` boundary expressions, witness/proof
+  markers, `copy_from_slice(marker)` setup, operation direction, and encoded
+  result non-reflection assertions.
+- Kept the broader request non-reflection guard focused on shared request-size
+  constants and pre-dispatch error messages, while text-field and byte-payload
+  overflow cases now fail under independent negative controls.
+- Added `--negative-control-ffi-oversized-request-payload-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-request-payload-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy oversized request text-field non-reflection guard
+
+- Split privacy proof request oversized text-field validation into a dedicated
+  aggregate guard check so C bridge, JS NAPI, and Python PyO3 reject
+  over-1024-byte `algorithm_id`, `entrypoint`, and `vk_ref` strings before
+  dispatch without reflecting attacker-controlled oversized bytes.
+- Tightened the JS parity test to pin the exact boundary expression
+  `PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES + 1`, all three reflected text fields,
+  the maximum-length failure message, and the encoded-result
+  `windows(oversized.len())` non-reflection check.
+- Kept the broader request non-reflection guard focused on binary public input,
+  witness, and proof size limits, while the text-field classes now have
+  separate oversized, control-character, non-ASCII, and punctuation guards.
+- Added `--negative-control-ffi-oversized-request-field-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-oversized-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy control-character request text-field non-reflection guard
+
+- Split privacy proof request control-character validation into a dedicated
+  aggregate guard check so C bridge, JS NAPI, and Python PyO3 reject newline,
+  carriage-return, and tab payloads before dispatch without reflecting attacker
+  marker bytes.
+- Tightened the JS parity test to pin the concrete adversarial fixtures:
+  `confidential-transfer-v2\nforged`, `buildConfidentialTransferProofV2\rforged`,
+  and `vk:test\tforged`.
+- Kept the broader request non-reflection guard focused on size limits and
+  oversized public input, witness, and proof payloads, while the non-ASCII and
+  unportable punctuation guards own their respective text-field classes.
+- Added `--negative-control-ffi-control-request-field-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-control-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-ascii-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy non-ASCII request text-field non-reflection guard
+
+- Split privacy proof request non-ASCII text-field validation into a dedicated
+  aggregate guard check so C bridge, JS NAPI, and Python PyO3 reject Unicode
+  request text before dispatch without reflecting attacker marker bytes.
+- Kept the broader request non-reflection guard focused on size limits, control
+  characters, and oversized public input, witness, and proof payloads, while
+  the unportable punctuation guard owns portable-identifier enforcement.
+- Pinned existing parity coverage for `privacy_request_has_non_ascii_text_field`,
+  printable-ASCII failure messages, and `unicode-text-never-echo` result
+  non-reflection checks.
+- Added `--negative-control-ffi-non-ascii-request-field-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-non-ascii-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-unportable-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy unportable request text-field non-reflection guard
+
+- Split privacy proof request punctuation/portable-identifier validation into a
+  dedicated aggregate guard check so C bridge, JS NAPI, and Python PyO3 reject
+  unportable request text fields before dispatch without reflecting attacker
+  marker bytes.
+- Kept the broader request non-reflection guard focused on size limits, control
+  characters, non-ASCII text, and oversized public input, witness, and proof
+  payloads.
+- Pinned existing parity coverage for the portable request text-field alphabet,
+  `privacy_request_has_unportable_text_field`, portable-identifier failure
+  messages, and `punctuation-text-never-echo` result non-reflection checks.
+- Added `--negative-control-ffi-unportable-request-field-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-unportable-request-field-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-catalog-shape-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request catalog-shape non-reflection guard
+
+- Split privacy proof request catalog-shape validation into a dedicated
+  aggregate guard check so C bridge, JS NAPI, and Python PyO3 reject malformed
+  `algorithm_id` and `entrypoint` shapes before dispatch without reflecting
+  attacker-controlled marker bytes.
+- Kept the broader request non-reflection guard focused on size limits,
+  character-set rules, required text fields, and oversized public input,
+  witness, and proof payloads.
+- Pinned existing parity coverage for leading/trailing separator variants,
+  malformed `Iroha.Privacy` entrypoint forms, catalog-shape failure messages,
+  and `catalog-shape-text-never-echo` result non-reflection checks.
+- Added `--negative-control-ffi-request-catalog-shape-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-catalog-shape-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-required-request-fields-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-production-claim-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy required request-field non-reflection guard
+
+- Split required privacy proof request text fields into a dedicated aggregate
+  guard check so C bridge, JS NAPI, and Python PyO3 keep rejecting empty
+  `algorithm_id`, `entrypoint`, and `vk_ref` before dispatch without reflecting
+  attacker-controlled marker bytes.
+- Kept the broader request non-reflection guard focused on size limits,
+  character-set rules, catalog-shape validation, and oversized public input,
+  witness, and proof payloads.
+- Pinned existing parity coverage for the empty-required-field regression,
+  non-empty `algorithm_id`/`entrypoint` and `vk_ref` errors, and
+  `required-text-field-never-echo` result non-reflection checks.
+- Added `--negative-control-ffi-required-request-fields-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-required-request-fields-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-production-claim-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request production-claim non-reflection guard
+
+- Split privacy proof request production/mainnet/audit claim rejection into a
+  dedicated aggregate guard check so C bridge, JS NAPI, and Python PyO3 reject
+  hostile request text fields before dispatch without reflecting attacker input.
+- Kept the neighboring request non-reflection guard focused on size limits,
+  character-set rules, catalog-shape validation, required text fields, and
+  oversized public input, witness, and proof payloads.
+- Pinned existing parity coverage for request text-field production-claim
+  scanning, forged mainnet/audit/security-review labels, and non-reflection
+  assertions around those rejection results.
+- Added `--negative-control-ffi-request-production-claim-nonreflection-coverage`
+  and wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-production-claim-nonreflection-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy verifier-key name binding guard
+
+- Split native privacy verifier-key name binding into a dedicated aggregate
+  guard check so C bridge, JS NAPI, and Python PyO3 proof FFI requests reject
+  same-backend wrong verifier-key names before production gates.
+- Kept verifier-key backend binding focused on `backend:name` parsing, portable
+  components, and backend-family mismatches, while the broad adversarial
+  fail-closed guard now focuses on empty public-input rejection.
+- Pinned existing parity coverage for native catalog verifier-key name maps,
+  canonical `vk_ref` name derivation, algorithm-to-verifier-key binding, and
+  generic, foreign-algorithm, and legacy verifier-key name drift cases.
+- Added `--negative-control-ffi-vk-ref-name-binding-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-name-binding-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-adversarial-fail-closed-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts reject verifier-key name drift before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'native privacy FFI hosts reject empty public inputs before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-backend-binding-coverage`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy verifier-key backend binding guard
+
+- Split native privacy verifier-key backend binding into a dedicated aggregate
+  guard check so C bridge, JS NAPI, and Python PyO3 proof FFI requests reject
+  malformed `vk_ref` shapes and wrong backend families before production gates.
+- Pinned existing parity coverage for `backend:name` parsing, portable backend
+  and verifier-key name components, pre-catalog malformed `vk_ref` rejection
+  without request reflection, and wrong-backend verifier-key rejection before
+  production-disabled dispatch.
+- Retargeted the neighboring broad adversarial fail-closed negative control to
+  verifier-key name drift so the backend and name controls fail independently.
+- Added `--negative-control-ffi-vk-ref-backend-binding-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-vk-ref-backend-binding-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-adversarial-fail-closed-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts reject verifier-key backend drift before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy operation-confusion fail-closed guard
+
+- Split privacy proof/witness operation-confusion rejection into a dedicated
+  aggregate guard check so native C bridge, JS NAPI, and Python PyO3 proof FFI
+  requests keep failing closed before production gates.
+- Pinned existing parity coverage that build requests reject proof bytes and
+  require witness bytes, verify requests reject witness bytes and require proof
+  bytes, and non-proof SDK helpers cannot pass through proof FFI dispatch.
+- Retargeted the neighboring adversarial fail-closed negative control to
+  verifier-key backend drift so the two controls fail on independent invariants.
+- Added `--negative-control-ffi-operation-confusion-fail-closed-coverage` and
+  wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-operation-confusion-fail-closed-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-adversarial-fail-closed-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts reject proof/witness operation confusion before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI error contract parity guard
+
+- Split deterministic privacy FFI version/error-code and native archive-size
+  parity into a dedicated aggregate guard check so the public contract cannot
+  drift independently of symbol-name stability.
+- Pinned existing JS source/browser/dist, Python, Swift, C bridge, JS NAPI,
+  Python PyO3, Java/Android, Kotlin/JVM, and C# parity coverage for bridge ABI
+  version, FFI version, status/error constants, and the 64 MiB native archive
+  cap.
+- Kept the neighboring ABI-surface guard focused on exported C symbols, JNI
+  symbols, operation dispatch, and free-buffer linkage so constant drift fails
+  independently.
+- Added `--negative-control-ffi-error-contract-parity-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-error-contract-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-abi-surface-coverage`
+  - `node --test --test-name-pattern 'privacy FFI ABI and deterministic error constants stay in parity' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy Norito schema operation parity guard
+
+- Split Norito schema and proof-operation parity into a dedicated aggregate
+  guard check so C bridge, JS NAPI, and Python PyO3 privacy FFI archives cannot
+  drift in field layout or supported proof operation variants.
+- Pinned existing parity coverage for `PrivacyProductionGateStatusV1`,
+  `PrivacyProductionGateV1`, `PrivacyCapabilityV1`,
+  `PrivacyCapabilitiesV1`, `PrivacyProofRequestV1`,
+  `PrivacyProofResultV1`, and `PrivacyProofOperationV1` Build/Verify variants
+  across all native host surfaces.
+- Kept the neighboring capability metadata guard focused on coarse fail-closed
+  capability model shape so schema/operation drift fails independently.
+- Added `--negative-control-norito-schema-operation-parity-coverage` and wired
+  it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-norito-schema-operation-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-capability-metadata-parity-coverage`
+  - `node --test --test-name-pattern 'privacy FFI Norito schema and proof operation set stay in parity' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy production-gate missing-reason parity guard
+
+- Split production-gate missing-reason parity into a dedicated aggregate guard
+  check so the public fail-closed reason list remains identical across JS
+  source/dist, Python, Swift, Java/Android, Kotlin/JVM, and C#.
+- Pinned existing parity coverage for every public missing reason, including
+  real proving/verifier engines, chain admission, cross-SDK parity,
+  wallet/state support, deterministic tests, fuzzing, performance gates,
+  external audit signoff, implementation hardening, planned entrypoints, dev
+  fixtures, and the Iroha production allowlist.
+- Kept the neighboring capability metadata guard focused on coarse fail-closed
+  capability model shape and Norito schema/operation metadata so missing-reason
+  drift fails independently.
+- Added `--negative-control-production-gate-missing-reason-parity-coverage` and
+  wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-production-gate-missing-reason-parity-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-capability-metadata-parity-coverage`
+  - `node --test --test-name-pattern 'SDK privacy production gate missing reasons stay in cross-SDK parity' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy binary-only Norito FFI guard
+
+- Split binary-only and JSON-free privacy FFI coverage into a dedicated
+  aggregate guard check so SDK wrappers and native hosts stay on raw Norito
+  archives instead of JSON payloads.
+- Pinned existing JS source/dist, Python, Swift, Java/Android, Kotlin/JVM, and
+  C# wrapper coverage for byte-oriented request/result archives, and C bridge,
+  JS NAPI, Python PyO3, and Java JNI host coverage for Norito decode/encode
+  paths with no JSON parsing or rendering.
+- Kept the neighboring ABI-surface guard focused on stable symbols, deterministic
+  error constants, and archive caps so serialization drift fails independently.
+- Added `--negative-control-binary-only-norito-ffi-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-binary-only-norito-ffi-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-abi-surface-coverage`
+  - `node --test --test-name-pattern 'privacy FFI SDK wrappers remain binary-only and JSON-free|native privacy FFI hosts remain Norito-only and JSON-free' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy SDK bridge method-surface guard
+
+- Split SDK privacy native bridge public method-surface coverage into a
+  dedicated aggregate guard check so Swift, Java/Android, Kotlin/JVM, and C#
+  expose only generic Norito archive operations until audited production Rust
+  engines are available.
+- Pinned existing parity coverage for the expected bridge method sets:
+  capabilities, build-proof, and verify-proof archive operations only, with no
+  algorithm-specific native bridge entrypoints.
+- Kept the neighboring ABI-surface guard focused on stable C/JNI symbols,
+  deterministic error constants, native archive caps, and binary/JSON-free FFI
+  wrappers so public method drift fails independently.
+- Added `--negative-control-sdk-bridge-method-surface-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-sdk-bridge-method-surface-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-abi-surface-coverage`
+  - `node --test --test-name-pattern 'SDK privacy native bridges expose only generic archive operations' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy public archive wrapper Norito guard
+
+- Split C# public privacy archive wrapper Norito validation into a dedicated
+  aggregate guard check so public wrapper constructors cannot accept malformed
+  or oversized native output bytes.
+- Pinned existing parity coverage for `PrivacyArchiveBytes`,
+  `PrivacyCapabilitiesArchive`, `PrivacyProofResultArchive`, archive-size
+  bounds, Norito V1 frame validation, adversarial malformed request archives,
+  and oversized public wrapper archives.
+- Kept the neighboring public-wrapper isolation guard focused on forged
+  production-gate mutation isolation so public archive wrapper drift fails
+  independently.
+- Added `--negative-control-public-archive-wrapper-norito-coverage` and wired
+  it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-archive-wrapper-norito-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-wrapper-isolation-coverage`
+  - `node --test --test-name-pattern 'C# public privacy archive wrappers reject malformed Norito archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native availability output hardening guard
+
+- Split native privacy availability-output hardening into a dedicated aggregate
+  guard check so SDKs cannot mark native privacy support available from hostile
+  or wrong-operation native output archives.
+- Pinned existing JS source/dist, Python, Swift, Java/Android, Kotlin/JVM, and
+  C# parity coverage for malformed capabilities/build/verify result schemas,
+  bad Norito minor versions, forged declared lengths, oversized native output,
+  invalid field-bitset flags, CRC/payload tampering, non-empty result checks,
+  operation-specific result schemas, and Swift’s completed build/verify probe
+  requirement before `privacyNativeProbeOk` is set.
+- Kept the neighboring cross-SDK operation-schema and request-boundary negative
+  controls targeted at shared request archives and malformed request dispatch,
+  respectively, so availability-output drift fails independently.
+- Added `--negative-control-native-availability-output-hardening-coverage` and
+  wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-availability-output-hardening-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-request-boundary-coverage`
+  - `node --test --test-name-pattern 'SDK privacy native availability probes reject adversarial native output archives|Swift privacy native availability requires valid Norito proof probes' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy Norito request schema hardening guard
+
+- Split cross-SDK Norito request schema hardening into a dedicated aggregate
+  guard check for native privacy wrappers.
+- Pinned existing JS source/dist, Python, Swift, Java/Android, Kotlin/JVM, and
+  C# parity coverage for exact Norito header padding boundaries, complete
+  field-bitset request flags, and wrong-schema request archive rejection before
+  native build/verify dispatch.
+- Retargeted the broader cross-SDK request-boundary negative control to the
+  mobile/C# adversarial malformed-request dispatch test so both guard modes
+  independently fail on their own drift.
+- Added `--negative-control-norito-request-schema-hardening-coverage` and wired
+  it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-request-boundary-coverage`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-norito-request-schema-hardening-coverage`
+  - `node --test --test-name-pattern 'SDK privacy native tests pin Norito header padding boundaries|SDK privacy native tests accept complete Norito field-bitset flags|SDK privacy native tests reject wrong-schema request archives before dispatch' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy ledger-mutation proof-pairing guard
+
+- Split native privacy ledger-mutation catalog coverage into a dedicated
+  aggregate guard check so component rows remain proof-only and ledger-mutating
+  rows remain typed, proof-paired, and tied to production proof builders.
+- Pinned existing C bridge, JS NAPI, and Python PyO3 parity coverage for
+  component row rejection of instruction/transaction/submit entrypoints,
+  planned ledger mutations requiring a production proof builder, and proofed SDK
+  ledger mutations rejecting generic or untyped transaction submission paths.
+- Added
+  `--negative-control-native-ledger-mutation-proof-pairing-coverage` and wired
+  it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-ledger-mutation-proof-pairing-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI catalogs keep proofed SDK ledger mutations typed and proof-paired' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy production-disabled gate-message guard
+
+- Extended the aggregate privacy SDK guard to require dedicated parity coverage
+  for native privacy FFI production-disabled responses that enumerate every
+  production gate before planned cryptography can execute.
+- Split the gate-message assertions out of the broader adversarial fail-closed
+  guard, pinning C bridge, JS NAPI, and Python PyO3 coverage for the shared
+  `PRIVACY_PRODUCTION_DISABLED_MESSAGE`, `PRIVACY_FFI_ERROR_PRODUCTION_DISABLED`,
+  request-bound failure results, build/verify tests, and all public gate
+  fragments: exact protocol implementation, real proving, real verification,
+  chain admission, cross-SDK parity, wallet/state support, deterministic tests,
+  fuzzing, performance gates, external audit, real protocol engine, and the
+  Iroha production allowlist.
+- Added `--negative-control-ffi-production-disabled-gate-message-coverage` and
+  wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-production-disabled-gate-message-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI production-disabled responses enumerate all gates' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native planned-entrypoint dispatch guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that
+  native privacy FFI hosts classify planned SDK entrypoints but never execute
+  them through proof build/verify dispatch.
+- Pinned existing C bridge, JS NAPI, and Python PyO3 coverage that
+  `privacy_entrypoint_supported` uses only executable SDK entrypoints,
+  `planned_entrypoints` are classified separately, planned requests return
+  `PRIVACY_FFI_ERROR_INVALID_REQUEST`, and planned-entrypoint rejection happens
+  before request validation.
+- Added `--negative-control-native-planned-entrypoint-dispatch-coverage` and
+  wired it into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-planned-entrypoint-dispatch-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts keep planned entrypoints non-executable' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request decoder bounds guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that
+  privacy request archives are bounded and validated before copying or native
+  dispatch across SDK wrappers and native hosts.
+- Pinned existing JS, Python, Swift, Java/Android, Kotlin/JVM, C#, C bridge, JS
+  NAPI, and Python PyO3 coverage for request size caps, Norito frame/schema and
+  non-empty payload checks, temporary request copy boundaries, C bridge raw
+  pointer bounds, stale output slot clearing on null-buffer failures, output
+  buffer precedence over bad requests, size-boundary tests, and adversarial
+  Norito request-frame fixtures.
+- Added `--negative-control-request-decoder-bounds-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-request-decoder-bounds-coverage`
+  - `node --test --test-name-pattern 'privacy native availability proof probes use shared Norito request archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native capability fail-closed guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that
+  emitted native privacy capability archives remain fail-closed and deterministic.
+- Pinned existing C bridge, JS NAPI, and Python PyO3 coverage for mandatory
+  production-gate missing evidence, deterministic gate status/missing-reason
+  ordering, `production_ready = false`, empty audit references, production-claim
+  label rejection, catalog-order capability rows, bad version/duplicate-row
+  rejection, and adversarial forged readiness/audit-signoff cases.
+- Added `--negative-control-native-capability-fail-closed-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-capability-fail-closed-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI capabilities keep production gates fail-closed' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native catalog structure guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage for native
+  privacy catalog structural invariants beyond row parity.
+- Pinned existing C bridge, JS NAPI, and Python PyO3 coverage for portable
+  algorithm/proof/backend/vk-ref/entrypoint labels, explicit DevFixture and
+  local-verifier classification, required production plan rows, explicit
+  verifier-key name maps, component rows staying proof-only, planned ledger
+  mutations requiring production proof builders, and proofed SDK ledger
+  mutations staying typed and proof-paired.
+- Added `--negative-control-native-catalog-structure-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-catalog-structure-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI catalogs keep algorithm rows unique and portable|native privacy FFI catalogs keep dev fixtures explicit and non-production|native privacy FFI catalogs pin required production plan rows|native privacy FFI catalogs require explicit verifier-key name maps|native privacy FFI catalog rows match public SDK catalogs|native privacy FFI verifier-key maps match public SDK catalogs|native privacy FFI catalogs keep component rows proof-only|native privacy FFI catalogs pair planned ledger mutations with production proof builders|native privacy FFI catalogs keep proofed SDK ledger mutations typed and proof-paired' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy capability metadata parity guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that
+  mobile/C# privacy capability models stay coarse and fail-closed, production
+  gate missing reasons stay identical across SDK catalogs/bridges, and native
+  FFI Norito structs plus proof operations remain schema-stable.
+- Pinned existing Swift, Java/Android, Kotlin/JVM, C#, JS, Python, C bridge, JS
+  NAPI, and Python PyO3 coverage for capability field shape, default
+  `productionReady = false`, fail-closed production gates, no direct
+  algorithm-specific capability fields, canonical missing reasons, and the
+  `Build`/`Verify` operation set.
+- Added `--negative-control-capability-metadata-parity-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-capability-metadata-parity-coverage`
+  - `node --test --test-name-pattern 'mobile and C# privacy capability models stay coarse and fail-closed|SDK privacy production gate missing reasons stay in cross-SDK parity|privacy FFI Norito schema and proof operation set stay in parity' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI ABI surface guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage for the
+  stable privacy FFI ABI, public C/JNI symbol names, generic archive-only SDK
+  operations, and binary Norito-only request/result boundaries.
+- Pinned existing JS, Python, Swift, Java/Android, Kotlin/JVM, C#, C bridge, JS
+  NAPI, and Python PyO3 coverage for deterministic status/error constants,
+  archive size caps, `iroha_privacy_*` symbols, build/verify operation dispatch,
+  free-buffer delegation, JNI wrapper names, SDK public method surfaces, and
+  JSON-free native/SDK payload handling.
+- Added `--negative-control-ffi-abi-surface-coverage` and wired it into the PR
+  privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-abi-surface-coverage`
+  - `node --test --test-name-pattern 'privacy FFI ABI and deterministic error constants stay in parity|privacy FFI public symbol names stay stable across native bindings|SDK privacy native bridges expose only generic archive operations|privacy FFI SDK wrappers remain binary-only and JSON-free|native privacy FFI hosts remain Norito-only and JSON-free' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy chain backend allowlist guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that chain
+  proof admission uses an explicit production verifier backend allowlist before
+  verifier-key registration, proof attachment validation, OpenVerify matching,
+  and SDK request encoding.
+- Pinned existing Rust, JS, Python, Kotlin, Java, Swift, and C# coverage for
+  production-claim labels, NUL/whitespace/Unicode-confusable backend aliases,
+  explicit STARK/FRI production profiles, unregistered STARK/FRI aliases, toy
+  Halo2 profiles, legacy vote/anon-transfer profiles, and SDK-side
+  register/update verifier-key preflight validation.
+- Added `--negative-control-chain-backend-allowlist-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-chain-backend-allowlist-coverage`
+  - `node --test --test-name-pattern 'native chain proof admission uses explicit production verifier backend allowlist' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy backend-alias fail-closed guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that
+  developer-only, unstable STARK/FRI, and pending privacy verifier-key backend
+  aliases remain fail-closed before any production allowlist.
+- Pinned existing cross-SDK tests and adversarial labels for pending privacy
+  backends, developer-only profiles, unstable embedded-text STARK/FRI aliases,
+  and native Halo2 developer-only profiles across Rust, JS, Python, Java,
+  Kotlin, Swift, and C# verifier-key/backend-tag surfaces.
+- Added `--negative-control-backend-alias-fail-closed-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-backend-alias-fail-closed-coverage`
+  - `node --test --test-name-pattern 'pending privacy backend tags stay in cross-SDK parity|developer-only privacy backend labels stay rejected before production allowlists|adversarial pending privacy backend aliases stay covered across SDK tests' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy public-wrapper isolation guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that
+  public privacy wrapper metadata remains fail-closed and defensive.
+- Pinned existing Swift, Java/Android, Kotlin/JVM, and C# tests that forged
+  production-gate missing reasons and audit references do not pollute fresh
+  capabilities, plus C# public archive wrapper tests that reject malformed,
+  wrong-schema, and oversized Norito bytes.
+- Added `--negative-control-public-wrapper-isolation-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-public-wrapper-isolation-coverage`
+  - `node --test --test-name-pattern 'mobile and C# privacy tests isolate forged production-gate mutations|C# public privacy archive wrappers reject malformed Norito archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy request-copy isolation guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage that
+  native privacy wrappers clear copied request archives after failures and
+  isolate caller-owned archives from hostile native mutation.
+- Pinned existing JS, Python, Swift, Java/Android, Kotlin/JVM, and C# tests for
+  sanitized native exceptions, availability-probe request clearing, complete
+  Python FFI method-surface checks, hostile request mutation isolation, and JS
+  and Swift malformed-request rejection before native dispatch.
+- Added `--negative-control-request-copy-isolation-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-request-copy-isolation-coverage`
+  - `node --test --test-name-pattern 'SDK privacy native tests clear request copies after native failures|JS and Python privacy availability probes clear request copies after failures|Python privacy native wrappers require the complete FFI method surface|mobile, Swift, and C# privacy native tests isolate hostile native request mutation|Swift privacy native tests reject malformed request archives before dispatch|JS privacy native tests reject adversarial malformed request archives before dispatch' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy cross-SDK request-boundary guard
+
+- Extended the aggregate privacy SDK guard to require parity coverage for
+  cross-SDK privacy request/archive boundary hardening before native dispatch.
+- Pinned existing JS, Python, Swift, Java/Android, Kotlin/JVM, and C# tests for
+  malformed Norito request frames, sliced byte views, wrong-schema requests,
+  Norito padding and field-bitset boundaries, defensive native-output copies,
+  malformed native-output archives, and unsafe availability probe outputs.
+- Added `--negative-control-cross-sdk-request-boundary-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-request-boundary-coverage`
+  - `node --test --test-name-pattern 'Python privacy native tests reject adversarial malformed request archives before dispatch|JS and Python privacy native tests pin sliced byte-view request handling|JS and Python privacy native tests pin sliced byte-view native output handling|mobile and C# privacy native tests reject adversarial malformed request archives before dispatch|SDK privacy native tests pin Norito header padding boundaries|SDK privacy native tests accept complete Norito field-bitset flags|SDK privacy native tests reject wrong-schema request archives before dispatch|SDK privacy native tests defensively copy native output archives|SDK privacy native tests reject malformed native output archives|SDK privacy native availability probes reject adversarial native output archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  existing `cargo-zigbuild`/`rustc` work for `pk-cbdc-core-api` and an
+  `iroha_core` ignored cargo test were active and using Iroha sources; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy cross-SDK operation-schema guard
+
+- Extended the aggregate privacy SDK guard to require cross-SDK parity coverage
+  that native privacy wrappers use shared Norito proof-request probes and
+  operation-specific result schemas.
+- Pinned coverage for JS/Python output archive decoders, Swift availability
+  probes and bridge output decoding, Java/Android and Kotlin/JVM output probes,
+  and C# expected-result schema selection.
+- Added `--negative-control-cross-sdk-operation-schema-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-cross-sdk-operation-schema-coverage`
+  - `node --test --test-name-pattern 'Swift privacy native availability requires valid Norito proof probes|privacy native availability proof probes use shared Norito request archives' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI public operation-schema guard
+
+- Extended the aggregate privacy SDK guard to require FFI parity coverage that
+  native hosts use the public Norito schema bytes for privacy capabilities,
+  build results, verify results, and proof requests.
+- Pinned coverage for public request-schema decode helpers, schema-hash
+  patching, operation-specific result schema selection, private Rust-schema
+  request rejection, and C bridge output/request patching boundaries.
+- Pinned adversarial public-schema request tests for build proof-shadow,
+  verify witness-shadow, missing build witness, and missing verify proof cases
+  before production-disabled proof dispatch.
+- Added `--negative-control-ffi-public-operation-schema-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-public-operation-schema-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI archives use public operation schema bytes' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  existing `cargo-zigbuild`/`rustc` work for `pk-cbdc-core-api` and an
+  `iroha_core` ignored cargo test were active and using Iroha sources; the full
+  guard proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy FFI request non-reflection guard
+
+- Extended the aggregate privacy SDK guard to require FFI parity coverage for
+  bounded, non-reflecting request-field validation before production-disabled
+  proof dispatch.
+- Pinned coverage for native text/public-input/witness/proof byte limits,
+  control-character, non-ASCII, unportable punctuation, invalid catalog-shape,
+  empty required field, malformed `vk_ref`, and production/mainnet/audit claim
+  rejection paths.
+- Pinned adversarial tests that hostile request markers such as Unicode text,
+  punctuation, invalid catalog shapes, required-field omissions, forged mainnet
+  readiness, audit-signoff entrypoints, and oversized byte fields are rejected
+  without reflecting attacker-controlled text or witness/proof material.
+- Added `--negative-control-ffi-request-nonreflection-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-request-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts bound reflected request fields before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI witness non-reflection guard
+
+- Extended the aggregate privacy SDK guard to require FFI parity coverage that
+  failure results stay non-successful, proof-free, and witness-private.
+- Pinned coverage for native `privacy_failure_result_invariants_hold`,
+  construction-time debug assertions, and the shared
+  `assert_privacy_result_does_not_serialize_witness` helper across C, JS NAPI,
+  and Python PyO3 hosts.
+- Pinned adversarial witness/proof non-reflection coverage for unsupported
+  algorithms, bad entrypoints, missing and wrong verifier keys, empty public
+  inputs, production-disabled build/verify results, verify witness-shadow
+  rejection, and encoded proof-marker rejection.
+- Added `--negative-control-ffi-witness-nonreflection-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-witness-nonreflection-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI hosts keep failure results non-successful and proof-free' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy FFI adversarial fail-closed guard
+
+- Extended the aggregate privacy SDK guard to require FFI parity coverage for
+  production-disabled proof build/verify responses and adversarial pre-gate
+  rejection paths.
+- Pinned coverage that native hosts reject proof bytes on build requests,
+  witness bytes on verify requests, missing build witnesses, missing verify
+  proofs, non-proof SDK helper entrypoints, wrong verifier-key backends,
+  wrong verifier-key names, and empty public inputs before reaching the
+  production-disabled dispatch.
+- Pinned coverage that production-disabled build/verify results enumerate every
+  production gate, keep status/error codes fail-closed, avoid proof success, and
+  do not echo witness secrets in public messages.
+- Added `--negative-control-ffi-adversarial-fail-closed-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-ffi-adversarial-fail-closed-coverage`
+  - `node --test --test-name-pattern 'native privacy FFI production-disabled responses enumerate all gates|native privacy FFI hosts reject proof/witness operation confusion before production gate|native privacy FFI hosts reject verifier-key backend drift before production gate|native privacy FFI hosts reject verifier-key name drift before production gate|native privacy FFI hosts reject empty public inputs before production gate' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyCatalogParity.test.js javascript/iroha_js/test/privacyFfiContractParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy native catalog parity guard
+
+- Extended the aggregate privacy SDK guard to require JS parity coverage that
+  parses Rust native privacy capability catalog rows and compares them against
+  the Python/JS SDK catalog order, algorithm IDs, proof families, backend
+  families, executable entrypoints, and planned entrypoints.
+- Pinned native production-gate coverage for the Rust bridge sources so
+  `privacy_production_gate()` remains fail-closed, empty of audit references,
+  and reused by native capability payloads.
+- Pinned FFI parity coverage for native production-gate invariant helpers so
+  native capability rows cannot claim production readiness or drift from the
+  canonical gate requirements.
+- Added `--negative-control-native-catalog-parity-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-native-catalog-parity-coverage`
+  - `node --test --test-name-pattern 'privacy algorithm catalogs stay fail-closed and in parity across JS and Python' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyCatalogParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy planned-entrypoint quarantine guard
+
+- Extended the aggregate privacy SDK guard to require JS and Python coverage
+  proving planned production privacy SDK entrypoints remain quarantined until
+  production gates pass.
+- Pinned JS coverage that planned entrypoints are absent from src/dist package
+  exports, crypto/browser/instruction exports, TypeScript declarations, public
+  API source declarations, and src/dist capability keys while executable
+  entrypoints remain exported and declared.
+- Pinned Python coverage that planned production entrypoints remain absent from
+  package/crypto exports, public Python definitions, capability keys, and broad
+  forbidden production-status keys such as asset-hidden proofs, shielded ZK-ACE
+  transfers, PQ MASP proofs, and ML-KEM note encryption.
+- Added `--negative-control-planned-entrypoint-quarantine-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-planned-entrypoint-quarantine-coverage`
+  - `node --test --test-name-pattern 'planned privacy SDK entrypoints remain unexported until production gates pass' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct `PYTHONDONTWRITEBYTECODE=1` Python 3.11 loader check that planned
+    privacy entrypoints remain disjoint from executable entrypoints, public
+    Python definitions, capability keys, and production-ready capability flags
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+  - `git diff --check -- .github/workflows/pr_privacy_sdk_guard.yml ci/check_privacy_sdk_guard.sh javascript/iroha_js/test/privacyCatalogParity.test.js status.md`
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy catalog defensive-copy guard
+
+- Extended the aggregate privacy SDK guard to require JS and Python coverage
+  proving privacy catalog getters return immutable or defensive-copy
+  fail-closed production metadata.
+- Pinned JS coverage for frozen production-gate descriptors, nested gates,
+  missing reasons, audit references, planned SDK entrypoints, source
+  references, and capabilities arrays so caller mutation cannot forge
+  production readiness.
+- Pinned Python coverage for defensive copies of descriptor production flags,
+  nested production gates, missing reasons, audit references, planned SDK
+  entrypoints, source references, and capability payloads.
+- Added `--negative-control-catalog-defensive-copy-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-catalog-defensive-copy-coverage`
+  - `node --test --test-name-pattern 'privacy algorithm JS getters return immutable fail-closed production metadata|privacy algorithm catalogs stay fail-closed and in parity across JS and Python' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct `PYTHONDONTWRITEBYTECODE=1` Python 3.11 loader check that mutating
+    returned privacy descriptors and capabilities cannot forge production
+    readiness, erase missing gates, or replace planned entrypoint/source
+    metadata
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python \( -name '*.pyc' -o -name '__pycache__' \)`
+    returned no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  existing `cargo test -p iroha_core ... --ignored` and external
+  `cargo-zigbuild` processes were active and using Iroha sources; the full guard
+  proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy DevFixture entrypoint guard
+
+- Extended the aggregate privacy SDK guard to require JS and Python catalog
+  classifiers for DevFixture, explicit DevFixture, local-only verifier, and
+  DevFixture non-production warning metadata.
+- Pinned JS and Python adversarial coverage for obfuscated fixture names such
+  as `buildShapeDev.Proof.Fixture`, local verifier names such as
+  `verifyShapeProofLocalVerifier`, explicit non-production fixture warnings,
+  and retained planned production proof builders.
+- Added `--negative-control-dev-fixture-entrypoint-coverage` and wired it into
+  the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-dev-fixture-entrypoint-coverage`
+  - `node --test --test-name-pattern 'privacy algorithm JS validators reject hostile catalog descriptor shapes' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct `PYTHONDONTWRITEBYTECODE=1` Python 3.11 loader check that
+    `_load_descriptors()` rejects DevFixture entrypoints without a paired local
+    verifier and local-only verifier entrypoints without an explicit
+    DevFixture
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
+    no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  existing `cargo test -p iroha_core ... --ignored` and external
+  `cargo-zigbuild` processes were active and using Iroha sources; the full guard
+  proceeds into native SDK build/test work after the source checks.
+
+## 2026-06-05 Privacy source-reference encoded-host URL guard
+
+- Added a JS catalog adversarial case for the out-of-range source-reference
+  IPv4 literal `https://256.256.256.256/source`, matching existing Python
+  parser hardening coverage.
+- Extended the aggregate privacy SDK guard to require JS and Python coverage
+  for percent-encoded authorities, local rebinding host encoding, invalid IPv4
+  literal shape, and malformed percent escapes in source-reference URLs.
+- Added
+  `--negative-control-source-reference-encoded-host-url-coverage` and wired it
+  into the PR privacy SDK workflow before the main guard.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-source-reference-encoded-host-url-coverage`
+  - `node --test --test-name-pattern 'privacy algorithm JS validators reject hostile catalog descriptor shapes' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct `PYTHONDONTWRITEBYTECODE=1` Python 3.11 loader check that
+    `_load_descriptors()` rejects the encoded-host, invalid IPv4 literal, and
+    malformed percent-escape source-reference URLs
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
+    no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
+## 2026-06-05 Privacy source-reference audit-readiness URL guard
+
+- Extended the aggregate privacy SDK guard to require the JS and Python privacy
+  catalog tests to keep adversarial source-reference URLs that smuggle
+  audit/mainnet/production readiness claims through query strings, fragments,
+  and nested percent encoding.
+- Added
+  `--negative-control-source-reference-audit-readiness-url-coverage` and wired
+  it into the PR privacy SDK workflow so removing the Python URL-smuggling
+  coverage fails before the main guard runs.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Python AST parse for `python/iroha_python/tests/privacy_catalog_test.py`
+  - `bash -n ci/check_privacy_sdk_guard.sh`
+  - Direct embedded source-only `ci/check_privacy_sdk_guard.sh` `run_checks()`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-source-reference-audit-readiness-url-coverage`
+  - `node --test --test-name-pattern 'privacy algorithm JS validators reject hostile catalog descriptor shapes' javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - Direct `PYTHONDONTWRITEBYTECODE=1` Python 3.11 loader check that
+    `_load_descriptors()` rejects the audit/readiness source-reference URL
+    smuggling cases
+  - `node --test --test-name-pattern 'privacy SDK guard runs wrong-operation result schema regressions' javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-inventory-parity`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-workflow`
+  - `bash ci/check_privacy_sdk_guard.sh --negative-control-negative-controls-order-workflow`
+  - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
+    no bytecode/cache artifacts after validation
+- Full `bash ci/check_privacy_sdk_guard.sh` was not rerun in this slice because
+  an existing `cargo test -p iroha_core ... --ignored` process was still active;
+  the full guard proceeds into native SDK build/test work after the source
+  checks.
+
 ## 2026-06-05 Privacy source-reference obfuscated IPv4 guard
 
 - Added explicit JS catalog adversarial cases for source-reference URLs that
@@ -11183,6 +16335,328 @@ Last updated: 2026-06-06
   - `bash ci/check_privacy_js_sdk.sh`
   - `find python/iroha_python -name '*.pyc' -o -name '__pycache__'` returned
     no bytecode/cache artifacts after validation
+
+## 2026-06-05 ISO trust DER pre-decode cap gate
+
+- Hardened `scripts/iso_trust_bundle_verify.py` so DER `der_base64` strings are
+  length-checked against the `1 MiB` DER material limit before base64 decoding.
+- This mirrors the existing evidence and XSD profile-material guards and avoids
+  allocating decoded DER for oversized trust-bundle material that can already
+  be rejected from the encoded length.
+- Added adversarial trust-bundle coverage for an oversized `der_base64` value.
+- Updated ISO audit, backlog, and roadmap notes for the trust DER pre-decode
+  cap.
+- Validation:
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (`35` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`295` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO XSD validator output boundary gate
+
+- Hardened `scripts/iso_xsd_fixture_verify.py` so optional `xmllint`
+  stdout/stderr are drained through bounded pipes and capped at `64 KiB`.
+- Truncated `xmllint` output now fails closed before a fixture can be reported
+  as schema-validated, including the successful-returncode path.
+- Added adversarial coverage that stubs `xmllint` output to prove both failed
+  and successful validator invocations reject truncated output without requiring
+  a local `xmllint` install.
+- Updated ISO audit, backlog, and roadmap notes for the external validator
+  output cap.
+- Validation:
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (`28` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`294` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO subprocess output boundary gate
+
+- Hardened `scripts/iso_operator_canary.py` so child stdout/stderr are drained
+  through bounded pipes while retaining only the configured preview bytes and
+  recording truncation flags. This replaces unbounded
+  `subprocess.run(capture_output=True)` buffering for rail/notary/verify stages.
+- Hardened `scripts/iso_operator_evidence_verify.py` so direct receipt-verifier
+  stdout/stderr are capped at `4 MiB`; truncated output is rejected before JSON
+  parsing or release-evidence comparison.
+- Added adversarial coverage for noisy child canary output and direct
+  receipt-verifier stdout/stderr truncation, while preserving duplicate-key
+  rejection on direct receipt-verifier output.
+- Updated ISO audit, backlog, and roadmap notes for the subprocess output
+  boundary.
+- Validation:
+  - `python3 -m py_compile scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test`
+    (`91` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`293` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO adapter bearer-token input cap gate
+
+- Hardened `scripts/iso_rail_gateway_adapter.py` and
+  `scripts/iso_audit_notary_adapter.py` so bearer-token files are capped at
+  `8 KiB` before UTF-8 decoding or token-shape validation.
+- Tightened the rail adapter's bounded payload reader to use a `max + 1`
+  actual-read boundary after `lstat`/`fstat`, matching the rest of the capped
+  ISO file readers and preserving existing symlink/non-regular file rejection.
+- Added helper-level regressions that patch the token cap down to a small
+  value and prove oversized token files fail before live delivery paths.
+- Updated ISO audit, backlog, and roadmap notes for the live-adapter token-file
+  cap.
+- Validation:
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_audit_notary_adapter.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_audit_notary_adapter_test`
+    (`48` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`291` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO receipt verifier input size gate
+
+- Hardened `scripts/iso_operator_receipt_verify.py` so raw receipt JSON is
+  capped at `4 MiB`, notary source JSON artifacts are capped at `64 MiB`, and
+  rail source XML payloads are capped at `4 MiB` before parsing, hashing, or
+  source replay.
+- The receipt verifier now applies caller-specific size labels on the existing
+  no-follow `lstat`/`fstat` plus `max + 1` actual-read boundary, while keeping
+  the prior `16 KiB` rail source-sidecar JSON cap.
+- Added adversarial coverage for oversized receipt JSON, rail source XML, and
+  notary latest-anchor, digest-addressed peer, exported-index, and persisted
+  record-source JSON inputs.
+- Updated ISO audit, backlog, and roadmap notes for the expanded receipt
+  verifier input caps.
+- Validation:
+  - `python3 -m py_compile scripts/iso_operator_receipt_verify.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (`21` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`289` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO audit export input size gate
+
+- Hardened `scripts/iso_audit_notary_adapter.py` so audit export anchor,
+  digest-addressed anchor peer, exported index, and persisted record-source JSON
+  inputs are capped at `64 MiB` before parsing or peer comparison.
+- The audit adapter now applies `lstat`/`fstat` plus `max + 1` actual-read
+  boundaries to those export artifacts before any network publication, while
+  preserving existing symlink, non-regular file, duplicate-key, and schema
+  checks.
+- Added adversarial no-network coverage for oversized latest-anchor,
+  `messages.index.json`, and `store_dir/messages` record-source inputs.
+- Updated ISO audit, backlog, and roadmap notes for the audit export JSON cap.
+- Validation:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py pytests/scripts/iso_audit_notary_adapter_test.py && python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
+    (`21` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`286` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO XSD fixture input size gate
+
+- Hardened `scripts/iso_xsd_fixture_verify.py` so fixture manifest JSON and
+  profile catalog source are capped at `4 MiB`, while checked schema and XML
+  fixture inputs are capped at `8 MiB`, before parsing.
+- The verifier now applies the same `lstat`/`fstat` plus `max + 1` actual-read
+  boundary used by the other capped ISO JSON inputs, preserving the single
+  checked-byte-buffer behavior for emitted digests.
+- Added adversarial coverage for oversized manifest, schema, fixture, and
+  profile-catalog inputs.
+- Updated ISO audit, backlog, and roadmap notes for the XSD preflight input
+  caps.
+- Validation:
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py && python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (`27` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`285` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO trust-bundle size gate
+
+- Hardened `scripts/iso_trust_bundle_verify.py` so operator trust-bundle JSON
+  is capped at `64 MiB` before parsing while preserving the existing symlink,
+  non-regular file, duplicate-key, and DER blob guards.
+- The bundle reader now enforces the cap on both checked metadata and actual
+  bytes read, using the same `max + 1` boundary pattern as the other capped ISO
+  JSON inputs.
+- Added an adversarial oversized-bundle regression that fails before summary or
+  profile override emission.
+- Updated ISO audit, backlog, and roadmap notes for the trust-bundle JSON cap.
+- Validation:
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py && python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (`34` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`284` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO capped JSON read-boundary gate
+
+- Tightened the capped JSON readers in `scripts/iso_operator_canary.py`,
+  `scripts/iso_operator_evidence_verify.py`,
+  `scripts/iso_operator_receipt_verify.py`, and
+  `scripts/iso_production_readiness.py` so capped inputs are read with a
+  `max + 1` byte boundary and rejected if the actual read crosses the cap, in
+  addition to the existing `lstat`/`fstat` size checks.
+- This keeps the canary runbook, archived canary/trust summaries,
+  receipt-verifier rail sidecars, and final XSD/evidence summaries bounded even
+  if a file changes between metadata checks and the read.
+- Validation:
+  - `python3 -m py_compile scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test`
+    (`179` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`283` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO canary runbook size gate
+
+- Hardened `scripts/iso_operator_canary.py` so operator runbook JSON is capped
+  at `64 KiB` before parsing while preserving the existing symlink,
+  non-regular file, and duplicate-key guards.
+- Added a plan-only adversarial regression proving an oversized runbook fails
+  before child command planning or execution.
+- Updated ISO audit, backlog, and roadmap notes for the canary runbook JSON cap.
+- Validation:
+  - `python3 -m py_compile scripts/iso_operator_canary.py pytests/scripts/iso_operator_canary_test.py && python3 -m unittest pytests.scripts.iso_operator_canary_test`
+    (`22` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`283` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO archived summary size gate
+
+- Hardened `scripts/iso_operator_evidence_verify.py` so archived canary and
+  trust-bundle summary JSON inputs are capped at `4 MiB` before parsing while
+  preserving the existing symlink, non-regular file, and duplicate-key guards.
+- Hardened `scripts/iso_production_readiness.py` so XSD and operator-evidence
+  summary JSON inputs are capped at `4 MiB` before parsing on the final release
+  rollup path.
+- Added adversarial oversized-summary tests for both evidence-gate input kinds
+  and both production-readiness input kinds.
+- Updated ISO audit, backlog, and roadmap notes for the archived summary JSON
+  cap.
+- Validation:
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py && python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`139` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`282` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO rail sidecar size gate
+
+- Hardened `scripts/iso_rail_gateway_adapter.py` so live rail sidecar JSON is
+  capped at `16 KiB` before parsing. Oversized sidecars now fail before the XML
+  payload can be submitted or a receipt can be written.
+- Hardened `scripts/iso_operator_receipt_verify.py` so source-sidecar JSON is
+  capped at the same `16 KiB` before receipt/source reparse, while leaving
+  broader receipt, anchor, and index artifact sizing unchanged in this slice.
+- Added no-network oversized-sidecar negatives for live adapter delivery and
+  digest-correct source-sidecar verification.
+- Updated ISO audit, backlog, and roadmap notes for the bounded sidecar JSON
+  rule.
+- Validation:
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py && python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+    (`43` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`280` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO rail sidecar closed-schema gate
+
+- Hardened `scripts/iso_rail_gateway_adapter.py` so live rail sidecar JSON is a
+  closed schema before network delivery. Unknown sidecar fields such as local
+  operator notes now fail before the XML payload is submitted or a receipt is
+  written, matching the stricter source-sidecar checks already enforced by
+  `scripts/iso_operator_receipt_verify.py`.
+- Added a no-network regression proving an otherwise valid sidecar with an
+  extra key is rejected and no HTTP request is sent.
+- Updated ISO audit/backlog/roadmap notes for the live sidecar closed-schema
+  rule.
+- Validation:
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py && python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+    (`42` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`279` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO rail message ID header gate
+
+- Hardened `scripts/iso_rail_gateway_adapter.py` so a present sidecar
+  `rail_message_id` must be a bounded canonical ASCII identifier before the
+  value is copied into `X-Iroha-Iso-Rail-Message-Id` or persisted in a receipt.
+  The guard rejects non-ASCII, path-like, leading/trailing punctuation, overlong,
+  whitespace-bearing, control-bearing, null, or empty values before network
+  delivery.
+- Hardened `scripts/iso_operator_receipt_verify.py` so digest-correct rail
+  receipts and matching source sidecars must preserve the same bounded canonical
+  ASCII `rail_message_id` shape before receipt summaries can feed evidence
+  aggregation.
+- Added adversarial coverage for Unicode, path separators, leading/trailing
+  punctuation, oversized IDs, whitespace, controls, and null values across live
+  rail adapter ingress, source-sidecar verification, and receipt-body
+  verification.
+- Updated ISO audit/backlog/roadmap notes for the rail-message-ID header
+  contract.
+- Validation:
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py && python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+    (`41` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`278` passed)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py scripts/iso_rail_gateway_adapter.py scripts/iso_trust_bundle_verify.py scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
+
+## 2026-06-05 ISO rail sidecar profile identity gate
+
+- Hardened `scripts/iso_rail_gateway_adapter.py` so any present rail sidecar
+  `profile` must be a canonical lowercase profile ID before a gateway payload is
+  submitted to Torii. The existing local diagnostic path may still omit
+  `profile` only when `--allow-default-profile` is supplied, but uppercase,
+  underscore, trailing-hyphen, whitespace, control-bearing, or null profile
+  values fail before network delivery.
+- Hardened `scripts/iso_operator_receipt_verify.py` so digest-correct rail
+  receipts and matching source sidecars must preserve the same canonical
+  profile ID shape before receipt summaries can be emitted. This prevents
+  hand-written or legacy receipts from smuggling non-canonical profile headers
+  into the evidence gate.
+- Updated ISO audit/backlog/roadmap notes for the rail-ingress and receipt
+  verifier posture.
+- Validation:
+  - `python3 -m py_compile scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py && python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
+    (`41` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
+    (`278` passed)
+- Hygiene checks passed with no lockfile drift, conflict markers, unsafe ISO
+  temp helpers, or Python bytecode artifacts.
 
 ## 2026-06-05 ISO trust profile identity gate
 
@@ -11898,6 +17372,9 @@ Last updated: 2026-06-06
   `anchors/<index_sha256>.notary.json` shape before the verifier considers
   whether source files are required. Source-missing diagnostic runs can no
   longer summarize receipts that point at malformed missing notary anchors.
+  Rail `xml_path` metadata must point at a `.xml` leaf, and rail
+  `xml_path`/`sidecar_path` plus notary `anchor_path` metadata now also reject
+  leading-dash path tokens before source replay.
 - Hardened `scripts/iso_audit_notary_adapter.py` and
   `scripts/iso_operator_receipt_verify.py` so digest-correct notary source
   anchors and audit indexes fail closed on unknown top-level fields before
@@ -11907,7 +17384,9 @@ Last updated: 2026-06-06
   timestamp fields, and non-canonical payload hashes before publication or
   receipt source re-verification. Audit record filenames must also match the
   Torii producer contract, `sha256(message_id).json`, so digest-correct indexes
-  cannot point records at spoofed filenames.
+  cannot point records at spoofed filenames. Audit indexes now also reject
+  duplicate `message_id`, filename, or `record_sha256` entries before publication
+  or receipt source re-verification.
 - Hardened persisted notary record-source verification so available
   `store_dir/messages/<sha256(message_id)>.json` bodies must carry a valid
   `record_sha256` and match the audit-index row before publication or receipt
@@ -11916,15 +17395,20 @@ Last updated: 2026-06-06
   anchor-only publication with the diagnostic `--allow-missing-record-sources`
   override. The evidence verifier explicitly rejects archived notary child
   commands that contain that local diagnostic flag, so source-less anchors
-  cannot be promoted into production evidence. Receipt verification with
+  cannot be promoted into production evidence. Notary adapter publication now
+  rejects anchor `store_dir` values with whitespace, leading dashes, backslashes,
+  semicolon path parameters, empty path segments, or dot/parent path segments
+  before the missing-source override can apply. Receipt verification with
   `--require-source-files` now requires `store_dir` for non-empty notary indexes
   and rejects missing record files, internally digest-correct source/body
-  mismatches, metadata row drift, and persisted-state-derived `pacs002_code`
-  drift. Raw notary `anchor_path` and raw rail `xml_path`/`sidecar_path`
-  receipt fields now reject embedded whitespace, backslashes, semicolon path
-  parameters, empty path segments, and dot/parent path segments as well as
-  surrounding whitespace and control characters before source-file cross-checks
-  run.
+  mismatches, metadata row drift, persisted-state-derived `pacs002_code` drift,
+  non-monotonic status history, and status history that does not end at the
+  current `updated_at_ms`. Raw notary `anchor_path`/`store_dir` and raw rail
+  `xml_path`/`sidecar_path` receipt fields now reject embedded whitespace,
+  leading dashes, backslashes, semicolon path parameters, empty path segments,
+  and dot/parent path segments as well as surrounding whitespace and control
+  characters before source-file cross-checks run, and rail `xml_path` values
+  must keep the `.xml` suffix.
 - Hardened compact trust-source provenance across
   `scripts/iso_operator_evidence_verify.py` and
   `scripts/iso_production_readiness.py` so archived `source.authority` and
@@ -12148,9 +17632,10 @@ Last updated: 2026-06-06
   silently normalizing surrounding whitespace.
 - Tightened the operator adapters so audit-notary `--endpoint` values and rail
   gateway `--torii-base-url` values reject surrounding or embedded whitespace
-  plus malformed, out-of-range, or explicit-default ports and non-canonical
+  plus empty, zero, leading-zero, malformed, out-of-range, or explicit-default ports and non-canonical
   hosts, including invalid DNS labels, percent-escaped hosts, and numeric-host
-  spoofing, and path traversal, encoded path separators, encoded percent signs,
+  spoofing, and path traversal, encoded path separators, encoded semicolon
+  parameters, encoded URL delimiters, encoded percent signs,
   or percent-encoded control/space bytes before any network delivery. Rail
   sidecar `profile` and `rail_message_id` values also reject explicit `null`,
   surrounding whitespace, embedded whitespace, and control characters before
@@ -12169,7 +17654,7 @@ Last updated: 2026-06-06
 - Tightened `scripts/iso_operator_receipt_verify.py` so archived receipt
   endpoint URLs, receipt rail `profile`/`rail_message_id` values, and matching
   source-sidecar rail metadata reject surrounding/embedded whitespace, malformed
-  or default endpoint ports, non-lowercase or trailing-dot hosts, or control
+  empty, zero, leading-zero, or default endpoint ports, non-lowercase or trailing-dot hosts, or control
   characters, plus path traversal, embedded semicolon path parameters, or
   encoded path separators before evidence summaries can be emitted. Raw rail
   receipt `message_type`, `xml_path`, and `sidecar_path` fields now follow the
@@ -12188,11 +17673,12 @@ Last updated: 2026-06-06
   context values are exact evidence-policy inputs instead of being trimmed.
   Evidence timestamp parsing and archived canary child-command arrays now also
   reject surrounding whitespace at the parser boundary, and evidence/readiness
-  trust-source URLs reject embedded whitespace, malformed/out-of-range ports,
+  trust-source URLs reject embedded whitespace, empty/zero/leading-zero/malformed/out-of-range ports,
   explicit default HTTPS ports, non-lowercase hosts, trailing-dot hosts, invalid
-  DNS labels, percent-escaped hosts, and numeric-host spoofing, plus
+  DNS labels, percent-escaped hosts, numeric-host/legacy-IPv4 spoofing, and
+  IPv6 transition embedded-IPv4 smuggling, plus
   dot-segment, semicolon-parameter, backslash, repeated-separator, percent-encoded dot/separator,
-  encoded-percent, and percent-encoded control/space path smuggling before URL
+  encoded-semicolon, encoded URL delimiters, encoded-percent, and percent-encoded control/space path smuggling before URL
   parsing.
 - Tightened `scripts/iso_operator_canary.py` so optional runbook path strings
   (`rail.message`, rail/notary `receipt_dir`, rail/notary
@@ -12233,11 +17719,13 @@ Last updated: 2026-06-06
   payload reads.
 - Tightened operator output paths so audit-notary and rail receipt directories
   and receipt leaves are preflighted before publication/Torii submission and
-  reject symlink or non-regular targets before writing. Canary `--summary-out`
-  paths are preflighted before subprocess stages, and trust-bundle, evidence,
-  XSD, and readiness `--summary-out` paths plus trust `--emit-profile-json`
-  paths reject symlink or non-regular targets. These outputs now write through
-  no-follow file opens where the platform supports them.
+  reject symlinked existing ancestors plus hard-linked, symlink, or non-regular
+  targets before writing. Canary `--summary-out` paths are preflighted before
+  subprocess stages, and trust-bundle, evidence, XSD, and readiness
+  `--summary-out` paths plus trust `--emit-profile-json` paths reject symlinked
+  existing ancestors plus hard-linked, symlink, or non-regular targets. These
+  outputs now write through no-follow file opens where the platform supports
+  them.
 - Tightened adapter and canary path boundaries so audit-notary `--export-dir`
   and rail `--inbox-dir` reject symlinked roots before discovery, explicit rail
   `--message` paths preserve the leaf for the regular-file/symlink check, and
@@ -12260,11 +17748,12 @@ Last updated: 2026-06-06
   schema references and non-canonical fixture paths in digest-correct readiness
   inputs, plus padded executed and plan-only canary child-command arguments.
   Trust-bundle coverage now also rejects embedded-whitespace source URLs before
-  emitting summaries, plus invalid, out-of-range, or explicit-default source
-  URL ports, non-canonical source hosts, invalid source host labels, percent
-  escapes in source hosts, numeric-host spoofing, percent-encoded
-  control/space bytes, malformed percent escapes, encoded-percent path
-  smuggling, smuggled source URL paths, and repeated URL path separators. XSD preflight coverage now also
+  emitting summaries, plus empty, zero, leading-zero, invalid, out-of-range, or
+  explicit-default source URL ports, non-canonical source hosts, invalid source host labels, percent
+  escapes in source hosts, numeric-host/legacy-IPv4 spoofing, IPv6 transition
+  embedded-IPv4 smuggling, percent-encoded control/space bytes, malformed
+  percent escapes, encoded-semicolon, encoded URL delimiter, and encoded-percent path smuggling, smuggled source URL paths,
+  and repeated URL path separators. XSD preflight coverage now also
   includes schema paths with backslashes, dot segments, empty segments, or
   parent segments, plus non-XML, dot/empty-segment, and non-leading-parent
   fixture paths. Adapter coverage now also proves valid bearer-token files
@@ -13049,8 +18538,52 @@ Last updated: 2026-06-06
 - The operator evidence gate now validates each canary summary's runbook
   `config_path`, preserves it in compact evidence, and the final readiness
   gate rechecks it as a control-free, traversal-free `.json` pointer.
+- ISO evidence, readiness, and XSD path validators now reject leading-dash path
+  tokens before archive or release acceptance, preventing artifact/config paths
+  from being confused with child-command flags.
 - Canary child command arrays now reject control characters before archival,
   covering both executed stage commands and plan-only stage commands.
+- Canary child command arrays now also reject duplicate singleton flags before
+  archival, so forged summaries cannot present multiple `--torii-base-url`,
+  `--export-dir`, or receipt policy flag values.
+- Canary child command arrays now reject store-true boolean flags spelled with
+  `=value`, so forged summaries cannot treat invalid argparse forms such as
+  `--require-source-files=false` as proof of a production policy.
+- Canary child command arrays now reject non-positive integer caps and
+  non-positive or non-finite timeout values before archival.
+- Canary child command path values such as rail `--inbox-dir`, rail
+  `--message`, notary `--export-dir`, and verifier `--receipt`/`--receipt-dir`
+  are now path-hardened before archival.
+- Canary child commands now require their production structural inputs, including
+  rail `--inbox-dir`/`--torii-base-url`, notary `--export-dir`/`--endpoint`,
+  and verifier receipt inputs plus source-file verification in plan-only
+  runbooks.
+- Executed canary stages now reject truncated child stdout or stderr previews
+  before archival, so rail/notary/verify evidence cannot rely on incomplete
+  child-process output.
+- Rail receipt source verification now rejects `xml_path` values that do not
+  point at `.xml` leaves before sidecar convention and source-file cross-checks
+  run.
+- Rail adapter submission now rejects explicit `--message` values and discovered
+  XML leaves that start with a dash before sidecar reads or Torii submission.
+- Notary audit-index verification now rejects duplicate record identities before
+  publication or archived receipt source replay, preventing digest-correct
+  anchors from inflating record counts with copied rows.
+- Persisted notary record-source verification now requires status history
+  timestamps to be monotonic and to end at the record's current `updated_at_ms`
+  before publication or archived receipt source replay.
+- Notary adapter publication now applies the same strict path-token checks to
+  anchor `store_dir` values that receipt source replay already required, so the
+  local missing-source override cannot publish malformed source-root pointers.
+  Validation after the ISO output/path/command hardening pass:
+  `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test
+  pytests.scripts.iso_operator_canary_test
+  pytests.scripts.iso_operator_evidence_verify_test
+  pytests.scripts.iso_operator_receipt_verify_test
+  pytests.scripts.iso_production_readiness_test
+  pytests.scripts.iso_rail_gateway_adapter_test
+  pytests.scripts.iso_trust_bundle_verify_test
+  pytests.scripts.iso_xsd_fixture_verify_test` (302 tests, 154.832s).
 - Canary rail/notary `receipt_dir` values now reject control characters and
   dot/parent traversal segments before the evidence archive accepts either
   executed or plan-only stage records.
@@ -17459,7 +22992,9 @@ Last updated: 2026-06-06
   for local diagnostic audits.
 - Hardened trust-bundle provenance so production source URLs must be clean
   HTTPS URLs without credentials, params, query strings, fragments, localhost,
-  local/private IP literals, malformed bracket syntax, or control characters;
+  local/private IP literals, known local/private rebinding hostnames, legacy
+  IPv4 numeric notation, IPv6 transition addresses embedding non-global IPv4
+  addresses, malformed bracket syntax, or control characters;
   `source.retrieved_at` must be a timezone-aware ISO 8601 timestamp and cannot
   be in the future. The existing `--allow-insecure-source-url` remains the
   explicit local-audit override.
@@ -17494,8 +23029,12 @@ Last updated: 2026-06-06
   bearer-token file paths in either separated or `--bearer-token-file=<path>`
   form, cannot smuggle local-only flags as `--flag=value`, and cannot add
   unsupported child command flags outside the expected rail/notary/receipt
-  verifier CLI surfaces. The diagnostic insecure-HTTP allowance does not permit
-  query or credential smuggling.
+  verifier CLI surfaces. It also rejects duplicate singleton child command
+  flags, boolean child command flags spelled with `=value`, and non-positive or
+  non-finite numeric child command flag values, plus non-canonical child command
+  path values or missing required child command inputs, while preserving
+  repeatable notary endpoints and receipt verifier input paths. The diagnostic
+  insecure-HTTP allowance does not permit query or credential smuggling.
 - The readiness gate exits `0` only for fully production-ready evidence, exits
   `1` with a digest-bound blocker report when inputs are valid but not ready,
   and exits `2` for malformed or digest-tampered summaries. A diagnostic
@@ -45844,7 +51383,8 @@ Last updated: 2026-06-06
   proof-bundle substitution before backend verification.
 - Updated the Kagemusha docs and roadmap to clarify that recursive aggregation
   proof bundles are Halo2 IPA/Pasta only, no trusted setup, and still
-  admission-neutral while mode `2` remains reserved.
+  admission-neutral; at that checkpoint mode `2` was still reserved before the
+  2026-06-05 ABI-7 recursive compact prover/verifier completion.
 - Reconfirmed that Kagemusha remains enabled by default while legacy fallback
   remains opt-in.
 - Validation:
@@ -46856,9 +52396,10 @@ Last updated: 2026-06-06
 - Added focused coverage for explicit true/false availability selection,
   default availability probing, partial-native fail-closed behavior, empty input
   rejection, and malformed archive rejection where the native bridge is
-  available. The compact-token aggregation mode `2` remains reserved; recursive
-  spendable cash uses `KagemushaRecursiveSpendBundleV1` plus ABI 6 rather than
-  enabling the older folded-token mode.
+  available. At that checkpoint the compact-token aggregation mode `2` was
+  still reserved; recursive spendable cash used `KagemushaRecursiveSpendBundleV1`
+  plus ABI 6 before the 2026-06-05 ABI-7 recursive compact prover/verifier
+  completion enabled the folded-token mode.
 - Validation:
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib`
   - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
@@ -86428,10 +91969,11 @@ Last updated: 2026-06-06
   translated into that recursive witness shape, with ordered batch preflight
   binding plus reserved-mode data-model evidence available as the host-side
   evidence surface for future private-hop recursive aggregation, but
-  production-width composed evidence and private-hop recursive aggregation are
-  not complete. Kagemusha aggregation mode `2` remains reserved and public
-  compact-token prover/verifier entry points continue to accept only checked
-  pre-fold mode `1`.
+  production-width composed evidence and private-hop recursive aggregation were
+  not complete at that checkpoint. Kagemusha aggregation mode `2` was still
+  reserved then, and public compact-token prover/verifier entry points accepted
+  only checked pre-fold mode `1`; this historical note is superseded by the
+  2026-06-05 ABI-7 recursive compact prover/verifier completion.
 - Focused validation passed:
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_affine_native_scalar_msm --lib` (10 tests, including two-term one-bit and two-bit MSM acceptance plus output-mismatch, high-scalar-bit, public base/output substitution, conditional-bit, sum-chain, noncanonical-scalar, and double-ladder tamper rejection; finished in 3513.80s)
   - `CARGO_INCREMENTAL=0 RUST_TEST_THREADS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_msm --lib` (4 tests, including one-bit IPA final-comparison acceptance plus output-mismatch, product-high-bit, and forged-product-link rejection; finished in 1662.51s)
@@ -86540,7 +92082,7 @@ Last updated: 2026-06-06
 - `connect_norito_bridge` now exports matching JNI entry points for the Kotlin
   and Java wrappers, and the Swift bridge loader requires ABI 4 plus the
   record-backed Kagemusha symbol before marking the compact-token prover
-  available. The older unanchored C compact-token prover symbol is retained
+  available. The older unanchored C compact-token prover entry point is retained
   only for ABI compatibility and now rejects valid `KagemushaVerifiedFoldBundle`
   input without returning output bytes, so production bridge callers must carry
   `KagemushaVerifiedFoldRecordBundle` verifier-record trust anchors. The

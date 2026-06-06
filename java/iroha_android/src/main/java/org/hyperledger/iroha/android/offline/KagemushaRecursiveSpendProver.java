@@ -3,8 +3,12 @@ package org.hyperledger.iroha.android.offline;
 /** Native recursive Kagemusha spend ABI-6 bridge. */
 public final class KagemushaRecursiveSpendProver {
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 6;
+  public static final int RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
   public static final String RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-aggregation-v1";
+  public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
+      "kagemusha-recursive-compact-v1";
+  public static final String RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa";
   public static final String RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-spend-lineage-v1";
   public static final String RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
@@ -40,6 +44,7 @@ public final class KagemushaRecursiveSpendProver {
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   public enum Mode {
+    RECURSIVE_COMPACT_V1("recursive_compact_v1"),
     RECURSIVE_SPEND_V1("recursive_spend_v1"),
     CHECKED_PREFOLD_V1("checked_prefold_v1");
 
@@ -61,10 +66,17 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static Mode preferredMode() {
-    return preferredMode(NATIVE_AVAILABLE);
+    return preferredMode(
+        KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable(), NATIVE_AVAILABLE);
   }
 
   public static Mode preferredMode(final boolean recursiveSpendAvailable) {
+    return preferredMode(false, recursiveSpendAvailable);
+  }
+
+  public static Mode preferredMode(
+      final boolean recursiveCompactAvailable, final boolean recursiveSpendAvailable) {
+    // Kept for source compatibility; compact mode is not a production default yet.
     return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;
   }
 
@@ -84,6 +96,88 @@ public final class KagemushaRecursiveSpendProver {
   public static boolean isLineageAppendOutputCircuitId(final String outputCircuitId) {
     return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId)
         || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId);
+  }
+
+  public static boolean isSupportedLineageKeyArtifactOpeningLen(final int verifierOpeningLen) {
+    switch (verifierOpeningLen) {
+      case 2:
+      case 4:
+      case 8:
+      case 16:
+      case 32:
+      case 64:
+      case 128:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  public static LineageKeyArtifacts lineageKeyArtifactsForInit(
+      final int verifierOpeningLen,
+      final String lineageVerifierKeyBackend,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive) {
+    return lineageKeyArtifacts(
+        RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        verifierOpeningLen,
+        lineageVerifierKeyBackend,
+        lineageVerifierKey,
+        lineageProvingKeyArchive);
+  }
+
+  public static LineageKeyArtifacts lineageKeyArtifactsForAppend(
+      final int verifierOpeningLen,
+      final String lineageVerifierKeyBackend,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive) {
+    return lineageKeyArtifacts(
+        RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        verifierOpeningLen,
+        lineageVerifierKeyBackend,
+        lineageVerifierKey,
+        lineageProvingKeyArchive);
+  }
+
+  public static LineageKeyArtifacts validateLineageKeyArtifacts(
+      final LineageKeyArtifacts artifacts) {
+    if (artifacts == null) {
+      throw new IllegalArgumentException("lineage_key_artifacts");
+    }
+    if (!RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.equals(artifacts.proofCircuitId)
+        && !RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(
+            artifacts.proofCircuitId)) {
+      throw new IllegalArgumentException("proof_circuit_id");
+    }
+    if (!isSupportedLineageKeyArtifactOpeningLen(artifacts.verifierOpeningLen)) {
+      throw new IllegalArgumentException("verifier_opening_len");
+    }
+    final byte[] lineageVerifierKey = artifacts.lineageVerifierKey();
+    final byte[] lineageProvingKeyArchive = artifacts.lineageProvingKeyArchive();
+    if (!RECURSIVE_AGGREGATION_PROOF_BACKEND.equals(artifacts.lineageVerifierKeyBackend)
+        || lineageVerifierKey == null
+        || lineageVerifierKey.length == 0) {
+      throw new IllegalArgumentException("lineage_verifier_key");
+    }
+    if (lineageProvingKeyArchive == null || lineageProvingKeyArchive.length == 0) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    return artifacts;
+  }
+
+  public static LineageKeyArtifacts lineageKeyArtifacts(
+      final String proofCircuitId,
+      final int verifierOpeningLen,
+      final String lineageVerifierKeyBackend,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive) {
+    return validateLineageKeyArtifacts(
+        new LineageKeyArtifacts(
+            proofCircuitId,
+            verifierOpeningLen,
+            lineageVerifierKeyBackend,
+            lineageVerifierKey,
+            lineageProvingKeyArchive));
   }
 
   public static boolean requiresLineageKeyArtifactsForInit() {
@@ -247,9 +341,7 @@ public final class KagemushaRecursiveSpendProver {
 
   private static byte[] callArchive(
       final String label, final String archiveName, final byte[] archive, final NativeCall call) {
-    if (archive == null || archive.length == 0) {
-      throw new IllegalArgumentException(archiveName + " must not be empty");
-    }
+    requireNativeInput(archive, archiveName);
     requireNative();
     final byte[] output = call.run(archive);
     return requireRecursiveSpendOutput(output, label);
@@ -260,12 +352,8 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] requestArchive,
       final byte[] bundleArchive,
       final NativePairCall call) {
-    if (requestArchive == null || requestArchive.length == 0) {
-      throw new IllegalArgumentException("requestArchive must not be empty");
-    }
-    if (bundleArchive == null || bundleArchive.length == 0) {
-      throw new IllegalArgumentException("bundleArchive must not be empty");
-    }
+    requireNativeInput(requestArchive, "requestArchive");
+    requireNativeInput(bundleArchive, "bundleArchive");
     requireNative();
     final byte[] output = call.run(requestArchive, bundleArchive);
     return requireRecursiveSpendOutput(output, label);
@@ -277,15 +365,9 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] requestArchive,
       final byte[] bundleArchive,
       final NativeTripleCall call) {
-    if (previousWitnessArchive == null || previousWitnessArchive.length == 0) {
-      throw new IllegalArgumentException("previousWitnessArchive must not be empty");
-    }
-    if (requestArchive == null || requestArchive.length == 0) {
-      throw new IllegalArgumentException("requestArchive must not be empty");
-    }
-    if (bundleArchive == null || bundleArchive.length == 0) {
-      throw new IllegalArgumentException("bundleArchive must not be empty");
-    }
+    requireNativeInput(previousWitnessArchive, "previousWitnessArchive");
+    requireNativeInput(requestArchive, "requestArchive");
+    requireNativeInput(bundleArchive, "bundleArchive");
     requireNative();
     final byte[] output = call.run(previousWitnessArchive, requestArchive, bundleArchive);
     return requireRecursiveSpendOutput(output, label);
@@ -293,6 +375,19 @@ public final class KagemushaRecursiveSpendProver {
 
   static byte[] requireRecursiveSpendOutput(final byte[] output, final String label) {
     return requireNativeOutput(output, "native " + label);
+  }
+
+  private static void requireNativeInput(final byte[] archive, final String archiveName) {
+    if (archive == null || archive.length == 0) {
+      throw new IllegalArgumentException(archiveName + " must not be empty");
+    }
+    if (!KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)) {
+      throw new IllegalArgumentException(archiveName + " must be a valid Norito archive");
+    }
+    if (!KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)) {
+      throw new IllegalArgumentException(
+          archiveName + " must contain a non-empty Norito payload");
+    }
   }
 
   private static byte[] requireNativeOutput(final byte[] output, final String label) {
@@ -304,6 +399,12 @@ public final class KagemushaRecursiveSpendProver {
     }
     if (output.length > NATIVE_ARCHIVE_MAX_BYTES) {
       throw new IllegalStateException(label + " returned oversized output");
+    }
+    if (!KagemushaCompactPaymentTokenProver.isValidNoritoArchive(output)) {
+      throw new IllegalStateException(label + " returned invalid Norito archive");
+    }
+    if (!KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(output)) {
+      throw new IllegalStateException(label + " returned empty Norito payload");
     }
     return output;
   }
@@ -353,6 +454,15 @@ public final class KagemushaRecursiveSpendProver {
       final NativeProbe loadLibrary,
       final NativeAbiVersionProbe bridgeAbiVersion,
       final NativeSymbolProbe probeSymbol) {
+    return detectNativeAvailability(
+        loadLibrary, bridgeAbiVersion, probeSymbol, REQUIRED_BRIDGE_ABI_VERSION);
+  }
+
+  static boolean detectNativeAvailability(
+      final NativeProbe loadLibrary,
+      final NativeAbiVersionProbe bridgeAbiVersion,
+      final NativeSymbolProbe probeSymbol,
+      final int requiredBridgeAbiVersion) {
     try {
       loadLibrary.run();
     } catch (final UnsatisfiedLinkError | SecurityException error) {
@@ -368,7 +478,7 @@ public final class KagemushaRecursiveSpendProver {
     } catch (final RuntimeException error) {
       return false;
     }
-    if (abiVersion < REQUIRED_BRIDGE_ABI_VERSION) {
+    if (abiVersion < requiredBridgeAbiVersion) {
       return false;
     }
     try {
@@ -425,4 +535,43 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeVerifySpend(byte[] requestArchive);
 
   private static native byte[] nativeRedeemSpend(byte[] requestArchive);
+
+  /** Portable Reserved-lineage verifier/proving key artifact package. */
+  public static final class LineageKeyArtifacts {
+    public final String proofCircuitId;
+    public final int verifierOpeningLen;
+    public final String lineageVerifierKeyBackend;
+    private final byte[] lineageVerifierKey;
+    private final byte[] lineageProvingKeyArchive;
+
+    private LineageKeyArtifacts(
+        final String proofCircuitId,
+        final int verifierOpeningLen,
+        final String lineageVerifierKeyBackend,
+        final byte[] lineageVerifierKey,
+        final byte[] lineageProvingKeyArchive) {
+      this.proofCircuitId = proofCircuitId;
+      this.verifierOpeningLen = verifierOpeningLen;
+      this.lineageVerifierKeyBackend = lineageVerifierKeyBackend;
+      this.lineageVerifierKey = lineageVerifierKey == null ? null : lineageVerifierKey.clone();
+      this.lineageProvingKeyArchive =
+          lineageProvingKeyArchive == null ? null : lineageProvingKeyArchive.clone();
+    }
+
+    public boolean isInitArtifact() {
+      return RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.equals(proofCircuitId);
+    }
+
+    public boolean isAppendArtifact() {
+      return RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(proofCircuitId);
+    }
+
+    public byte[] lineageVerifierKey() {
+      return lineageVerifierKey == null ? null : lineageVerifierKey.clone();
+    }
+
+    public byte[] lineageProvingKeyArchive() {
+      return lineageProvingKeyArchive == null ? null : lineageProvingKeyArchive.clone();
+    }
+  }
 }

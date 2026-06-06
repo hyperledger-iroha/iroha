@@ -4882,6 +4882,14 @@ final class OfflineNoteTests: XCTestCase {
     }
 
     private static func instructionCount(in envelope: SignedTransactionEnvelope) throws -> UInt64 {
+        if let json = NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito),
+           let data = json.data(using: .utf8),
+           let value = try Optional(JSONSerialization.jsonObject(with: data)),
+           let count = instructionCount(inDecodedTransactionJSON: value)
+        {
+            return count
+        }
+
         var signedTransaction = OfflineNoritoReader(data: envelope.signedTransaction)
         _ = try signedTransaction.readField()
         let transactionPayload = try signedTransaction.readField()
@@ -4895,6 +4903,30 @@ final class OfflineNoteTests: XCTestCase {
         let instructionsPayload = try executable.readField()
         var instructions = OfflineNoritoReader(data: instructionsPayload)
         return try instructions.readUInt64LE()
+    }
+
+    private static func instructionCount(inDecodedTransactionJSON value: Any) -> UInt64? {
+        if let object = value as? [String: Any] {
+            if let instructions = object["instructions"] as? [Any] {
+                return UInt64(instructions.count)
+            }
+            if let instructions = object["Instructions"] as? [Any] {
+                return UInt64(instructions.count)
+            }
+            for child in object.values {
+                if let count = instructionCount(inDecodedTransactionJSON: child) {
+                    return count
+                }
+            }
+        }
+        if let array = value as? [Any] {
+            for child in array {
+                if let count = instructionCount(inDecodedTransactionJSON: child) {
+                    return count
+                }
+            }
+        }
+        return nil
     }
 
     private static func auditInstructionEnvelope(_ audit: OfflineNoteAuditBundle) throws -> Data {

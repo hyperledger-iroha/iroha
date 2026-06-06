@@ -5,6 +5,20 @@ import XCTest
 final class KagemushaRecursiveSpendProverTests: XCTestCase {
     func testPreferredModeDefaultsToRecursiveWhenAvailable() {
         XCTAssertEqual(
+            KagemushaRecursiveSpendProver.preferredMode(
+                recursiveCompactAvailable: true,
+                recursiveSpendAvailable: true
+            ),
+            .recursiveSpendV1
+        )
+        XCTAssertEqual(
+            KagemushaRecursiveSpendProver.preferredMode(
+                recursiveCompactAvailable: true,
+                recursiveSpendAvailable: false
+            ),
+            .checkedPrefoldV1
+        )
+        XCTAssertEqual(
             KagemushaRecursiveSpendProver.preferredMode(recursiveSpendAvailable: true),
             .recursiveSpendV1
         )
@@ -12,6 +26,85 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             KagemushaRecursiveSpendProver.preferredMode(recursiveSpendAvailable: false),
             .checkedPrefoldV1
         )
+        XCTAssertEqual(KagemushaOfflineSpendMode.recursiveCompactV1.rawValue, "recursive_compact_v1")
+        XCTAssertEqual(KagemushaRecursiveCompactPaymentTokenProver.requiredBridgeAbiVersion, 7)
+        XCTAssertEqual(
+            KagemushaRecursiveCompactPaymentTokenProver.recursiveCompactCircuitIdV1,
+            "kagemusha-recursive-compact-v1"
+        )
+    }
+
+    func testLineageKeyArtifactPackagesValidateReleaseProfiles() throws {
+        XCTAssertTrue(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(2))
+        XCTAssertTrue(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(128))
+        XCTAssertFalse(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(3))
+        XCTAssertFalse(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(0))
+
+        let initArtifacts = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+            verifierOpeningLen: 2,
+            lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+            lineageVerifierKey: Data(repeating: 0xE7, count: 64),
+            lineageProvingKeyArchive: Data(repeating: 0xE8, count: 64)
+        )
+        XCTAssertTrue(initArtifacts.isInitArtifact)
+        XCTAssertFalse(initArtifacts.isAppendArtifact)
+        XCTAssertEqual(initArtifacts.lineageVerifierKey, Data(repeating: 0xE7, count: 64))
+        XCTAssertEqual(initArtifacts.lineageProvingKeyArchive, Data(repeating: 0xE8, count: 64))
+        XCTAssertEqual(
+            try KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(initArtifacts),
+            initArtifacts
+        )
+
+        let appendArtifacts = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForAppend(
+            verifierOpeningLen: 2,
+            lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+            lineageVerifierKey: Data(repeating: 0xA7, count: 64),
+            lineageProvingKeyArchive: Data(repeating: 0xA8, count: 64)
+        )
+        XCTAssertFalse(appendArtifacts.isInitArtifact)
+        XCTAssertTrue(appendArtifacts.isAppendArtifact)
+
+        try assertInvalidLineageKeyArtifact("proof_circuit_id") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifacts(
+                proofCircuitId: "kagemusha-recursive-spend-lineage-forged-circuit",
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: Data(repeating: 0xE7, count: 64),
+                lineageProvingKeyArchive: Data(repeating: 0xE8, count: 64)
+            )
+        }
+        try assertInvalidLineageKeyArtifact("verifier_opening_len") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 3,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: Data(repeating: 0xE7, count: 64),
+                lineageProvingKeyArchive: Data(repeating: 0xE8, count: 64)
+            )
+        }
+        try assertInvalidLineageKeyArtifact("lineage_verifier_key") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: "halo2/kzg",
+                lineageVerifierKey: Data(repeating: 0xE7, count: 64),
+                lineageProvingKeyArchive: Data(repeating: 0xE8, count: 64)
+            )
+        }
+        try assertInvalidLineageKeyArtifact("lineage_verifier_key") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: Data(),
+                lineageProvingKeyArchive: Data(repeating: 0xE8, count: 64)
+            )
+        }
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: Data(repeating: 0xE7, count: 64),
+                lineageProvingKeyArchive: Data()
+            )
+        }
     }
 
     func testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface() throws {
@@ -769,6 +862,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     }
 
     func testRejectsEmptyRequestArchivesBeforeBridgeCall() {
+        let validArchive = Self.validKagemushaNoritoArchive()
         let helpers: [(String, (Data) throws -> Data)] = [
             ("init", KagemushaRecursiveSpendProver.initSpend),
             ("append", KagemushaRecursiveSpendProver.appendSpend),
@@ -788,14 +882,14 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 requestArchive: Data(),
-                bundleArchive: Data([0x01])
+                bundleArchive: validArchive
             )
         ) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .emptyRequestArchive)
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
-                requestArchive: Data([0x01]),
+                requestArchive: validArchive,
                 bundleArchive: Data()
             )
         ) { error in
@@ -804,25 +898,25 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
                 previousWitnessArchive: Data(),
-                requestArchive: Data([0x01]),
-                bundleArchive: Data([0x02])
+                requestArchive: validArchive,
+                bundleArchive: validArchive
             )
         ) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .emptyRequestArchive)
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                previousWitnessArchive: Data([0x01]),
+                previousWitnessArchive: validArchive,
                 requestArchive: Data(),
-                bundleArchive: Data([0x02])
+                bundleArchive: validArchive
             )
         ) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .emptyRequestArchive)
         }
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                previousWitnessArchive: Data([0x01]),
-                requestArchive: Data([0x02]),
+                previousWitnessArchive: validArchive,
+                requestArchive: validArchive,
                 bundleArchive: Data()
             )
         ) { error in
@@ -830,10 +924,119 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         }
     }
 
+    func testRejectsMalformedInputArchivesBeforeBridgeCall() {
+        let validArchive = Self.validKagemushaNoritoArchive()
+        let malformedArchive = Data([0x01, 0x02])
+        let helpers: [(String, (Data) throws -> Data)] = [
+            ("init", KagemushaRecursiveSpendProver.initSpend),
+            ("append", KagemushaRecursiveSpendProver.appendSpend),
+            ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),
+            ("transitionProfileAppend", KagemushaRecursiveSpendProver.transitionProfileAppend),
+            ("lineageAppendBoundary", KagemushaRecursiveSpendProver.lineageAppendBoundary),
+            ("verify", KagemushaRecursiveSpendProver.verifySpend),
+            ("redeem", KagemushaRecursiveSpendProver.redeemSpend)
+        ]
+
+        for (label, helper) in helpers {
+            assertRecursiveSpendInputError(.invalidInputArchive, "helper \(label)") {
+                try helper(malformedArchive)
+            }
+        }
+
+        assertRecursiveSpendInputError(.invalidInputArchive, "init witness request") {
+            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                requestArchive: malformedArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(.invalidInputArchive, "init witness bundle") {
+            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                requestArchive: validArchive,
+                bundleArchive: malformedArchive
+            )
+        }
+        assertRecursiveSpendInputError(.invalidInputArchive, "append witness previous witness") {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: malformedArchive,
+                requestArchive: validArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(.invalidInputArchive, "append witness request") {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: validArchive,
+                requestArchive: malformedArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(.invalidInputArchive, "append witness bundle") {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: validArchive,
+                requestArchive: validArchive,
+                bundleArchive: malformedArchive
+            )
+        }
+    }
+
+    func testRejectsEmptyPayloadInputArchivesBeforeBridgeCall() {
+        let validArchive = Self.validKagemushaNoritoArchive()
+        let emptyPayloadArchive = Self.emptyPayloadKagemushaNoritoArchive()
+        let helpers: [(String, (Data) throws -> Data)] = [
+            ("init", KagemushaRecursiveSpendProver.initSpend),
+            ("append", KagemushaRecursiveSpendProver.appendSpend),
+            ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),
+            ("transitionProfileAppend", KagemushaRecursiveSpendProver.transitionProfileAppend),
+            ("lineageAppendBoundary", KagemushaRecursiveSpendProver.lineageAppendBoundary),
+            ("verify", KagemushaRecursiveSpendProver.verifySpend),
+            ("redeem", KagemushaRecursiveSpendProver.redeemSpend)
+        ]
+
+        for (label, helper) in helpers {
+            assertRecursiveSpendInputError(.emptyInputPayload, "helper \(label)") {
+                try helper(emptyPayloadArchive)
+            }
+        }
+
+        assertRecursiveSpendInputError(.emptyInputPayload, "init witness request") {
+            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                requestArchive: emptyPayloadArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(.emptyInputPayload, "init witness bundle") {
+            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                requestArchive: validArchive,
+                bundleArchive: emptyPayloadArchive
+            )
+        }
+        assertRecursiveSpendInputError(.emptyInputPayload, "append witness previous witness") {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: emptyPayloadArchive,
+                requestArchive: validArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(.emptyInputPayload, "append witness request") {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: validArchive,
+                requestArchive: emptyPayloadArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(.emptyInputPayload, "append witness bundle") {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: validArchive,
+                requestArchive: validArchive,
+                bundleArchive: emptyPayloadArchive
+            )
+        }
+    }
+
     func testRejectsEmptyNativeOutput() {
+        let validArchive = Self.validKagemushaNoritoArchive()
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.call(
-                requestArchive: Data([0x01]),
+                requestArchive: validArchive,
                 bridgeAvailable: true
             ) { _ in
                 Data()
@@ -844,9 +1047,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     }
 
     func testRejectsOversizedNativeOutput() {
+        let validArchive = Self.validKagemushaNoritoArchive()
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.call(
-                requestArchive: Data([0x01]),
+                requestArchive: validArchive,
                 bridgeAvailable: true
             ) { _ in
                 Data(
@@ -859,10 +1063,51 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         }
     }
 
-    func testNilNativeOutputIsBridgeUnavailable() {
+    func testRejectsMalformedNativeOutput() {
+        let validArchive = Self.validKagemushaNoritoArchive()
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.call(
-                requestArchive: Data([0x01]),
+                requestArchive: validArchive,
+                bridgeAvailable: true
+            ) { _ in
+                Data([0x01, 0x02])
+            }
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .invalidNativeOutput)
+        }
+    }
+
+    func testRejectsEmptyPayloadNativeOutput() {
+        let validArchive = Self.validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendProver.call(
+                requestArchive: validArchive,
+                bridgeAvailable: true
+            ) { _ in
+                Self.emptyPayloadKagemushaNoritoArchive()
+            }
+        ) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .emptyNativeOutputPayload)
+        }
+    }
+
+    func testReturnsValidNativeOutput() throws {
+        let validArchive = Self.validKagemushaNoritoArchive()
+        let output = try KagemushaRecursiveSpendProver.call(
+            requestArchive: validArchive,
+            bridgeAvailable: true
+        ) { _ in
+            validArchive
+        }
+
+        XCTAssertEqual(output, validArchive)
+    }
+
+    func testNilNativeOutputIsBridgeUnavailable() {
+        let validArchive = Self.validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendProver.call(
+                requestArchive: validArchive,
                 bridgeAvailable: true
             ) { _ in
                 nil
@@ -873,9 +1118,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     }
 
     func testNativeKagemushaRejectionMapsToProofRejected() {
+        let validArchive = Self.validKagemushaNoritoArchive()
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.call(
-                requestArchive: Data([0x01]),
+                requestArchive: validArchive,
                 bridgeAvailable: true
             ) { _ in
                 throw NativeBridgeError.kagemushaProve
@@ -890,9 +1136,10 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             case rejected
         }
 
+        let validArchive = Self.validKagemushaNoritoArchive()
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendProver.call(
-                requestArchive: Data([0x01]),
+                requestArchive: validArchive,
                 bridgeAvailable: true
             ) { _ in
                 throw LocalError.rejected
@@ -944,45 +1191,6 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         #endif
     }
 
-    func testRejectsMalformedArchivesWhenBridgeIsAvailable() throws {
-        guard KagemushaRecursiveSpendProver.isNativeAvailable else {
-            throw XCTSkip("Native Kagemusha recursive spend prover is unavailable.")
-        }
-
-        let helpers: [(String, (Data) throws -> Data)] = [
-            ("init", KagemushaRecursiveSpendProver.initSpend),
-            ("append", KagemushaRecursiveSpendProver.appendSpend),
-            ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),
-            ("transitionProfileAppend", KagemushaRecursiveSpendProver.transitionProfileAppend),
-            ("verify", KagemushaRecursiveSpendProver.verifySpend),
-            ("redeem", KagemushaRecursiveSpendProver.redeemSpend)
-        ]
-
-        for (label, helper) in helpers {
-            XCTAssertThrowsError(try helper(Data([0x01, 0x02])), "helper \(label) should reject malformed archives") { error in
-                XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .proofRejected)
-            }
-        }
-
-        XCTAssertThrowsError(
-            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
-                requestArchive: Data([0x01, 0x02]),
-                bundleArchive: Data([0x03, 0x04])
-            )
-        ) { error in
-            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .proofRejected)
-        }
-        XCTAssertThrowsError(
-            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
-                previousWitnessArchive: Data([0x01, 0x02]),
-                requestArchive: Data([0x03, 0x04]),
-                bundleArchive: Data([0x05, 0x06])
-            )
-        ) { error in
-            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, .proofRejected)
-        }
-    }
-
     private static func sharedRecursiveSpendManifest() throws -> [String: Any] {
         try sharedRecursiveSpendFixture(named: "manifest.json")
     }
@@ -1009,5 +1217,47 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "missing shared recursive spend ABI-6 fixture \(fileName)"]
         )
+    }
+
+    private func assertRecursiveSpendInputError(
+        _ expected: KagemushaRecursiveSpendProverError,
+        _ message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ body: () throws -> Data
+    ) {
+        XCTAssertThrowsError(try body(), message, file: file, line: line) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, expected, file: file, line: line)
+        }
+    }
+
+    private static func validKagemushaNoritoArchive() -> Data {
+        noritoEncode(
+            typeName: "KagemushaRecursiveSpendInputArchiveV1",
+            payload: Data([0xa5, 0x5a, 0x11])
+        )
+    }
+
+    private static func emptyPayloadKagemushaNoritoArchive() -> Data {
+        noritoEncode(
+            typeName: "KagemushaRecursiveSpendInputArchiveV1",
+            payload: Data()
+        )
+    }
+
+    private func assertInvalidLineageKeyArtifact(
+        _ field: String,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ body: () throws -> Void
+    ) throws {
+        XCTAssertThrowsError(try body(), file: file, line: line) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendProverError,
+                .invalidLineageKeyArtifact(field),
+                file: file,
+                line: line
+            )
+        }
     }
 }

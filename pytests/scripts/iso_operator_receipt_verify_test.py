@@ -39,6 +39,20 @@ def rewrite_receipt(path, mutate):
     return receipt
 
 
+@contextlib.contextmanager
+def patched_verifier_constant(name, value):
+    original = getattr(VERIFIER, name)
+    setattr(VERIFIER, name, value)
+    try:
+        yield
+    finally:
+        setattr(VERIFIER, name, original)
+
+
+def oversized_json_bytes(limit):
+    return b'{"padding":"' + (b"a" * (limit + 1)) + b'"}\n'
+
+
 class IsoOperatorReceiptVerifyTest(unittest.TestCase):
     def test_verifies_successful_notary_and_rail_receipts_with_source_files(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -159,6 +173,46 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("receipt_sha256 duplicates", stderr)
 
+    def test_symlinked_receipt_file_ancestor_is_rejected_before_read(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            target_dir = inbox / "receipt-target"
+            target_dir.mkdir()
+            target = target_dir / receipt.name
+            target.write_bytes(receipt.read_bytes())
+            ancestor = inbox / "receipt-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(ancestor / target.name),
+                    "--allow-insecure-http",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+
     def test_non_regular_receipt_dirs_are_rejected_before_discovery(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -185,6 +239,92 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_symlinked_receipt_dir_ancestor_is_rejected_before_discovery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "receipt-target"
+            target_dir.mkdir()
+            ancestor = root / "receipt-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            receipt_dir = ancestor / "receipts"
+
+            rc, stdout, stderr = run_verify(
+                ["--receipt-dir", str(receipt_dir), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+
+    def test_receipt_cli_paths_reject_raw_smuggling_before_discovery(self):
+        cases = (
+            ("receipt semicolon", "--receipt", "bad;debug.receipt.json", "semicolon path"),
+            ("receipt whitespace", "--receipt", "bad receipt.json", "whitespace"),
+            (
+                "receipt leading dash",
+                "--receipt",
+                "-bad.receipt.json",
+                "leading-dash path segments",
+            ),
+            (
+                "receipt segment dash",
+                "--receipt",
+                "nested/-bad.receipt.json",
+                "leading-dash path segments",
+            ),
+            (
+                "receipt dot",
+                "--receipt",
+                lambda root: f"{root}/nested/./bad.receipt.json",
+                "dot or parent",
+            ),
+            (
+                "receipt empty",
+                "--receipt",
+                lambda root: f"{root}//bad.receipt.json",
+                "empty path",
+            ),
+            ("dir semicolon", "--receipt-dir", "receipts;debug", "semicolon path"),
+            ("dir whitespace", "--receipt-dir", "receipt dir", "whitespace"),
+            (
+                "dir segment dash",
+                "--receipt-dir",
+                "nested/-receipts",
+                "leading-dash path segments",
+            ),
+            (
+                "dir parent",
+                "--receipt-dir",
+                "nested/../receipts",
+                "dot or parent",
+            ),
+            (
+                "dir empty equals",
+                "--receipt-dir",
+                lambda root: f"{root}//receipts",
+                "empty path",
+            ),
+        )
+        for name, flag, raw_path, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    value = raw_path(root) if callable(raw_path) else str(root / raw_path)
+                    argv = (
+                        [f"{flag}={value}", "--allow-insecure-http"]
+                        if "equals" in name
+                        else [flag, value, "--allow-insecure-http"]
+                    )
+
+                    rc, stdout, stderr = run_verify(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
     def test_duplicate_receipt_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             receipt = Path(raw_root) / "receipt.json"
@@ -196,6 +336,43 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
+
+    def test_non_finite_receipt_json_numbers_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            receipt = Path(raw_root) / "receipt.json"
+            receipt.write_text('{"version":NaN}\n', encoding="utf-8")
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("non-finite numeric constant NaN", stderr)
+
+    def test_receipt_json_surrogate_strings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            receipt = Path(raw_root) / "receipt.json"
+            receipt.write_text('{"version":"\\ud800"}\n', encoding="utf-8")
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid Unicode surrogate", stderr)
+
+    def test_oversized_receipt_json_is_rejected_before_parsing(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            receipt = Path(raw_root) / "receipt.json"
+            receipt.write_bytes(oversized_json_bytes(64))
+
+            with patched_verifier_constant("MAX_RECEIPT_JSON_BYTES", 64):
+                rc, _stdout, stderr = run_verify(
+                    ["--receipt", str(receipt), "--allow-insecure-http"]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("exceeds 64 byte JSON limit", stderr)
 
     def test_unknown_receipt_fields_are_rejected_even_with_valid_digest(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -311,6 +488,30 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     "xml_path must not contain whitespace",
                 ),
                 (
+                    "xml path dash",
+                    lambda body: body.update({"xml_path": "--rail-status.xml"}),
+                    "xml_path must not start with a dash",
+                ),
+                (
+                    "xml path segment dash",
+                    lambda body: body.update(
+                        {"xml_path": f"{xml_path.parent}/--{xml_path.name}"}
+                    ),
+                    "xml_path must not contain leading-dash path segments",
+                ),
+                (
+                    "xml path non xml",
+                    lambda body: body.update(
+                        {
+                            "xml_path": str(xml_path.with_suffix(".txt")),
+                            "sidecar_path": str(
+                                xml_path.with_suffix(".txt").with_suffix(".txt.json")
+                            ),
+                        }
+                    ),
+                    "xml_path must point to a .xml file",
+                ),
+                (
                     "xml path backslash",
                     lambda body: body.update(
                         {"xml_path": str(xml_path).replace("/", "\\", 1)}
@@ -357,6 +558,18 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         }
                     ),
                     "sidecar_path must not contain whitespace",
+                ),
+                (
+                    "sidecar path dash",
+                    lambda body: body.update({"sidecar_path": "--rail-status.xml.json"}),
+                    "sidecar_path must not start with a dash",
+                ),
+                (
+                    "sidecar path segment dash",
+                    lambda body: body.update(
+                        {"sidecar_path": f"{sidecar_path.parent}/--{sidecar_path.name}"}
+                    ),
+                    "sidecar_path must not contain leading-dash path segments",
                 ),
                 (
                     "sidecar path backslash",
@@ -453,7 +666,28 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 lambda body: body.update(
                     {"response_body_preview": "Authorization: Bearer abc"}
                 ),
-                "response_body_preview contains bearer-token material",
+                "response_body_preview contains secret-looking material",
+            ),
+            (
+                "token_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "upstream token=abc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
+                "private_key_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "private_key=abc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
+                "secret_error",
+                lambda body: body.update(
+                    {"error": "upstream token=abc"}
+                ),
+                "error contains secret-looking material",
             ),
             (
                 "naive_timestamp",
@@ -501,6 +735,38 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
+
+    def test_redacted_failed_response_preview_is_verifier_acceptable(self):
+        body = b'{"error":"token=rail-secret"}'
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server(status=500, body=body) as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    1,
+                )
+
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            receipt_body = json.loads(receipt.read_text(encoding="utf-8"))
+            self.assertEqual(
+                receipt_body["response_body_preview"],
+                rail_test.ADAPTER.REDACTED_RESPONSE_PREVIEW,
+            )
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http", "--allow-failed"]
+            )
+
+            self.assertEqual(rc, 0, stderr)
 
     def test_tampered_receipt_digest_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -595,6 +861,41 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 2)
+
+    def test_oversized_rail_source_xml_is_rejected_when_required(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, _sidecar = rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+
+            with patched_verifier_constant(
+                "MAX_RAIL_XML_BYTES",
+                len(rail_test.SAMPLE_XML) - 1,
+            ):
+                rc, _stdout, stderr = run_verify(
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        "--require-source-files",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("byte payload limit", stderr)
 
     def test_source_sidecar_mismatches_are_rejected_when_required(self):
         def replace_with_symlink(path, target):
@@ -763,6 +1064,64 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "rail_message_id must not contain whitespace",
             ),
             (
+                "rail_message_id_unicode",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "rail_message_id": "rail-drop-\U0001f69a",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "rail_message_id must be a canonical ASCII rail message id",
+            ),
+            (
+                "rail_message_id_path_separator",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "rail_message_id": "rail/drop/1",
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "rail_message_id must be a canonical ASCII rail message id",
+            ),
+            (
+                "rail_message_id_oversized",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "rail_message_id": "a"
+                            * (VERIFIER.MAX_RAIL_MESSAGE_ID_CHARS + 1),
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "rail_message_id must be at most",
+            ),
+            (
+                "oversized_sidecar",
+                lambda receipt, sidecar_path: sidecar_path.write_text(
+                    json.dumps(
+                        {
+                            **json.loads(sidecar_path.read_text(encoding="utf-8")),
+                            "rail_message_id": "a"
+                            * VERIFIER.MAX_RAIL_SIDECAR_JSON_BYTES,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                ),
+                "exceeds",
+            ),
+            (
                 "symlinked_xml",
                 symlinked_xml,
                 "must not be a symlink",
@@ -886,6 +1245,36 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 lambda body: body.update({"rail_message_id": "rail drop 1"}),
                 "rail_message_id must not contain whitespace",
             ),
+            (
+                "receipt rail message unicode",
+                lambda body: body.update({"rail_message_id": "rail-drop-\U0001f69a"}),
+                "rail_message_id must be a canonical ASCII rail message id",
+            ),
+            (
+                "receipt rail message path separator",
+                lambda body: body.update({"rail_message_id": "rail/drop/1"}),
+                "rail_message_id must be a canonical ASCII rail message id",
+            ),
+            (
+                "receipt rail message leading punctuation",
+                lambda body: body.update({"rail_message_id": "-rail-drop-1"}),
+                "rail_message_id must be a canonical ASCII rail message id",
+            ),
+            (
+                "receipt rail message trailing punctuation",
+                lambda body: body.update({"rail_message_id": "rail-drop-1-"}),
+                "rail_message_id must be a canonical ASCII rail message id",
+            ),
+            (
+                "receipt rail message oversized",
+                lambda body: body.update(
+                    {
+                        "rail_message_id": "a"
+                        * (VERIFIER.MAX_RAIL_MESSAGE_ID_CHARS + 1)
+                    }
+                ),
+                "rail_message_id must be at most",
+            ),
         ]
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -922,6 +1311,80 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
+
+    def test_oversized_notary_source_json_files_are_rejected_when_required(self):
+        def make_fixture(root):
+            export_dir = root / "export"
+            export_dir.mkdir()
+            _index, _anchor, digest_anchor = audit_test.write_export(
+                export_dir,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            latest = export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE
+            index_file = export_dir / audit_test.ADAPTER.INDEX_FILE
+            record_source = next(
+                (root / "store" / audit_test.ADAPTER.RECORDS_DIR).glob("*.json")
+            )
+            return receipt, latest, digest_anchor, index_file, record_source
+
+        cases = [
+            "latest_anchor",
+            "digest_peer",
+            "exported_index",
+            "record_source",
+        ]
+        for name in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                receipt, latest, digest_anchor, index_file, record_source = make_fixture(
+                    root
+                )
+                latest_size = len(latest.read_bytes())
+                digest_anchor_size = len(digest_anchor.read_bytes())
+                index_size = len(index_file.read_bytes())
+                record_size = len(record_source.read_bytes())
+
+                if name == "latest_anchor":
+                    limit = latest_size - 1
+                elif name == "digest_peer":
+                    limit = max(latest_size, index_size, record_size) + 64
+                    digest_anchor.write_bytes(oversized_json_bytes(limit))
+                elif name == "exported_index":
+                    limit = max(latest_size, digest_anchor_size, record_size) + 64
+                    index_file.write_bytes(oversized_json_bytes(limit))
+                elif name == "record_source":
+                    limit = max(latest_size, digest_anchor_size, index_size) + 64
+                    record_source.write_bytes(oversized_json_bytes(limit))
+                else:  # pragma: no cover - guarded by the cases table.
+                    raise AssertionError(name)
+
+                with patched_verifier_constant("MAX_AUDIT_EXPORT_JSON_BYTES", limit):
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--require-source-files",
+                        ]
+                    )
+
+                self.assertEqual(rc, 2)
+                self.assertIn("byte JSON limit", stderr)
 
     def test_notary_anchor_source_mismatches_are_rejected_when_required(self):
         def mismatched_index():
@@ -1022,9 +1485,131 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
             index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
 
+        def duplicate_embedded_record(receipt, latest, digest_anchor, index_file):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"].append(dict(index["records"][0]))
+            index["record_count"] = 2
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["audit_index"] = index
+            anchor["index_sha256"] = index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]
+            anchor["record_count"] = 2
+            anchor = audit_test.with_digest(
+                anchor,
+                audit_test.ADAPTER.ANCHOR_DIGEST_FIELD,
+            )
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            new_digest_anchor = digest_anchor.with_name(
+                f"{index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]}.notary.json"
+            )
+            new_digest_anchor.write_text(anchor_text, encoding="utf-8")
+            if new_digest_anchor != digest_anchor:
+                digest_anchor.unlink()
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ],
+                        "index_sha256": index[
+                            audit_test.ADAPTER.INDEX_DIGEST_FIELD
+                        ],
+                        "record_count": 2,
+                    }
+                ),
+            )
+
         def record_source_path(latest):
             store_dir = latest.parent.parent / "store"
             return next((store_dir / audit_test.ADAPTER.RECORDS_DIR).glob("*.json"))
+
+        def rewrite_digest_correct_record_source(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+            mutate_source,
+        ):
+            record_path = record_source_path(latest)
+            source = json.loads(record_path.read_text(encoding="utf-8"))
+            mutate_source(source)
+            source = audit_test.with_digest(
+                source,
+                audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD,
+            )
+            record_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0]["record_sha256"] = source[
+                audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+            ]
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["audit_index"] = index
+            anchor["index_sha256"] = index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]
+            anchor = audit_test.with_digest(anchor, audit_test.ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            new_digest_anchor = digest_anchor.with_name(
+                f"{index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]}.notary.json"
+            )
+            new_digest_anchor.write_text(anchor_text, encoding="utf-8")
+            if new_digest_anchor != digest_anchor:
+                digest_anchor.unlink()
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ],
+                        "index_sha256": index[
+                            audit_test.ADAPTER.INDEX_DIGEST_FIELD
+                        ],
+                    }
+                ),
+            )
+
+        def status_history_current_timestamp_mismatch(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            def mutate(source):
+                source["status_history"][-1]["updated_at_ms"] = (
+                    source["updated_at_ms"] - 1
+                )
+
+            rewrite_digest_correct_record_source(
+                receipt,
+                latest,
+                digest_anchor,
+                index_file,
+                mutate,
+            )
+
+        def status_history_timestamp_moves_backwards(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            def mutate(source):
+                earlier_entry = dict(source["status_history"][-1])
+                earlier_entry["updated_at_ms"] = source["updated_at_ms"] + 1
+                source["status_history"].insert(0, earlier_entry)
+
+            rewrite_digest_correct_record_source(
+                receipt,
+                latest,
+                digest_anchor,
+                index_file,
+                mutate,
+            )
 
         def missing_anchor_store_dir(receipt, latest, digest_anchor, _index_file):
             anchor = json.loads(latest.read_text(encoding="utf-8"))
@@ -1043,6 +1628,30 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     }
                 ),
             )
+
+        def malformed_anchor_store_dir(value):
+            def mutate(receipt, latest, digest_anchor, _index_file):
+                anchor = json.loads(latest.read_text(encoding="utf-8"))
+                anchor["store_dir"] = value
+                anchor = audit_test.with_digest(
+                    anchor,
+                    audit_test.ADAPTER.ANCHOR_DIGEST_FIELD,
+                )
+                anchor_text = json.dumps(anchor, indent=2) + "\n"
+                latest.write_text(anchor_text, encoding="utf-8")
+                digest_anchor.write_text(anchor_text, encoding="utf-8")
+                rewrite_receipt(
+                    receipt,
+                    lambda body: body.update(
+                        {
+                            "anchor_sha256": anchor[
+                                audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                            ]
+                        }
+                    ),
+                )
+
+            return mutate
 
         def missing_persisted_record_source(_receipt, latest, _digest_anchor, _index_file):
             record_source_path(latest).unlink()
@@ -1171,9 +1780,34 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "filename must be digest-addressed",
             ),
             (
+                "duplicate_embedded_record",
+                duplicate_embedded_record,
+                "records[1].message_id duplicates",
+            ),
+            (
                 "missing_anchor_store_dir",
                 missing_anchor_store_dir,
                 "store_dir is required to verify audit records",
+            ),
+            (
+                "anchor_store_dir_whitespace",
+                malformed_anchor_store_dir(str(Path("/ops/iso store"))),
+                "store_dir must not contain whitespace",
+            ),
+            (
+                "anchor_store_dir_dash",
+                malformed_anchor_store_dir("--store"),
+                "store_dir must not start with a dash",
+            ),
+            (
+                "anchor_store_dir_segment_dash",
+                malformed_anchor_store_dir("/ops/--store"),
+                "store_dir must not contain leading-dash path segments",
+            ),
+            (
+                "anchor_store_dir_parent_segment",
+                malformed_anchor_store_dir("/ops/iso/../store"),
+                "store_dir must not contain dot or parent segments",
             ),
             (
                 "missing_persisted_record_source",
@@ -1189,6 +1823,16 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "digest_correct_record_metadata_mismatch",
                 digest_correct_record_metadata_mismatch,
                 "metadata.message_type does not match audit index record",
+            ),
+            (
+                "status_history_current_timestamp_mismatch",
+                status_history_current_timestamp_mismatch,
+                "status_history does not end at current updated_at_ms",
+            ),
+            (
+                "status_history_timestamp_moves_backwards",
+                status_history_timestamp_moves_backwards,
+                "status_history[1].updated_at_ms must not move backwards",
             ),
             (
                 "wrong_anchor_filename",
@@ -1239,6 +1883,22 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     ),
                 ),
                 "anchor_path must not contain whitespace",
+            ),
+            (
+                "anchor_path_dash",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update({"anchor_path": "--latest.notary.json"}),
+                ),
+                "anchor_path must not start with a dash",
+            ),
+            (
+                "anchor_path_segment_dash",
+                lambda receipt, latest, digest_anchor, index_file: rewrite_receipt(
+                    receipt,
+                    lambda body: body.update({"anchor_path": f"{latest.parent}/--{latest.name}"}),
+                ),
+                "anchor_path must not contain leading-dash path segments",
             ),
             (
                 "anchor_path_backslash",
@@ -1496,11 +2156,19 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("notary", "endpoint", "https://notary.example/anc\nhor", False),
             ("notary", "endpoint", "https://notary.example/iso anchor", False),
             ("notary", "endpoint", "https://notary.example:abc/anchor", False),
+            ("notary", "endpoint", "https://notary.example:/anchor", False),
+            ("notary", "endpoint", "https://notary.example:0/anchor", False),
+            ("notary", "endpoint", "https://notary.example:08443/anchor", False),
             ("notary", "endpoint", "https://notary.example:99999/anchor", False),
             ("notary", "endpoint", "https://notary.example:443/anchor", False),
             ("notary", "endpoint", "https://Notary.example/anchor", False),
             ("notary", "endpoint", "https://notary.example./anchor", False),
             ("notary", "endpoint", "https://notary..example/anchor", False),
+            ("notary", "endpoint", "https://localhost/anchor", False),
+            ("notary", "endpoint", "https://10.1.2.3/anchor", False),
+            ("notary", "endpoint", "https://10.1.2.3.sslip.io/anchor", False),
+            ("notary", "endpoint", "https://0x7f.0.0.1/anchor", False),
+            ("notary", "endpoint", "https://[::127.0.0.1]/anchor", False),
             ("notary", "endpoint", "https://-notary.example/anchor", False),
             ("notary", "endpoint", "https://notary-.example/anchor", False),
             ("notary", "endpoint", "https://notary._tcp.example/anchor", False),
@@ -1512,10 +2180,34 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("notary", "endpoint", "https://notary.example/archive%2fanchor", False),
             ("notary", "endpoint", "https://notary.example/archive%252fanchor", False),
             ("notary", "endpoint", "https://notary.example/archive;debug/anchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%3bdebug/anchor", False),
+            ("notary", "endpoint", "https://notary.example/archive%23debug/anchor", False),
             ("notary", "endpoint", "https://notary.example/archive%20anchor", False),
             ("notary", "endpoint", "https://notary.example/archive%00anchor", False),
             ("notary", "endpoint", "https://notary.example/archive%7fanchor", False),
             ("notary", "endpoint", "https://notary.example/archive%zzanchor", False),
+            (
+                "notary",
+                "endpoint",
+                "https://notary.example/" + ("a" * VERIFIER.MAX_HTTP_URL_CHARS),
+                False,
+            ),
+            (
+                "notary",
+                "endpoint",
+                "https://" + ".".join(["a" * 63] * 5) + "/anchor",
+                False,
+            ),
+            ("rail", "endpoint_url", "https://localhost/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://127.0.0.1/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://127.0.0.1.nip.io/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://0x7f000001/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://[64:ff9b::7f00:1]/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example:/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example:0/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example:08443/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example/v1%3bdebug/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example/v1%3fdebug/iso20022", False),
             ("rail", "endpoint_url", "http://127.0.0.1/v1/iso20022 ", True),
             ("rail", "endpoint_url", "http://user:pass@127.0.0.1/v1/iso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1/v1/iso20022?debug=true", True),
@@ -1535,6 +2227,18 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%00iso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%zziso20022", True),
             ("rail", "endpoint_url", r"http://127.0.0.1:8080/v1\iso20022", True),
+            (
+                "rail",
+                "endpoint_url",
+                "http://127.0.0.1:8080/" + ("a" * VERIFIER.MAX_HTTP_URL_CHARS),
+                True,
+            ),
+            (
+                "rail",
+                "endpoint_url",
+                "http://" + ".".join(["a" * 63] * 5) + ":8080/v1/iso20022",
+                True,
+            ),
         ]
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1585,6 +2289,76 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn("error:", stderr)
+
+    def test_rejected_receipt_endpoint_url_does_not_echo_secret_query(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            audit_test.write_export(export_dir)
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            notary_receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+
+            inbox = root / "inbox"
+            inbox.mkdir()
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            rail_receipt = next((inbox / "receipts").glob("*.receipt.json"))
+
+            cases = [
+                (
+                    notary_receipt,
+                    "endpoint",
+                    "https://notary.example/anchor?token=notary-secret",
+                    "notary-secret",
+                ),
+                (
+                    rail_receipt,
+                    "endpoint_url",
+                    "https://rail.example/v1/iso20022?token=rail-secret",
+                    "rail-secret",
+                ),
+            ]
+            for receipt, field, secret_url, secret in cases:
+                with self.subTest(field=field):
+                    rewrite_receipt(
+                        receipt,
+                        lambda body, field=field, secret_url=secret_url: body.update(
+                            {field: secret_url}
+                        ),
+                    )
+
+                    rc, _stdout, stderr = run_verify(["--receipt", str(receipt)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("params, query, or fragment", stderr)
+                    self.assertNotIn(secret_url, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn(secret, stderr)
 
 
 if __name__ == "__main__":

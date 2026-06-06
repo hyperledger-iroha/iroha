@@ -11,11 +11,19 @@ from typing import Literal, Union
 from ._native import load_crypto_extension
 
 BytesLike = Union[bytes, bytearray, memoryview]
-KagemushaOfflineSpendMode = Literal["recursive_spend_v1", "checked_prefold_v1"]
+KagemushaOfflineSpendMode = Literal[
+    "recursive_compact_v1",
+    "recursive_spend_v1",
+    "checked_prefold_v1",
+]
 
+KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1"
 KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6
+KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7
+KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
+KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1"
 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 = (
     "kagemusha-recursive-aggregation-v1"
 )
@@ -62,11 +70,21 @@ _RECURSIVE_AGGREGATION_METHOD = (
     "kagemusha_prove_verified_recursive_aggregation_proof_bundle"
     "_with_records_and_pallas_open_envelopes"
 )
+_RECURSIVE_COMPACT_TOKEN_METHOD = (
+    "kagemusha_prove_verified_recursive_compact_payment_token"
+    "_with_records_and_pallas_open_envelopes"
+)
+_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD = (
+    "kagemusha_verify_recursive_compact_payment_token"
+)
 
 __all__ = [
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
@@ -104,10 +122,15 @@ __all__ = [
     "requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append",
     "is_kagemusha_compact_payment_token_prover_available",
     "is_kagemusha_recursive_aggregation_proof_bundle_prover_available",
+    "is_kagemusha_recursive_compact_payment_token_prover_available",
+    "is_kagemusha_recursive_compact_payment_token_verifier_available",
     "is_kagemusha_recursive_spend_available",
+    "preferred_kagemusha_offline_spend_mode_for_capabilities",
     "preferred_kagemusha_offline_spend_mode",
     "kagemusha_prove_verified_compact_payment_token_with_records",
     _RECURSIVE_AGGREGATION_METHOD,
+    _RECURSIVE_COMPACT_TOKEN_METHOD,
+    _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
     "kagemusha_recursive_spend_transition_profile_init",
@@ -132,13 +155,30 @@ _NATIVE_METHODS = (
 )
 _RECURSIVE_SPEND_ABI_VERSION_METHOD = "kagemusha_recursive_spend_bridge_abi_version"
 _MALFORMED_NATIVE_PROBE_ARCHIVE = b"\x00"
+_KAGEMUSHA_NORITO_HEADER_BYTES = 40
+_KAGEMUSHA_NORITO_MAX_HEADER_PADDING_BYTES = 64
+_KAGEMUSHA_NORITO_SUPPORTED_FLAGS_MASK = 0x27
+_KAGEMUSHA_NORITO_FIELD_BITSET_FLAG = 0x20
+_KAGEMUSHA_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06
+_KAGEMUSHA_NORITO_MAGIC = b"NRT0"
+_KAGEMUSHA_CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
+_KAGEMUSHA_CRC64_REFLECTED_POLY = 0xC96C_5795_D787_0F42
 
 
-def _archive_bytes(request_archive: BytesLike) -> bytes:
-    data = bytes(request_archive)
-    if not data:
-        raise ValueError("request_archive must not be empty")
-    return data
+def _build_kagemusha_crc64_table() -> tuple[int, ...]:
+    table: list[int] = []
+    for index in range(256):
+        crc = index
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ _KAGEMUSHA_CRC64_REFLECTED_POLY
+            else:
+                crc >>= 1
+        table.append(crc)
+    return tuple(table)
+
+
+_KAGEMUSHA_CRC64_TABLE = _build_kagemusha_crc64_table()
 
 
 def _archive_bytes_named(archive: BytesLike, name: str) -> bytes:
@@ -146,6 +186,64 @@ def _archive_bytes_named(archive: BytesLike, name: str) -> bytes:
     if not data:
         raise ValueError(f"{name} must not be empty")
     return data
+
+
+def _norito_archive_bytes_named(archive: BytesLike, name: str) -> bytes:
+    data = _archive_bytes_named(archive, name)
+    _assert_kagemusha_norito_archive(data, name)
+    return data
+
+
+def _kagemusha_crc64(payload: bytes) -> int:
+    crc = _KAGEMUSHA_CRC64_MASK
+    for byte in payload:
+        index = (crc ^ byte) & 0xFF
+        crc = _KAGEMUSHA_CRC64_TABLE[index] ^ (crc >> 8)
+    return (crc ^ _KAGEMUSHA_CRC64_MASK) & _KAGEMUSHA_CRC64_MASK
+
+
+def _assert_kagemusha_norito_archive(data: bytes, name: str) -> None:
+    def fail() -> None:
+        raise ValueError(f"{name} must be a valid Norito archive")
+
+    if len(data) > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES:
+        raise ValueError(
+            f"{name} must not exceed {KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES} bytes"
+        )
+    if len(data) < _KAGEMUSHA_NORITO_HEADER_BYTES:
+        fail()
+    if data[:4] != _KAGEMUSHA_NORITO_MAGIC:
+        fail()
+    if data[4] != 0 or data[5] != 0 or data[22] != 0:
+        fail()
+    flags = data[39]
+    if (
+        flags & ~_KAGEMUSHA_NORITO_SUPPORTED_FLAGS_MASK
+        or (
+            flags & _KAGEMUSHA_NORITO_FIELD_BITSET_FLAG
+            and (
+                flags & _KAGEMUSHA_NORITO_FIELD_BITSET_REQUIRED_FLAGS
+                != _KAGEMUSHA_NORITO_FIELD_BITSET_REQUIRED_FLAGS
+            )
+        )
+    ):
+        fail()
+    payload_length = int.from_bytes(data[23:31], "little")
+    if payload_length == 0:
+        raise ValueError(f"{name} must contain a non-empty Norito payload")
+    minimum_length = _KAGEMUSHA_NORITO_HEADER_BYTES + payload_length
+    if len(data) < minimum_length:
+        fail()
+    padding_length = len(data) - minimum_length
+    if padding_length > _KAGEMUSHA_NORITO_MAX_HEADER_PADDING_BYTES:
+        fail()
+    padding_start = _KAGEMUSHA_NORITO_HEADER_BYTES
+    padding_end = padding_start + padding_length
+    if any(data[padding_start:padding_end]):
+        fail()
+    payload = data[padding_end:]
+    if _kagemusha_crc64(payload) != int.from_bytes(data[31:39], "little"):
+        fail()
 
 
 def _native_method(name: str):
@@ -191,10 +289,17 @@ def _recursive_spend_abi_version(module: object) -> int | None:
     if not callable(method):
         return None
     try:
-        version = int(method())
+        version = method()
     except (TypeError, ValueError, RuntimeError, OSError):
         return None
     except Exception:
+        return None
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version < 0
+        or version > KAGEMUSHA_MAX_BRIDGE_ABI_VERSION
+    ):
         return None
     return version
 
@@ -204,6 +309,14 @@ def _has_recursive_spend_abi(module: object) -> bool:
     return (
         version is not None
         and version >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION
+    )
+
+
+def _has_recursive_compact_abi(module: object) -> bool:
+    version = _recursive_spend_abi_version(module)
+    return (
+        version is not None
+        and version >= KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION
     )
 
 
@@ -250,6 +363,42 @@ def is_kagemusha_recursive_aggregation_proof_bundle_prover_available() -> bool:
         _RECURSIVE_AGGREGATION_METHOD,
         _MALFORMED_NATIVE_PROBE_ARCHIVE,
         _MALFORMED_NATIVE_PROBE_ARCHIVE,
+    )
+
+
+def is_kagemusha_recursive_compact_payment_token_prover_available() -> bool:
+    try:
+        module = load_crypto_extension()
+    except RuntimeError:
+        return False
+    return (
+        _has_recursive_compact_abi(module)
+        and _probe_native_archive_method(
+            module,
+            _RECURSIVE_COMPACT_TOKEN_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
+        )
+        and _probe_native_archive_method(
+            module,
+            _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
+        )
+    )
+
+
+def is_kagemusha_recursive_compact_payment_token_verifier_available() -> bool:
+    try:
+        module = load_crypto_extension()
+    except RuntimeError:
+        return False
+    return (
+        _has_recursive_compact_abi(module)
+        and _probe_native_archive_method(
+            module,
+            _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
+        )
     )
 
 
@@ -307,9 +456,27 @@ def _probe_recursive_spend_surface(module: object) -> bool:
 
 def preferred_kagemusha_offline_spend_mode(
     recursive_spend_available: bool | None = None,
+    recursive_compact_available: bool | None = None,
 ) -> KagemushaOfflineSpendMode:
+    if recursive_compact_available is None:
+        recursive_compact_available = (
+            is_kagemusha_recursive_compact_payment_token_prover_available()
+            if recursive_spend_available is None
+            else False
+        )
     if recursive_spend_available is None:
         recursive_spend_available = is_kagemusha_recursive_spend_available()
+    return preferred_kagemusha_offline_spend_mode_for_capabilities(
+        recursive_compact_available,
+        recursive_spend_available,
+    )
+
+
+def preferred_kagemusha_offline_spend_mode_for_capabilities(
+    recursive_compact_available: bool,
+    recursive_spend_available: bool,
+) -> KagemushaOfflineSpendMode:
+    _ = recursive_compact_available
     if recursive_spend_available:
         return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
@@ -550,7 +717,7 @@ def kagemusha_prove_verified_compact_payment_token_with_records(
 ) -> bytes:
     return _call_native_archive_method(
         _COMPACT_TOKEN_METHOD,
-        _archive_bytes_named(record_bundle_archive, "record_bundle_archive"),
+        _norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive"),
     )
 
 
@@ -560,12 +727,43 @@ def _prove_verified_recursive_aggregation_proof_bundle(
 ) -> bytes:
     return _call_native_archive_method(
         _RECURSIVE_AGGREGATION_METHOD,
-        _archive_bytes_named(record_bundle_archive, "record_bundle_archive"),
-        _archive_bytes_named(
-            pallas_open_envelopes_archive,
-            "pallas_open_envelopes_archive",
-        ),
+        _norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive"),
+        _norito_archive_bytes_named(pallas_open_envelopes_archive, "pallas_open_envelopes_archive"),
     )
+
+
+def _prove_verified_recursive_compact_payment_token(
+    record_bundle_archive: BytesLike,
+    pallas_open_envelopes_archive: BytesLike,
+) -> bytes:
+    record_bundle = _norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive")
+    pallas_open_envelopes = _norito_archive_bytes_named(pallas_open_envelopes_archive, "pallas_open_envelopes_archive")
+    if not is_kagemusha_recursive_compact_payment_token_prover_available():
+        raise RuntimeError(
+            "recursive compact Kagemusha payment-token prover requires native "
+            "bridge ABI 7 with compact prover and verifier symbols"
+        )
+    return _call_native_archive_method(
+        _RECURSIVE_COMPACT_TOKEN_METHOD,
+        record_bundle,
+        pallas_open_envelopes,
+    )
+
+
+def _verify_recursive_compact_payment_token(compact_token_archive: BytesLike) -> bool:
+    compact_token = _archive_bytes_named(compact_token_archive, "compact_token_archive")
+    _assert_kagemusha_norito_archive(compact_token, "compact_token_archive")
+    if not is_kagemusha_recursive_compact_payment_token_verifier_available():
+        raise RuntimeError(
+            "recursive compact Kagemusha payment-token verifier requires native "
+            "bridge ABI 7 with the compact verifier symbol"
+        )
+    result = _native_method(_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD)(compact_token)
+    if not isinstance(result, bool):
+        raise RuntimeError(
+            f"{_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD} returned non-boolean result"
+        )
+    return result
 
 
 def _call_native_archive_method(name: str, *archives: bytes) -> bytes:
@@ -583,10 +781,18 @@ def _require_kagemusha_native_output(name: str, result: object) -> bytes:
         raise RuntimeError(f"{name} returned empty output")
     if len(output) > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES:
         raise RuntimeError(f"{name} returned oversized output")
+    try:
+        _assert_kagemusha_norito_archive(output, name)
+    except ValueError as error:
+        if "non-empty Norito payload" in str(error):
+            raise RuntimeError(f"{name} returned empty Norito payload") from error
+        raise RuntimeError(f"{name} returned invalid Norito archive") from error
     return output
 
 
 globals()[_RECURSIVE_AGGREGATION_METHOD] = _prove_verified_recursive_aggregation_proof_bundle
+globals()[_RECURSIVE_COMPACT_TOKEN_METHOD] = _prove_verified_recursive_compact_payment_token
+globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD] = _verify_recursive_compact_payment_token
 
 
 def kagemusha_recursive_spend_init(request_archive: BytesLike) -> bytes:
@@ -614,7 +820,7 @@ def kagemusha_recursive_spend_transition_profile_append(request_archive: BytesLi
 def kagemusha_recursive_spend_lineage_append_boundary(profile_archive: BytesLike) -> bytes:
     return _call_recursive_spend_multi_archive_method(
         "kagemusha_recursive_spend_lineage_append_boundary",
-        _archive_bytes_named(profile_archive, "profile_archive"),
+        _norito_archive_bytes_named(profile_archive, "profile_archive"),
     )
 
 
@@ -624,8 +830,8 @@ def kagemusha_recursive_spend_lineage_witness_from_init_result(
 ) -> bytes:
     return _call_recursive_spend_multi_archive_method(
         "kagemusha_recursive_spend_lineage_witness_from_init_result",
-        _archive_bytes_named(request_archive, "request_archive"),
-        _archive_bytes_named(bundle_archive, "bundle_archive"),
+        _norito_archive_bytes_named(request_archive, "request_archive"),
+        _norito_archive_bytes_named(bundle_archive, "bundle_archive"),
     )
 
 
@@ -636,9 +842,9 @@ def kagemusha_recursive_spend_lineage_witness_append_result(
 ) -> bytes:
     return _call_recursive_spend_multi_archive_method(
         "kagemusha_recursive_spend_lineage_witness_append_result",
-        _archive_bytes_named(previous_witness_archive, "previous_witness_archive"),
-        _archive_bytes_named(request_archive, "request_archive"),
-        _archive_bytes_named(bundle_archive, "bundle_archive"),
+        _norito_archive_bytes_named(previous_witness_archive, "previous_witness_archive"),
+        _norito_archive_bytes_named(request_archive, "request_archive"),
+        _norito_archive_bytes_named(bundle_archive, "bundle_archive"),
     )
 
 
@@ -651,7 +857,7 @@ def kagemusha_recursive_spend_redeem(request_archive: BytesLike) -> bytes:
 
 
 def _call_recursive_spend_method(name: str, request_archive: BytesLike) -> bytes:
-    request = _archive_bytes(request_archive)
+    request = _norito_archive_bytes_named(request_archive, "request_archive")
     module = load_crypto_extension()
     _require_complete_recursive_spend_surface(module)
     method = getattr(module, name, None)

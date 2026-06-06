@@ -146,7 +146,7 @@ public enum PrivacyNativeBridge {
     static func call(
         requestArchive: Data,
         bridgeAvailable: Bool,
-        expectedSchemaByte: UInt8? = nil,
+        expectedSchemaByte: UInt8,
         _ body: (Data) throws -> Data?
     ) throws -> Data {
         guard !requestArchive.isEmpty else {
@@ -177,7 +177,7 @@ public enum PrivacyNativeBridge {
 
     static func call(
         bridgeAvailable: Bool,
-        expectedSchemaByte: UInt8? = nil,
+        expectedSchemaByte: UInt8,
         _ body: () throws -> Data?
     ) throws -> Data {
         guard bridgeAvailable else {
@@ -212,11 +212,8 @@ public enum PrivacyNativeBridge {
 
     private static func hasPrivacyNoritoSchema(
         _ archive: Data,
-        expectedSchemaByte: UInt8?
+        expectedSchemaByte: UInt8
     ) -> Bool {
-        guard let expectedSchemaByte else {
-            return true
-        }
         guard archive.count >= 22 else {
             return false
         }

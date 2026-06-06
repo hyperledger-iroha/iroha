@@ -13,12 +13,10 @@ public final class KagemushaRecursiveAggregationProofBundleProver {
 
   public static byte[] proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
       final byte[] recordBundleArchive, final byte[] pallasOpenEnvelopesArchive) {
-    if (recordBundleArchive == null || recordBundleArchive.length == 0) {
-      throw new IllegalArgumentException("recordBundleArchive must not be empty");
-    }
-    if (pallasOpenEnvelopesArchive == null || pallasOpenEnvelopesArchive.length == 0) {
-      throw new IllegalArgumentException("pallasOpenEnvelopesArchive must not be empty");
-    }
+    KagemushaCompactPaymentTokenProver.requireNativeInput(
+        recordBundleArchive, "recordBundleArchive");
+    KagemushaCompactPaymentTokenProver.requireNativeInput(
+        pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive");
     requireNative();
     final byte[] proofBundleArchive =
         nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(

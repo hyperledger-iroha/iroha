@@ -22,6 +22,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_OFFLINE_SERIALIZE -304
 #define CONNECT_NORITO_ERR_OFFLINE_NOTE_PROVE -310
 #define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
+#define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE -312
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -170,7 +171,7 @@ int32_t connect_norito_kagemusha_prove_verified_compact_payment_token_with_recor
 // Verify private Kagemusha hop proofs plus proof-derived Pallas opening envelopes and
 // generate an admission-neutral recursive aggregation proof bundle.
 // Input 1: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
-// Input 2: Norito-archive bytes of `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`.
+// Input 2: Norito-archive bytes of `Vec<iroha_data_model::zk::OpenVerifyEnvelope>`.
 // Output: Norito-archive bytes of `KagemushaRecursiveAggregationProofBundle`.
 int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
     const uint8_t* verified_record_bundle_norito_ptr,
@@ -179,6 +180,30 @@ int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bund
     unsigned long pallas_open_envelopes_norito_len,
     uint8_t** out_proof_bundle_ptr,
     unsigned long* out_proof_bundle_len);
+
+// ABI 7 recursive compact-token prover surface for `kagemusha-recursive-compact-v1`.
+// Reserved source-stable surface. It rejects malformed input archives and fails
+// closed with ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE until compact-token
+// proofs compose the private-hop verifier-slice relation in-circuit.
+// Input 1: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
+// Input 2: Norito-archive bytes of `Vec<iroha_data_model::zk::OpenVerifyEnvelope>`.
+// Output: none in this release.
+int32_t connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+    const uint8_t* verified_record_bundle_norito_ptr,
+    unsigned long verified_record_bundle_norito_len,
+    const uint8_t* pallas_open_envelopes_norito_ptr,
+    unsigned long pallas_open_envelopes_norito_len,
+    uint8_t** out_compact_token_ptr,
+    unsigned long* out_compact_token_len);
+
+// Verify an ABI 7 recursive compact Kagemusha token.
+// Input: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+// Malformed archives and malformed token bindings return ERR_KAGEMUSHA_PROVE.
+// Output: `*out_valid = 0` for every shape-valid token in this release.
+int32_t connect_norito_kagemusha_verify_recursive_compact_payment_token(
+    const uint8_t* compact_token_norito_ptr,
+    unsigned long compact_token_norito_len,
+    uint8_t* out_valid);
 
 // Initialize production recursive Kagemusha spendable offline cash.
 // Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
@@ -256,6 +281,9 @@ int32_t connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
 // Verify production recursive Kagemusha spendable offline cash.
 // Input: Norito-archive bytes of `KagemushaRecursiveSpendVerifyRequestV1`.
 // Output: Norito-archive bytes of `KagemushaRecursiveSpendVerifyResultV1`.
+// Malformed request archives, including missing or forged Reserved-lineage
+// verifier records and unsupported proof attachments, return
+// ERR_KAGEMUSHA_PROVE instead of a diagnostic result archive.
 int32_t connect_norito_kagemusha_recursive_spend_verify(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,

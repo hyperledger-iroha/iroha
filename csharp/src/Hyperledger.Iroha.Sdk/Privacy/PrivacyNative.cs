@@ -324,6 +324,8 @@ public static class PrivacyNative
             RequireAbi();
         }
 
+        var expectedSchemas = RequireKnownPrivacyResultSymbol(symbol);
+
         int code;
         IntPtr outPtr;
         UIntPtr outLen;
@@ -335,7 +337,7 @@ public static class PrivacyNative
         {
             throw new InvalidOperationException($"{symbol} failed.");
         }
-        return ReadPrivacyOutput(symbol, code, outPtr, outLen);
+        return ReadPrivacyOutput(symbol, code, outPtr, outLen, expectedSchemas);
     }
 
     internal static byte[] CallProof(
@@ -393,6 +395,8 @@ public static class PrivacyNative
                 RequireAbi();
             }
 
+            var expectedSchemas = RequireKnownPrivacyResultSymbol(symbol);
+
             int code;
             IntPtr outPtr;
             UIntPtr outLen;
@@ -404,7 +408,7 @@ public static class PrivacyNative
             {
                 throw new InvalidOperationException($"{symbol} failed.");
             }
-            return ReadPrivacyOutput(symbol, code, outPtr, outLen, free);
+            return ReadPrivacyOutput(symbol, code, outPtr, outLen, free, expectedSchemas);
         }
         finally
         {
@@ -433,9 +437,14 @@ public static class PrivacyNative
         }
     }
 
-    internal static byte[] ReadPrivacyOutput(string symbol, int code, IntPtr outPtr, UIntPtr outLen)
+    internal static byte[] ReadPrivacyOutput(
+        string symbol,
+        int code,
+        IntPtr outPtr,
+        UIntPtr outLen,
+        params byte[] expectedSchemaBytes)
     {
-        return ReadPrivacyOutput(symbol, code, outPtr, outLen, NativeFree);
+        return ReadPrivacyOutput(symbol, code, outPtr, outLen, NativeFree, expectedSchemaBytes);
     }
 
     internal static byte[] ReadPrivacyOutput(
@@ -452,6 +461,8 @@ public static class PrivacyNative
             {
                 throw new InvalidOperationException($"{symbol} failed with bridge error code {code}.");
             }
+
+            var schemas = RequireExplicitPrivacyResultSchemas(symbol, expectedSchemaBytes);
 
             if (outPtr == IntPtr.Zero)
             {
@@ -470,9 +481,6 @@ public static class PrivacyNative
                 throw new InvalidOperationException(
                     $"{symbol} returned empty privacy result payload.");
             }
-            var schemas = expectedSchemaBytes.Length == 0
-                ? ExpectedPrivacyResultSchemas(symbol)
-                : expectedSchemaBytes;
             if (!HasNoritoSchema(result, schemas))
             {
                 throw new InvalidOperationException(
@@ -515,7 +523,8 @@ public static class PrivacyNative
         if (code != 0
             || outPtr == IntPtr.Zero
             || length == 0
-            || length > PrivacyNativeArchiveMaxBytes)
+            || length > PrivacyNativeArchiveMaxBytes
+            || expectedSchemaBytes.Length == 0)
         {
             return false;
         }
@@ -602,7 +611,7 @@ public static class PrivacyNative
     {
         if (expectedSchemaBytes.Length == 0)
         {
-            return true;
+            return false;
         }
 
         if (archive.Length < 22)
@@ -640,6 +649,52 @@ public static class PrivacyNative
             "iroha_privacy_verify_proof_v1" => new[] { PrivacyVerifyProofResultSchemaByte },
             _ => Array.Empty<byte>(),
         };
+    }
+
+    private static byte[] RequireKnownPrivacyResultSymbol(string symbol)
+    {
+        var schemas = ExpectedPrivacyResultSchemas(symbol);
+        if (schemas.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"{symbol} is not a supported privacy native operation.");
+        }
+        return schemas;
+    }
+
+    private static byte[] RequireExplicitPrivacyResultSchemas(
+        string symbol,
+        byte[]? expectedSchemaBytes)
+    {
+        var schemas = RequireKnownPrivacyResultSymbol(symbol);
+        if (expectedSchemaBytes is null || expectedSchemaBytes.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"{symbol} requires explicit privacy result schemas.");
+        }
+        if (!PrivacyResultSchemasEqual(expectedSchemaBytes, schemas))
+        {
+            throw new InvalidOperationException(
+                $"{symbol} expected privacy result schemas do not match the supported operation.");
+        }
+        return expectedSchemaBytes;
+    }
+
+    private static bool PrivacyResultSchemasEqual(byte[] left, byte[] right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Length; index++)
+        {
+            if (left[index] != right[index])
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static ulong[] BuildPrivacyCrc64Table()

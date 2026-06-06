@@ -24,6 +24,7 @@ from iroha_python._privacy_backends import (
     _is_production_verify_backend_label,
     _require_production_verify_backend_label,
 )
+from iroha_python.tx import _normalize_positive_u128_literal
 from iroha_python.repo import RepoAgreementListPage
 
 
@@ -2262,6 +2263,39 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert captured[1][1]["private_key_hex"] == "22" * 32
 
 
+def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -> None:
+    u128_max = str((1 << 128) - 1)
+    assert _normalize_positive_u128_literal("00017", "amount") == "17"
+    assert _normalize_positive_u128_literal(23, "amount") == "23"
+    assert _normalize_positive_u128_literal(u128_max, "amount") == u128_max
+
+    for amount in [
+        None,
+        True,
+        False,
+        0,
+        -1,
+        1.5,
+        Decimal("1"),
+        "",
+        " ",
+        "0",
+        "-1",
+        "+1",
+        "1.0",
+        "1e3",
+        1 << 128,
+        str(1 << 128),
+        [],
+        object(),
+    ]:
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="amount must be a positive decimal u128 string",
+        ):
+            _normalize_positive_u128_literal(amount, "amount")
+
+
 @pytest.mark.parametrize(
     ("method_name", "kwargs", "error_type", "match"),
     [
@@ -2358,6 +2392,29 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
             ValueError,
             "stark/fri/sha256-goldilocks",
             id="zk-ace-transfer-wrong-proof-backend",
+        ),
+        pytest.param(
+            "zk_ace_authorized_transfer_and_wait",
+            {
+                "from_account_id": account_address(0x6D),
+                "to_account_id": account_address(0x6E),
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "amount": 0,
+                "identity_commitment": "11" * 32,
+                "tx_digest": "22" * 32,
+                "domain_tag": "iroha:zk-ace:pq-authorization:v0",
+                "action_class": "transparent_asset_transfer",
+                "replay_nullifier": "33" * 32,
+                "policy_hash": "44" * 32,
+                "proof": {
+                    "backend": "stark/fri/sha256-goldilocks",
+                    "proof_bytes": b"proof-bytes",
+                    "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+                },
+            },
+            ValueError,
+            "positive decimal u128",
+            id="zk-ace-transfer-zero-amount",
         ),
     ],
 )

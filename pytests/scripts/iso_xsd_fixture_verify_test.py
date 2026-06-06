@@ -159,6 +159,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
     def test_checked_in_manifest_passes_and_records_reviewed_gaps(self):
         with tempfile.TemporaryDirectory() as raw_root:
             summary_out = Path(raw_root) / "summary.json"
+            summary_out.write_text('{"stale": true}\n' + ("x" * 4096), encoding="utf-8")
 
             rc, stdout, stderr = run_verify(
                 [
@@ -194,9 +195,67 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertNotIn("colr.007.001.08", missing_schema_ids)
             self.assertEqual(summary["schema_only_entries"], [])
             self.assertEqual(json.loads(summary_out.read_text(encoding="utf-8")), summary)
+            self.assertEqual(summary_out.stat().st_mode & 0o077, 0)
+            self.assertEqual(
+                list(summary_out.parent.glob(".iso-*.tmp")),
+                [],
+            )
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(digest, VERIFIER.sha256_hex(VERIFIER._canonical_json_bytes(body)))
+
+    def test_long_summary_output_leaf_uses_bounded_atomic_temp_name(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            summary_out = root / (("x" * 240) + ".json")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertEqual(json.loads(summary_out.read_text(encoding="utf-8")), summary)
+            self.assertEqual(summary_out.stat().st_mode & 0o077, 0)
+            self.assertEqual(list(summary_out.parent.glob(".iso-*.tmp")), [])
+
+    def test_rejected_manifest_paths_do_not_echo_secret_absolute_paths(self):
+        cases = [
+            (
+                lambda body: body["schemas"][0].update(
+                    {"path": "/tmp/token=xsd-schema-secret/fooo.001.001.01.xsd"}
+                ),
+                "schemas[0].path must be relative",
+                "xsd-schema-secret",
+            ),
+            (
+                lambda body: body["fixtures"][0].update(
+                    {"path": "/tmp/token=xsd-fixture-secret/foo_fixture.xml"}
+                ),
+                "fixtures[0].path must be relative",
+                "xsd-fixture-secret",
+            ),
+        ]
+        for mutate, expected, secret in cases:
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest = minimal_manifest()
+                    mutate(manifest)
+                    manifest_path = write_minimal_tree(root, manifest)
+
+                    rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn(secret, stderr)
 
     def test_symlinked_summary_output_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -222,6 +281,138 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("must not be a symlink", stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_summary_output_path_rejects_smuggled_segments(self):
+        cases = (
+            ("semicolon", "xsd;debug.summary.json", "semicolon path"),
+            ("whitespace", "xsd summary.json", "whitespace"),
+            ("leading-dash", "nested/-xsd.summary.json", "leading-dash"),
+            ("parent", "nested/../xsd.summary.json", "dot or parent"),
+            ("dot", lambda root: f"{root}/nested/./xsd.summary.json", "dot or parent"),
+            ("empty", lambda root: f"{root}//xsd.summary.json", "empty path"),
+        )
+        for name, summary_arg, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+
+                    rc, stdout, stderr = run_verify(
+                        [
+                            "--manifest",
+                            str(manifest_path),
+                            "--summary-out",
+                            summary_arg(root)
+                            if callable(summary_arg)
+                            else str(root / summary_arg),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_hardlinked_summary_output_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            target = root / "xsd-target.summary.json"
+            target.write_text("untouched\n", encoding="utf-8")
+            summary_out = root / "xsd-hardlink.summary.json"
+            try:
+                summary_out.hardlink_to(target)
+            except OSError as error:
+                self.skipTest(f"hard link creation unavailable: {error}")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be hard-linked", stderr)
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_symlinked_summary_output_ancestor_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            target_dir = root / "xsd-target"
+            target_dir.mkdir()
+            ancestor = root / "xsd-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            summary_out = ancestor / "nested" / "xsd.summary.json"
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
+            self.assertFalse((target_dir / "nested").exists())
+
+    def test_cli_input_paths_reject_raw_smuggling_before_read(self):
+        cases = (
+            ("manifest semicolon", "--manifest", "fixture;debug.json", "semicolon path"),
+            ("manifest whitespace", "--manifest", "fixture manifest.json", "whitespace"),
+            ("catalog leading-dash", "--profile-catalog", "nested/-profiles.rs", "leading-dash"),
+            ("catalog parent", "--profile-catalog", "nested/../profiles.rs", "dot or parent"),
+            (
+                "manifest dot",
+                "--manifest",
+                lambda root: f"{root}/nested/./fixture_manifest.json",
+                "dot or parent",
+            ),
+            (
+                "catalog empty",
+                "--profile-catalog",
+                lambda root: f"{root}//profiles.rs",
+                "empty path",
+            ),
+        )
+        for name, flag, raw_path, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    value = raw_path(root) if callable(raw_path) else str(root / raw_path)
+
+                    rc, stdout, stderr = run_verify([flag, value])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
+    def test_symlinked_manifest_ancestor_is_rejected_before_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            target_dir = root / "manifest-target"
+            manifest_path = write_minimal_tree(target_dir, minimal_manifest())
+            ancestor = root / "manifest-ancestor-link"
+            try:
+                ancestor.symlink_to(target_dir, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            manifest = ancestor / manifest_path.relative_to(target_dir)
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must not be a symlink", stderr)
 
     def test_strict_flags_reject_current_reviewed_gaps(self):
         manifest = str(REPO_ROOT / "fixtures" / "iso20022" / "xsd" / "fixture_manifest.json")
@@ -277,13 +468,13 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             read_counts = dict.fromkeys(watched, 0)
             original_read = VERIFIER._read_regular_file
 
-            def read_once(path):
+            def read_once(path, *, max_bytes=None):
                 resolved = Path(path).resolve()
                 if resolved in watched:
                     read_counts[resolved] += 1
                     if read_counts[resolved] > 1:
                         raise AssertionError(f"{watched[resolved]} file was read more than once")
-                return original_read(path)
+                return original_read(path, max_bytes=max_bytes)
 
             args = VERIFIER.build_parser().parse_args(["--manifest", str(manifest_path)])
             VERIFIER._read_regular_file = read_once
@@ -414,6 +605,50 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("exactly one DEFAULT_PROFILES_JSON", stderr)
+
+    def test_profile_catalog_loader_rejects_non_finite_json_constants(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = root / "profiles.rs"
+            profile_catalog.write_text(
+                'const DEFAULT_PROFILES_JSON: &str = r#"\n[NaN]\n"#;\n',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("non-finite numeric constant NaN", stderr)
+
+    def test_profile_catalog_loader_rejects_json_surrogate_strings(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = root / "profiles.rs"
+            profile_catalog.write_text(
+                'const DEFAULT_PROFILES_JSON: &str = r#"\n["\\ud800"]\n"#;\n',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid Unicode surrogate", stderr)
 
     def test_profile_catalog_strict_flag_rejects_missing_schema_versions(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1139,6 +1374,98 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["profile_schema_backed_versions"], 26)
             self.assertEqual(len(summary["missing_profile_schema_versions"]), 29)
 
+    def test_xml_schema_validation_bounds_xmllint_output(self):
+        cases = [
+            (
+                "failed",
+                (1, "", False, "E" * 32, True, False),
+                "xmllint output truncated",
+            ),
+            (
+                "successful",
+                (0, "O" * 32, True, "", False, False),
+                "xmllint output exceeded",
+            ),
+        ]
+        for name, result, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                manifest_path = write_minimal_tree(root, minimal_manifest())
+                original_which = VERIFIER.shutil.which
+                original_run = VERIFIER._run_command_bounded
+                VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+                VERIFIER._run_command_bounded = (
+                    lambda *_args, result=result, **_kwargs: result
+                )
+                try:
+                    rc, _stdout, stderr = run_verify(
+                        ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                    )
+                finally:
+                    VERIFIER.shutil.which = original_which
+                    VERIFIER._run_command_bounded = original_run
+
+                self.assertEqual(rc, 2)
+                self.assertIn(expected, stderr)
+
+    def test_xml_schema_validation_bounds_xmllint_runtime(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            fake_xmllint = root / "xmllint"
+            fake_xmllint.write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env python3",
+                        "import sys",
+                        "import time",
+                        "sys.stdout.write('started')",
+                        "sys.stdout.flush()",
+                        "time.sleep(5)",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            fake_xmllint.chmod(0o700)
+            original_which = VERIFIER.shutil.which
+            VERIFIER.shutil.which = lambda command: str(fake_xmllint)
+            try:
+                rc, stdout, stderr = run_verify(
+                    [
+                        "--manifest",
+                        str(manifest_path),
+                        "--validate-xml-schema",
+                        "--xmllint-timeout-secs",
+                        "1",
+                    ]
+                )
+            finally:
+                VERIFIER.shutil.which = original_which
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("xmllint timed out after 1 seconds", stderr)
+
+    def test_xmllint_timeout_cli_rejects_nonpositive_and_nonfinite_values(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            for value in ("0", "-1", "nan", "inf"):
+                with self.subTest(value=value):
+                    rc, stdout, stderr = run_verify(
+                        [
+                            "--manifest",
+                            str(manifest_path),
+                            "--xmllint-timeout-secs",
+                            value,
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("positive finite number", stderr)
+
     @unittest.skipUnless(shutil.which("xmllint"), "xmllint is required for XSD validation")
     def test_xml_schema_validation_flag_validates_schema_backed_fixtures(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1676,6 +2003,12 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         )
         cases.append((bad_repository, "repository must be a canonical"))
 
+        long_repository = minimal_manifest()
+        long_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/example/" + ("a" * VERIFIER.MAX_SOURCE_REPOSITORY_CHARS)
+        )
+        cases.append((long_repository, "repository must be no longer than 2048 characters"))
+
         bad_commit = minimal_manifest()
         bad_commit["schemas"][0]["source"]["commit"] = (
             "0123456789abcdef0123456789abcdef0123456Z"
@@ -1691,6 +2024,19 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             "xsd/iso/fooo source.001.001.01.xsd"
         )
         cases.append((whitespace_path, "source.path must not contain whitespace"))
+        dash_path = minimal_manifest()
+        dash_path["schemas"][0]["source"]["path"] = "--fooo.001.001.01.xsd"
+        cases.append((dash_path, "source.path must not start with a dash"))
+        segment_dash_path = minimal_manifest()
+        segment_dash_path["schemas"][0]["source"]["path"] = (
+            "xsd/iso/--fooo.001.001.01.xsd"
+        )
+        cases.append(
+            (
+                segment_dash_path,
+                "source.path must not contain leading-dash path segments",
+            )
+        )
 
         semicolon_path = minimal_manifest()
         semicolon_path["schemas"][0]["source"]["path"] = (
@@ -1794,6 +2140,17 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         schema_whitespace = minimal_manifest()
         schema_whitespace["schemas"][0]["path"] = "iso/fooo source.001.001.01.xsd"
         cases.append((schema_whitespace, "path must not contain whitespace"))
+        schema_dash = minimal_manifest()
+        schema_dash["schemas"][0]["path"] = "--fooo.001.001.01.xsd"
+        cases.append((schema_dash, "path must not start with a dash"))
+        schema_segment_dash = minimal_manifest()
+        schema_segment_dash["schemas"][0]["path"] = "iso/--fooo.001.001.01.xsd"
+        cases.append(
+            (
+                schema_segment_dash,
+                "path must not contain leading-dash path segments",
+            )
+        )
         schema_semicolon = minimal_manifest()
         schema_semicolon["schemas"][0]["path"] = "iso;debug/fooo.001.001.01.xsd"
         cases.append(
@@ -1828,6 +2185,17 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         fixture_whitespace = minimal_manifest()
         fixture_whitespace["fixtures"][0]["path"] = "../fixtures/foo fixture.xml"
         cases.append((fixture_whitespace, "path must not contain whitespace"))
+        fixture_dash = minimal_manifest()
+        fixture_dash["fixtures"][0]["path"] = "--foo_fixture.xml"
+        cases.append((fixture_dash, "path must not start with a dash"))
+        fixture_segment_dash = minimal_manifest()
+        fixture_segment_dash["fixtures"][0]["path"] = "../fixtures/--foo_fixture.xml"
+        cases.append(
+            (
+                fixture_segment_dash,
+                "path must not contain leading-dash path segments",
+            )
+        )
         fixture_semicolon = minimal_manifest()
         fixture_semicolon["fixtures"][0]["path"] = "../fixtures;debug/foo_fixture.xml"
         cases.append(
@@ -1923,6 +2291,36 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
 
+    def test_non_finite_manifest_json_numbers_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = root / "xsd" / "fixture_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                '{"version":NaN,"schemas":[],"fixtures":[]}\n',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("non-finite numeric constant NaN", stderr)
+
+    def test_manifest_json_surrogate_strings_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = root / "xsd" / "fixture_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                '{"version":"\\ud800","schemas":[],"fixtures":[]}\n',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid Unicode surrogate", stderr)
+
     def test_symlinked_manifest_schema_fixture_or_profile_catalog_is_rejected(self):
         cases = ("manifest", "schema", "fixture", "profile_catalog")
         for name in cases:
@@ -2003,6 +2401,51 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn("must be a regular file", stderr)
+
+    def test_oversized_manifest_schema_fixture_or_profile_catalog_is_rejected(self):
+        cases = (
+            ("manifest", "MAX_MANIFEST_JSON_BYTES"),
+            ("schema", "MAX_SCHEMA_BYTES"),
+            ("fixture", "MAX_FIXTURE_XML_BYTES"),
+            ("profile_catalog", "MAX_PROFILE_CATALOG_BYTES"),
+        )
+        for name, limit_name in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    profile_catalog = None
+                    argv = ["--manifest", str(manifest_path)]
+                    old_limit = getattr(VERIFIER, limit_name)
+                    try:
+                        setattr(VERIFIER, limit_name, 128)
+                        if name == "manifest":
+                            manifest_path.write_text(
+                                '{"version":1,"padding":"' + ("a" * 128) + '"}',
+                                encoding="utf-8",
+                            )
+                        elif name == "schema":
+                            schema = root / "xsd" / "iso" / "fooo.001.001.01.xsd"
+                            schema.write_text("<xs:schema>" + ("a" * 128), encoding="utf-8")
+                        elif name == "fixture":
+                            fixture = root / "foo_fixture.xml"
+                            fixture.write_text("<Document>" + ("a" * 128), encoding="utf-8")
+                        else:
+                            profile_catalog = root / "profiles.rs"
+                            profile_catalog.write_text(
+                                'const DEFAULT_PROFILES_JSON: &str = r#"\n'
+                                + ("a" * 128)
+                                + '\n"#;\n',
+                                encoding="utf-8",
+                            )
+                            argv.extend(["--profile-catalog", str(profile_catalog)])
+
+                        rc, _stdout, stderr = run_verify(argv)
+                    finally:
+                        setattr(VERIFIER, limit_name, old_limit)
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("exceeds", stderr)
 
     def test_copied_fixture_payloads_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

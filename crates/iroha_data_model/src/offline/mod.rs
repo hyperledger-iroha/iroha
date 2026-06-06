@@ -90,6 +90,8 @@ pub const KAGEMUSHA_RECURSIVE_VERIFIER_WITNESS_PROFILE_V1: &str =
 /// Canonical circuit id for proof-carrying Kagemusha recursive aggregation evidence.
 pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-aggregation-v1";
+/// Canonical circuit id for compact tokens with in-circuit recursive aggregation.
+pub const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: &str = "kagemusha-recursive-compact-v1";
 /// Reserved chain-admission circuit id for lineage-proving recursive spend redemption.
 ///
 /// This is the legacy family selector accepted by ABI helpers. Production
@@ -142,8 +144,14 @@ pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN: u32 = 128;
 pub const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: usize = 128;
 /// Current Kagemusha aggregation mode: every private hop proof is verified before folding.
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
-/// Reserved Kagemusha aggregation mode for future in-circuit recursive proof aggregation.
+/// Kagemusha aggregation mode for compact tokens whose private-hop verifier is proven in-circuit.
 pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
+/// SDK-facing Kagemusha spend mode for recursive compact tokens.
+///
+/// This mode is intentionally not selected by production defaults until the
+/// public compact-token proof uses the composed private-hop verifier-slice
+/// circuit instead of the standalone semantic aggregation circuit.
+pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1";
 /// SDK-facing Kagemusha spend mode for recursive spend-again-offline cash.
 pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";
 /// SDK-facing Kagemusha spend mode for legacy checked pre-fold compact tokens.
@@ -164,6 +172,20 @@ pub const fn is_supported_kagemusha_aggregation_mode(mode: u16) -> bool {
 /// compact-token surface.
 #[must_use]
 pub const fn preferred_kagemusha_offline_spend_mode(
+    recursive_spend_available: bool,
+) -> &'static str {
+    preferred_kagemusha_offline_spend_mode_for_capabilities(false, recursive_spend_available)
+}
+
+/// Return the default SDK Kagemusha spend mode for advertised native capabilities.
+///
+/// ABI-6 recursive spend remains the production default when available. The
+/// `recursive_compact_available` argument is accepted for source compatibility,
+/// but recursive compact mode is not auto-selected until compact-token proofs
+/// compose the private-hop verifier-slice relation in-circuit.
+#[must_use]
+pub const fn preferred_kagemusha_offline_spend_mode_for_capabilities(
+    _recursive_compact_available: bool,
     recursive_spend_available: bool,
 ) -> &'static str {
     if recursive_spend_available {
@@ -395,7 +417,7 @@ pub fn can_select_kagemusha_recursive_spend_append_output_proof_circuit_id(
 pub const fn unsupported_kagemusha_aggregation_mode_reason(mode: u16) -> &'static str {
     match mode {
         KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1 => {
-            "reserved for future in-circuit recursive aggregation; private-hop verifier is not yet composed into compact-token admission"
+            "recursive compact mode requires ABI-7 recursive compact-token admission; the legacy checked pre-fold path does not accept mode 2"
         }
         _ => "unsupported or unknown Kagemusha aggregation mode",
     }
@@ -1744,6 +1766,14 @@ mod model {
         /// Poseidon2 digest of the canonical recursive aggregation evidence.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub evidence_digest: [u8; 32],
+        /// Hash of the reserved folded public-input projection claimed by the recursive proof.
+        ///
+        /// Future `kagemusha-recursive-compact-v1` admission compares this
+        /// value with the chain-visible compact token public-input hash, so a
+        /// detached recursive proof cannot be replayed against a different
+        /// folded compact-token transcript.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub folded_public_inputs_hash: [u8; 32],
         /// Poseidon2 digest of the ordered folded-hop aggregation transcript.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub aggregation_transcript_digest: [u8; 32],
@@ -2284,6 +2314,28 @@ mod model {
         pub recursive_proof: KagemushaRecursiveAggregationProof,
     }
 
+    /// Portable Reserved-lineage verifier/proving key artifact package.
+    ///
+    /// Release tooling can generate this Norito archive once per supported
+    /// Pallas opening length and circuit profile, then mobile SDKs can embed
+    /// the archive and attach its fields to init or append requests without
+    /// synthesizing recursive verifier-slice keys at payment time.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendLineageKeyArtifactsV1 {
+        /// Profile-specific Reserved-lineage circuit id for these artifacts.
+        pub proof_circuit_id: String,
+        /// Pallas IPA opening vector length supported by the packaged key pair.
+        pub verifier_opening_len: u32,
+        /// Packaged Reserved-lineage verifier key.
+        pub lineage_verifier_key: VerifyingKeyBox,
+        /// Packaged Reserved-lineage proving key archive.
+        pub lineage_proving_key_archive: Vec<u8>,
+    }
+
     /// Bridge request for the first recursive Kagemusha spendable state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2752,7 +2804,7 @@ pub const OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"of
 /// Canonical public-input schema descriptor for Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_folded_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","aggregation_mode","hop_count","initial_root_limb0","initial_root_limb1","initial_root_limb2","initial_root_limb3","final_root_limb0","final_root_limb1","final_root_limb2","final_root_limb3","nullifier_digest_limb0","nullifier_digest_limb1","nullifier_digest_limb2","nullifier_digest_limb3","output_commitment_digest_limb0","output_commitment_digest_limb1","output_commitment_digest_limb2","output_commitment_digest_limb3","fold_digest_limb0","fold_digest_limb1","fold_digest_limb2","fold_digest_limb3","aggregation_transcript_digest_limb0","aggregation_transcript_digest_limb1","aggregation_transcript_digest_limb2","aggregation_transcript_digest_limb3"]}"#;
 /// Canonical public-input schema descriptor for Kagemusha recursive aggregation proofs.
-pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_recursive_aggregation_proof_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","evidence_digest_limb0","evidence_digest_limb1","evidence_digest_limb2","evidence_digest_limb3","aggregation_transcript_digest_limb0","aggregation_transcript_digest_limb1","aggregation_transcript_digest_limb2","aggregation_transcript_digest_limb3","verifier_params_fingerprint_limb0","verifier_params_fingerprint_limb1","verifier_params_fingerprint_limb2","verifier_params_fingerprint_limb3","fixed_window_table_schedule_digest_limb0","fixed_window_table_schedule_digest_limb1","fixed_window_table_schedule_digest_limb2","fixed_window_table_schedule_digest_limb3","fixed_window_shared_table_manifest_digest_limb0","fixed_window_shared_table_manifest_digest_limb1","fixed_window_shared_table_manifest_digest_limb2","fixed_window_shared_table_manifest_digest_limb3","fixed_window_table_base_digest_limb0","fixed_window_table_base_digest_limb1","fixed_window_table_base_digest_limb2","fixed_window_table_base_digest_limb3","verifier_witness_batch_digest_limb0","verifier_witness_batch_digest_limb1","verifier_witness_batch_digest_limb2","verifier_witness_batch_digest_limb3","recursive_proof_chain_digest_limb0","recursive_proof_chain_digest_limb1","recursive_proof_chain_digest_limb2","recursive_proof_chain_digest_limb3","transition_profile_binding_digest_limb0","transition_profile_binding_digest_limb1","transition_profile_binding_digest_limb2","transition_profile_binding_digest_limb3","append_opening_preflight_digest_limb0","append_opening_preflight_digest_limb1","append_opening_preflight_digest_limb2","append_opening_preflight_digest_limb3","append_boundary_digest_limb0","append_boundary_digest_limb1","append_boundary_digest_limb2","append_boundary_digest_limb3","recursive_verifier_scalar_projection_digest_limb0","recursive_verifier_scalar_projection_digest_limb1","recursive_verifier_scalar_projection_digest_limb2","recursive_verifier_scalar_projection_digest_limb3","verifier_opening_len","verifier_witness_count","hop_count"]}"#;
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA: &[u8] = br#"{"schema":"kagemusha_recursive_aggregation_proof_v1","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","evidence_digest_limb0","evidence_digest_limb1","evidence_digest_limb2","evidence_digest_limb3","folded_public_inputs_hash_limb0","folded_public_inputs_hash_limb1","folded_public_inputs_hash_limb2","folded_public_inputs_hash_limb3","aggregation_transcript_digest_limb0","aggregation_transcript_digest_limb1","aggregation_transcript_digest_limb2","aggregation_transcript_digest_limb3","verifier_params_fingerprint_limb0","verifier_params_fingerprint_limb1","verifier_params_fingerprint_limb2","verifier_params_fingerprint_limb3","fixed_window_table_schedule_digest_limb0","fixed_window_table_schedule_digest_limb1","fixed_window_table_schedule_digest_limb2","fixed_window_table_schedule_digest_limb3","fixed_window_shared_table_manifest_digest_limb0","fixed_window_shared_table_manifest_digest_limb1","fixed_window_shared_table_manifest_digest_limb2","fixed_window_shared_table_manifest_digest_limb3","fixed_window_table_base_digest_limb0","fixed_window_table_base_digest_limb1","fixed_window_table_base_digest_limb2","fixed_window_table_base_digest_limb3","verifier_witness_batch_digest_limb0","verifier_witness_batch_digest_limb1","verifier_witness_batch_digest_limb2","verifier_witness_batch_digest_limb3","recursive_proof_chain_digest_limb0","recursive_proof_chain_digest_limb1","recursive_proof_chain_digest_limb2","recursive_proof_chain_digest_limb3","transition_profile_binding_digest_limb0","transition_profile_binding_digest_limb1","transition_profile_binding_digest_limb2","transition_profile_binding_digest_limb3","append_opening_preflight_digest_limb0","append_opening_preflight_digest_limb1","append_opening_preflight_digest_limb2","append_opening_preflight_digest_limb3","append_boundary_digest_limb0","append_boundary_digest_limb1","append_boundary_digest_limb2","append_boundary_digest_limb3","recursive_verifier_scalar_projection_digest_limb0","recursive_verifier_scalar_projection_digest_limb1","recursive_verifier_scalar_projection_digest_limb2","recursive_verifier_scalar_projection_digest_limb3","verifier_opening_len","verifier_witness_count","hop_count"]}"#;
 
 #[derive(Debug, Clone, Decode, Encode)]
 struct KagemushaFoldStepDigestPreimage {
@@ -3217,13 +3269,15 @@ fn kagemusha_verifying_key_commitment(vk: &VerifyingKeyBox) -> [u8; Hash::LENGTH
 
 /// Return the canonical Poseidon2 digest for a Kagemusha aggregation transcript statement.
 ///
-/// This is the hash-friendly public accumulator that future recursive verifier
-/// circuits should recompute from their private per-hop witness. It is
+/// This is the hash-friendly public accumulator that recursive verifier circuits
+/// recompute from their private per-hop witness. It is
 /// domain-separated from proof-statement, verifier-key, and host-side folded-hop
 /// hashes. The digest accepts both checked pre-fold and reserved recursive
-/// aggregation modes so recursive evidence can bind the same transcript shape;
-/// compact-token admission still rejects reserved modes through
-/// [`KagemushaFoldedPublicInputs::validate_supported_context`].
+/// aggregation modes so recursive evidence can bind the same transcript shape.
+/// The legacy checked pre-fold validator still rejects mode `2` through
+/// [`KagemushaFoldedPublicInputs::validate_supported_context`]; ABI-7 recursive
+/// compact admission uses the narrower recursive-compact context and projection
+/// validators.
 ///
 /// # Errors
 ///
@@ -3580,9 +3634,12 @@ pub fn kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
     evidence: &KagemushaRecursiveAggregationEvidence,
 ) -> Result<KagemushaRecursiveAggregationProofPublicInputs, KagemushaFoldError> {
     validate_kagemusha_recursive_aggregation_evidence(evidence)?;
+    let folded_public_inputs =
+        kagemusha_folded_public_inputs_from_aggregation_statement(&evidence.aggregation_statement)?;
     let public_inputs = KagemushaRecursiveAggregationProofPublicInputs {
         domain: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_DOMAIN.to_owned(),
         evidence_digest: kagemusha_recursive_aggregation_evidence_digest(evidence)?,
+        folded_public_inputs_hash: hash_bytes_from_hash(folded_public_inputs.public_inputs_hash()?),
         aggregation_transcript_digest: kagemusha_poseidon_aggregation_transcript_shape_digest(
             &evidence.aggregation_statement,
         )?,
@@ -3625,6 +3682,13 @@ impl KagemushaRecursiveAggregationProofPublicInputs {
             return Err(
                 KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
                     field: "evidence_digest",
+                },
+            );
+        }
+        if self.folded_public_inputs_hash == [0u8; Hash::LENGTH] {
+            return Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "folded_public_inputs_hash",
                 },
             );
         }
@@ -3778,9 +3842,10 @@ impl KagemushaRecursiveAggregationProof {
 impl KagemushaRecursiveAggregationProofBundle {
     /// Validate that recursive proof public inputs are derived from this evidence.
     ///
-    /// This still does not make aggregation mode `2` accepted for compact-token
-    /// admission. It provides the canonical proof-carrying surface that a future
-    /// recursive verifier can check before backend proof verification.
+    /// This still does not make aggregation mode `2` accepted by the legacy
+    /// compact-token admission path. It provides the canonical proof-carrying
+    /// surface that the ABI-7 recursive compact verifier checks before backend
+    /// proof verification.
     ///
     /// # Errors
     ///
@@ -3814,6 +3879,7 @@ fn validate_kagemusha_recursive_aggregation_proof_public_input_parity(
     }
     ensure_field!(domain);
     ensure_field!(evidence_digest);
+    ensure_field!(folded_public_inputs_hash);
     ensure_field!(aggregation_transcript_digest);
     ensure_field!(verifier_params_fingerprint);
     ensure_field!(fixed_window_table_schedule_digest);
@@ -4261,9 +4327,24 @@ pub fn kagemusha_recursive_spend_public_inputs_from_accumulator(
     accumulator: &KagemushaRecursiveSpendAccumulatorV1,
 ) -> Result<KagemushaRecursiveAggregationProofPublicInputs, KagemushaFoldError> {
     accumulator.validate_context()?;
+    let folded_public_inputs = KagemushaFoldedPublicInputs {
+        domain: KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN.to_owned(),
+        aggregation_mode: KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+        chain_id: accumulator.chain_id.clone(),
+        asset: accumulator.asset.clone(),
+        initial_root: accumulator.initial_root,
+        final_root: accumulator.final_root,
+        hop_count: accumulator.hop_count,
+        nullifier_digest: accumulator.nullifier_digest,
+        output_commitment_digest: accumulator.output_commitment_digest,
+        fold_digest: accumulator.fold_digest,
+        aggregation_transcript_digest: accumulator.aggregation_transcript_digest,
+    };
+    folded_public_inputs.validate_recursive_compact_context()?;
     let public_inputs = KagemushaRecursiveAggregationProofPublicInputs {
         domain: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_DOMAIN.to_owned(),
         evidence_digest: kagemusha_recursive_spend_accumulator_digest(accumulator)?,
+        folded_public_inputs_hash: hash_bytes_from_hash(folded_public_inputs.public_inputs_hash()?),
         aggregation_transcript_digest: accumulator.aggregation_transcript_digest,
         verifier_params_fingerprint: accumulator.verifier_params_fingerprint,
         fixed_window_table_schedule_digest: accumulator.fixed_window_table_schedule_digest,
@@ -6295,6 +6376,7 @@ impl KagemushaRecursiveSpendBundleV1 {
         }
         ensure_field!(domain);
         ensure_field!(evidence_digest);
+        ensure_field!(folded_public_inputs_hash);
         ensure_field!(aggregation_transcript_digest);
         ensure_field!(verifier_params_fingerprint);
         ensure_field!(fixed_window_table_schedule_digest);
@@ -6350,6 +6432,140 @@ fn validate_kagemusha_recursive_spend_lineage_key_artifact_pair(
     }
 }
 
+fn is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len(
+    verifier_opening_len: u32,
+) -> bool {
+    matches!(verifier_opening_len, 2 | 4 | 8 | 16 | 32 | 64 | 128)
+}
+
+impl KagemushaRecursiveSpendLineageKeyArtifactsV1 {
+    /// Build and validate a portable Reserved-lineage key artifact package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the circuit id is not a
+    /// profile-specific Reserved-lineage id, the opening length is unsupported,
+    /// or either packaged key artifact is malformed.
+    pub fn new(
+        proof_circuit_id: impl Into<String>,
+        verifier_opening_len: u32,
+        lineage_verifier_key: VerifyingKeyBox,
+        lineage_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        let artifacts = Self {
+            proof_circuit_id: proof_circuit_id.into(),
+            verifier_opening_len,
+            lineage_verifier_key,
+            lineage_proving_key_archive,
+        };
+        artifacts.validate_public_binding()?;
+        Ok(artifacts)
+    }
+
+    /// Build artifacts for first-hop Reserved-lineage init proving.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when validation fails.
+    pub fn new_for_init(
+        verifier_opening_len: u32,
+        lineage_verifier_key: VerifyingKeyBox,
+        lineage_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        Self::new(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            verifier_opening_len,
+            lineage_verifier_key,
+            lineage_proving_key_archive,
+        )
+    }
+
+    /// Build artifacts for Reserved-lineage append proving.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when validation fails.
+    pub fn new_for_append(
+        verifier_opening_len: u32,
+        lineage_verifier_key: VerifyingKeyBox,
+        lineage_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        Self::new(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            verifier_opening_len,
+            lineage_verifier_key,
+            lineage_proving_key_archive,
+        )
+    }
+
+    /// Return `true` when this artifact package targets first-hop init.
+    #[must_use]
+    pub fn is_init_artifact(&self) -> bool {
+        self.proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    }
+
+    /// Return `true` when this artifact package targets Reserved-lineage append.
+    #[must_use]
+    pub fn is_append_artifact(&self) -> bool {
+        self.proof_circuit_id == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+    }
+
+    /// Validate the portable artifact package before attaching it to a request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any field is outside the
+    /// Reserved-lineage artifact contract.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
+        if !matches!(
+            self.proof_circuit_id.as_str(),
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+                | KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+        ) {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "proof_circuit_id",
+            });
+        }
+        if !is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len(
+            self.verifier_opening_len,
+        ) {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "verifier_opening_len",
+            });
+        }
+        if self.lineage_verifier_key.backend.as_str()
+            != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_key",
+            });
+        }
+        validate_kagemusha_recursive_spend_lineage_key_artifact_pair(
+            Some(&self.lineage_verifier_key),
+            Some(&self.lineage_proving_key_archive),
+        )
+    }
+
+    /// Return the verified key artifacts as request fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] if the artifact package is malformed.
+    pub fn into_key_artifacts(self) -> Result<(VerifyingKeyBox, Vec<u8>), KagemushaFoldError> {
+        self.validate_public_binding()?;
+        Ok((self.lineage_verifier_key, self.lineage_proving_key_archive))
+    }
+
+    /// Return the Norito-encoded size of this artifact package.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Norito encoding fails.
+    pub fn norito_encoded_len(&self) -> Result<usize, norito::Error> {
+        to_bytes(self).map(|bytes| bytes.len())
+    }
+}
+
 impl KagemushaRecursiveSpendInitRequestV1 {
     /// Build and validate the first-hop recursive spend init request.
     ///
@@ -6392,6 +6608,23 @@ impl KagemushaRecursiveSpendInitRequestV1 {
             .with_lineage_key_artifacts(lineage_verifier_key, lineage_proving_key_archive)
     }
 
+    /// Build and validate an init request from a portable key artifact package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the artifact package is malformed,
+    /// targets the append circuit, or the resulting init request no longer
+    /// satisfies its public binding.
+    pub fn new_with_lineage_key_artifact_package(
+        record_bundle: KagemushaVerifiedFoldRecordBundle,
+        pallas_open_envelopes_archive: Vec<u8>,
+        current_note: KagemushaSpendableNoteDescriptorV1,
+        artifacts: KagemushaRecursiveSpendLineageKeyArtifactsV1,
+    ) -> Result<Self, KagemushaFoldError> {
+        Self::new(record_bundle, pallas_open_envelopes_archive, current_note)?
+            .with_lineage_key_artifact_package(artifacts)
+    }
+
     /// Attach packaged Reserved-lineage proving artifacts to an init request.
     ///
     /// # Errors
@@ -6407,6 +6640,26 @@ impl KagemushaRecursiveSpendInitRequestV1 {
         self.lineage_proving_key_archive = Some(lineage_proving_key_archive);
         self.validate_public_binding()?;
         Ok(self)
+    }
+
+    /// Attach a portable Reserved-lineage key artifact package to an init request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the package is malformed, targets
+    /// the append circuit, or the resulting init request no longer satisfies
+    /// its public binding.
+    pub fn with_lineage_key_artifact_package(
+        self,
+        artifacts: KagemushaRecursiveSpendLineageKeyArtifactsV1,
+    ) -> Result<Self, KagemushaFoldError> {
+        if !artifacts.is_init_artifact() {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "proof_circuit_id",
+            });
+        }
+        let (lineage_verifier_key, lineage_proving_key_archive) = artifacts.into_key_artifacts()?;
+        self.with_lineage_key_artifacts(lineage_verifier_key, lineage_proving_key_archive)
     }
 
     /// Attach a verifier-record activation height to an init request.
@@ -6570,6 +6823,34 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
         .with_lineage_key_artifacts(lineage_verifier_key, lineage_proving_key_archive)
     }
 
+    /// Build and validate a Reserved-lineage append request from a portable key artifact package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the package is malformed, targets
+    /// init, or any append public binding is malformed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_previous_lineage_proof_witness_and_key_artifact_package(
+        previous_bundle: KagemushaRecursiveSpendBundleV1,
+        previous_lineage_verifier_record: Option<VerifyingKeyRecord>,
+        previous_recursive_proof_open_envelopes_archive: Vec<u8>,
+        record_bundle: KagemushaVerifiedFoldRecordBundle,
+        pallas_open_envelopes_archive: Vec<u8>,
+        current_note: KagemushaSpendableNoteDescriptorV1,
+        artifacts: KagemushaRecursiveSpendLineageKeyArtifactsV1,
+    ) -> Result<Self, KagemushaFoldError> {
+        Self::new_with_previous_proof_witness_and_output_circuit(
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            previous_bundle,
+            previous_lineage_verifier_record,
+            previous_recursive_proof_open_envelopes_archive,
+            record_bundle,
+            pallas_open_envelopes_archive,
+            current_note,
+        )?
+        .with_lineage_key_artifact_package(artifacts)
+    }
+
     /// Attach packaged Reserved-lineage proving artifacts to an append request.
     ///
     /// The request must select the Reserved-lineage append output circuit. The
@@ -6590,6 +6871,26 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
         self.lineage_proving_key_archive = Some(lineage_proving_key_archive);
         self.validate_public_binding()?;
         Ok(self)
+    }
+
+    /// Attach a portable Reserved-lineage key artifact package to an append request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the package is malformed, targets
+    /// init, the request does not select Reserved-lineage output, or the
+    /// resulting append request no longer satisfies its public binding.
+    pub fn with_lineage_key_artifact_package(
+        self,
+        artifacts: KagemushaRecursiveSpendLineageKeyArtifactsV1,
+    ) -> Result<Self, KagemushaFoldError> {
+        if !artifacts.is_append_artifact() {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "proof_circuit_id",
+            });
+        }
+        let (lineage_verifier_key, lineage_proving_key_archive) = artifacts.into_key_artifacts()?;
+        self.with_lineage_key_artifacts(lineage_verifier_key, lineage_proving_key_archive)
     }
 
     /// Attach a verifier-record activation height to an append request.
@@ -8578,6 +8879,116 @@ pub fn kagemusha_validate_folded_public_inputs_against_aggregation_statement(
     Ok(())
 }
 
+fn validate_kagemusha_folded_public_inputs_projection(
+    public_inputs: &KagemushaFoldedPublicInputs,
+    expected: &KagemushaFoldedPublicInputs,
+) -> Result<(), KagemushaFoldError> {
+    macro_rules! ensure_field {
+        ($field:ident) => {
+            if public_inputs.$field != expected.$field {
+                return Err(KagemushaFoldError::FoldedPublicInputTranscriptMismatch {
+                    field: stringify!($field),
+                });
+            }
+        };
+    }
+
+    ensure_field!(chain_id);
+    ensure_field!(asset);
+    ensure_field!(aggregation_mode);
+    ensure_field!(initial_root);
+    ensure_field!(final_root);
+    ensure_field!(hop_count);
+    ensure_field!(nullifier_digest);
+    ensure_field!(output_commitment_digest);
+    ensure_field!(fold_digest);
+    ensure_field!(aggregation_transcript_digest);
+
+    Ok(())
+}
+
+/// Validate a reserved recursive evidence statement against its folded public-input projection.
+///
+/// This is the host-side projection contract for ABI-7
+/// `kagemusha-recursive-compact-v1` admission. It deliberately accepts only the
+/// reserved recursive aggregation mode `2` and does not make
+/// [`KagemushaFoldedPublicInputs::validate_supported_context`] accept mode `2`
+/// compact tokens.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the evidence is not canonical reserved
+/// recursive evidence, when the folded public-input domain is not canonical, or
+/// when any folded public-input field is not the exact projection of the
+/// evidence aggregation transcript.
+pub fn kagemusha_validate_recursive_evidence_folded_public_input_projection(
+    public_inputs: &KagemushaFoldedPublicInputs,
+    evidence: &KagemushaRecursiveAggregationEvidence,
+) -> Result<(), KagemushaFoldError> {
+    validate_kagemusha_recursive_aggregation_evidence(evidence)?;
+    if public_inputs.domain != KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN {
+        return Err(KagemushaFoldError::InvalidPublicInputDomain {
+            expected: KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN,
+            actual: public_inputs.domain.clone(),
+        });
+    }
+    if public_inputs.aggregation_mode != KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1 {
+        return Err(KagemushaFoldError::UnsupportedAggregationMode {
+            expected: KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+            actual: public_inputs.aggregation_mode,
+            reason: "reserved recursive evidence projection requires Kagemusha aggregation mode 2",
+        });
+    }
+    let expected =
+        kagemusha_folded_public_inputs_from_aggregation_statement(&evidence.aggregation_statement)?;
+    validate_kagemusha_folded_public_inputs_projection(public_inputs, &expected)
+}
+
+/// Validate the chain-visible folded projection claimed by a recursive proof.
+///
+/// This is the public-input-only relation future
+/// `kagemusha-recursive-compact-v1` admission can enforce from a compact token:
+/// the folded public inputs must be canonical reserved mode `2`, and the
+/// recursive proof public inputs must expose the exact folded public-input hash,
+/// aggregation transcript digest, and hop count carried by that token.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the folded input shape is not reserved
+/// recursive compact mode, the recursive proof public inputs are malformed, or
+/// the two public surfaces do not match.
+pub fn kagemusha_validate_recursive_proof_folded_public_input_projection(
+    public_inputs: &KagemushaFoldedPublicInputs,
+    recursive_proof: &KagemushaRecursiveAggregationProof,
+) -> Result<(), KagemushaFoldError> {
+    public_inputs.validate_recursive_compact_context()?;
+    recursive_proof.validate_public_input_binding()?;
+    let expected_hash = public_inputs.public_inputs_hash()?;
+    let mut expected_hash_bytes = [0u8; Hash::LENGTH];
+    expected_hash_bytes.copy_from_slice(expected_hash.as_ref());
+    if recursive_proof.public_inputs.folded_public_inputs_hash != expected_hash_bytes {
+        return Err(KagemushaFoldError::PublicInputHashMismatch {
+            expected: expected_hash,
+            actual: Hash::prehashed(recursive_proof.public_inputs.folded_public_inputs_hash),
+        });
+    }
+    if recursive_proof.public_inputs.aggregation_transcript_digest
+        != public_inputs.aggregation_transcript_digest
+    {
+        return Err(
+            KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                field: "aggregation_transcript_digest",
+            },
+        );
+    }
+    if recursive_proof.public_inputs.hop_count != public_inputs.hop_count {
+        return Err(
+            KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch { field: "hop_count" },
+        );
+    }
+    Ok(())
+}
+
 /// Build the chain-visible public inputs for a compact folded Kagemusha token.
 ///
 /// The builder canonicalizes nullifier and output order inside each hop because the ledger treats
@@ -8614,13 +9025,13 @@ pub fn kagemusha_folded_public_inputs(
 }
 
 impl KagemushaFoldedPublicInputs {
-    /// Validate the domain and aggregation mode supported by this release.
+    /// Validate the domain and aggregation mode supported by the legacy compact path.
     ///
     /// # Errors
     ///
     /// Returns [`KagemushaFoldError::InvalidPublicInputDomain`] when the domain separator is not
     /// canonical, or [`KagemushaFoldError::UnsupportedAggregationMode`] when the folded token
-    /// declares a future or unknown aggregation mode.
+    /// declares recursive compact mode `2` or an unknown aggregation mode.
     pub fn validate_supported_context(&self) -> Result<(), KagemushaFoldError> {
         if self.domain != KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN {
             return Err(KagemushaFoldError::InvalidPublicInputDomain {
@@ -8655,6 +9066,77 @@ impl KagemushaFoldedPublicInputs {
             return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest {
                 field: "aggregation_transcript_digest",
             });
+        }
+        let encoded_len = self.norito_encoded_len()?;
+        if encoded_len > KAGEMUSHA_FOLDED_PUBLIC_INPUTS_MAX_ENCODED_BYTES {
+            return Err(KagemushaFoldError::EncodedSizeExceeded {
+                max: KAGEMUSHA_FOLDED_PUBLIC_INPUTS_MAX_ENCODED_BYTES,
+                actual: encoded_len,
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate the reserved recursive compact-token public-input context.
+    ///
+    /// This deliberately does not change [`Self::validate_supported_context`]:
+    /// checked pre-fold mode `1` remains the only mode accepted by the legacy
+    /// compact-token path. ABI-7 recursive compact admission calls this narrower
+    /// validator and then verifies a recursive proof whose
+    /// `folded_public_inputs_hash` matches [`Self::public_inputs_hash`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the public inputs are not the
+    /// canonical reserved mode-2 folded public-input shape.
+    pub fn validate_recursive_compact_context(&self) -> Result<(), KagemushaFoldError> {
+        if self.domain != KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN {
+            return Err(KagemushaFoldError::InvalidPublicInputDomain {
+                expected: KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN,
+                actual: self.domain.clone(),
+            });
+        }
+        if self.aggregation_mode != KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1 {
+            return Err(KagemushaFoldError::UnsupportedAggregationMode {
+                expected: KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+                actual: self.aggregation_mode,
+                reason: "recursive compact admission requires Kagemusha aggregation mode 2",
+            });
+        }
+        if self.hop_count == 0 {
+            return Err(KagemushaFoldError::Empty);
+        }
+        if usize::try_from(self.hop_count).map_or(true, |hop_count| {
+            hop_count > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS
+        }) {
+            return Err(KagemushaFoldError::TooManyHops {
+                max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+                actual: usize::try_from(self.hop_count).unwrap_or(usize::MAX),
+            });
+        }
+        validate_kagemusha_fold_root("initial_root", self.initial_root)?;
+        validate_kagemusha_fold_root("final_root", self.final_root)?;
+        if self.initial_root == self.final_root {
+            return Err(KagemushaFoldError::UnchangedFoldedPublicRoots);
+        }
+        for (field, digest) in [
+            (
+                "nullifier_digest",
+                hash_bytes_from_hash(self.nullifier_digest),
+            ),
+            (
+                "output_commitment_digest",
+                hash_bytes_from_hash(self.output_commitment_digest),
+            ),
+            ("fold_digest", hash_bytes_from_hash(self.fold_digest)),
+            (
+                "aggregation_transcript_digest",
+                self.aggregation_transcript_digest,
+            ),
+        ] {
+            if digest == [0u8; Hash::LENGTH] {
+                return Err(KagemushaFoldError::ZeroFoldedPublicInputDigest { field });
+            }
         }
         let encoded_len = self.norito_encoded_len()?;
         if encoded_len > KAGEMUSHA_FOLDED_PUBLIC_INPUTS_MAX_ENCODED_BYTES {
@@ -9923,7 +10405,7 @@ mod offline_note_tests {
     }
 
     #[test]
-    fn kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved() {
+    fn kagemusha_aggregation_mode_helpers_keep_recursive_mode_out_of_legacy_path() {
         assert!(is_supported_kagemusha_aggregation_mode(
             KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1
         ));
@@ -9934,13 +10416,13 @@ mod offline_note_tests {
             unsupported_kagemusha_aggregation_mode_reason(
                 KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
             )
-            .contains("reserved for future in-circuit recursive aggregation")
+            .contains("requires ABI-7 recursive compact-token admission")
         );
         assert!(
             unsupported_kagemusha_aggregation_mode_reason(
                 KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
             )
-            .contains("private-hop verifier is not yet composed into compact-token admission")
+            .contains("legacy checked pre-fold path does not accept mode 2")
         );
         assert!(
             !unsupported_kagemusha_aggregation_mode_reason(
@@ -9951,6 +10433,22 @@ mod offline_note_tests {
         assert!(
             unsupported_kagemusha_aggregation_mode_reason(0xFFFF)
                 .contains("unsupported or unknown")
+        );
+        assert_eq!(
+            preferred_kagemusha_offline_spend_mode_for_capabilities(true, true),
+            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+        );
+        assert_eq!(
+            preferred_kagemusha_offline_spend_mode_for_capabilities(true, false),
+            KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+        );
+        assert_eq!(
+            preferred_kagemusha_offline_spend_mode_for_capabilities(false, true),
+            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+        );
+        assert_eq!(
+            preferred_kagemusha_offline_spend_mode_for_capabilities(false, false),
+            KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
@@ -10575,6 +11073,167 @@ mod offline_note_tests {
             kagemusha_recursive_aggregation_evidence_digest(&changed_params)
                 .expect("changed params evidence")
         );
+    }
+
+    #[test]
+    fn kagemusha_recursive_evidence_validates_reserved_folded_projection_without_opening_admission()
+    {
+        let evidence = sample_kagemusha_recursive_aggregation_evidence();
+        let public_inputs = kagemusha_folded_public_inputs_from_aggregation_statement(
+            &evidence.aggregation_statement,
+        )
+        .expect("reserved recursive folded projection");
+
+        assert_eq!(public_inputs.domain, KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN);
+        assert_eq!(
+            public_inputs.aggregation_mode,
+            KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        );
+        kagemusha_validate_recursive_evidence_folded_public_input_projection(
+            &public_inputs,
+            &evidence,
+        )
+        .expect("reserved recursive evidence must bind its folded projection");
+        public_inputs
+            .validate_recursive_compact_context()
+            .expect("reserved recursive folded projection has a valid compact context");
+        let recursive_proof_public_inputs =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                .expect("recursive proof public inputs");
+        let recursive_proof_public_inputs_hash = recursive_proof_public_inputs
+            .public_inputs_hash()
+            .expect("recursive proof public-input hash");
+        let recursive_proof = KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new(
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            ),
+            public_inputs: recursive_proof_public_inputs.clone(),
+            public_inputs_hash: recursive_proof_public_inputs_hash,
+            proof: ProofBox::new(
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND.to_owned(),
+                vec![0xA5],
+            ),
+        };
+        assert_eq!(
+            recursive_proof_public_inputs.folded_public_inputs_hash,
+            hash_bytes_from_hash(
+                public_inputs
+                    .public_inputs_hash()
+                    .expect("reserved recursive folded public-input hash")
+            )
+        );
+        kagemusha_validate_recursive_proof_folded_public_input_projection(
+            &public_inputs,
+            &recursive_proof,
+        )
+        .expect("recursive proof public inputs must bind the folded public projection");
+        assert!(matches!(
+            public_inputs.validate_supported_context(),
+            Err(KagemushaFoldError::UnsupportedAggregationMode { actual, .. })
+                if actual == KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        ));
+
+        let mut checked_mode = public_inputs.clone();
+        checked_mode.aggregation_mode = KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1;
+        assert!(matches!(
+            kagemusha_validate_recursive_evidence_folded_public_input_projection(
+                &checked_mode,
+                &evidence,
+            ),
+            Err(KagemushaFoldError::UnsupportedAggregationMode { expected, actual, .. })
+                if expected == KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+                    && actual == KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1
+        ));
+        assert!(matches!(
+            checked_mode.validate_recursive_compact_context(),
+            Err(KagemushaFoldError::UnsupportedAggregationMode { expected, actual, .. })
+                if expected == KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+                    && actual == KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1
+        ));
+
+        let mut forged_proof_inputs = recursive_proof_public_inputs.clone();
+        forged_proof_inputs.folded_public_inputs_hash =
+            fixed_hash(b"recursive-compact-forged-public-input-hash");
+        let mut forged_recursive_proof = recursive_proof.clone();
+        forged_recursive_proof.public_inputs = forged_proof_inputs.clone();
+        forged_recursive_proof.public_inputs_hash = forged_proof_inputs
+            .public_inputs_hash()
+            .expect("forged recursive proof public-input hash");
+        assert!(matches!(
+            kagemusha_validate_recursive_proof_folded_public_input_projection(
+                &public_inputs,
+                &forged_recursive_proof,
+            ),
+            Err(KagemushaFoldError::PublicInputHashMismatch { .. })
+        ));
+        assert!(matches!(
+            validate_kagemusha_recursive_aggregation_proof_public_input_parity(
+                &recursive_proof_public_inputs,
+                &forged_proof_inputs,
+            ),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "folded_public_inputs_hash"
+                }
+            )
+        ));
+
+        let mut zero_proof_inputs = recursive_proof_public_inputs.clone();
+        zero_proof_inputs.folded_public_inputs_hash = [0u8; Hash::LENGTH];
+        assert!(matches!(
+            zero_proof_inputs.validate_context(),
+            Err(
+                KagemushaFoldError::RecursiveAggregationProofPublicInputMismatch {
+                    field: "folded_public_inputs_hash"
+                }
+            )
+        ));
+
+        let mut forged_domain = public_inputs.clone();
+        forged_domain.domain = "iroha:kagemusha:recursive-compact-forged-domain".to_owned();
+        assert!(matches!(
+            kagemusha_validate_recursive_evidence_folded_public_input_projection(
+                &forged_domain,
+                &evidence,
+            ),
+            Err(KagemushaFoldError::InvalidPublicInputDomain { .. })
+        ));
+
+        let mut forged_chain = public_inputs.clone();
+        forged_chain.chain_id = "kagemusha-recursive-forged-chain"
+            .parse()
+            .expect("chain id");
+        assert!(matches!(
+            kagemusha_validate_recursive_evidence_folded_public_input_projection(
+                &forged_chain,
+                &evidence,
+            ),
+            Err(KagemushaFoldError::FoldedPublicInputTranscriptMismatch { field: "chain_id" })
+        ));
+
+        let mut forged_digest = public_inputs.clone();
+        forged_digest.aggregation_transcript_digest =
+            fixed_hash(b"recursive-compact-forged-aggregation-digest");
+        assert!(matches!(
+            kagemusha_validate_recursive_evidence_folded_public_input_projection(
+                &forged_digest,
+                &evidence,
+            ),
+            Err(KagemushaFoldError::FoldedPublicInputTranscriptMismatch {
+                field: "aggregation_transcript_digest"
+            })
+        ));
+
+        let mut forged_evidence = evidence;
+        forged_evidence.verifier_witness_count += 1;
+        assert!(matches!(
+            kagemusha_validate_recursive_evidence_folded_public_input_projection(
+                &public_inputs,
+                &forged_evidence,
+            ),
+            Err(KagemushaFoldError::RecursiveAggregationWitnessCountMismatch { .. })
+        ));
     }
 
     #[test]
@@ -14754,6 +15413,30 @@ mod offline_note_tests {
         bundle
             .validate_public_input_binding()
             .expect("valid recursive spend bundle");
+        let folded_public_inputs = KagemushaFoldedPublicInputs {
+            domain: KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN.to_owned(),
+            aggregation_mode: KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+            chain_id: bundle.accumulator.chain_id.clone(),
+            asset: bundle.accumulator.asset.clone(),
+            initial_root: bundle.accumulator.initial_root,
+            final_root: bundle.accumulator.final_root,
+            hop_count: bundle.accumulator.hop_count,
+            nullifier_digest: bundle.accumulator.nullifier_digest,
+            output_commitment_digest: bundle.accumulator.output_commitment_digest,
+            fold_digest: bundle.accumulator.fold_digest,
+            aggregation_transcript_digest: bundle.accumulator.aggregation_transcript_digest,
+        };
+        assert_eq!(
+            bundle
+                .recursive_proof
+                .public_inputs
+                .folded_public_inputs_hash,
+            hash_bytes_from_hash(
+                folded_public_inputs
+                    .public_inputs_hash()
+                    .expect("recursive spend folded public-input hash")
+            )
+        );
         assert_eq!(
             bundle
                 .recursive_proof
@@ -14801,6 +15484,26 @@ mod offline_note_tests {
             forged_evidence_digest.validate_public_input_binding(),
             Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                 field: "evidence_digest"
+            })
+        ));
+
+        let mut forged_folded_public_inputs_hash = bundle.clone();
+        forged_folded_public_inputs_hash
+            .recursive_proof
+            .public_inputs
+            .folded_public_inputs_hash =
+            fixed_hash(b"recursive-spend-forged-folded-public-inputs-hash");
+        forged_folded_public_inputs_hash
+            .recursive_proof
+            .public_inputs_hash = forged_folded_public_inputs_hash
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("forged recursive spend folded hash public-input hash");
+        assert!(matches!(
+            forged_folded_public_inputs_hash.validate_public_input_binding(),
+            Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
+                field: "folded_public_inputs_hash"
             })
         ));
 
@@ -16675,7 +17378,7 @@ mod offline_note_tests {
             .expect_err("reserved recursive mode must be rejected");
         assert!(
             err.to_string()
-                .contains("reserved for future in-circuit recursive aggregation")
+                .contains("requires ABI-7 recursive compact-token admission")
         );
     }
 
@@ -16816,12 +17519,101 @@ mod offline_note_tests {
                 field: "lineage_proving_key_archive"
             })
         ));
+        assert!(matches!(
+            KagemushaRecursiveSpendLineageKeyArtifactsV1::new(
+                "kagemusha-recursive-spend-lineage-forged-circuit",
+                2,
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
+                vec![0xE8; 64],
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "proof_circuit_id"
+            })
+        ));
+        assert!(matches!(
+            KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
+                3,
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
+                vec![0xE8; 64],
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "verifier_opening_len"
+            })
+        ));
+        assert!(matches!(
+            KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
+                2,
+                VerifyingKeyBox::new("halo2/kzg".into(), vec![0xE7; 64]),
+                vec![0xE8; 64],
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_key"
+            })
+        ));
+        assert!(matches!(
+            KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
+                2,
+                VerifyingKeyBox::new("halo2/ipa".into(), Vec::new()),
+                vec![0xE8; 64],
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_verifier_key"
+            })
+        ));
+        assert!(matches!(
+            KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
+                2,
+                VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
+                Vec::new(),
+            ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_proving_key_archive"
+            })
+        ));
+        let init_artifacts = KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
+            2,
+            VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
+            vec![0xE8; 64],
+        )
+        .expect("init Reserved-lineage key artifact package validates");
+        assert!(init_artifacts.is_init_artifact());
+        assert!(!init_artifacts.is_append_artifact());
+        assert!(
+            init_artifacts
+                .norito_encoded_len()
+                .expect("encode init artifact package length")
+                > 0
+        );
+        let init_artifacts_bytes = to_bytes(&init_artifacts).expect("encode init artifact package");
+        let decoded_init_artifacts: KagemushaRecursiveSpendLineageKeyArtifactsV1 =
+            norito::decode_from_bytes(&init_artifacts_bytes).expect("decode init artifact package");
+        assert_eq!(decoded_init_artifacts, init_artifacts);
+        let init_from_artifact_package = init_without_key_artifacts
+            .clone()
+            .with_lineage_key_artifact_package(init_artifacts.clone())
+            .expect("ABI init request builder accepts Reserved-lineage key artifact package");
+        assert!(matches!(
+            init_without_key_artifacts
+                .clone()
+                .with_lineage_key_artifact_package(
+                    KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
+                        2,
+                        VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]),
+                        vec![0xA8; 64],
+                    )
+                    .expect("append artifact package validates"),
+                ),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "proof_circuit_id"
+            })
+        ));
         let init = init_without_key_artifacts
             .with_lineage_key_artifacts(
                 VerifyingKeyBox::new("halo2/ipa".into(), vec![0xE7; 64]),
                 vec![0xE8; 64],
             )
             .expect("ABI init request builder accepts Reserved-lineage key material");
+        assert_eq!(init_from_artifact_package, init);
         let init_from_production_builder =
             KagemushaRecursiveSpendInitRequestV1::new_with_lineage_key_artifacts(
                 init_record_bundle.clone(),
@@ -16832,6 +17624,15 @@ mod offline_note_tests {
             )
             .expect("ABI init production builder accepts Reserved-lineage key material");
         assert_eq!(init_from_production_builder, init);
+        let init_from_artifact_package_builder =
+            KagemushaRecursiveSpendInitRequestV1::new_with_lineage_key_artifact_package(
+                init_record_bundle.clone(),
+                init_pallas_open_envelopes_archive.clone(),
+                note0.clone(),
+                init_artifacts.clone(),
+            )
+            .expect("ABI init production builder accepts Reserved-lineage key artifact package");
+        assert_eq!(init_from_artifact_package_builder, init);
         let mut init_missing_proving_key = init.clone();
         init_missing_proving_key.lineage_proving_key_archive = None;
         assert!(matches!(
@@ -16994,6 +17795,38 @@ mod offline_note_tests {
                 field: "lineage_proving_key_archive"
             })
         ));
+        let append_artifacts = KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
+            2,
+            VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]),
+            vec![0xA8; 64],
+        )
+        .expect("append Reserved-lineage key artifact package validates");
+        assert!(append_artifacts.is_append_artifact());
+        assert!(!append_artifacts.is_init_artifact());
+        assert!(
+            append_artifacts
+                .norito_encoded_len()
+                .expect("encode append artifact package length")
+                > 0
+        );
+        let append_artifacts_bytes =
+            to_bytes(&append_artifacts).expect("encode append artifact package");
+        let decoded_append_artifacts: KagemushaRecursiveSpendLineageKeyArtifactsV1 =
+            norito::decode_from_bytes(&append_artifacts_bytes)
+                .expect("decode append artifact package");
+        assert_eq!(decoded_append_artifacts, append_artifacts);
+        assert!(matches!(
+            append_without_key_artifacts
+                .clone()
+                .with_lineage_key_artifact_package(init_artifacts),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "proof_circuit_id"
+            })
+        ));
+        let append_from_artifact_package = append_without_key_artifacts
+            .clone()
+            .with_lineage_key_artifact_package(append_artifacts.clone())
+            .expect("ABI append request builder accepts Reserved-lineage key artifact package");
         let semantic_append_without_key_artifacts =
             KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness_and_output_circuit(
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -17005,6 +17838,14 @@ mod offline_note_tests {
                 note1.clone(),
             )
             .expect("ABI semantic append request validates without Reserved-lineage key material");
+        assert!(matches!(
+            semantic_append_without_key_artifacts
+                .clone()
+                .with_lineage_key_artifact_package(append_artifacts.clone()),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "lineage_key_artifacts"
+            })
+        ));
         assert!(matches!(
             semantic_append_without_key_artifacts.with_lineage_key_artifacts(
                 VerifyingKeyBox::new("halo2/ipa".into(), vec![0xA7; 64]),
@@ -17020,6 +17861,7 @@ mod offline_note_tests {
                 vec![0xA8; 64],
             )
             .expect("ABI append request builder accepts Reserved-lineage key material");
+        assert_eq!(append_from_artifact_package, append);
         let append_from_production_builder =
             KagemushaRecursiveSpendAppendRequestV1::new_with_previous_lineage_proof_witness_and_key_artifacts(
                 init_lineage_bundle.clone(),
@@ -17033,6 +17875,18 @@ mod offline_note_tests {
             )
             .expect("ABI append production builder accepts Reserved-lineage key material");
         assert_eq!(append_from_production_builder, append);
+        let append_from_artifact_package_builder =
+            KagemushaRecursiveSpendAppendRequestV1::new_with_previous_lineage_proof_witness_and_key_artifact_package(
+                init_lineage_bundle.clone(),
+                Some(previous_lineage_verifier_record.clone()),
+                previous_recursive_proof_open_envelopes_archive.clone(),
+                append_record_bundle.clone(),
+                append_pallas_open_envelopes_archive.clone(),
+                note1.clone(),
+                append_artifacts,
+            )
+            .expect("ABI append production builder accepts Reserved-lineage key artifact package");
+        assert_eq!(append_from_artifact_package_builder, append);
         let mut append_missing_proving_key = append.clone();
         append_missing_proving_key.lineage_proving_key_archive = None;
         assert!(matches!(

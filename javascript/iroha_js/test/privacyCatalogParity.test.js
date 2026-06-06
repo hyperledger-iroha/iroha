@@ -237,6 +237,7 @@ const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
   Object.freeze(["zk-x509-onchain-identity-v0", "sdk-builder", "zk-x509"]),
   Object.freeze(["jindo-lattice-pcs-zk-v0", "sdk-builder", "lattice-pcs-sis"]),
   Object.freeze(["sis-hints-anoncred-pq-v0", "sdk-builder", "sis-with-hints"]),
+  Object.freeze(["zk-ace-pq-authorization-v0", "chain-executable", "stark-fri"]),
   Object.freeze([
     "orchard-halo2-actions-v1",
     "research-target-as-of-2026-05",
@@ -264,6 +265,707 @@ const REQUIRED_PRIVACY_PLAN_ROWS = Object.freeze([
   ]),
   Object.freeze(["pq-masp-stark-v0", "research-target-as-of-2026-05", "pq-masp-stark-fri"]),
 ]);
+const REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."]),
+  "verange-transparent-range-v1": Object.freeze(["VeRange transparent range proofs v1", "VeRange", "Verification-efficient transparent range-proof component for confidential amounts, solvency proofs, and numeric credential predicates."]),
+  "zkat-policy-private-auth-v1": Object.freeze(["zkAt policy-private authorization v1", "zkAt policy auth", "Policy-private blockchain authenticator that hides threshold rules, signer sets, and account authorization logic."]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["ZK-AMS recursive anonymous admission v0", "ZK-AMS admission", "Research target for recursively aggregated anonymous admission from real-world personhood or eligibility credentials into anonymous on-chain accounts."]),
+  "vega-existing-credential-zk-v0": Object.freeze(["Vega existing-credential ZK proofs v0", "Vega credentials", "Low-latency zero-knowledge proof target for proving predicates over existing credentials without revealing the full credential."]),
+  "silent-threshold-anoncred-v0": Object.freeze(["Silent threshold anonymous credentials v0", "Silent threshold cred", "Research target for threshold-issued anonymous credentials with silent setup, issuer hiding, constant-size showings, and dynamic verifier policies."]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["ZK-X.509 on-chain identity v0", "ZK-X.509 identity", "ZK proof target for X.509 certificate validity, ownership, revocation status, and wallet-address binding."]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["Jindo lattice polynomial commitment ZK v0", "Jindo lattice PCS", "2026 lattice-based polynomial commitment candidate for post-quantum zero-knowledge proof systems."]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["SIS-with-hints PQ anonymous credentials v0", "SIS hints anoncred", "PKC 2026 research foundation for lattice/SIS-with-hints anonymous credentials and post-quantum credential proofs."]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["ZK-ACE post-quantum authorization v0", "ZK-ACE PQ auth", "STARK/FRI-backed source-account authorization for transparent asset transfers."]),
+  "orchard-halo2-actions-v1": Object.freeze(["Orchard-style Halo2 action bundle v1", "Orchard Halo2", "Zcash Orchard-style action bundle with note commitments, nullifiers, and one aggregated Halo2 proof over spend/output actions."]),
+  "penumbra-masp-v1": Object.freeze(["Penumbra-style multi-asset shielded pool v1", "Penumbra MASP", "Single multi-asset shielded pool using typed notes, note commitments, nullifiers, and spend/output proofs for private IBC-style assets."]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["Monero FCMP++ RingCT-style transfer v1", "FCMP++", "Full-chain membership proof target that replaces small decoy rings with a full-output-set spend proof while retaining hidden amounts and one-time receivers."]),
+  "miden-stark-note-v1": Object.freeze(["Miden-style STARK private note transaction v1", "Miden STARK", "Client-side STARK-proved account transition using private notes whose data stays off-chain while note hashes/nullifiers anchor correctness."]),
+  "aztec-private-rollup-v1": Object.freeze(["Aztec-style programmable private transaction v1", "Aztec private", "Programmable private-state transaction using client-side private execution, note hashes, nullifiers, encrypted logs, and recursive private-kernel proofs."]),
+  "pq-masp-stark-v0": Object.freeze(["Post-quantum MASP STARK v0", "PQ MASP v0", "Target end-to-end post-quantum MASP using STARK/FRI proofs, ML-DSA authorization, and ML-KEM note encryption."]),
+});
+const REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": "payment",
+  "verange-transparent-range-v1": "proof_backend",
+  "zkat-policy-private-auth-v1": "authorization",
+  "zk-ams-recursive-admission-v0": "admission",
+  "vega-existing-credential-zk-v0": "credential",
+  "silent-threshold-anoncred-v0": "credential",
+  "zk-x509-onchain-identity-v0": "identity",
+  "jindo-lattice-pcs-zk-v0": "proof_backend",
+  "sis-hints-anoncred-pq-v0": "credential",
+  "zk-ace-pq-authorization-v0": "authorization",
+  "orchard-halo2-actions-v1": "payment",
+  "penumbra-masp-v1": "payment",
+  "monero-fcmp-plus-plus-v1": "payment",
+  "miden-stark-note-v1": "payment",
+  "aztec-private-rollup-v1": "payment",
+  "pq-masp-stark-v0": "payment",
+});
+const REQUIRED_PRIVACY_PLAN_MATURITY_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": "accepted_conference",
+  "verange-transparent-range-v1": "accepted_conference",
+  "zkat-policy-private-auth-v1": "accepted_conference",
+  "zk-ams-recursive-admission-v0": "arxiv_preprint",
+  "vega-existing-credential-zk-v0": "technical_report",
+  "silent-threshold-anoncred-v0": "technical_report",
+  "zk-x509-onchain-identity-v0": "arxiv_preprint",
+  "jindo-lattice-pcs-zk-v0": "technical_report",
+  "sis-hints-anoncred-pq-v0": "accepted_conference",
+  "zk-ace-pq-authorization-v0": "arxiv_preprint",
+  "orchard-halo2-actions-v1": "specification",
+  "penumbra-masp-v1": "specification",
+  "monero-fcmp-plus-plus-v1": "specification",
+  "miden-stark-note-v1": "specification",
+  "aztec-private-rollup-v1": "specification",
+  "pq-masp-stark-v0": "specification",
+});
+const REQUIRED_PRIVACY_PLAN_RECOMMENDED_FOR_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["account-based private payments", "multi-receiver confidential transfers", "payment privacy without a note-based shielded pool UX"]),
+  "verange-transparent-range-v1": Object.freeze(["confidential amount range proofs", "reserve or solvency proofs", "numeric credential predicates"]),
+  "zkat-policy-private-auth-v1": Object.freeze(["institutional wallet policy privacy", "hidden threshold authorization", "authorization-policy migration without revealing signer topology"]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["anonymous onboarding", "Sybil-resistant wallet issuance", "credential-gated CBDC pilots"]),
+  "vega-existing-credential-zk-v0": Object.freeze(["legacy credential bridges", "private eligibility checks", "attribute predicates for wallet enrollment"]),
+  "silent-threshold-anoncred-v0": Object.freeze(["multi-authority regulated credentials", "issuer-hiding eligibility proofs", "central-bank or supervisor issued wallet credentials"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["institutional wallet identity", "legal-entity account binding", "private PKI-based eligibility checks"]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["post-quantum proof-system research", "future PQ verifier backend evaluation", "lattice PCS benchmarking"]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["post-quantum anonymous credential research", "future PQ KYC or eligibility proofs", "assumption tracking for lattice credential designs"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["post-quantum transaction authorization migration", "identity-private source-account authorization", "authorization envelopes for transparent asset transfers"]),
+  "orchard-halo2-actions-v1": Object.freeze(["single-asset private transfers", "mature note/nullifier wallet design", "compact client proofs without Groth16 ceremonies"]),
+  "penumbra-masp-v1": Object.freeze(["multi-asset shielded pools", "IBC-style asset privacy", "asset-id hiding with typed-value notes"]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["maximal sender anonymity sets", "decoy-ring replacement research", "account-independent UTXO spend privacy"]),
+  "miden-stark-note-v1": Object.freeze(["client-side proving", "private programmable note workflows", "parallel account-local transaction execution"]),
+  "aztec-private-rollup-v1": Object.freeze(["programmable private payments", "hybrid public/private contract workflows", "wallet-side private execution with encrypted note discovery"]),
+  "pq-masp-stark-v0": Object.freeze(["end-to-end post-quantum privacy target", "long-horizon central-bank pilot research", "strict PQ proof, authorization, and note-encryption experiments"]),
+});
+const REQUIRED_PRIVACY_PLAN_COVERED_CRITERIA_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
+  "verange-transparent-range-v1": Object.freeze(["hide_amount"]),
+  "zkat-policy-private-auth-v1": Object.freeze([]),
+  "zk-ams-recursive-admission-v0": Object.freeze([]),
+  "vega-existing-credential-zk-v0": Object.freeze([]),
+  "silent-threshold-anoncred-v0": Object.freeze([]),
+  "zk-x509-onchain-identity-v0": Object.freeze([]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze([]),
+  "sis-hints-anoncred-pq-v0": Object.freeze([]),
+  "zk-ace-pq-authorization-v0": Object.freeze([]),
+  "orchard-halo2-actions-v1": Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
+  "penumbra-masp-v1": Object.freeze(["hide_amount", "hide_sender", "hide_receiver", "hide_asset_type"]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
+  "miden-stark-note-v1": Object.freeze(["hide_amount", "hide_receiver", "hide_asset_type"]),
+  "aztec-private-rollup-v1": Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
+  "pq-masp-stark-v0": Object.freeze(["hide_amount", "hide_sender", "hide_receiver", "hide_asset_type", "post_quantum"]),
+});
+const REQUIRED_PRIVACY_PLAN_PROOF_FAMILY_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": "anonymous-pgc-k-out-of-n",
+  "verange-transparent-range-v1": "verange-transparent-range",
+  "zkat-policy-private-auth-v1": "zkat-policy-private-authenticator",
+  "zk-ams-recursive-admission-v0": "recursive-anonymous-admission",
+  "vega-existing-credential-zk-v0": "existing-credential-zk",
+  "silent-threshold-anoncred-v0": "threshold-anonymous-credentials",
+  "zk-x509-onchain-identity-v0": "zkvm-x509-identity",
+  "jindo-lattice-pcs-zk-v0": "lattice-polynomial-commitment",
+  "sis-hints-anoncred-pq-v0": "lattice-anonymous-credentials",
+  "zk-ace-pq-authorization-v0": "stark/fri/sha256-goldilocks",
+  "orchard-halo2-actions-v1": "halo2-pasta-action-bundle",
+  "penumbra-masp-v1": "groth16-bls12-377-decaf377",
+  "monero-fcmp-plus-plus-v1": "fcmp-plus-plus-curve-trees-bulletproofs",
+  "miden-stark-note-v1": "stark-vm-note-transaction",
+  "aztec-private-rollup-v1": "plonkish-private-kernel-rollup",
+  "pq-masp-stark-v0": "stark-fri",
+});
+const REQUIRED_PRIVACY_PLAN_PUBLIC_INPUT_SCHEMA_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1":
+    "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator",
+  "verange-transparent-range-v1":
+    "commitments,range_parameters,aggregation_count,domain_separator,payload_digest",
+  "zkat-policy-private-auth-v1":
+    "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
+  "zk-ams-recursive-admission-v0":
+    "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
+  "vega-existing-credential-zk-v0":
+    "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
+  "silent-threshold-anoncred-v0":
+    "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
+  "zk-x509-onchain-identity-v0":
+    "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
+  "jindo-lattice-pcs-zk-v0":
+    "commitment,opening_claim,query_set,parameter_hash,domain_separator",
+  "sis-hints-anoncred-pq-v0":
+    "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
+  "zk-ace-pq-authorization-v0":
+    "identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id",
+  "orchard-halo2-actions-v1":
+    "anchor,nullifiers,cmx,value_commitments,binding_signature",
+  "penumbra-masp-v1":
+    "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
+  "monero-fcmp-plus-plus-v1":
+    "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
+  "miden-stark-note-v1":
+    "account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_block",
+  "aztec-private-rollup-v1":
+    "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
+  "pq-masp-stark-v0":
+    "pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash",
+});
+const REQUIRED_PRIVACY_PLAN_VERIFIER_KEY_ID_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": "anonymous_pgc_k_out_of_n_v1",
+  "verange-transparent-range-v1": "verange_transparent_range_v1",
+  "zkat-policy-private-auth-v1": "zkat_policy_private_auth_v1",
+  "zk-ams-recursive-admission-v0": "zk_ams_recursive_admission_v0",
+  "vega-existing-credential-zk-v0": "vega_existing_credential_zk_v0",
+  "silent-threshold-anoncred-v0": "silent_threshold_anoncred_v0",
+  "zk-x509-onchain-identity-v0": "zk_x509_onchain_identity_v0",
+  "jindo-lattice-pcs-zk-v0": "jindo_lattice_pcs_zk_v0",
+  "sis-hints-anoncred-pq-v0": "sis_hints_anoncred_pq_v0",
+  "zk-ace-pq-authorization-v0": "zk_ace_pq_authorization_v0",
+  "orchard-halo2-actions-v1": "orchard_halo2_action_bundle_v1",
+  "penumbra-masp-v1": "penumbra_masp_v1",
+  "monero-fcmp-plus-plus-v1": "monero_fcmp_plus_plus_v1",
+  "miden-stark-note-v1": "miden_stark_note_v1",
+  "aztec-private-rollup-v1": "aztec_private_kernel_v1",
+  "pq-masp-stark-v0": "pq_masp_stark_v0",
+});
+const REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze([
+    "anonymous account commitment",
+    "anonymity-set roots",
+    "spent link-tag",
+    "range-proof",
+    "wallet account blinding",
+  ]),
+  "verange-transparent-range-v1": Object.freeze([
+    "range-proof verifier parameters",
+    "verange verifier",
+    "range commitment",
+    "dependent payment or credential verifier",
+  ]),
+  "zkat-policy-private-auth-v1": Object.freeze([
+    "policy commitment registry",
+    "policy epoch state",
+    "authorization replay",
+    "wallet policy witness",
+    "typed zk::submitzkatauthorizedtransaction",
+  ]),
+  "zk-ams-recursive-admission-v0": Object.freeze([
+    "issuer root registry",
+    "admission nullifier set",
+    "anonymous account commitment registry",
+    "wallet admission witness",
+    "typed zk-ams admission batch instruction",
+  ]),
+  "vega-existing-credential-zk-v0": Object.freeze([
+    "credential issuer registry",
+    "credential schema registry",
+    "revocation or expiration policy",
+    "wallet credential predicate witness",
+    "typed vega credential proof instruction",
+  ]),
+  "silent-threshold-anoncred-v0": Object.freeze([
+    "threshold issuer registry",
+    "credential showing nullifier policy",
+    "wallet credential showing witness",
+    "anonymous credential verifier key registry",
+    "typed silent-threshold credential proof instruction",
+  ]),
+  "zk-x509-onchain-identity-v0": Object.freeze([
+    "trusted ca root registry",
+    "revocation root registry",
+    "certificate subject commitment registry",
+    "wallet certificate witness",
+    "typed zk-x.509 identity proof instruction",
+  ]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze([
+    "lattice pcs parameter registry",
+    "backend verifier implementation",
+    "lattice pcs verifier key registry",
+    "dependent circuit integration",
+  ]),
+  "sis-hints-anoncred-pq-v0": Object.freeze([
+    "lattice credential parameter registry",
+    "credential showing verifier",
+    "wallet lattice credential witness",
+    "lattice credential verifier key registry",
+    "typed sis-with-hints credential proof instruction",
+  ]),
+  "zk-ace-pq-authorization-v0": Object.freeze([
+    "active identity commitment registry",
+    "replay nullifier set",
+    "authorization verifier registry",
+    "wallet identity witness",
+    "zk::submitzkaceauthorizedtransfer",
+  ]),
+  "orchard-halo2-actions-v1": Object.freeze([
+    "orchard note commitment tree",
+    "orchard nullifier set",
+    "orchard action-bundle verifier key registry",
+    "wallet orchard witness",
+    "typed orchard action-bundle instruction",
+  ]),
+  "penumbra-masp-v1": Object.freeze([
+    "multi-asset state commitment tree",
+    "typed nullifier set",
+    "groth16 spend/output verifier key registry",
+    "wallet asset metadata witness",
+    "typed penumbra shielded-pool transaction admission",
+  ]),
+  "monero-fcmp-plus-plus-v1": Object.freeze([
+    "full-output-set commitment accumulator",
+    "spent link-tag set",
+    "fcmp++ verifier key registry",
+    "wallet output ownership scan state",
+    "typed fcmp++ transfer instruction",
+  ]),
+  "miden-stark-note-v1": Object.freeze([
+    "private note hash database",
+    "input note nullifier set",
+    "account commitment state",
+    "stark vm verifier key registry",
+    "wallet private note witness",
+  ]),
+  "aztec-private-rollup-v1": Object.freeze([
+    "private note-hash tree",
+    "nullifier tree",
+    "encrypted log delivery store",
+    "private-kernel verifier key registry",
+    "wallet private execution witness",
+    "typed aztec private-rollup transaction instruction",
+  ]),
+  "pq-masp-stark-v0": Object.freeze([
+    "pq masp asset-set commitment root",
+    "pq nullifier set",
+    "ml-kem encrypted note payload store",
+    "wallet pq note witness",
+    "active pq masp verifier key",
+  ]),
+});
+const REQUIRED_PRIVACY_PLAN_COMMON_FAILURE_MODE_TOKENS = Object.freeze([
+  "malformed proof bytes",
+  "wrong verifier key",
+  "public input mismatch",
+]);
+const REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze([
+    "stale or unknown anonymity-set root",
+    "duplicate link tag",
+    "receiver-set substitution",
+  ]),
+  "verange-transparent-range-v1": Object.freeze([
+    "wrong bit length",
+    "commitment substitution",
+    "verifier-parameter mismatch",
+  ]),
+  "zkat-policy-private-auth-v1": Object.freeze([
+    "policy-root substitution",
+    "stale policy epoch",
+    "authorization replay",
+  ]),
+  "zk-ams-recursive-admission-v0": Object.freeze([
+    "duplicate credential admission",
+    "wrong issuer root",
+    "batch omission or account commitment substitution",
+  ]),
+  "vega-existing-credential-zk-v0": Object.freeze([
+    "expired credential",
+    "predicate mismatch",
+    "wallet-binding replay",
+  ]),
+  "silent-threshold-anoncred-v0": Object.freeze([
+    "insufficient issuer threshold",
+    "issuer-set substitution",
+    "credential showing replay",
+  ]),
+  "zk-x509-onchain-identity-v0": Object.freeze([
+    "expired certificate",
+    "revoked certificate",
+    "stale revocation root",
+  ]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze([
+    "parameter mismatch",
+    "opening claim substitution",
+    "unsupported query set",
+  ]),
+  "sis-hints-anoncred-pq-v0": Object.freeze([
+    "wrong parameter set",
+    "issuer parameter substitution",
+    "credential showing replay",
+  ]),
+  "zk-ace-pq-authorization-v0": Object.freeze([
+    "transaction digest substitution",
+    "chain-id or domain-separator mismatch",
+    "replayed nullifier",
+  ]),
+  "orchard-halo2-actions-v1": Object.freeze([
+    "stale anchor",
+    "duplicate nullifier",
+    "invalid action-bundle proof",
+  ]),
+  "penumbra-masp-v1": Object.freeze([
+    "stale state commitment anchor",
+    "duplicate nullifier",
+    "asset balance commitment mismatch",
+  ]),
+  "monero-fcmp-plus-plus-v1": Object.freeze([
+    "stale membership root",
+    "duplicate link tag",
+    "amount commitment mismatch",
+  ]),
+  "miden-stark-note-v1": Object.freeze([
+    "stale reference block",
+    "duplicate input note nullifier",
+    "account commitment transition mismatch",
+  ]),
+  "aztec-private-rollup-v1": Object.freeze([
+    "stale rollup state root",
+    "duplicate nullifier",
+    "private-kernel public input mismatch",
+  ]),
+  "pq-masp-stark-v0": Object.freeze([
+    "stale asset-set root",
+    "duplicate pq nullifier",
+    "ml-dsa or ml-kem domain mismatch",
+  ]),
+});
+const REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["stale or unknown anonymity-set root", "duplicate link tag", "receiver-set substitution", "range commitment mismatch", "authorization envelope mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "verange-transparent-range-v1": Object.freeze(["wrong bit length", "commitment substitution", "verifier-parameter mismatch", "oversized aggregation", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "zkat-policy-private-auth-v1": Object.freeze(["policy-root substitution", "stale policy epoch", "unauthorized signer witness", "transaction digest mismatch", "authorization replay", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["duplicate credential admission", "wrong issuer root", "batch omission or account commitment substitution", "recursive proof parameter mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "vega-existing-credential-zk-v0": Object.freeze(["expired credential", "wrong issuer", "predicate mismatch", "wallet-binding replay", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "silent-threshold-anoncred-v0": Object.freeze(["insufficient issuer threshold", "issuer-set substitution", "credential showing replay", "verifier-policy mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["parameter mismatch", "opening claim substitution", "unsupported query set", "backend misclassified as production-ready", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["wrong parameter set", "issuer parameter substitution", "credential showing replay", "overclaiming production readiness from assumption research", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["transaction digest substitution", "chain-id or domain-separator mismatch", "replayed nullifier", "revoked identity commitment", "policy hash mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "orchard-halo2-actions-v1": Object.freeze(["stale anchor", "duplicate nullifier", "invalid action-bundle proof", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "penumbra-masp-v1": Object.freeze(["stale state commitment anchor", "duplicate nullifier", "asset balance commitment mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["stale membership root", "duplicate link tag", "amount commitment mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "miden-stark-note-v1": Object.freeze(["stale reference block", "duplicate input note nullifier", "account commitment transition mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "aztec-private-rollup-v1": Object.freeze(["stale rollup state root", "duplicate nullifier", "private-kernel public input mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "pq-masp-stark-v0": Object.freeze(["stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+});
+const REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "verange-transparent-range-v1": Object.freeze(["This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "silent-threshold-anoncred-v0": Object.freeze(["Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "orchard-halo2-actions-v1": Object.freeze(["Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "penumbra-masp-v1": Object.freeze(["Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "miden-stark-note-v1": Object.freeze(["Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "aztec-private-rollup-v1": Object.freeze(["Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+  "pq-masp-stark-v0": Object.freeze(["PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."]),
+});
+const REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze([
+    Object.freeze({
+      label: "Anonymous PGC with k-out-of-n Proofs",
+      url: "https://eprint.iacr.org/2025/884",
+    }),
+  ]),
+  "verange-transparent-range-v1": Object.freeze([
+    Object.freeze({
+      label: "VeRange: Verification-efficient Zero-knowledge Range Arguments",
+      url: "https://eprint.iacr.org/2025/528",
+    }),
+  ]),
+  "zkat-policy-private-auth-v1": Object.freeze([
+    Object.freeze({
+      label: "zkAt: Zero-Knowledge Authenticator for Blockchain",
+      url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+    }),
+  ]),
+  "zk-ams-recursive-admission-v0": Object.freeze([
+    Object.freeze({
+      label: "ZK-AMS recursive anonymous admission",
+      url: "https://arxiv.org/abs/2602.16130",
+    }),
+  ]),
+  "vega-existing-credential-zk-v0": Object.freeze([
+    Object.freeze({
+      label: "Vega: Low-Latency Zero-Knowledge Proofs over Existing Credentials",
+      url: "https://www.microsoft.com/en-us/research/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/",
+    }),
+  ]),
+  "silent-threshold-anoncred-v0": Object.freeze([
+    Object.freeze({
+      label:
+        "Anonymous Credentials with Issuer-Hiding, Threshold Issuance, and Silent Setup",
+      url: "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2026/EECS-2026-124.html",
+    }),
+  ]),
+  "zk-x509-onchain-identity-v0": Object.freeze([
+    Object.freeze({
+      label: "ZK-X.509 on-chain identity",
+      url: "https://arxiv.org/abs/2603.25190",
+    }),
+  ]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze([
+    Object.freeze({
+      label: "Jindo lattice-based polynomial commitment",
+      url: "https://eprint.iacr.org.cn/2026/044",
+    }),
+  ]),
+  "sis-hints-anoncred-pq-v0": Object.freeze([
+    Object.freeze({
+      label:
+        "Tight Reductions for SIS-with-Hints Assumptions with Applications",
+      url: "https://kclpure.kcl.ac.uk/portal/en/publications/tight-reductions-for-sis-with-hints-assumptions-with-applications/",
+    }),
+  ]),
+  "zk-ace-pq-authorization-v0": Object.freeze([
+    Object.freeze({
+      label: "ZK-ACE: Practical Post-Quantum Authorization for Blockchain",
+      url: "https://arxiv.org/abs/2603.07974",
+    }),
+  ]),
+  "orchard-halo2-actions-v1": Object.freeze([
+    Object.freeze({
+      label: "ZIP 224 Orchard Shielded Protocol",
+      url: "https://zips.z.cash/zip-0224",
+    }),
+    Object.freeze({
+      label: "Zcash Protocol Specification",
+      url: "https://zips.z.cash/protocol/protocol.pdf",
+    }),
+  ]),
+  "penumbra-masp-v1": Object.freeze([
+    Object.freeze({
+      label: "Penumbra Multi-Asset Shielded Pool",
+      url: "https://protocol.penumbra.zone/main/shielded_pool.html",
+    }),
+    Object.freeze({
+      label: "Penumbra Cryptographic Primitives",
+      url: "https://protocol.penumbra.zone/main/crypto.html",
+    }),
+  ]),
+  "monero-fcmp-plus-plus-v1": Object.freeze([
+    Object.freeze({
+      label: "Monero FCMP++ Development",
+      url: "https://web.getmonero.org/2024/04/27/fcmps.html",
+    }),
+  ]),
+  "miden-stark-note-v1": Object.freeze([
+    Object.freeze({
+      label: "Miden Transaction Model",
+      url: "https://docs.miden.xyz/core-concepts/miden-base/transaction/",
+    }),
+    Object.freeze({
+      label: "Miden Notes",
+      url: "https://docs.miden.xyz/core-concepts/miden-base/note/",
+    }),
+  ]),
+  "aztec-private-rollup-v1": Object.freeze([
+    Object.freeze({
+      label: "Aztec State Management",
+      url: "https://docs.aztec.network/developers/docs/foundational-topics/state_management",
+    }),
+    Object.freeze({
+      label: "Aztec Private Kernel Circuit",
+      url: "https://docs.aztec.network/developers/nightly/docs/foundational-topics/advanced/circuits/private_kernel",
+    }),
+  ]),
+  "pq-masp-stark-v0": Object.freeze([
+    Object.freeze({
+      label: "NIST Post-Quantum Standards",
+      url: "https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standards",
+    }),
+    Object.freeze({
+      label: "FIPS 203 ML-KEM",
+      url: "https://csrc.nist.gov/pubs/fips/203/final",
+    }),
+    Object.freeze({
+      label: "FIPS 204 ML-DSA",
+      url: "https://csrc.nist.gov/pubs/fips/204/final",
+    }),
+    Object.freeze({
+      label: "FIPS 205 SLH-DSA",
+      url: "https://csrc.nist.gov/pubs/fips/205/final",
+    }),
+  ]),
+});
+const REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["buildAnonymousPgcReceiverSet", "buildAnonymousPgcDevProofFixture", "verifyAnonymousPgcDevProofLocally"]),
+  "verange-transparent-range-v1": Object.freeze(["buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"]),
+  "zkat-policy-private-auth-v1": Object.freeze(["buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtDevProofFixture", "verifyZkAtAuthenticatorLocally"]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionDevProofFixture", "verifyZkAmsAdmissionProofLocally"]),
+  "vega-existing-credential-zk-v0": Object.freeze(["buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialDevProofFixture", "verifyVegaCredentialProofLocally"]),
+  "silent-threshold-anoncred-v0": Object.freeze(["buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialDevProofFixture", "verifySilentThresholdCredentialProofLocally"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityDevProofFixture", "verifyZkX509IdentityProofLocally"]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeDevProofFixture", "verifyJindoLatticeProofLocally"]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsCredentialDevProofFixture", "verifySisHintsCredentialProofLocally"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["buildRegisterZkAceIdentityCommitmentInstruction", "buildRotateZkAceIdentityCommitmentInstruction", "buildRevokeZkAceIdentityCommitmentInstruction", "buildZkAceAuthorizedTransferInstruction", "buildZkAceAuthorizationProofV1"]),
+  "orchard-halo2-actions-v1": Object.freeze([]),
+  "penumbra-masp-v1": Object.freeze([]),
+  "monero-fcmp-plus-plus-v1": Object.freeze([]),
+  "miden-stark-note-v1": Object.freeze([]),
+  "aztec-private-rollup-v1": Object.freeze([]),
+  "pq-masp-stark-v0": Object.freeze([]),
+});
+const REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze([
+    "buildAnonymousPgcAccountCommitmentInstruction",
+    "buildAnonymousPgcKOutOfNProofV1",
+    "buildAnonymousPgcTransferInstruction",
+  ]),
+  "verange-transparent-range-v1": Object.freeze(["buildVeRangeProofV1"]),
+  "zkat-policy-private-auth-v1": Object.freeze([
+    "buildZkAtPolicyCommitmentInstruction",
+    "buildZkAtPolicyProofV1",
+    "buildZkAtAuthorizedTransaction",
+  ]),
+  "zk-ams-recursive-admission-v0": Object.freeze([
+    "buildZkAmsAdmissionBatchProofV0",
+    "buildSubmitZkAmsAdmissionBatchInstruction",
+  ]),
+  "vega-existing-credential-zk-v0": Object.freeze([
+    "buildVegaCredentialPredicateProofV0",
+    "buildSubmitVegaCredentialProofInstruction",
+  ]),
+  "silent-threshold-anoncred-v0": Object.freeze([
+    "buildSilentThresholdCredentialShowingProofV0",
+    "buildSubmitSilentThresholdCredentialProofInstruction",
+  ]),
+  "zk-x509-onchain-identity-v0": Object.freeze([
+    "buildZkX509IdentityProofV0",
+    "buildSubmitZkX509IdentityProofInstruction",
+  ]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze([
+    "buildJindoLatticeProofV0",
+    "verifyJindoPolynomialCommitmentV0",
+  ]),
+  "sis-hints-anoncred-pq-v0": Object.freeze([
+    "buildSisHintsAnonymousCredentialProofV0",
+    "buildSubmitSisHintsCredentialProofInstruction",
+  ]),
+  "zk-ace-pq-authorization-v0": Object.freeze([
+    "buildShieldedZkAceAuthorizationProofV1",
+    "buildShieldedZkAceAuthorizedTransferInstruction",
+  ]),
+  "orchard-halo2-actions-v1": Object.freeze([
+    "buildOrchardActionBundleProofV1",
+    "buildOrchardActionBundleInstruction",
+  ]),
+  "penumbra-masp-v1": Object.freeze([
+    "buildPenumbraSpendProofV1",
+    "buildPenumbraOutputProofV1",
+    "buildPenumbraShieldedPoolTransaction",
+  ]),
+  "monero-fcmp-plus-plus-v1": Object.freeze([
+    "buildFcmpPlusPlusMembershipProofV1",
+    "buildFcmpPlusPlusTransferInstruction",
+  ]),
+  "miden-stark-note-v1": Object.freeze([
+    "buildMidenStarkTransactionProofV1",
+    "buildMidenNoteTransactionInstruction",
+  ]),
+  "aztec-private-rollup-v1": Object.freeze([
+    "buildAztecPrivateKernelProofV1",
+    "buildAztecPrivateRollupTransactionInstruction",
+  ]),
+  "pq-masp-stark-v0": Object.freeze([
+    "buildPqMaspStarkTransferProofV0",
+    "buildPqMaspStarkRegisterPoolInstruction",
+    "buildPqMaspStarkTransferInstruction",
+    "generateMlDsaKeyPair",
+    "encapsulateMlKem",
+  ]),
+});
+const REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "verange-transparent-range-v1": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "zkat-policy-private-auth-v1": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "zk-ams-recursive-admission-v0": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "vega-existing-credential-zk-v0": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "silent-threshold-anoncred-v0": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "zk-x509-onchain-identity-v0": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "jindo-lattice-pcs-zk-v0": Object.freeze({ proof: true, authorization: false, note_encryption: false }),
+  "sis-hints-anoncred-pq-v0": Object.freeze({ proof: true, authorization: false, note_encryption: false }),
+  "zk-ace-pq-authorization-v0": Object.freeze({ proof: true, authorization: true, note_encryption: false }),
+  "orchard-halo2-actions-v1": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "penumbra-masp-v1": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "monero-fcmp-plus-plus-v1": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "miden-stark-note-v1": Object.freeze({ proof: true, authorization: false, note_encryption: false }),
+  "aztec-private-rollup-v1": Object.freeze({ proof: false, authorization: false, note_encryption: false }),
+  "pq-masp-stark-v0": Object.freeze({ proof: true, authorization: true, note_encryption: true }),
+});
+const REQUIRED_PRIVACY_PLAN_CHAIN_REQUIREMENTS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["anonymous account commitment accumulator", "spent link-tag set", "Anonymous PGC verifier", "range-proof component verifier", "typed zk::RegisterAnonymousPgcAccountCommitment instruction", "typed zk::SubmitAnonymousPgcTransfer instruction"]),
+  "verange-transparent-range-v1": Object.freeze(["VeRange verifier registry entry", "range commitment binding rules", "dependent payment or credential verifier"]),
+  "zkat-policy-private-auth-v1": Object.freeze(["zkAt policy commitment registry", "zkAt verifier", "account policy epoch state", "account policy replay protection", "typed zk::RegisterZkAtPolicyCommitment instruction", "typed zk::SubmitZkAtAuthorizedTransaction admission"]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["issuer root registry", "admission nullifier set", "recursive admission verifier", "typed ZK-AMS admission batch instruction"]),
+  "vega-existing-credential-zk-v0": Object.freeze(["credential schema registry", "issuer registry", "credential predicate verifier", "typed Vega credential proof instruction"]),
+  "silent-threshold-anoncred-v0": Object.freeze(["threshold issuer registry", "anonymous credential verifier", "credential showing replay policy", "typed silent-threshold credential proof instruction"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["trusted CA root registry", "revocation root registry", "ZK-X.509 verifier", "typed ZK-X.509 identity proof instruction"]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["Jindo verifier backend", "lattice PCS parameter registry", "dependent circuit integration"]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["lattice anonymous credential verifier", "credential parameter registry", "issuer parameter registry", "typed SIS-with-hints credential proof instruction"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["zk::RegisterZkAceIdentityCommitment", "zk::RotateZkAceIdentityCommitment", "zk::RevokeZkAceIdentityCommitment", "zk::SubmitZkAceAuthorizedTransfer", "active stark/fri/sha256-goldilocks ZK-ACE verifier key", "ZK-ACE identity source-account allowlist"]),
+  "orchard-halo2-actions-v1": Object.freeze(["Orchard note commitment tree", "Orchard nullifier set", "Halo2 action-bundle verifier", "wallet Orchard witness store", "typed Orchard action-bundle instruction"]),
+  "penumbra-masp-v1": Object.freeze(["multi-asset state commitment tree", "typed note commitment and nullifier state", "Groth16 verifier registry", "wallet multi-asset witness store", "typed Penumbra shielded-pool transaction admission"]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier", "wallet scanning and ownership recovery", "typed FCMP++ transfer instruction"]),
+  "miden-stark-note-v1": Object.freeze(["STARK VM verifier", "private note hash and nullifier database", "account commitment state", "wallet private-note delivery store", "typed Miden note transaction instruction"]),
+  "aztec-private-rollup-v1": Object.freeze(["private note-hash tree", "nullifier tree", "encrypted log store", "private-kernel verifier", "wallet private execution environment", "typed Aztec private-rollup transaction instruction"]),
+  "pq-masp-stark-v0": Object.freeze(["STARK/FRI verifier enabled", "ML-DSA transaction authorization", "ML-KEM note payload encryption", "zk::RegisterAssetHiddenZkPool", "zk::AssetHiddenZkTransfer", "active PQ MASP verifier key"]),
+});
+const REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["anonymous account commitment set", "recent anonymity-set roots", "spent link-tag set", "range-proof verifier parameters", "wallet account blinding and receiver recovery metadata"]),
+  "verange-transparent-range-v1": Object.freeze(["range-proof verifier parameters", "VeRange verifier key registry", "range commitment domain separators", "maximum aggregation policy"]),
+  "zkat-policy-private-auth-v1": Object.freeze(["policy commitment registry", "policy epoch state", "authorization replay guard", "authorization verifier registry", "wallet policy witness store"]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["issuer root registry", "admission nullifier set", "anonymous account commitment registry", "recursive verifier parameters", "recursive admission verifier key registry", "wallet admission witness store"]),
+  "vega-existing-credential-zk-v0": Object.freeze(["credential issuer registry", "supported credential schema registry", "predicate registry", "revocation or expiration policy", "wallet credential predicate witness store", "credential predicate commitment registry", "credential predicate verifier key registry"]),
+  "silent-threshold-anoncred-v0": Object.freeze(["threshold issuer registry", "credential parameter registry", "verifier policy registry", "credential showing nullifier policy", "wallet credential showing witness store", "credential showing commitment registry", "anonymous credential verifier key registry"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["active identity commitment registry", "replay nullifier set", "authorization verifier registry", "wallet identity witness and replay-secret store"]),
+  "orchard-halo2-actions-v1": Object.freeze(["Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"]),
+  "penumbra-masp-v1": Object.freeze(["multi-asset state commitment tree", "typed nullifier set", "Groth16 spend/output verifier key registry", "wallet asset metadata witness store"]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier key registry", "wallet output ownership scan state"]),
+  "miden-stark-note-v1": Object.freeze(["private note hash database", "input note nullifier set", "account commitment state", "STARK VM verifier key registry", "wallet private note witness store"]),
+  "aztec-private-rollup-v1": Object.freeze(["private note-hash tree", "nullifier tree", "encrypted log delivery store", "private-kernel verifier key registry", "wallet private execution witness store"]),
+  "pq-masp-stark-v0": Object.freeze(["PQ MASP asset-set commitment root", "PQ nullifier set", "ML-KEM encrypted note payload store", "wallet PQ note witness store"]),
+});
+const REQUIRED_PRIVACY_PLAN_SETUP_STEPS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Register anonymous account commitments and anonymity-set accumulator state.", "Register the k-out-of-n payment verifier key and range-proof parameters.", "Persist wallet blinding, balance-opening, and receiver recovery witnesses."]),
+  "verange-transparent-range-v1": Object.freeze(["Register VeRange verifier parameters and allowed bit lengths.", "Define the commitment scheme and domain separators used by dependent algorithms."]),
+  "zkat-policy-private-auth-v1": Object.freeze(["Register a hidden policy commitment and verifier key.", "Bind the policy to account action classes and epoch rules."]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["Register credential issuer roots and recursive verifier parameters.", "Define anonymous account commitment format and admission-nullifier derivation."]),
+  "vega-existing-credential-zk-v0": Object.freeze(["Register supported credential schemas, issuers, and predicates.", "Bind credential proof subjects to wallet or ZK-ACE identity commitments."]),
+  "silent-threshold-anoncred-v0": Object.freeze(["Register issuer sets, threshold policies, and credential parameters.", "Define showing-nullifier and verifier-policy binding rules."]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["Register trusted CA roots, certificate policies, and revocation-root feeds.", "Define wallet address binding and domain-separation rules."]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["Track lattice PCS parameter sets and verifier API shape.", "Benchmark prover, verifier, and proof-size behavior before integration."]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["Track supported SIS-with-hints parameter sets and issuer parameters.", "Define how future PQ credential showings bind to wallet or authorization contexts."]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["Register a ZK-ACE identity commitment, source-account allowlist, and verifier key.", "Initialize replay-state tracking for the authorizing wallet.", "Bind authorization policy hash to the allowed transaction action classes."]),
+  "orchard-halo2-actions-v1": Object.freeze(["Add Orchard-compatible note, nullifier, action, and anchor data model types.", "Register Orchard Halo2 verifier parameters and action-bundle public input layout.", "Persist wallet note plaintexts, diversifiers, Merkle witnesses, and outgoing viewing data."]),
+  "penumbra-masp-v1": Object.freeze(["Add typed-value notes, asset identifiers, state commitments, and nullifier state.", "Register Groth16/BLS12-377 verifier parameters for spend and output proofs.", "Persist wallet note plaintexts, asset metadata, state commitment positions, and nullifier keys."]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["Add output commitment accumulator state suitable for full-chain membership proofs.", "Define link tags/key images and spent-output rejection for Iroha assets.", "Implement wallet scanning, ownership recovery, and amount commitment witness storage."]),
+  "miden-stark-note-v1": Object.freeze(["Add private note hash/nullifier state and account-local transition verification.", "Register a STARK VM verifier and public-input commitment layout.", "Persist private note data and off-chain delivery metadata in the wallet note store."]),
+  "aztec-private-rollup-v1": Object.freeze(["Add private note-hash and nullifier trees plus encrypted log delivery metadata.", "Register a private-kernel verifier and public-input layout for private contract side effects.", "Persist wallet PXE-style note discovery, private call witnesses, and app-scoped nullifier keys."]),
+  "pq-masp-stark-v0": Object.freeze(["Register STARK/FRI verifier parameters and PQ MASP public input layout.", "Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.", "Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata."]),
+});
+const REQUIRED_PRIVACY_PLAN_EXECUTION_STEPS_BY_ALGORITHM_ID = Object.freeze({
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Select an anonymity-set root and receiver set.", "Create balance commitments, receiver ciphertext commitments, and link tag.", "Generate the Anonymous PGC proof and submit the transfer instruction."]),
+  "verange-transparent-range-v1": Object.freeze(["Build amount commitments.", "Generate a range proof bound to the transaction payload.", "Attach the range-proof envelope to the dependent confidential algorithm."]),
+  "zkat-policy-private-auth-v1": Object.freeze(["Generate a policy-private authenticator proof.", "Attach the authenticator envelope to the transaction authorization path."]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["Collect admitted account commitments into a batch.", "Generate or import a recursive admission proof.", "Submit the batch proof and admission nullifiers."]),
+  "vega-existing-credential-zk-v0": Object.freeze(["Parse the credential under a registered schema.", "Generate a predicate proof and bind it to the wallet context.", "Submit the proof envelope to the admission or authorization flow."]),
+  "silent-threshold-anoncred-v0": Object.freeze(["Generate a credential showing proof under the verifier policy.", "Submit the proof as an admission or authorization component."]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["Generate a proof of certificate validity, ownership, and revocation status.", "Bind the proof to an institution wallet or ZK-ACE identity commitment."]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["Use as a candidate backend for future PQ circuits only after concrete circuit integration."]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["Use as a future PQ credential backend after a concrete credential protocol is selected."]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["Hash the transaction payload and chain/domain context.", "Derive a fresh replay nullifier.", "Generate a ZK-ACE authorization proof and submit a protected transparent transfer."]),
+  "orchard-halo2-actions-v1": Object.freeze(["Select spend notes and anchors from the wallet witness store.", "Create output notes and value commitments.", "Generate one Halo2 proof over the action bundle and submit nullifiers plus commitments."]),
+  "penumbra-masp-v1": Object.freeze(["Select positioned notes and derive nullifiers.", "Create typed output notes and balance commitments.", "Submit spend/output actions with proofs against the shielded pool state commitment tree."]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["Select owned outputs from the wallet scan state.", "Generate full-chain membership and amount-conservation proofs.", "Submit link tag, output commitments, range proof, and spend authorization."]),
+  "miden-stark-note-v1": Object.freeze(["Execute the account-local transition against private note witnesses.", "Produce a STARK proof for the transaction script and account state delta.", "Submit note nullifiers, output note hashes, account commitments, and proof."]),
+  "aztec-private-rollup-v1": Object.freeze(["Execute private contract calls locally against wallet notes.", "Accumulate note hashes, nullifiers, encrypted logs, and public-call requests in the private kernel.", "Submit the recursive private-kernel proof and side-effect commitments for validator verification."]),
+  "pq-masp-stark-v0": Object.freeze(["Select PQ MASP input notes and derive nullifiers.", "Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.", "Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission."]),
+});
 const BRIDGE_MISSING_REASON_SOURCES = Object.freeze([
   Object.freeze({
     label: "Java Android",
@@ -835,6 +1537,17 @@ function assertPythonZkAceProofBuilderCoverage() {
     '"zk_ace_build_transfer_authorization_v1"',
     'assert capabilities["zk_ace_authorization_proof_v1"] is False',
     'assert capabilities["zk_ace_sdk_exports_v1"] is False',
+    "test_privacy_capabilities_reports_native_bridge_without_production_claims",
+    "zk_ace_capability = next(",
+    'assert zk_ace_capability["proof_family"] == "stark/fri/sha256-goldilocks"',
+    'assert zk_ace_capability["backend_family"] == "stark-fri"',
+    'assert zk_ace_capability["production_gate"]["audit_references"] == []',
+    "test_privacy_catalog_enforces_execution_and_metadata_invariants",
+    'assert zk_ace["proof_family"] == "stark/fri/sha256-goldilocks"',
+    'assert zk_ace["backend_family"] == "stark-fri"',
+    'assert zk_ace["production_gate"]["audit_references"] == []',
+    'assert all(ready is False for ready in zk_ace["production_gate"]["gates"].values())',
+    "Iroha production allowlist is not enabled for this audited row",
   ]) {
     assert.ok(
       pythonCatalogTests.includes(snippet),
@@ -848,6 +1561,69 @@ function assertPythonZkAceProofBuilderCoverage() {
   );
 }
 
+function assertZkAceJsBuilderAmountCoverage() {
+  const instructionBuilderTests = fileText("javascript/iroha_js/test/instructionBuilders.test.js");
+  for (const [label, text] of [
+    ["JS source instruction builders", fileText("javascript/iroha_js/src/instructionBuilders.js")],
+    ["JS dist instruction builders", fileText("javascript/iroha_js/dist/instructionBuilders.js")],
+  ]) {
+    assert.match(
+      text,
+      /function asPositiveU128JsonNumber\(value, name\)[\s\S]*const amount = asU128JsonNumber\(value, name\)[\s\S]*amount <= 0[\s\S]*must be greater than zero[\s\S]*function normalizeZkAcePublicInputs[\s\S]*amount: asPositiveU128JsonNumber\(source\.amount, `\$\{name\}\.amount`\)[\s\S]*function buildZkAceAuthorizedTransferInstruction[\s\S]*amount: asPositiveU128JsonNumber\(source\.amount, "zkAceAuthorizedTransfer\.amount"\)/,
+      `${label} must require positive ZK-ACE proof and transfer amounts`,
+    );
+  }
+  for (const snippet of [
+    "descriptorTest(\"ZK-ACE builders reject malformed proof and replay inputs\"",
+    "ZK-ACE builders reject malformed proof and replay inputs",
+    "must be greater than zero",
+    "Number.MAX_SAFE_INTEGER + 1",
+    "BigInt(Number.MAX_SAFE_INTEGER) + 1n",
+    "{ toString: () => \"17\" }",
+    "canonicalAmountTransfer.amount, 17",
+    "buildZkAceAuthorizationProofV1({",
+    "buildZkAceAuthorizedTransferInstruction({",
+  ]) {
+    assert.ok(
+      instructionBuilderTests.includes(snippet),
+      `JS ZK-ACE positive-amount coverage missing ${snippet}`,
+    );
+  }
+}
+
+function assertZkAcePythonTransactionAmountCoverage() {
+  const pythonTx = fileText("python/iroha_python/src/iroha_python/tx.py");
+  const pythonClient = fileText("python/iroha_python/src/iroha_python/client.py");
+  const pythonClientTests = fileText("python/iroha_python/tests/client_ledger_helpers_test.py");
+
+  assert.match(
+    pythonTx,
+    /PositiveU128Like = Union\[str, int\][\s\S]*_U128_MAX = \(1 << 128\) - 1[\s\S]*def _normalize_positive_u128_literal\(quantity: Any, context: str\) -> str:[\s\S]*isinstance\(quantity, bool\)[\s\S]*text\.isdecimal\(\)[\s\S]*value <= 0 or value > _U128_MAX[\s\S]*def zk_ace_authorized_transfer[\s\S]*amount: PositiveU128Like[\s\S]*_normalize_positive_u128_literal\(amount, "amount"\)/,
+    "Python transaction draft must require positive decimal u128 ZK-ACE transfer amounts",
+  );
+  assert.match(
+    pythonClient,
+    /def zk_ace_authorized_transfer_and_wait[\s\S]*amount: Union\[str, int\]/,
+    "Python client ZK-ACE helper must expose the strict positive-u128 amount contract",
+  );
+  for (const snippet of [
+    "test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary",
+    "_normalize_positive_u128_literal",
+    "\"00017\"",
+    "str((1 << 128) - 1)",
+    "Decimal(\"1\")",
+    "\"1e3\"",
+    "str(1 << 128)",
+    "id=\"zk-ace-transfer-zero-amount\"",
+    "positive decimal u128",
+  ]) {
+    assert.ok(
+      pythonClientTests.includes(snippet),
+      `Python ZK-ACE transaction amount coverage missing ${snippet}`,
+    );
+  }
+}
+
 function assertZkAceExecutableDescriptorShape(label, descriptor) {
   assert.equal(
     descriptor.implementationStage,
@@ -858,6 +1634,11 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
     descriptor.backendFamily,
     "stark-fri",
     `${label} ZK-ACE descriptor must stay on the STARK/FRI backend`,
+  );
+  assert.equal(
+    descriptor.proofFamily,
+    "stark/fri/sha256-goldilocks",
+    `${label} ZK-ACE descriptor must expose the concrete STARK/FRI SHA-256 Goldilocks verifier profile`,
   );
   assert.deepEqual(
     descriptor.sdkEntrypoints,
@@ -906,10 +1687,115 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
     false,
     `${label} ZK-ACE production gate must remain closed`,
   );
+  assert.deepEqual(
+    descriptor.productionGate.auditReferences,
+    [],
+    `${label} ZK-ACE production gate must not claim audit references before signoff`,
+  );
+  assert.deepEqual(
+    Object.entries(descriptor.productionGate.gates),
+    PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]),
+    `${label} ZK-ACE production gate must keep every required gate false`,
+  );
   assert.ok(
     descriptor.productionGate.missing.includes("planned SDK entrypoints remain"),
     `${label} ZK-ACE production gate must report planned shielded SDK entrypoints`,
   );
+  assert.ok(
+    descriptor.productionGate.missing.includes(
+      "Iroha production allowlist is not enabled for this audited row",
+    ),
+    `${label} ZK-ACE production gate must not inherit verifier-backend allowlist admission`,
+  );
+  assert.deepEqual(
+    descriptor.productionGate.missing,
+    [
+      ...PRODUCTION_GATE_REQUIRED_REASONS,
+      "implementation stage is not production-hardened",
+      "planned SDK entrypoints remain",
+      "Iroha production allowlist is not enabled for this audited row",
+    ],
+    `${label} ZK-ACE production gate must stay fail-closed despite the STARK/FRI verifier profile allowlist`,
+  );
+}
+
+function pythonDescriptorToJsShape(descriptor) {
+  return {
+    implementationStage: descriptor.implementation_stage,
+    backendFamily: descriptor.backend_family,
+    proofFamily: descriptor.proof_family,
+    sdkEntrypoints: descriptor.sdk_entrypoints,
+    plannedSdkEntrypoints: descriptor.planned_sdk_entrypoints,
+    pqLayers: {
+      proof: descriptor.pq_layers.proof,
+      authorization: descriptor.pq_layers.authorization,
+      noteEncryption: descriptor.pq_layers.note_encryption,
+    },
+    coveredCriteria: descriptor.covered_criteria,
+    productionReady: descriptor.production_ready,
+    productionGate: {
+      ready: descriptor.production_gate.ready,
+      gates: descriptor.production_gate.gates,
+      missing: descriptor.production_gate.missing,
+      auditReferences: descriptor.production_gate.audit_references,
+    },
+  };
+}
+
+function assertZkAceCapabilitySurfaceFailClosed(label, capabilities) {
+  const zkAceCapability = capabilities.privacyAlgorithms.find(
+    (descriptor) => descriptor.id === "zk-ace-pq-authorization-v0",
+  );
+  assert.ok(zkAceCapability, `${label} ZK-ACE capability descriptor must exist`);
+  assertZkAceExecutableDescriptorShape(`${label} capability`, zkAceCapability);
+  assert.equal(
+    Object.isFrozen(zkAceCapability),
+    true,
+    `${label} ZK-ACE capability descriptor must be frozen`,
+  );
+  assert.equal(
+    Object.isFrozen(zkAceCapability.productionGate),
+    true,
+    `${label} ZK-ACE capability production gate must be frozen`,
+  );
+  assert.equal(
+    Object.isFrozen(zkAceCapability.productionGate.gates),
+    true,
+    `${label} ZK-ACE capability production gate bits must be frozen`,
+  );
+  assert.equal(
+    Object.isFrozen(zkAceCapability.productionGate.missing),
+    true,
+    `${label} ZK-ACE capability missing reasons must be frozen`,
+  );
+  assert.equal(
+    Object.isFrozen(zkAceCapability.productionGate.auditReferences),
+    true,
+    `${label} ZK-ACE capability audit references must be frozen`,
+  );
+  assert.equal(
+    zkAceCapability.productionReady,
+    false,
+    `${label} ZK-ACE capability must stay fail-closed through getPrivacyCapabilities`,
+  );
+  assert.equal(
+    zkAceCapability.productionGate.ready,
+    false,
+    `${label} ZK-ACE capability production gate must stay closed through getPrivacyCapabilities`,
+  );
+  assert.throws(() => {
+    zkAceCapability.productionReady = true;
+  });
+  assert.throws(() => {
+    zkAceCapability.productionGate.gates.external_audit = true;
+  });
+  assert.throws(() => {
+    zkAceCapability.productionGate.auditReferences.push({
+      label: "forged capability audit",
+      url: "https://audit.example/forged-capability",
+    });
+  });
+  return zkAceCapability;
 }
 
 function extractJsBackendFamilyEntries(text, label) {
@@ -1541,6 +2427,11 @@ function assertRequiredPrivacyPlanRows(label, descriptors) {
       undefined,
       `${label} missing required production privacy plan row ${algorithmId}`,
     );
+    assert.deepEqual(
+      [descriptor.name, descriptor.short_name, descriptor.summary],
+      REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan display text drifted`,
+    );
     assert.equal(
       descriptor.implementation_stage,
       implementationStage,
@@ -1550,6 +2441,129 @@ function assertRequiredPrivacyPlanRows(label, descriptors) {
       descriptor.backend_family,
       backendFamily,
       `${label} ${algorithmId} required production privacy plan backend drifted`,
+    );
+    assert.equal(
+      descriptor.category,
+      REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan category drifted`,
+    );
+    assert.equal(
+      descriptor.maturity,
+      REQUIRED_PRIVACY_PLAN_MATURITY_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan maturity drifted`,
+    );
+    assert.deepEqual(
+      descriptor.recommended_for,
+      REQUIRED_PRIVACY_PLAN_RECOMMENDED_FOR_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan recommendedFor drifted`,
+    );
+    assert.deepEqual(
+      descriptor.covered_criteria,
+      REQUIRED_PRIVACY_PLAN_COVERED_CRITERIA_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan covered criteria drifted`,
+    );
+    assert.equal(
+      descriptor.proof_family,
+      REQUIRED_PRIVACY_PLAN_PROOF_FAMILY_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan proof family drifted`,
+    );
+    assert.equal(
+      descriptor.public_inputs_schema,
+      REQUIRED_PRIVACY_PLAN_PUBLIC_INPUT_SCHEMA_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan public input schema drifted`,
+    );
+    assert.equal(
+      descriptor.verifier_key_id,
+      REQUIRED_PRIVACY_PLAN_VERIFIER_KEY_ID_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan verifier-key id drifted`,
+    );
+    assert.deepEqual(
+      descriptor.pq_layers,
+      REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan PQ layer drifted`,
+    );
+    assert.deepEqual(
+      descriptor.chain_requirements,
+      REQUIRED_PRIVACY_PLAN_CHAIN_REQUIREMENTS_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan chain requirements drifted`,
+    );
+    assert.deepEqual(
+      descriptor.required_state,
+      REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan required state drifted`,
+    );
+    assert.deepEqual(
+      descriptor.setup_steps,
+      REQUIRED_PRIVACY_PLAN_SETUP_STEPS_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan setup steps drifted`,
+    );
+    assert.deepEqual(
+      descriptor.execution_steps,
+      REQUIRED_PRIVACY_PLAN_EXECUTION_STEPS_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan execution steps drifted`,
+    );
+    assert.deepEqual(
+      descriptor.failure_modes,
+      REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan failure modes drifted`,
+    );
+    assert.deepEqual(
+      descriptor.security_notes,
+      REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan security notes drifted`,
+    );
+    const stateText = [
+      ...(descriptor.required_state ?? []),
+      ...(descriptor.chain_requirements ?? []),
+    ]
+      .map((value) => String(value).toLowerCase())
+      .join("\n");
+    for (const stateToken of REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID[
+      algorithmId
+    ]) {
+      assert.ok(
+        stateText.includes(stateToken),
+        `${label} ${algorithmId} required production privacy plan state token drifted: ${stateToken}`,
+      );
+    }
+    const failureModeText = (descriptor.failure_modes ?? [])
+      .map((value) => String(value).toLowerCase())
+      .join("\n");
+    for (const failureToken of [
+      ...REQUIRED_PRIVACY_PLAN_COMMON_FAILURE_MODE_TOKENS,
+      ...REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID[algorithmId],
+    ]) {
+      assert.ok(
+        failureModeText.includes(failureToken),
+        `${label} ${algorithmId} required production privacy plan failure-mode token drifted: ${failureToken}`,
+      );
+    }
+    for (const sourceReference of REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID[
+      algorithmId
+    ]) {
+      assert.ok(
+        (descriptor.source_references ?? []).some(
+          (reference) =>
+            reference.label === sourceReference.label &&
+            reference.url === sourceReference.url,
+        ),
+        `${label} ${algorithmId} required production privacy plan source reference drifted: ${sourceReference.label} <${sourceReference.url}>`,
+      );
+    }
+    assert.deepEqual(
+      descriptor.source_references,
+      REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan source references drifted`,
+    );
+    assert.deepEqual(
+      descriptor.sdk_entrypoints,
+      REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan SDK entrypoints drifted`,
+    );
+    assert.deepEqual(
+      descriptor.planned_sdk_entrypoints,
+      REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[algorithmId],
+      `${label} ${algorithmId} required production privacy plan planned SDK entrypoints drifted`,
     );
     assert.ok(
       descriptor.planned_sdk_entrypoints.some(entrypointIsProductionProofBuilder),
@@ -1663,6 +2677,8 @@ test("privacy algorithm catalogs stay fail-closed and in parity across JS and Py
   assertBackendFamilyRegistrationParity(pythonCatalog);
   assertPythonCatalogDefensiveCopyCoverage();
   assertPythonZkAceProofBuilderCoverage();
+  assertZkAceJsBuilderAmountCoverage();
+  assertZkAcePythonTransactionAmountCoverage();
   assertRustNativeProductionGateParity(pythonCatalog);
   assertRustNativeCatalogParity(pythonCatalog);
 });
@@ -1677,6 +2693,15 @@ test("privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor 
       getDescriptor("zk-ace-pq-authorization-v0"),
     );
   }
+  const pythonCatalog = loadPythonPrivacyCatalog();
+  const pythonZkAce = pythonCatalog.descriptors.find(
+    (descriptor) => descriptor.id === "zk-ace-pq-authorization-v0",
+  );
+  assert.ok(pythonZkAce, "python ZK-ACE descriptor must exist");
+  assertZkAceExecutableDescriptorShape(
+    "python",
+    pythonDescriptorToJsShape(pythonZkAce),
+  );
 });
 
 test("privacy algorithm catalogs require proof builders on required production plan rows", () => {
@@ -1696,8 +2721,13 @@ test("privacy algorithm catalogs require proof builders on required production p
     );
     assert.match(
       text,
-      /function\s+validateRequiredPrivacyPlanRows\([^)]*\)\s*\{[\s\S]*REQUIRED_PRIVACY_PLAN_ROWS[\s\S]*entrypointIsProductionProofBuilder[\s\S]*must retain a planned production proof builder/,
-      `${label} required production plan rows must require planned production proof builders`,
+      /function\s+validateRequiredPrivacyPlanRows\([^)]*\)\s*\{[\s\S]*REQUIRED_PRIVACY_PLAN_ROWS[\s\S]*REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID[\s\S]*must keep category[\s\S]*REQUIRED_PRIVACY_PLAN_MATURITY_BY_ALGORITHM_ID[\s\S]*must keep maturity[\s\S]*REQUIRED_PRIVACY_PLAN_RECOMMENDED_FOR_BY_ALGORITHM_ID[\s\S]*must keep recommendedFor[\s\S]*REQUIRED_PRIVACY_PLAN_COVERED_CRITERIA_BY_ALGORITHM_ID[\s\S]*must keep covered criteria[\s\S]*REQUIRED_PRIVACY_PLAN_PROOF_FAMILY_BY_ALGORITHM_ID[\s\S]*must keep proof family[\s\S]*REQUIRED_PRIVACY_PLAN_PUBLIC_INPUT_SCHEMA_BY_ALGORITHM_ID[\s\S]*must keep public inputs schema[\s\S]*REQUIRED_PRIVACY_PLAN_VERIFIER_KEY_ID_BY_ALGORITHM_ID[\s\S]*must keep verifier key id[\s\S]*REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID[\s\S]*must keep PQ layer[\s\S]*REQUIRED_PRIVACY_PLAN_CHAIN_REQUIREMENTS_BY_ALGORITHM_ID[\s\S]*must keep chain requirements[\s\S]*REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID[\s\S]*must keep required state[\s\S]*REQUIRED_PRIVACY_PLAN_SETUP_STEPS_BY_ALGORITHM_ID[\s\S]*must keep setup steps[\s\S]*REQUIRED_PRIVACY_PLAN_EXECUTION_STEPS_BY_ALGORITHM_ID[\s\S]*must keep execution steps[\s\S]*REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID[\s\S]*must keep failure modes[\s\S]*REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID[\s\S]*must keep security notes[\s\S]*REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID[\s\S]*must retain required state token[\s\S]*REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID[\s\S]*must retain required failure-mode token[\s\S]*REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID[\s\S]*must retain source reference[\s\S]*must keep source references[\s\S]*REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[\s\S]*must keep SDK entrypoints[\s\S]*REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[\s\S]*must keep planned SDK entrypoints[\s\S]*entrypointIsProductionProofBuilder[\s\S]*must retain a planned production proof builder/,
+      `${label} required production plan rows must require covered-criteria, proof-family, public-input schema, verifier-key, PQ-layer, chain-requirement, exact required-state, setup-step, execution-step, exact failure-mode, exact security-note, state-token, failure-mode token, source-reference, SDK entrypoint, planned SDK entrypoint, and planned proof-builder checks`,
+    );
+    assert.match(
+      text,
+      /function\s+validateRequiredPrivacyPlanRows\([^)]*\)\s*\{[\s\S]*REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID[\s\S]*must keep display text[\s\S]*REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID/,
+      `${label} required production plan rows must keep exact display text`,
     );
   }
 
@@ -1706,8 +2736,13 @@ test("privacy algorithm catalogs require proof builders on required production p
   );
   assert.match(
     pythonCatalogSource,
-    /def\s+_validate_required_privacy_plan_rows[\s\S]*REQUIRED_PRIVACY_PLAN_ROWS[\s\S]*_entrypoint_is_production_proof_builder[\s\S]*must retain a planned production proof/,
-    "Python required production plan rows must require planned production proof builders",
+    /def\s+_validate_required_privacy_plan_rows[\s\S]*REQUIRED_PRIVACY_PLAN_ROWS[\s\S]*REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID[\s\S]*must keep category[\s\S]*REQUIRED_PRIVACY_PLAN_MATURITY_BY_ALGORITHM_ID[\s\S]*must keep maturity[\s\S]*REQUIRED_PRIVACY_PLAN_RECOMMENDED_FOR_BY_ALGORITHM_ID[\s\S]*must keep recommendedFor[\s\S]*REQUIRED_PRIVACY_PLAN_COVERED_CRITERIA_BY_ALGORITHM_ID[\s\S]*must keep covered criteria[\s\S]*REQUIRED_PRIVACY_PLAN_PROOF_FAMILY_BY_ALGORITHM_ID[\s\S]*must keep proof family[\s\S]*REQUIRED_PRIVACY_PLAN_PUBLIC_INPUT_SCHEMA_BY_ALGORITHM_ID[\s\S]*must keep public inputs schema[\s\S]*REQUIRED_PRIVACY_PLAN_VERIFIER_KEY_ID_BY_ALGORITHM_ID[\s\S]*must keep verifier key id[\s\S]*REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID[\s\S]*must keep PQ layer[\s\S]*REQUIRED_PRIVACY_PLAN_CHAIN_REQUIREMENTS_BY_ALGORITHM_ID[\s\S]*must keep chain requirements[\s\S]*REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID[\s\S]*must keep required state[\s\S]*REQUIRED_PRIVACY_PLAN_SETUP_STEPS_BY_ALGORITHM_ID[\s\S]*must keep setup steps[\s\S]*REQUIRED_PRIVACY_PLAN_EXECUTION_STEPS_BY_ALGORITHM_ID[\s\S]*must keep execution steps[\s\S]*REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID[\s\S]*must keep failure modes[\s\S]*REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID[\s\S]*must keep security notes[\s\S]*REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID[\s\S]*must retain required state[\s\S]*REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID[\s\S]*must retain required[\s\S]*failure-mode token[\s\S]*REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID[\s\S]*must retain source reference[\s\S]*must keep source references[\s\S]*REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[\s\S]*must keep SDK entrypoints[\s\S]*REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[\s\S]*_entrypoint_is_production_proof_builder[\s\S]*must retain a planned production proof[\s\S]*must keep planned SDK entrypoints/,
+    "Python required production plan rows must require covered-criteria, proof-family, public-input schema, verifier-key, PQ-layer, chain-requirement, exact required-state, setup-step, execution-step, exact failure-mode, exact security-note, state-token, failure-mode token, source-reference, SDK entrypoint, planned SDK entrypoint, and planned production proof checks",
+  );
+  assert.match(
+    pythonCatalogSource,
+    /def\s+_validate_required_privacy_plan_rows[\s\S]*REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID[\s\S]*must keep display text[\s\S]*REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID/,
+    "Python required production plan rows must keep exact display text",
   );
   assert.match(
     pythonCatalogSource,
@@ -1725,6 +2760,106 @@ test("privacy algorithm catalogs require proof builders on required production p
     pythonCatalogTests,
     /(?=[\s\S]*test_privacy_catalog_rejects_required_production_privacy_plan_without_proof_builder)(?=[\s\S]*deriveOrchardWitness)(?=[\s\S]*buildAnonymousPgcProductionInstruction)(?=[\s\S]*buildAnonymousPgcProofTransaction)(?=[\s\S]*buildSubmitAnonymousPgcProof)(?=[\s\S]*buildAnonymousPgcProofEnvelope)(?=[\s\S]*buildAnonymousPgcProofWitness)(?=[\s\S]*buildAnonymousPgcProofPublicInputs)(?=[\s\S]*buildAnonymousPgcProofRequest)(?=[\s\S]*buildAnonymousPgcProofCommitment)(?=[\s\S]*buildAnonymousPgcDevProofFixture)/,
     "Python tests must cover helper-only, instruction-only, transaction-only, submit-only, proof-helper-only, and fixture-only required rows",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_proof_family_drift[\s\S]*forged-proof-family[\s\S]*must keep proof family/,
+    "Python tests must cover required production plan proof-family drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_covered_criteria_drift[\s\S]*hide_asset_type[\s\S]*must keep covered criteria/,
+    "Python tests must cover required production plan covered-criteria drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_public_input_schema_drift[\s\S]*forged_public_input[\s\S]*must keep public inputs schema/,
+    "Python tests must cover required production plan public-input schema drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_category_drift[\s\S]*authorization[\s\S]*must keep category/,
+    "Python tests must cover required production plan category drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_maturity_drift[\s\S]*specification[\s\S]*must keep maturity/,
+    "Python tests must cover required production plan maturity drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_recommended_for_drift[\s\S]*claimed production rollout[\s\S]*must keep recommendedFor/,
+    "Python tests must cover required production plan recommendedFor drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_verifier_key_drift[\s\S]*forged_verifier_key[\s\S]*must keep verifier key id/,
+    "Python tests must cover required production plan verifier-key drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_pq_layer_drift[\s\S]*descriptor\["pq_layers"\]\["proof"\] = True[\s\S]*must keep PQ layer/,
+    "Python tests must cover required production plan PQ-layer drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_chain_requirement_drift[\s\S]*typed zk::SubmitAnonymousPgcProofOnly instruction[\s\S]*must keep chain requirements/,
+    "Python tests must cover required production plan chain-requirement drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_required_state_drift[\s\S]*forged wallet recovery placeholder[\s\S]*must keep required state/,
+    "Python tests must cover required production plan required-state drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_setup_step_drift[\s\S]*Register forged Anonymous PGC verifier setup\.[\s\S]*must keep setup steps/,
+    "Python tests must cover required production plan setup-step drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_execution_step_drift[\s\S]*Submit forged Anonymous PGC proof-only envelope\.[\s\S]*must keep execution steps/,
+    "Python tests must cover required production plan execution-step drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_failure_modes_drift[\s\S]*accept forged replay tag[\s\S]*must keep failure modes/,
+    "Python tests must cover required production plan exact failure-mode drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_security_note_drift[\s\S]*latency gates[\s\S]*must keep security notes/,
+    "Python tests must cover required production plan exact security-note drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_state_token_drift[\s\S]*forged state placeholder[\s\S]*must retain required state token/,
+    "Python tests must cover required production plan state-token drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_drift[\s\S]*forged failure placeholder[\s\S]*must retain required[\s\S]*failure-mode token/,
+    "Python tests must cover required production plan failure-mode drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_source_reference_drift[\s\S]*https:\/\/example\.com\/forged-source[\s\S]*must retain source reference/,
+    "Python tests must cover required production plan source-reference drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_source_reference_extra[\s\S]*https:\/\/example\.com\/forged-extra-source[\s\S]*must keep source references/,
+    "Python tests must cover required production plan exact source-reference drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_sdk_entrypoint_drift[\s\S]*buildForgedAnonymousPgcProductionProof[\s\S]*must keep SDK entrypoints/,
+    "Python tests must cover required production plan SDK entrypoint drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_planned_sdk_entrypoint_drift[\s\S]*buildForgedAnonymousPgcProofV1[\s\S]*must keep planned SDK entrypoints/,
+    "Python tests must cover required production plan planned SDK entrypoint drift",
   );
 });
 
@@ -1744,6 +2879,7 @@ test("privacy algorithm JS getters return immutable fail-closed production metad
     ],
   ]) {
     const capabilities = getCapabilities();
+    assertZkAceCapabilitySurfaceFailClosed(label, capabilities);
     const descriptors = getDescriptors();
     const descriptor = descriptors.find((entry) => entry.plannedSdkEntrypoints.length > 0);
     assert.ok(descriptor, `${label} must expose a planned fail-closed privacy row`);
@@ -2285,6 +3421,10 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       { sourceReferences: [{ label: "paper", url: "https://localhost%2elocaltest%2eme/source" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://256.256.256.256/source" }] },
       /sourceReferences\[0\]\.url must use https/,
     ],
     [

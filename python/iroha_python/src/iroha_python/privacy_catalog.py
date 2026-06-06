@@ -99,6 +99,721 @@ REQUIRED_PRIVACY_PLAN_ROWS = (
     ),
     ("pq-masp-stark-v0", "research-target-as-of-2026-05", "pq-masp-stark-fri"),
 )
+REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("Anonymous PGC k-out-of-n payments v1", "Anonymous PGC", "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs."),
+    "verange-transparent-range-v1": ("VeRange transparent range proofs v1", "VeRange", "Verification-efficient transparent range-proof component for confidential amounts, solvency proofs, and numeric credential predicates."),
+    "zkat-policy-private-auth-v1": ("zkAt policy-private authorization v1", "zkAt policy auth", "Policy-private blockchain authenticator that hides threshold rules, signer sets, and account authorization logic."),
+    "zk-ams-recursive-admission-v0": ("ZK-AMS recursive anonymous admission v0", "ZK-AMS admission", "Research target for recursively aggregated anonymous admission from real-world personhood or eligibility credentials into anonymous on-chain accounts."),
+    "vega-existing-credential-zk-v0": ("Vega existing-credential ZK proofs v0", "Vega credentials", "Low-latency zero-knowledge proof target for proving predicates over existing credentials without revealing the full credential."),
+    "silent-threshold-anoncred-v0": ("Silent threshold anonymous credentials v0", "Silent threshold cred", "Research target for threshold-issued anonymous credentials with silent setup, issuer hiding, constant-size showings, and dynamic verifier policies."),
+    "zk-x509-onchain-identity-v0": ("ZK-X.509 on-chain identity v0", "ZK-X.509 identity", "ZK proof target for X.509 certificate validity, ownership, revocation status, and wallet-address binding."),
+    "jindo-lattice-pcs-zk-v0": ("Jindo lattice polynomial commitment ZK v0", "Jindo lattice PCS", "2026 lattice-based polynomial commitment candidate for post-quantum zero-knowledge proof systems."),
+    "sis-hints-anoncred-pq-v0": ("SIS-with-hints PQ anonymous credentials v0", "SIS hints anoncred", "PKC 2026 research foundation for lattice/SIS-with-hints anonymous credentials and post-quantum credential proofs."),
+    "zk-ace-pq-authorization-v0": ("ZK-ACE post-quantum authorization v0", "ZK-ACE PQ auth", "STARK/FRI-backed source-account authorization for transparent asset transfers."),
+    "orchard-halo2-actions-v1": ("Orchard-style Halo2 action bundle v1", "Orchard Halo2", "Zcash Orchard-style action bundle with note commitments, nullifiers, and one aggregated Halo2 proof over spend/output actions."),
+    "penumbra-masp-v1": ("Penumbra-style multi-asset shielded pool v1", "Penumbra MASP", "Single multi-asset shielded pool using typed notes, note commitments, nullifiers, and spend/output proofs for private IBC-style assets."),
+    "monero-fcmp-plus-plus-v1": ("Monero FCMP++ RingCT-style transfer v1", "FCMP++", "Full-chain membership proof target that replaces small decoy rings with a full-output-set spend proof while retaining hidden amounts and one-time receivers."),
+    "miden-stark-note-v1": ("Miden-style STARK private note transaction v1", "Miden STARK", "Client-side STARK-proved account transition using private notes whose data stays off-chain while note hashes/nullifiers anchor correctness."),
+    "aztec-private-rollup-v1": ("Aztec-style programmable private transaction v1", "Aztec private", "Programmable private-state transaction using client-side private execution, note hashes, nullifiers, encrypted logs, and recursive private-kernel proofs."),
+    "pq-masp-stark-v0": ("Post-quantum MASP STARK v0", "PQ MASP v0", "Target end-to-end post-quantum MASP using STARK/FRI proofs, ML-DSA authorization, and ML-KEM note encryption."),
+}
+REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": "payment",
+    "verange-transparent-range-v1": "proof_backend",
+    "zkat-policy-private-auth-v1": "authorization",
+    "zk-ams-recursive-admission-v0": "admission",
+    "vega-existing-credential-zk-v0": "credential",
+    "silent-threshold-anoncred-v0": "credential",
+    "zk-x509-onchain-identity-v0": "identity",
+    "jindo-lattice-pcs-zk-v0": "proof_backend",
+    "sis-hints-anoncred-pq-v0": "credential",
+    "zk-ace-pq-authorization-v0": "authorization",
+    "orchard-halo2-actions-v1": "payment",
+    "penumbra-masp-v1": "payment",
+    "monero-fcmp-plus-plus-v1": "payment",
+    "miden-stark-note-v1": "payment",
+    "aztec-private-rollup-v1": "payment",
+    "pq-masp-stark-v0": "payment",
+}
+REQUIRED_PRIVACY_PLAN_MATURITY_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": "accepted_conference",
+    "verange-transparent-range-v1": "accepted_conference",
+    "zkat-policy-private-auth-v1": "accepted_conference",
+    "zk-ams-recursive-admission-v0": "arxiv_preprint",
+    "vega-existing-credential-zk-v0": "technical_report",
+    "silent-threshold-anoncred-v0": "technical_report",
+    "zk-x509-onchain-identity-v0": "arxiv_preprint",
+    "jindo-lattice-pcs-zk-v0": "technical_report",
+    "sis-hints-anoncred-pq-v0": "accepted_conference",
+    "zk-ace-pq-authorization-v0": "arxiv_preprint",
+    "orchard-halo2-actions-v1": "specification",
+    "penumbra-masp-v1": "specification",
+    "monero-fcmp-plus-plus-v1": "specification",
+    "miden-stark-note-v1": "specification",
+    "aztec-private-rollup-v1": "specification",
+    "pq-masp-stark-v0": "specification",
+}
+REQUIRED_PRIVACY_PLAN_RECOMMENDED_FOR_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("account-based private payments", "multi-receiver confidential transfers", "payment privacy without a note-based shielded pool UX"),
+    "verange-transparent-range-v1": ("confidential amount range proofs", "reserve or solvency proofs", "numeric credential predicates"),
+    "zkat-policy-private-auth-v1": ("institutional wallet policy privacy", "hidden threshold authorization", "authorization-policy migration without revealing signer topology"),
+    "zk-ams-recursive-admission-v0": ("anonymous onboarding", "Sybil-resistant wallet issuance", "credential-gated CBDC pilots"),
+    "vega-existing-credential-zk-v0": ("legacy credential bridges", "private eligibility checks", "attribute predicates for wallet enrollment"),
+    "silent-threshold-anoncred-v0": ("multi-authority regulated credentials", "issuer-hiding eligibility proofs", "central-bank or supervisor issued wallet credentials"),
+    "zk-x509-onchain-identity-v0": ("institutional wallet identity", "legal-entity account binding", "private PKI-based eligibility checks"),
+    "jindo-lattice-pcs-zk-v0": ("post-quantum proof-system research", "future PQ verifier backend evaluation", "lattice PCS benchmarking"),
+    "sis-hints-anoncred-pq-v0": ("post-quantum anonymous credential research", "future PQ KYC or eligibility proofs", "assumption tracking for lattice credential designs"),
+    "zk-ace-pq-authorization-v0": ("post-quantum transaction authorization migration", "identity-private source-account authorization", "authorization envelopes for transparent asset transfers"),
+    "orchard-halo2-actions-v1": ("single-asset private transfers", "mature note/nullifier wallet design", "compact client proofs without Groth16 ceremonies"),
+    "penumbra-masp-v1": ("multi-asset shielded pools", "IBC-style asset privacy", "asset-id hiding with typed-value notes"),
+    "monero-fcmp-plus-plus-v1": ("maximal sender anonymity sets", "decoy-ring replacement research", "account-independent UTXO spend privacy"),
+    "miden-stark-note-v1": ("client-side proving", "private programmable note workflows", "parallel account-local transaction execution"),
+    "aztec-private-rollup-v1": ("programmable private payments", "hybrid public/private contract workflows", "wallet-side private execution with encrypted note discovery"),
+    "pq-masp-stark-v0": ("end-to-end post-quantum privacy target", "long-horizon central-bank pilot research", "strict PQ proof, authorization, and note-encryption experiments"),
+}
+REQUIRED_PRIVACY_PLAN_COVERED_CRITERIA_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("hide_amount", "hide_sender", "hide_receiver"),
+    "verange-transparent-range-v1": ("hide_amount",),
+    "zkat-policy-private-auth-v1": (),
+    "zk-ams-recursive-admission-v0": (),
+    "vega-existing-credential-zk-v0": (),
+    "silent-threshold-anoncred-v0": (),
+    "zk-x509-onchain-identity-v0": (),
+    "jindo-lattice-pcs-zk-v0": (),
+    "sis-hints-anoncred-pq-v0": (),
+    "zk-ace-pq-authorization-v0": (),
+    "orchard-halo2-actions-v1": ("hide_amount", "hide_sender", "hide_receiver"),
+    "penumbra-masp-v1": ("hide_amount", "hide_sender", "hide_receiver", "hide_asset_type"),
+    "monero-fcmp-plus-plus-v1": ("hide_amount", "hide_sender", "hide_receiver"),
+    "miden-stark-note-v1": ("hide_amount", "hide_receiver", "hide_asset_type"),
+    "aztec-private-rollup-v1": ("hide_amount", "hide_sender", "hide_receiver"),
+    "pq-masp-stark-v0": ("hide_amount", "hide_sender", "hide_receiver", "hide_asset_type", "post_quantum"),
+}
+REQUIRED_PRIVACY_PLAN_PROOF_FAMILY_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": "anonymous-pgc-k-out-of-n",
+    "verange-transparent-range-v1": "verange-transparent-range",
+    "zkat-policy-private-auth-v1": "zkat-policy-private-authenticator",
+    "zk-ams-recursive-admission-v0": "recursive-anonymous-admission",
+    "vega-existing-credential-zk-v0": "existing-credential-zk",
+    "silent-threshold-anoncred-v0": "threshold-anonymous-credentials",
+    "zk-x509-onchain-identity-v0": "zkvm-x509-identity",
+    "jindo-lattice-pcs-zk-v0": "lattice-polynomial-commitment",
+    "sis-hints-anoncred-pq-v0": "lattice-anonymous-credentials",
+    "zk-ace-pq-authorization-v0": "stark/fri/sha256-goldilocks",
+    "orchard-halo2-actions-v1": "halo2-pasta-action-bundle",
+    "penumbra-masp-v1": "groth16-bls12-377-decaf377",
+    "monero-fcmp-plus-plus-v1": "fcmp-plus-plus-curve-trees-bulletproofs",
+    "miden-stark-note-v1": "stark-vm-note-transaction",
+    "aztec-private-rollup-v1": "plonkish-private-kernel-rollup",
+    "pq-masp-stark-v0": "stark-fri",
+}
+REQUIRED_PRIVACY_PLAN_PUBLIC_INPUT_SCHEMA_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": (
+        "anonymity_set_root,tx_digest,balance_commitments,"
+        "receiver_set_commitment,receiver_ciphertext_commitments,"
+        "receiver_threshold,receiver_count,link_tag,range_commitments,"
+        "chain_id,domain_separator"
+    ),
+    "verange-transparent-range-v1": (
+        "commitments,range_parameters,aggregation_count,domain_separator,"
+        "payload_digest"
+    ),
+    "zkat-policy-private-auth-v1": (
+        "policy_commitment,tx_digest,account_id,action_class,domain_separator,"
+        "policy_epoch"
+    ),
+    "zk-ams-recursive-admission-v0": (
+        "issuer_root,admission_batch_root,admission_nullifiers,"
+        "anonymous_account_commitments,recursive_admission_digest,"
+        "domain_separator"
+    ),
+    "vega-existing-credential-zk-v0": (
+        "issuer_commitment,credential_schema,predicate_commitment,"
+        "subject_binding,expiration_epoch,domain_separator"
+    ),
+    "silent-threshold-anoncred-v0": (
+        "issuer_set_commitment,threshold_policy_hash,"
+        "credential_showing_commitment,showing_nullifier,"
+        "verifier_policy_hash,domain_separator"
+    ),
+    "zk-x509-onchain-identity-v0": (
+        "ca_root_commitment,certificate_policy_hash,revocation_root,"
+        "subject_commitment,address_binding,domain_separator"
+    ),
+    "jindo-lattice-pcs-zk-v0": (
+        "commitment,opening_claim,query_set,parameter_hash,domain_separator"
+    ),
+    "sis-hints-anoncred-pq-v0": (
+        "issuer_commitment,credential_commitment,showing_policy_hash,"
+        "parameter_hash,domain_separator"
+    ),
+    "zk-ace-pq-authorization-v0": (
+        "identity_commitment,tx_digest,chain_id,domain_separator,action_class,"
+        "replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id"
+    ),
+    "orchard-halo2-actions-v1": (
+        "anchor,nullifiers,cmx,value_commitments,binding_signature"
+    ),
+    "penumbra-masp-v1": (
+        "state_commitment_anchor,nullifiers,note_commitments,"
+        "balance_commitment,asset_id_commitment"
+    ),
+    "monero-fcmp-plus-plus-v1": (
+        "membership_root,key_image_or_link_tag,amount_commitments,"
+        "range_commitments,spend_authorization,chain_tag"
+    ),
+    "miden-stark-note-v1": (
+        "account_id,initial_account_commitment,final_account_commitment,"
+        "input_note_nullifiers,output_note_hashes,reference_block"
+    ),
+    "aztec-private-rollup-v1": (
+        "note_hashes,nullifiers,encrypted_logs,public_call_requests,"
+        "private_kernel_commitment,rollup_state_roots"
+    ),
+    "pq-masp-stark-v0": (
+        "pool_id,asset_set_root,nullifier_set,output_commitments,root,"
+        "chain_tag,pq_policy_hash"
+    ),
+}
+REQUIRED_PRIVACY_PLAN_VERIFIER_KEY_ID_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": "anonymous_pgc_k_out_of_n_v1",
+    "verange-transparent-range-v1": "verange_transparent_range_v1",
+    "zkat-policy-private-auth-v1": "zkat_policy_private_auth_v1",
+    "zk-ams-recursive-admission-v0": "zk_ams_recursive_admission_v0",
+    "vega-existing-credential-zk-v0": "vega_existing_credential_zk_v0",
+    "silent-threshold-anoncred-v0": "silent_threshold_anoncred_v0",
+    "zk-x509-onchain-identity-v0": "zk_x509_onchain_identity_v0",
+    "jindo-lattice-pcs-zk-v0": "jindo_lattice_pcs_zk_v0",
+    "sis-hints-anoncred-pq-v0": "sis_hints_anoncred_pq_v0",
+    "zk-ace-pq-authorization-v0": "zk_ace_pq_authorization_v0",
+    "orchard-halo2-actions-v1": "orchard_halo2_action_bundle_v1",
+    "penumbra-masp-v1": "penumbra_masp_v1",
+    "monero-fcmp-plus-plus-v1": "monero_fcmp_plus_plus_v1",
+    "miden-stark-note-v1": "miden_stark_note_v1",
+    "aztec-private-rollup-v1": "aztec_private_kernel_v1",
+    "pq-masp-stark-v0": "pq_masp_stark_v0",
+}
+REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": (
+        "anonymous account commitment",
+        "anonymity-set roots",
+        "spent link-tag",
+        "range-proof",
+        "wallet account blinding",
+    ),
+    "verange-transparent-range-v1": (
+        "range-proof verifier parameters",
+        "verange verifier",
+        "range commitment",
+        "dependent payment or credential verifier",
+    ),
+    "zkat-policy-private-auth-v1": (
+        "policy commitment registry",
+        "policy epoch state",
+        "authorization replay",
+        "wallet policy witness",
+        "typed zk::submitzkatauthorizedtransaction",
+    ),
+    "zk-ams-recursive-admission-v0": (
+        "issuer root registry",
+        "admission nullifier set",
+        "anonymous account commitment registry",
+        "wallet admission witness",
+        "typed zk-ams admission batch instruction",
+    ),
+    "vega-existing-credential-zk-v0": (
+        "credential issuer registry",
+        "credential schema registry",
+        "revocation or expiration policy",
+        "wallet credential predicate witness",
+        "typed vega credential proof instruction",
+    ),
+    "silent-threshold-anoncred-v0": (
+        "threshold issuer registry",
+        "credential showing nullifier policy",
+        "wallet credential showing witness",
+        "anonymous credential verifier key registry",
+        "typed silent-threshold credential proof instruction",
+    ),
+    "zk-x509-onchain-identity-v0": (
+        "trusted ca root registry",
+        "revocation root registry",
+        "certificate subject commitment registry",
+        "wallet certificate witness",
+        "typed zk-x.509 identity proof instruction",
+    ),
+    "jindo-lattice-pcs-zk-v0": (
+        "lattice pcs parameter registry",
+        "backend verifier implementation",
+        "lattice pcs verifier key registry",
+        "dependent circuit integration",
+    ),
+    "sis-hints-anoncred-pq-v0": (
+        "lattice credential parameter registry",
+        "credential showing verifier",
+        "wallet lattice credential witness",
+        "lattice credential verifier key registry",
+        "typed sis-with-hints credential proof instruction",
+    ),
+    "zk-ace-pq-authorization-v0": (
+        "active identity commitment registry",
+        "replay nullifier set",
+        "authorization verifier registry",
+        "wallet identity witness",
+        "zk::submitzkaceauthorizedtransfer",
+    ),
+    "orchard-halo2-actions-v1": (
+        "orchard note commitment tree",
+        "orchard nullifier set",
+        "orchard action-bundle verifier key registry",
+        "wallet orchard witness",
+        "typed orchard action-bundle instruction",
+    ),
+    "penumbra-masp-v1": (
+        "multi-asset state commitment tree",
+        "typed nullifier set",
+        "groth16 spend/output verifier key registry",
+        "wallet asset metadata witness",
+        "typed penumbra shielded-pool transaction admission",
+    ),
+    "monero-fcmp-plus-plus-v1": (
+        "full-output-set commitment accumulator",
+        "spent link-tag set",
+        "fcmp++ verifier key registry",
+        "wallet output ownership scan state",
+        "typed fcmp++ transfer instruction",
+    ),
+    "miden-stark-note-v1": (
+        "private note hash database",
+        "input note nullifier set",
+        "account commitment state",
+        "stark vm verifier key registry",
+        "wallet private note witness",
+    ),
+    "aztec-private-rollup-v1": (
+        "private note-hash tree",
+        "nullifier tree",
+        "encrypted log delivery store",
+        "private-kernel verifier key registry",
+        "wallet private execution witness",
+        "typed aztec private-rollup transaction instruction",
+    ),
+    "pq-masp-stark-v0": (
+        "pq masp asset-set commitment root",
+        "pq nullifier set",
+        "ml-kem encrypted note payload store",
+        "wallet pq note witness",
+        "active pq masp verifier key",
+    ),
+}
+REQUIRED_PRIVACY_PLAN_COMMON_FAILURE_MODE_TOKENS = (
+    "malformed proof bytes",
+    "wrong verifier key",
+    "public input mismatch",
+)
+REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": (
+        "stale or unknown anonymity-set root",
+        "duplicate link tag",
+        "receiver-set substitution",
+    ),
+    "verange-transparent-range-v1": (
+        "wrong bit length",
+        "commitment substitution",
+        "verifier-parameter mismatch",
+    ),
+    "zkat-policy-private-auth-v1": (
+        "policy-root substitution",
+        "stale policy epoch",
+        "authorization replay",
+    ),
+    "zk-ams-recursive-admission-v0": (
+        "duplicate credential admission",
+        "wrong issuer root",
+        "batch omission or account commitment substitution",
+    ),
+    "vega-existing-credential-zk-v0": (
+        "expired credential",
+        "predicate mismatch",
+        "wallet-binding replay",
+    ),
+    "silent-threshold-anoncred-v0": (
+        "insufficient issuer threshold",
+        "issuer-set substitution",
+        "credential showing replay",
+    ),
+    "zk-x509-onchain-identity-v0": (
+        "expired certificate",
+        "revoked certificate",
+        "stale revocation root",
+    ),
+    "jindo-lattice-pcs-zk-v0": (
+        "parameter mismatch",
+        "opening claim substitution",
+        "unsupported query set",
+    ),
+    "sis-hints-anoncred-pq-v0": (
+        "wrong parameter set",
+        "issuer parameter substitution",
+        "credential showing replay",
+    ),
+    "zk-ace-pq-authorization-v0": (
+        "transaction digest substitution",
+        "chain-id or domain-separator mismatch",
+        "replayed nullifier",
+    ),
+    "orchard-halo2-actions-v1": (
+        "stale anchor",
+        "duplicate nullifier",
+        "invalid action-bundle proof",
+    ),
+    "penumbra-masp-v1": (
+        "stale state commitment anchor",
+        "duplicate nullifier",
+        "asset balance commitment mismatch",
+    ),
+    "monero-fcmp-plus-plus-v1": (
+        "stale membership root",
+        "duplicate link tag",
+        "amount commitment mismatch",
+    ),
+    "miden-stark-note-v1": (
+        "stale reference block",
+        "duplicate input note nullifier",
+        "account commitment transition mismatch",
+    ),
+    "aztec-private-rollup-v1": (
+        "stale rollup state root",
+        "duplicate nullifier",
+        "private-kernel public input mismatch",
+    ),
+    "pq-masp-stark-v0": (
+        "stale asset-set root",
+        "duplicate pq nullifier",
+        "ml-dsa or ml-kem domain mismatch",
+    ),
+}
+REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("stale or unknown anonymity-set root", "duplicate link tag", "receiver-set substitution", "range commitment mismatch", "authorization envelope mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "verange-transparent-range-v1": ("wrong bit length", "commitment substitution", "verifier-parameter mismatch", "oversized aggregation", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "zkat-policy-private-auth-v1": ("policy-root substitution", "stale policy epoch", "unauthorized signer witness", "transaction digest mismatch", "authorization replay", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "zk-ams-recursive-admission-v0": ("duplicate credential admission", "wrong issuer root", "batch omission or account commitment substitution", "recursive proof parameter mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "vega-existing-credential-zk-v0": ("expired credential", "wrong issuer", "predicate mismatch", "wallet-binding replay", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "silent-threshold-anoncred-v0": ("insufficient issuer threshold", "issuer-set substitution", "credential showing replay", "verifier-policy mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "zk-x509-onchain-identity-v0": ("expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "jindo-lattice-pcs-zk-v0": ("parameter mismatch", "opening claim substitution", "unsupported query set", "backend misclassified as production-ready", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "sis-hints-anoncred-pq-v0": ("wrong parameter set", "issuer parameter substitution", "credential showing replay", "overclaiming production readiness from assumption research", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "zk-ace-pq-authorization-v0": ("transaction digest substitution", "chain-id or domain-separator mismatch", "replayed nullifier", "revoked identity commitment", "policy hash mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "orchard-halo2-actions-v1": ("stale anchor", "duplicate nullifier", "invalid action-bundle proof", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "penumbra-masp-v1": ("stale state commitment anchor", "duplicate nullifier", "asset balance commitment mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "monero-fcmp-plus-plus-v1": ("stale membership root", "duplicate link tag", "amount commitment mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "miden-stark-note-v1": ("stale reference block", "duplicate input note nullifier", "account commitment transition mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "aztec-private-rollup-v1": ("stale rollup state root", "duplicate nullifier", "private-kernel public input mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "pq-masp-stark-v0": ("stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+}
+REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "verange-transparent-range-v1": ("This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "zkat-policy-private-auth-v1": ("Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "zk-ams-recursive-admission-v0": ("Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "vega-existing-credential-zk-v0": ("Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "silent-threshold-anoncred-v0": ("Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "zk-x509-onchain-identity-v0": ("Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "jindo-lattice-pcs-zk-v0": ("This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "sis-hints-anoncred-pq-v0": ("This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "zk-ace-pq-authorization-v0": ("Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "orchard-halo2-actions-v1": ("Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "penumbra-masp-v1": ("Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "monero-fcmp-plus-plus-v1": ("Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "miden-stark-note-v1": ("Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "aztec-private-rollup-v1": ("Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "pq-masp-stark-v0": ("PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+}
+REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": (
+        (
+            "Anonymous PGC with k-out-of-n Proofs",
+            "https://eprint.iacr.org/2025/884",
+        ),
+    ),
+    "verange-transparent-range-v1": (
+        (
+            "VeRange: Verification-efficient Zero-knowledge Range Arguments",
+            "https://eprint.iacr.org/2025/528",
+        ),
+    ),
+    "zkat-policy-private-auth-v1": (
+        (
+            "zkAt: Zero-Knowledge Authenticator for Blockchain",
+            "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+        ),
+    ),
+    "zk-ams-recursive-admission-v0": (
+        (
+            "ZK-AMS recursive anonymous admission",
+            "https://arxiv.org/abs/2602.16130",
+        ),
+    ),
+    "vega-existing-credential-zk-v0": (
+        (
+            "Vega: Low-Latency Zero-Knowledge Proofs over Existing Credentials",
+            "https://www.microsoft.com/en-us/research/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/",
+        ),
+    ),
+    "silent-threshold-anoncred-v0": (
+        (
+            "Anonymous Credentials with Issuer-Hiding, Threshold Issuance, and Silent Setup",
+            "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2026/EECS-2026-124.html",
+        ),
+    ),
+    "zk-x509-onchain-identity-v0": (
+        ("ZK-X.509 on-chain identity", "https://arxiv.org/abs/2603.25190"),
+    ),
+    "jindo-lattice-pcs-zk-v0": (
+        (
+            "Jindo lattice-based polynomial commitment",
+            "https://eprint.iacr.org.cn/2026/044",
+        ),
+    ),
+    "sis-hints-anoncred-pq-v0": (
+        (
+            "Tight Reductions for SIS-with-Hints Assumptions with Applications",
+            "https://kclpure.kcl.ac.uk/portal/en/publications/tight-reductions-for-sis-with-hints-assumptions-with-applications/",
+        ),
+    ),
+    "zk-ace-pq-authorization-v0": (
+        (
+            "ZK-ACE: Practical Post-Quantum Authorization for Blockchain",
+            "https://arxiv.org/abs/2603.07974",
+        ),
+    ),
+    "orchard-halo2-actions-v1": (
+        ("ZIP 224 Orchard Shielded Protocol", "https://zips.z.cash/zip-0224"),
+        (
+            "Zcash Protocol Specification",
+            "https://zips.z.cash/protocol/protocol.pdf",
+        ),
+    ),
+    "penumbra-masp-v1": (
+        (
+            "Penumbra Multi-Asset Shielded Pool",
+            "https://protocol.penumbra.zone/main/shielded_pool.html",
+        ),
+        (
+            "Penumbra Cryptographic Primitives",
+            "https://protocol.penumbra.zone/main/crypto.html",
+        ),
+    ),
+    "monero-fcmp-plus-plus-v1": (
+        (
+            "Monero FCMP++ Development",
+            "https://web.getmonero.org/2024/04/27/fcmps.html",
+        ),
+    ),
+    "miden-stark-note-v1": (
+        (
+            "Miden Transaction Model",
+            "https://docs.miden.xyz/core-concepts/miden-base/transaction/",
+        ),
+        ("Miden Notes", "https://docs.miden.xyz/core-concepts/miden-base/note/"),
+    ),
+    "aztec-private-rollup-v1": (
+        (
+            "Aztec State Management",
+            "https://docs.aztec.network/developers/docs/foundational-topics/state_management",
+        ),
+        (
+            "Aztec Private Kernel Circuit",
+            "https://docs.aztec.network/developers/nightly/docs/foundational-topics/advanced/circuits/private_kernel",
+        ),
+    ),
+    "pq-masp-stark-v0": (
+        (
+            "NIST Post-Quantum Standards",
+            "https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standards",
+        ),
+        ("FIPS 203 ML-KEM", "https://csrc.nist.gov/pubs/fips/203/final"),
+        ("FIPS 204 ML-DSA", "https://csrc.nist.gov/pubs/fips/204/final"),
+        ("FIPS 205 SLH-DSA", "https://csrc.nist.gov/pubs/fips/205/final"),
+    ),
+}
+REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("buildAnonymousPgcReceiverSet", "buildAnonymousPgcDevProofFixture", "verifyAnonymousPgcDevProofLocally"),
+    "verange-transparent-range-v1": ("buildRangeCommitment", "buildVeRangeDevProofFixture", "buildVeRangeProofEnvelope", "verifyVeRangeProofLocally"),
+    "zkat-policy-private-auth-v1": ("buildZkAtPolicyCommitment", "buildZkAtAuthenticatorEnvelope", "buildZkAtDevProofFixture", "verifyZkAtAuthenticatorLocally"),
+    "zk-ams-recursive-admission-v0": ("buildZkAmsAdmissionBatch", "buildZkAmsAdmissionProofEnvelope", "buildZkAmsAdmissionDevProofFixture", "verifyZkAmsAdmissionProofLocally"),
+    "vega-existing-credential-zk-v0": ("buildVegaCredentialPredicateCommitment", "buildVegaCredentialProofEnvelope", "buildVegaCredentialDevProofFixture", "verifyVegaCredentialProofLocally"),
+    "silent-threshold-anoncred-v0": ("buildSilentThresholdCredentialCommitments", "buildSilentThresholdCredentialEnvelope", "buildSilentThresholdCredentialDevProofFixture", "verifySilentThresholdCredentialProofLocally"),
+    "zk-x509-onchain-identity-v0": ("buildZkX509IdentityCommitments", "buildZkX509IdentityEnvelope", "buildZkX509IdentityDevProofFixture", "verifyZkX509IdentityProofLocally"),
+    "jindo-lattice-pcs-zk-v0": ("buildJindoLatticePublicInputs", "buildJindoLatticeProofEnvelope", "buildJindoLatticeDevProofFixture", "verifyJindoLatticeProofLocally"),
+    "sis-hints-anoncred-pq-v0": ("buildSisHintsCredentialCommitments", "buildSisHintsCredentialEnvelope", "buildSisHintsCredentialDevProofFixture", "verifySisHintsCredentialProofLocally"),
+    "zk-ace-pq-authorization-v0": ("buildRegisterZkAceIdentityCommitmentInstruction", "buildRotateZkAceIdentityCommitmentInstruction", "buildRevokeZkAceIdentityCommitmentInstruction", "buildZkAceAuthorizedTransferInstruction", "buildZkAceAuthorizationProofV1"),
+    "orchard-halo2-actions-v1": (),
+    "penumbra-masp-v1": (),
+    "monero-fcmp-plus-plus-v1": (),
+    "miden-stark-note-v1": (),
+    "aztec-private-rollup-v1": (),
+    "pq-masp-stark-v0": (),
+}
+REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": (
+        "buildAnonymousPgcAccountCommitmentInstruction",
+        "buildAnonymousPgcKOutOfNProofV1",
+        "buildAnonymousPgcTransferInstruction",
+    ),
+    "verange-transparent-range-v1": ("buildVeRangeProofV1",),
+    "zkat-policy-private-auth-v1": (
+        "buildZkAtPolicyCommitmentInstruction",
+        "buildZkAtPolicyProofV1",
+        "buildZkAtAuthorizedTransaction",
+    ),
+    "zk-ams-recursive-admission-v0": (
+        "buildZkAmsAdmissionBatchProofV0",
+        "buildSubmitZkAmsAdmissionBatchInstruction",
+    ),
+    "vega-existing-credential-zk-v0": (
+        "buildVegaCredentialPredicateProofV0",
+        "buildSubmitVegaCredentialProofInstruction",
+    ),
+    "silent-threshold-anoncred-v0": (
+        "buildSilentThresholdCredentialShowingProofV0",
+        "buildSubmitSilentThresholdCredentialProofInstruction",
+    ),
+    "zk-x509-onchain-identity-v0": (
+        "buildZkX509IdentityProofV0",
+        "buildSubmitZkX509IdentityProofInstruction",
+    ),
+    "jindo-lattice-pcs-zk-v0": (
+        "buildJindoLatticeProofV0",
+        "verifyJindoPolynomialCommitmentV0",
+    ),
+    "sis-hints-anoncred-pq-v0": (
+        "buildSisHintsAnonymousCredentialProofV0",
+        "buildSubmitSisHintsCredentialProofInstruction",
+    ),
+    "zk-ace-pq-authorization-v0": (
+        "buildShieldedZkAceAuthorizationProofV1",
+        "buildShieldedZkAceAuthorizedTransferInstruction",
+    ),
+    "orchard-halo2-actions-v1": (
+        "buildOrchardActionBundleProofV1",
+        "buildOrchardActionBundleInstruction",
+    ),
+    "penumbra-masp-v1": (
+        "buildPenumbraSpendProofV1",
+        "buildPenumbraOutputProofV1",
+        "buildPenumbraShieldedPoolTransaction",
+    ),
+    "monero-fcmp-plus-plus-v1": (
+        "buildFcmpPlusPlusMembershipProofV1",
+        "buildFcmpPlusPlusTransferInstruction",
+    ),
+    "miden-stark-note-v1": (
+        "buildMidenStarkTransactionProofV1",
+        "buildMidenNoteTransactionInstruction",
+    ),
+    "aztec-private-rollup-v1": (
+        "buildAztecPrivateKernelProofV1",
+        "buildAztecPrivateRollupTransactionInstruction",
+    ),
+    "pq-masp-stark-v0": (
+        "buildPqMaspStarkTransferProofV0",
+        "buildPqMaspStarkRegisterPoolInstruction",
+        "buildPqMaspStarkTransferInstruction",
+        "generateMlDsaKeyPair",
+        "encapsulateMlKem",
+    ),
+}
+REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "verange-transparent-range-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "zkat-policy-private-auth-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "zk-ams-recursive-admission-v0": {"proof": False, "authorization": False, "note_encryption": False},
+    "vega-existing-credential-zk-v0": {"proof": False, "authorization": False, "note_encryption": False},
+    "silent-threshold-anoncred-v0": {"proof": False, "authorization": False, "note_encryption": False},
+    "zk-x509-onchain-identity-v0": {"proof": False, "authorization": False, "note_encryption": False},
+    "jindo-lattice-pcs-zk-v0": {"proof": True, "authorization": False, "note_encryption": False},
+    "sis-hints-anoncred-pq-v0": {"proof": True, "authorization": False, "note_encryption": False},
+    "zk-ace-pq-authorization-v0": {"proof": True, "authorization": True, "note_encryption": False},
+    "orchard-halo2-actions-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "penumbra-masp-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "monero-fcmp-plus-plus-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "miden-stark-note-v1": {"proof": True, "authorization": False, "note_encryption": False},
+    "aztec-private-rollup-v1": {"proof": False, "authorization": False, "note_encryption": False},
+    "pq-masp-stark-v0": {"proof": True, "authorization": True, "note_encryption": True},
+}
+REQUIRED_PRIVACY_PLAN_CHAIN_REQUIREMENTS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("anonymous account commitment accumulator", "spent link-tag set", "Anonymous PGC verifier", "range-proof component verifier", "typed zk::RegisterAnonymousPgcAccountCommitment instruction", "typed zk::SubmitAnonymousPgcTransfer instruction"),
+    "verange-transparent-range-v1": ("VeRange verifier registry entry", "range commitment binding rules", "dependent payment or credential verifier"),
+    "zkat-policy-private-auth-v1": ("zkAt policy commitment registry", "zkAt verifier", "account policy epoch state", "account policy replay protection", "typed zk::RegisterZkAtPolicyCommitment instruction", "typed zk::SubmitZkAtAuthorizedTransaction admission"),
+    "zk-ams-recursive-admission-v0": ("issuer root registry", "admission nullifier set", "recursive admission verifier", "typed ZK-AMS admission batch instruction"),
+    "vega-existing-credential-zk-v0": ("credential schema registry", "issuer registry", "credential predicate verifier", "typed Vega credential proof instruction"),
+    "silent-threshold-anoncred-v0": ("threshold issuer registry", "anonymous credential verifier", "credential showing replay policy", "typed silent-threshold credential proof instruction"),
+    "zk-x509-onchain-identity-v0": ("trusted CA root registry", "revocation root registry", "ZK-X.509 verifier", "typed ZK-X.509 identity proof instruction"),
+    "jindo-lattice-pcs-zk-v0": ("Jindo verifier backend", "lattice PCS parameter registry", "dependent circuit integration"),
+    "sis-hints-anoncred-pq-v0": ("lattice anonymous credential verifier", "credential parameter registry", "issuer parameter registry", "typed SIS-with-hints credential proof instruction"),
+    "zk-ace-pq-authorization-v0": ("zk::RegisterZkAceIdentityCommitment", "zk::RotateZkAceIdentityCommitment", "zk::RevokeZkAceIdentityCommitment", "zk::SubmitZkAceAuthorizedTransfer", "active stark/fri/sha256-goldilocks ZK-ACE verifier key", "ZK-ACE identity source-account allowlist"),
+    "orchard-halo2-actions-v1": ("Orchard note commitment tree", "Orchard nullifier set", "Halo2 action-bundle verifier", "wallet Orchard witness store", "typed Orchard action-bundle instruction"),
+    "penumbra-masp-v1": ("multi-asset state commitment tree", "typed note commitment and nullifier state", "Groth16 verifier registry", "wallet multi-asset witness store", "typed Penumbra shielded-pool transaction admission"),
+    "monero-fcmp-plus-plus-v1": ("full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier", "wallet scanning and ownership recovery", "typed FCMP++ transfer instruction"),
+    "miden-stark-note-v1": ("STARK VM verifier", "private note hash and nullifier database", "account commitment state", "wallet private-note delivery store", "typed Miden note transaction instruction"),
+    "aztec-private-rollup-v1": ("private note-hash tree", "nullifier tree", "encrypted log store", "private-kernel verifier", "wallet private execution environment", "typed Aztec private-rollup transaction instruction"),
+    "pq-masp-stark-v0": ("STARK/FRI verifier enabled", "ML-DSA transaction authorization", "ML-KEM note payload encryption", "zk::RegisterAssetHiddenZkPool", "zk::AssetHiddenZkTransfer", "active PQ MASP verifier key"),
+}
+REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("anonymous account commitment set", "recent anonymity-set roots", "spent link-tag set", "range-proof verifier parameters", "wallet account blinding and receiver recovery metadata"),
+    "verange-transparent-range-v1": ("range-proof verifier parameters", "VeRange verifier key registry", "range commitment domain separators", "maximum aggregation policy"),
+    "zkat-policy-private-auth-v1": ("policy commitment registry", "policy epoch state", "authorization replay guard", "authorization verifier registry", "wallet policy witness store"),
+    "zk-ams-recursive-admission-v0": ("issuer root registry", "admission nullifier set", "anonymous account commitment registry", "recursive verifier parameters", "recursive admission verifier key registry", "wallet admission witness store"),
+    "vega-existing-credential-zk-v0": ("credential issuer registry", "supported credential schema registry", "predicate registry", "revocation or expiration policy", "wallet credential predicate witness store", "credential predicate commitment registry", "credential predicate verifier key registry"),
+    "silent-threshold-anoncred-v0": ("threshold issuer registry", "credential parameter registry", "verifier policy registry", "credential showing nullifier policy", "wallet credential showing witness store", "credential showing commitment registry", "anonymous credential verifier key registry"),
+    "zk-x509-onchain-identity-v0": ("trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"),
+    "jindo-lattice-pcs-zk-v0": ("lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"),
+    "sis-hints-anoncred-pq-v0": ("lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"),
+    "zk-ace-pq-authorization-v0": ("active identity commitment registry", "replay nullifier set", "authorization verifier registry", "wallet identity witness and replay-secret store"),
+    "orchard-halo2-actions-v1": ("Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"),
+    "penumbra-masp-v1": ("multi-asset state commitment tree", "typed nullifier set", "Groth16 spend/output verifier key registry", "wallet asset metadata witness store"),
+    "monero-fcmp-plus-plus-v1": ("full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier key registry", "wallet output ownership scan state"),
+    "miden-stark-note-v1": ("private note hash database", "input note nullifier set", "account commitment state", "STARK VM verifier key registry", "wallet private note witness store"),
+    "aztec-private-rollup-v1": ("private note-hash tree", "nullifier tree", "encrypted log delivery store", "private-kernel verifier key registry", "wallet private execution witness store"),
+    "pq-masp-stark-v0": ("PQ MASP asset-set commitment root", "PQ nullifier set", "ML-KEM encrypted note payload store", "wallet PQ note witness store"),
+}
+REQUIRED_PRIVACY_PLAN_SETUP_STEPS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("Register anonymous account commitments and anonymity-set accumulator state.", "Register the k-out-of-n payment verifier key and range-proof parameters.", "Persist wallet blinding, balance-opening, and receiver recovery witnesses."),
+    "verange-transparent-range-v1": ("Register VeRange verifier parameters and allowed bit lengths.", "Define the commitment scheme and domain separators used by dependent algorithms."),
+    "zkat-policy-private-auth-v1": ("Register a hidden policy commitment and verifier key.", "Bind the policy to account action classes and epoch rules."),
+    "zk-ams-recursive-admission-v0": ("Register credential issuer roots and recursive verifier parameters.", "Define anonymous account commitment format and admission-nullifier derivation."),
+    "vega-existing-credential-zk-v0": ("Register supported credential schemas, issuers, and predicates.", "Bind credential proof subjects to wallet or ZK-ACE identity commitments."),
+    "silent-threshold-anoncred-v0": ("Register issuer sets, threshold policies, and credential parameters.", "Define showing-nullifier and verifier-policy binding rules."),
+    "zk-x509-onchain-identity-v0": ("Register trusted CA roots, certificate policies, and revocation-root feeds.", "Define wallet address binding and domain-separation rules."),
+    "jindo-lattice-pcs-zk-v0": ("Track lattice PCS parameter sets and verifier API shape.", "Benchmark prover, verifier, and proof-size behavior before integration."),
+    "sis-hints-anoncred-pq-v0": ("Track supported SIS-with-hints parameter sets and issuer parameters.", "Define how future PQ credential showings bind to wallet or authorization contexts."),
+    "zk-ace-pq-authorization-v0": ("Register a ZK-ACE identity commitment, source-account allowlist, and verifier key.", "Initialize replay-state tracking for the authorizing wallet.", "Bind authorization policy hash to the allowed transaction action classes."),
+    "orchard-halo2-actions-v1": ("Add Orchard-compatible note, nullifier, action, and anchor data model types.", "Register Orchard Halo2 verifier parameters and action-bundle public input layout.", "Persist wallet note plaintexts, diversifiers, Merkle witnesses, and outgoing viewing data."),
+    "penumbra-masp-v1": ("Add typed-value notes, asset identifiers, state commitments, and nullifier state.", "Register Groth16/BLS12-377 verifier parameters for spend and output proofs.", "Persist wallet note plaintexts, asset metadata, state commitment positions, and nullifier keys."),
+    "monero-fcmp-plus-plus-v1": ("Add output commitment accumulator state suitable for full-chain membership proofs.", "Define link tags/key images and spent-output rejection for Iroha assets.", "Implement wallet scanning, ownership recovery, and amount commitment witness storage."),
+    "miden-stark-note-v1": ("Add private note hash/nullifier state and account-local transition verification.", "Register a STARK VM verifier and public-input commitment layout.", "Persist private note data and off-chain delivery metadata in the wallet note store."),
+    "aztec-private-rollup-v1": ("Add private note-hash and nullifier trees plus encrypted log delivery metadata.", "Register a private-kernel verifier and public-input layout for private contract side effects.", "Persist wallet PXE-style note discovery, private call witnesses, and app-scoped nullifier keys."),
+    "pq-masp-stark-v0": ("Register STARK/FRI verifier parameters and PQ MASP public input layout.", "Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.", "Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata."),
+}
+REQUIRED_PRIVACY_PLAN_EXECUTION_STEPS_BY_ALGORITHM_ID = {
+    "anonymous-pgc-k-out-of-n-v1": ("Select an anonymity-set root and receiver set.", "Create balance commitments, receiver ciphertext commitments, and link tag.", "Generate the Anonymous PGC proof and submit the transfer instruction."),
+    "verange-transparent-range-v1": ("Build amount commitments.", "Generate a range proof bound to the transaction payload.", "Attach the range-proof envelope to the dependent confidential algorithm."),
+    "zkat-policy-private-auth-v1": ("Generate a policy-private authenticator proof.", "Attach the authenticator envelope to the transaction authorization path."),
+    "zk-ams-recursive-admission-v0": ("Collect admitted account commitments into a batch.", "Generate or import a recursive admission proof.", "Submit the batch proof and admission nullifiers."),
+    "vega-existing-credential-zk-v0": ("Parse the credential under a registered schema.", "Generate a predicate proof and bind it to the wallet context.", "Submit the proof envelope to the admission or authorization flow."),
+    "silent-threshold-anoncred-v0": ("Generate a credential showing proof under the verifier policy.", "Submit the proof as an admission or authorization component."),
+    "zk-x509-onchain-identity-v0": ("Generate a proof of certificate validity, ownership, and revocation status.", "Bind the proof to an institution wallet or ZK-ACE identity commitment."),
+    "jindo-lattice-pcs-zk-v0": ("Use as a candidate backend for future PQ circuits only after concrete circuit integration.",),
+    "sis-hints-anoncred-pq-v0": ("Use as a future PQ credential backend after a concrete credential protocol is selected.",),
+    "zk-ace-pq-authorization-v0": ("Hash the transaction payload and chain/domain context.", "Derive a fresh replay nullifier.", "Generate a ZK-ACE authorization proof and submit a protected transparent transfer."),
+    "orchard-halo2-actions-v1": ("Select spend notes and anchors from the wallet witness store.", "Create output notes and value commitments.", "Generate one Halo2 proof over the action bundle and submit nullifiers plus commitments."),
+    "penumbra-masp-v1": ("Select positioned notes and derive nullifiers.", "Create typed output notes and balance commitments.", "Submit spend/output actions with proofs against the shielded pool state commitment tree."),
+    "monero-fcmp-plus-plus-v1": ("Select owned outputs from the wallet scan state.", "Generate full-chain membership and amount-conservation proofs.", "Submit link tag, output commitments, range proof, and spend authorization."),
+    "miden-stark-note-v1": ("Execute the account-local transition against private note witnesses.", "Produce a STARK proof for the transaction script and account state delta.", "Submit note nullifiers, output note hashes, account commitments, and proof."),
+    "aztec-private-rollup-v1": ("Execute private contract calls locally against wallet notes.", "Accumulate note hashes, nullifiers, encrypted logs, and public-call requests in the private kernel.", "Submit the recursive private-kernel proof and side-effect commitments for validator verification."),
+    "pq-masp-stark-v0": ("Select PQ MASP input notes and derive nullifiers.", "Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.", "Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission."),
+}
 
 _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "[{\"id\":\"transparent-transfer\",\"name\":\"Transparent asset transfer\",\"shortName\":\"Transparent\",\"sum"
@@ -2598,6 +3313,19 @@ def _validate_required_privacy_plan_rows(
                 "privacy algorithm catalog missing required production privacy "
                 f"plan row {algorithm_id!r}"
             )
+        display_text = REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if (
+            descriptor.get("name"),
+            descriptor.get("short_name"),
+            descriptor.get("summary"),
+        ) != display_text:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep display text {display_text!r} "
+                "until the production inventory is deliberately updated"
+            )
         if descriptor.get("implementation_stage") != implementation_stage:
             raise RuntimeError(
                 "privacy algorithm catalog required production privacy plan row "
@@ -2611,6 +3339,206 @@ def _validate_required_privacy_plan_rows(
                 f"{algorithm_id!r} must keep backend family {backend_family!r} "
                 "until the production inventory is deliberately updated"
             )
+        category = REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID[algorithm_id]
+        if descriptor.get("category") != category:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep category {category!r} until the "
+                "production inventory is deliberately updated"
+            )
+        maturity = REQUIRED_PRIVACY_PLAN_MATURITY_BY_ALGORITHM_ID[algorithm_id]
+        if descriptor.get("maturity") != maturity:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep maturity {maturity!r} until the "
+                "production inventory is deliberately updated"
+            )
+        recommended_for = REQUIRED_PRIVACY_PLAN_RECOMMENDED_FOR_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("recommended_for") or ()) != recommended_for:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep recommendedFor "
+                f"{recommended_for!r} until the production inventory is "
+                "deliberately updated"
+            )
+        covered_criteria = REQUIRED_PRIVACY_PLAN_COVERED_CRITERIA_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("covered_criteria") or ()) != covered_criteria:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep covered criteria "
+                f"{covered_criteria!r} until the production inventory is "
+                "deliberately updated"
+            )
+        proof_family = REQUIRED_PRIVACY_PLAN_PROOF_FAMILY_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if descriptor.get("proof_family") != proof_family:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep proof family {proof_family!r} "
+                "until the production inventory is deliberately updated"
+            )
+        public_inputs_schema = REQUIRED_PRIVACY_PLAN_PUBLIC_INPUT_SCHEMA_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if descriptor.get("public_inputs_schema") != public_inputs_schema:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep public inputs schema "
+                f"{public_inputs_schema!r} until the production inventory is "
+                "deliberately updated"
+            )
+        verifier_key_id = REQUIRED_PRIVACY_PLAN_VERIFIER_KEY_ID_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if descriptor.get("verifier_key_id") != verifier_key_id:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep verifier key id {verifier_key_id!r} "
+                "until the production inventory is deliberately updated"
+            )
+        pq_layers = REQUIRED_PRIVACY_PLAN_PQ_LAYERS_BY_ALGORITHM_ID[algorithm_id]
+        descriptor_pq_layers = descriptor.get("pq_layers") or {}
+        for pq_layer_name, expected_enabled in pq_layers.items():
+            if descriptor_pq_layers.get(pq_layer_name) is not expected_enabled:
+                raise RuntimeError(
+                    "privacy algorithm catalog required production privacy "
+                    f"plan row {algorithm_id!r} must keep PQ layer "
+                    f"{pq_layer_name!r}={expected_enabled!r} until the "
+                    "production inventory is deliberately updated"
+                )
+        chain_requirements = REQUIRED_PRIVACY_PLAN_CHAIN_REQUIREMENTS_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("chain_requirements") or ()) != chain_requirements:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep chain requirements "
+                f"{chain_requirements!r} until the production inventory is "
+                "deliberately updated"
+            )
+        required_state = REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("required_state") or ()) != required_state:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep required state "
+                f"{required_state!r} until the production inventory is "
+                "deliberately updated"
+            )
+        setup_steps = REQUIRED_PRIVACY_PLAN_SETUP_STEPS_BY_ALGORITHM_ID[algorithm_id]
+        if tuple(descriptor.get("setup_steps") or ()) != setup_steps:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep setup steps {setup_steps!r} until "
+                "the production inventory is deliberately updated"
+            )
+        execution_steps = REQUIRED_PRIVACY_PLAN_EXECUTION_STEPS_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("execution_steps") or ()) != execution_steps:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep execution steps "
+                f"{execution_steps!r} until the production inventory is "
+                "deliberately updated"
+            )
+        failure_modes = REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("failure_modes") or ()) != failure_modes:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep failure modes "
+                f"{failure_modes!r} until the production inventory is "
+                "deliberately updated"
+            )
+        security_notes = REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("security_notes") or ()) != security_notes:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep security notes "
+                f"{security_notes!r} until the production inventory is "
+                "deliberately updated"
+            )
+        state_text = "\n".join(
+            str(value).lower()
+            for value in (
+                list(descriptor.get("required_state") or [])
+                + list(descriptor.get("chain_requirements") or [])
+            )
+        )
+        for state_token in REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID[
+            algorithm_id
+        ]:
+            if state_token not in state_text:
+                raise RuntimeError(
+                    "privacy algorithm catalog required production privacy "
+                    f"plan row {algorithm_id!r} must retain required state "
+                    f"token {state_token!r} until the production inventory is "
+                    "deliberately updated"
+                )
+        failure_mode_text = "\n".join(
+            str(value).lower() for value in descriptor.get("failure_modes") or []
+        )
+        for failure_token in (
+            REQUIRED_PRIVACY_PLAN_COMMON_FAILURE_MODE_TOKENS
+            + REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID[algorithm_id]
+        ):
+            if failure_token not in failure_mode_text:
+                raise RuntimeError(
+                    "privacy algorithm catalog required production privacy "
+                    f"plan row {algorithm_id!r} must retain required "
+                    f"failure-mode token {failure_token!r} until the "
+                    "production inventory is deliberately updated"
+                )
+        source_reference_pairs = {
+            (item.get("label"), item.get("url"))
+            for item in descriptor.get("source_references") or []
+        }
+        source_references = REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        for label, url in source_references:
+            if (label, url) not in source_reference_pairs:
+                raise RuntimeError(
+                    "privacy algorithm catalog required production privacy "
+                    f"plan row {algorithm_id!r} must retain source reference "
+                    f"{label!r} <{url}> until the production inventory is "
+                    "deliberately updated"
+                )
+        descriptor_source_references = tuple(
+            (item.get("label"), item.get("url"))
+            for item in descriptor.get("source_references") or []
+        )
+        if descriptor_source_references != source_references:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep source references until the "
+                "production inventory is deliberately updated"
+            )
+        sdk_entrypoints = REQUIRED_PRIVACY_PLAN_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+        if tuple(descriptor.get("sdk_entrypoints") or ()) != sdk_entrypoints:
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep SDK entrypoints "
+                f"{sdk_entrypoints!r} until the production inventory is "
+                "deliberately updated"
+            )
+        planned_sdk_entrypoints = (
+            REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[
+                algorithm_id
+            ]
+        )
         if not any(
             _entrypoint_is_production_proof_builder(entrypoint)
             for entrypoint in descriptor.get("planned_sdk_entrypoints", [])
@@ -2619,6 +3547,15 @@ def _validate_required_privacy_plan_rows(
                 "privacy algorithm catalog required production privacy plan row "
                 f"{algorithm_id!r} must retain a planned production proof "
                 "builder until production gates pass"
+            )
+        if tuple(descriptor.get("planned_sdk_entrypoints") or []) != (
+            planned_sdk_entrypoints
+        ):
+            raise RuntimeError(
+                "privacy algorithm catalog required production privacy plan row "
+                f"{algorithm_id!r} must keep planned SDK entrypoints "
+                f"{planned_sdk_entrypoints!r} until the production inventory "
+                "is deliberately updated"
             )
 
 

@@ -106,12 +106,16 @@ public final class PrivacyNativeBridge {
     }
     requireNative(nativeAvailable);
     final String outputLabel = "privacy " + label;
+    final int expectedSchemaByte = expectedPrivacyResultSchema(outputLabel);
+    if (expectedSchemaByte < 0) {
+      throw new IllegalStateException(outputLabel + " is not a supported privacy native operation");
+    }
     final byte[] request = Arrays.copyOf(requestArchive, requestArchive.length);
     try {
       return requireNativeOutput(
           invokeNativeOutput(outputLabel, () -> call.run(request)),
           outputLabel,
-          expectedPrivacyResultSchema(outputLabel));
+          expectedSchemaByte);
     } finally {
       Arrays.fill(request, (byte) 0);
     }
@@ -128,11 +132,18 @@ public final class PrivacyNativeBridge {
   }
 
   static byte[] requireNativeOutput(final byte[] output, final String label) {
-    return requireNativeOutput(output, label, expectedPrivacyResultSchema(label));
+    final int expectedSchemaByte = expectedPrivacyResultSchema(label);
+    if (expectedSchemaByte < 0) {
+      throw new IllegalStateException(label + " is not a supported privacy native operation");
+    }
+    return requireNativeOutput(output, label, expectedSchemaByte);
   }
 
   static byte[] requireNativeOutput(
       final byte[] output, final String label, final int expectedSchemaByte) {
+    if (expectedSchemaByte < 0) {
+      throw new IllegalStateException(label + " is not a supported privacy native operation");
+    }
     if (output == null) {
       throw new IllegalStateException(label + " returned no output");
     }
@@ -189,10 +200,6 @@ public final class PrivacyNativeBridge {
     return Arrays.copyOf(
         PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
         PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE.length);
-  }
-
-  static boolean returnsOutputProbe(final NativeByteArrayProbe probe) {
-    return returnsOutputProbe(-1, probe);
   }
 
   static boolean returnsOutputProbe(
@@ -278,10 +285,10 @@ public final class PrivacyNativeBridge {
     return -1;
   }
 
-  private static boolean hasPrivacyNoritoSchema(
+  static boolean hasPrivacyNoritoSchema(
       final byte[] output, final int expectedSchemaByte) {
     if (expectedSchemaByte < 0) {
-      return true;
+      return false;
     }
     final byte expected = (byte) expectedSchemaByte;
     for (int index = 6; index < 22; index++) {

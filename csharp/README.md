@@ -67,10 +67,10 @@ await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
 
 The optional `Hyperledger.Iroha.Offline.KagemushaRecursiveSpendNative` wrapper
 calls the ABI-6 `connect_norito_bridge` recursive spend surface. `IsAvailable()`
-requires bridge ABI 6 plus `init`, `append`, both transition-profile helpers,
-the append-boundary helper, both lineage-witness helpers, `verify`, and
-`redeem` before reporting recursive spend support. Each entry point accepts raw
-Norito request archives and returns raw Norito archive bytes; the C# SDK does
+requires bridge ABI 6 or later plus `init`, `append`, both transition-profile
+helpers, the append-boundary helper, both lineage-witness helpers, `verify`,
+and `redeem` before reporting recursive spend support. Each entry point accepts
+raw Norito request archives and returns raw Norito archive bytes; the C# SDK does
 not reimplement prover internals.
 `TransitionProfileInit(...)` and `TransitionProfileAppend(...)` return the
 canonical Reserved-lineage accumulator transition profile as raw Norito
@@ -86,8 +86,11 @@ The append-boundary digest uses the public
 `RecursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1` for chain/asset
 and final-root/current-note binding.
 
-Use `PreferredMode(...)` to select `recursive_spend_v1` only when the complete
-native surface is available, otherwise fall back to `checked_prefold_v1`. For
+Use `PreferredMode(...)` to select `recursive_spend_v1` when the complete
+ABI-6-or-later native surface is available, otherwise fall back to
+`checked_prefold_v1`.
+The ABI-7 compact-token symbols remain source-stable but fail closed until the
+compact token proof composes the private-hop verifier-slice relation in-circuit. For
 Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
 `RequiresLineageWitnessForRedeem(...)`, `PreferredAppendOutputCircuitId(...)`,
 `CanProveAppendOutputCircuitId(...)`, and
@@ -106,6 +109,11 @@ material: C# wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Verify request archives must pass the same public-binding preflight before the
+native bridge returns a recursive spend verify result: Reserved-lineage bundles
+require a matching active `lineage_verifier_record`, semantic bundles must omit
+it, and unsupported proof attachments are rejected as malformed requests rather
+than soft invalid proof results.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -123,9 +131,9 @@ plus a record-backed lineage witness.
 generic raw Norito archives: `CapabilitiesV1()`, `BuildProofV1(requestArchive)`,
 and `VerifyProofV1(requestArchive)`. The C# SDK does not expose
 algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires ABI 6, the privacy capability/build/verify
-symbols, and successful Norito probe outputs whose operation-specific result
-schema bytes match the called entry point.
+gated. Native availability requires ABI 6 or later, the privacy
+capability/build/verify symbols, and successful Norito probe outputs whose
+operation-specific result schema bytes match the called entry point.
 
 All privacy request and response payloads must stay as raw Norito archives. C#
 validates archive magic, length, CRC, the 64 MiB native size cap, and the

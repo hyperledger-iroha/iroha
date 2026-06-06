@@ -28,8 +28,11 @@ import {
   SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
   SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+  KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -53,6 +56,9 @@ import {
   canProveKagemushaRecursiveSpendAppendOutputProofCircuitId,
   canRedeemKagemushaRecursiveSpendWitnessless,
   canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  isKagemushaCompactPaymentTokenNativeAvailable,
+  isKagemushaRecursiveAggregationProofBundleNativeAvailable,
+  isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
   isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
@@ -60,6 +66,7 @@ import {
   isSupportedKagemushaRecursiveSpendPreviousProofCircuitId,
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  preferredKagemushaOfflineSpendModeForCapabilities,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit,
   requiresKagemushaRecursiveSpendLineageWitnessForRedeem,
@@ -167,6 +174,10 @@ import {
   wrapSolanaSccpProofResult,
   preferredKagemushaOfflineSpendMode,
   isKagemushaRecursiveSpendNativeAvailable,
+  kagemushaProveVerifiedCompactPaymentTokenWithRecords,
+  kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes,
+  kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes,
+  kagemushaVerifyRecursiveCompactPaymentToken,
   kagemushaRecursiveSpendInit,
   kagemushaRecursiveSpendAppend,
   kagemushaRecursiveSpendTransitionProfileInit,
@@ -824,8 +835,11 @@ test("package SCCP entrypoint and declarations cover public source exports", () 
 test("package dist entrypoint exports Kagemusha recursive spend helpers", () => {
   const declarationExports = declarationExportNames();
   const expected = [
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+    "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
@@ -845,6 +859,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
     "preferredKagemushaOfflineSpendMode",
+    "preferredKagemushaOfflineSpendModeForCapabilities",
     "canRedeemKagemushaRecursiveSpendWitnessless",
     "requiresKagemushaRecursiveSpendLineageWitnessForRedeem",
     "canAppendKagemushaRecursiveSpendWitnesslessLineage",
@@ -861,7 +876,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "canProveKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
+    "isKagemushaCompactPaymentTokenNativeAvailable",
+    "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
+    "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
     "isKagemushaRecursiveSpendNativeAvailable",
+    "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
+    "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+    "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+    "kagemushaVerifyRecursiveCompactPaymentToken",
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
     "kagemushaRecursiveSpendTransitionProfileInit",
@@ -877,8 +899,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     assert.match(DIST_INDEX_TEXT, new RegExp(`\\b${name}\\b`, "u"));
     assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
   }
+  assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1, "recursive_compact_v1");
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1, "recursive_spend_v1");
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1, "checked_prefold_v1");
+  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION, 7);
+  assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -1435,6 +1460,14 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     );
   }
   assert.equal(
+    preferredKagemushaOfflineSpendModeForCapabilities(true, true),
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+  );
+  assert.equal(
+    preferredKagemushaOfflineSpendModeForCapabilities(false, true),
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+  );
+  assert.equal(
     preferredKagemushaOfflineSpendMode(true),
     KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
@@ -1442,7 +1475,40 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     preferredKagemushaOfflineSpendMode(false),
     KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   );
+  assert.equal(typeof isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), "boolean");
+  assert.equal(typeof isKagemushaCompactPaymentTokenNativeAvailable(), "boolean");
+  assert.equal(
+    typeof isKagemushaRecursiveAggregationProofBundleNativeAvailable(),
+    "boolean",
+  );
   assert.equal(typeof isKagemushaRecursiveSpendNativeAvailable(), "boolean");
+  assert.equal(typeof kagemushaVerifyRecursiveCompactPaymentToken, "function");
+  assert.throws(
+    () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(
+      privacyNoritoFrameWithPayload(0x4d),
+    ),
+    /Kagemusha compact payment-token prover|unavailable in browser-only crypto builds|Native binding required/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+        privacyNoritoFrameWithPayload(0x4e),
+        privacyNoritoFrameWithPayload(0x4f),
+      ),
+    /Kagemusha recursive aggregation proof-bundle prover|unavailable in browser-only crypto builds|Native binding required/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        privacyNoritoFrameWithPayload(0x4a),
+        privacyNoritoFrameWithPayload(0x4c),
+    ),
+    /recursive compact Kagemusha payment-token prover|unavailable in browser-only crypto builds|Native binding required/,
+  );
+  assert.throws(
+    () => kagemushaVerifyRecursiveCompactPaymentToken(privacyNoritoFrameWithPayload(0x4b)),
+    /recursive compact Kagemusha payment-token verifier|unavailable in browser-only crypto builds|Native binding required/,
+  );
   for (const helper of [
     kagemushaRecursiveSpendInit,
     kagemushaRecursiveSpendAppend,
@@ -1461,7 +1527,16 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
 test("package dist Kagemusha recursive spend availability rejects coerced ABI versions", () => {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
   try {
-    for (const abiVersion of ["6", true]) {
+    for (const abiVersion of [
+      "6",
+      true,
+      -1,
+      6.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+      0x1_0000_0000,
+    ]) {
       globalThis.__IROHA_NATIVE_BINDING__ = {
         connectNoritoBridgeAbiVersion() {
           return abiVersion;
@@ -1484,9 +1559,16 @@ test("package dist Kagemusha recursive spend availability rejects coerced ABI ve
         kagemushaRecursiveSpendRedeem() {
           return Uint8Array.from([6]);
         },
+        kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes() {
+          return Uint8Array.from([10]);
+        },
+        kagemushaVerifyRecursiveCompactPaymentToken() {
+          return true;
+        },
       };
 
       assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
+      assert.equal(isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false);
     }
   } finally {
     if (previous === undefined) {

@@ -798,14 +798,14 @@ final class ToriiClientTests: XCTestCase {
 
     private func legacyFlatBytesVec(_ bytes: Data) -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeLength(UInt64(bytes.count))
+        writer.writeUInt64LE(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data
     }
 
     private func constVecBytes(_ bytes: Data) -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeLength(UInt64(bytes.count))
+        writer.writeUInt64LE(UInt64(bytes.count))
         for byte in bytes {
             writer.writeLength(1)
             writer.writeUInt8(byte)
@@ -1675,14 +1675,14 @@ final class ToriiClientTests: XCTestCase {
         let encoded = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(payload)
 
         XCTAssertNotNil(
-            encoded.range(of: Data([0x07, 0x03, 0x01, 0xFA, 0x01, 0xFB, 0x01, 0xFC]))
+            encoded.range(of: Data([0x0E, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xFA, 0x01, 0xFB, 0x01, 0xFC]))
         )
         XCTAssertNil(
-            encoded.range(of: Data([0x04, 0x03, 0xFA, 0xFB, 0xFC]))
+            encoded.range(of: Data([0x0B, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFA, 0xFB, 0xFC]))
         )
     }
 
-    func testIdentifierReceiptOpeningSignatureConstVecEncodingUsesLongLengthFraming() throws {
+    func testIdentifierReceiptOpeningSignatureConstVecEncodingUsesFixedU64LengthFraming() throws {
         let accountId = try canonicalOwnerLiteral()
         let longSignature = Data((0..<128).map { UInt8($0) })
         let payload = makeSignedIdentifierReceiptPayload(
@@ -1702,7 +1702,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNotEqual(signaturePayload, legacyFlatBytesVec(longSignature))
         XCTAssertEqual(
             Data(signaturePayload.prefix(6)),
-            Data([0x80, 0x01, 0x01, 0x00, 0x01, 0x01])
+            Data([0x80, 0x00, 0x00, 0x00, 0x00, 0x00])
         )
     }
 
@@ -8978,7 +8978,13 @@ final class ToriiClientHeaderTests: XCTestCase {
         for payload in payloads {
             let data = payload.data(using: .utf8)!
             XCTAssertThrowsError(try JSONDecoder().decode([ToriiVerifyingKeyListItem].self, from: data)) { error in
-                XCTAssertTrue(String(describing: error).contains("unsupported production verifier backend"))
+                let description = String(describing: error)
+                XCTAssertTrue(
+                    description.contains("unsupported production verifier backend")
+                        || description.contains("stored key backend must match record backend")
+                        || description.contains("vk_len must match stored key byte length"),
+                    description
+                )
             }
         }
     }

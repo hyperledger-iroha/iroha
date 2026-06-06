@@ -80,6 +80,84 @@ const EXPECTED_PRIVACY_C_FFI_SYMBOLS = Object.freeze([
   "iroha_privacy_verify_proof_v1",
   "iroha_privacy_free_buffer",
 ]);
+const EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS = Object.freeze([
+  Object.freeze([
+    "anonymous-pgc-k-out-of-n-v1",
+    "anonymous-pgc-k-out-of-n",
+    "anonymous-pgc",
+  ]),
+  Object.freeze([
+    "verange-transparent-range-v1",
+    "verange-transparent-range",
+    "verange",
+  ]),
+  Object.freeze([
+    "zkat-policy-private-auth-v1",
+    "zkat-policy-private-authenticator",
+    "zkat",
+  ]),
+  Object.freeze([
+    "zk-ams-recursive-admission-v0",
+    "recursive-anonymous-admission",
+    "recursive-anonymous-admission",
+  ]),
+  Object.freeze([
+    "vega-existing-credential-zk-v0",
+    "existing-credential-zk",
+    "vega-existing-credential-zk",
+  ]),
+  Object.freeze([
+    "silent-threshold-anoncred-v0",
+    "threshold-anonymous-credentials",
+    "silent-threshold-anoncred",
+  ]),
+  Object.freeze([
+    "zk-x509-onchain-identity-v0",
+    "zkvm-x509-identity",
+    "zk-x509",
+  ]),
+  Object.freeze([
+    "jindo-lattice-pcs-zk-v0",
+    "lattice-polynomial-commitment",
+    "lattice-pcs-sis",
+  ]),
+  Object.freeze([
+    "sis-hints-anoncred-pq-v0",
+    "lattice-anonymous-credentials",
+    "sis-with-hints",
+  ]),
+  Object.freeze([
+    "zk-ace-pq-authorization-v0",
+    "stark/fri/sha256-goldilocks",
+    "stark-fri",
+  ]),
+  Object.freeze([
+    "orchard-halo2-actions-v1",
+    "halo2-pasta-action-bundle",
+    "halo2-ipa-orchard",
+  ]),
+  Object.freeze([
+    "penumbra-masp-v1",
+    "groth16-bls12-377-decaf377",
+    "groth16-bls12-377",
+  ]),
+  Object.freeze([
+    "monero-fcmp-plus-plus-v1",
+    "fcmp-plus-plus-curve-trees-bulletproofs",
+    "fcmp-plus-plus-curve-tree",
+  ]),
+  Object.freeze([
+    "miden-stark-note-v1",
+    "stark-vm-note-transaction",
+    "miden-stark",
+  ]),
+  Object.freeze([
+    "aztec-private-rollup-v1",
+    "plonkish-private-kernel-rollup",
+    "aztec-plonkish-private-kernel",
+  ]),
+  Object.freeze(["pq-masp-stark-v0", "stark-fri", "pq-masp-stark-fri"]),
+]);
 const REQUIRED_PRIVACY_HEADER_NEGATIVE_CONTROL_MODES = Object.freeze([
   "--negative-control-missing-privacy-header",
   "--negative-control-bad-privacy-signature",
@@ -168,6 +246,15 @@ const EXPECTED_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "silent-threshold-anoncred",
   "zk-x509",
   "sis-with-hints",
+]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS = Object.freeze([
+  "stark-fri",
+]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([
+  Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"]),
+]);
+const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS = Object.freeze([
+  Object.freeze(["stark-fri", "stark/fri", "stark/fri/sha256-goldilocks"]),
 ]);
 const EXPECTED_ADVERSARIAL_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "halo2/ipa/orchard/dev-fixture",
@@ -358,6 +445,32 @@ function publicPrivacyCatalogNativeRows(descriptors, { pythonShape = false } = {
   }));
 }
 
+function publicRequiredPrivacyPlanNativeRows(
+  descriptors,
+  requiredRows,
+  { pythonShape = false } = {},
+) {
+  return requiredRows.map(([algorithmId, implementationStage, backendFamily]) => {
+    const descriptor = descriptors.find((candidate) => candidate.id === algorithmId);
+    assert.ok(descriptor, `public required privacy plan row ${algorithmId} is missing`);
+    assert.equal(
+      pythonShape ? descriptor.implementation_stage : descriptor.implementationStage,
+      implementationStage,
+      `public required privacy plan row ${algorithmId} implementation stage drifted`,
+    );
+    assert.equal(
+      pythonShape ? descriptor.backend_family : descriptor.backendFamily,
+      backendFamily,
+      `public required privacy plan row ${algorithmId} backend family drifted`,
+    );
+    return [
+      algorithmId,
+      pythonShape ? descriptor.proof_family : descriptor.proofFamily,
+      backendFamily,
+    ];
+  });
+}
+
 function parseRustStringField(block, fieldName, label) {
   return requireMatch(
     block,
@@ -415,6 +528,42 @@ function extractNativePrivacyCatalogRows(text, label) {
     new Set(rows.map((row) => row.id)).size,
     rows.length,
     `${label} native privacy catalog entries contain duplicate ids`,
+  );
+  return rows;
+}
+
+function extractNativeRequiredProductionPlanRows(text, label) {
+  const rowsBody = requireMatch(
+    text,
+    /const\s+PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS:\s*&\[\(&str,\s*&str,\s*&str\)\]\s*=\s*&\[([\s\S]*?)\n\];/,
+    `${label} native required production plan rows`,
+  )[1];
+  const rows = [...rowsBody.matchAll(/\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,?\s*\)/g)].map(
+    (match) => [match[1], match[2], match[3]],
+  );
+
+  assert.equal(
+    rows.length,
+    EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.length,
+    `${label} native required production plan row count drifted`,
+  );
+  return rows;
+}
+
+function extractPublicRequiredPrivacyPlanRows(text, label) {
+  const rowsBody = requireMatch(
+    text,
+    /const\s+REQUIRED_PRIVACY_PLAN_ROWS\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/,
+    `${label} public required privacy plan rows`,
+  )[1];
+  const rows = [...rowsBody.matchAll(/Object\.freeze\(\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,?\s*\]\)/g)].map(
+    (match) => [match[1], match[2], match[3]],
+  );
+
+  assert.equal(
+    rows.length,
+    EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.length,
+    `${label} public required privacy plan row count drifted`,
   );
   return rows;
 }
@@ -844,6 +993,13 @@ function rustBridgeAbiReturn(text, functionName) {
 
 function assertContractSubset(label, actual) {
   for (const [key, value] of Object.entries(actual)) {
+    if (key === "requiredBridgeAbiVersion") {
+      assert.ok(
+        value >= EXPECTED_CONTRACT[key],
+        `${label} ${key} must be at least ${EXPECTED_CONTRACT[key]}`,
+      );
+      continue;
+    }
     assert.equal(value, EXPECTED_CONTRACT[key], `${label} ${key} drifted`);
   }
 }
@@ -943,7 +1099,7 @@ function sliceFrom(text, start, label) {
 function assertNoDirectAlgorithmCapabilityFields(label, body) {
   assert.doesNotMatch(
     body,
-    /\b(?:anonymousPgc|AnonymousPgc|verange|VeRange|zkat|ZkAt|zkAms|ZkAms|vega|Vega|silentThreshold|SilentThreshold|zkX509|ZkX509|jindo|Jindo|sisHints|SisHints|orchard|Orchard|penumbra|Penumbra|fcmp|Fcmp|miden|Miden|aztec|Aztec|pqMasp|PqMasp|mlKem|MlKem|assetHiddenTransferProof|AssetHiddenTransferProof|build[A-Z]|verify[A-Z])\b/,
+    /\b(?:anonymousPgc|AnonymousPgc|verange|VeRange|zkat|ZkAt|zkAce|ZkAce|zkAms|ZkAms|vega|Vega|silentThreshold|SilentThreshold|zkX509|ZkX509|jindo|Jindo|sisHints|SisHints|orchard|Orchard|penumbra|Penumbra|fcmp|Fcmp|miden|Miden|aztec|Aztec|pqMasp|PqMasp|mlKem|MlKem|assetHiddenTransferProof|AssetHiddenTransferProof|build[A-Z]|verify[A-Z])[A-Za-z0-9_]*\b/,
     `${label} privacy capabilities must not expose direct algorithm capability fields`,
   );
 }
@@ -1682,20 +1838,83 @@ test("native privacy FFI catalogs keep dev fixtures explicit and non-production"
 });
 
 test("native privacy FFI catalogs pin required production plan rows", () => {
+  const jsSourceRequiredRows = extractPublicRequiredPrivacyPlanRows(
+    source("javascript/iroha_js/src/privacyAlgorithms.js"),
+    "JS source",
+  );
+  const jsDistRequiredRows = extractPublicRequiredPrivacyPlanRows(
+    source("javascript/iroha_js/dist/privacyAlgorithms.js"),
+    "JS dist",
+  );
+  assert.deepEqual(
+    jsDistRequiredRows,
+    jsSourceRequiredRows,
+    "JS dist public required privacy plan rows must match JS source rows",
+  );
+  assert.deepEqual(
+    publicRequiredPrivacyPlanNativeRows(
+      getSrcPrivacyAlgorithmDescriptors(),
+      jsSourceRequiredRows,
+    ),
+    EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS,
+    "native required production plan rows must match public required privacy plan rows",
+  );
+  assert.deepEqual(
+    publicRequiredPrivacyPlanNativeRows(
+      getDistPrivacyAlgorithmDescriptors(),
+      jsSourceRequiredRows,
+    ),
+    EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS,
+    "native required production plan rows must match dist public required privacy plan rows",
+  );
+  assert.deepEqual(
+    publicRequiredPrivacyPlanNativeRows(
+      loadPythonPrivacyAlgorithmDescriptors(),
+      jsSourceRequiredRows,
+      { pythonShape: true },
+    ),
+    EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS,
+    "native required production plan rows must match Python public required privacy plan rows",
+  );
+  const requiredAllowlistRustBackends = new Map(
+    EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS.map(
+      ([publicBackendLabel, ...rustBackendLabels]) => [publicBackendLabel, rustBackendLabels],
+    ),
+  );
+  const productionAllowlistedNativeRows =
+    EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.filter(
+      ([_algorithmId, _proofFamily, backendFamily]) =>
+        EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS.includes(backendFamily),
+    );
+  assert.deepEqual(
+    productionAllowlistedNativeRows.map(([algorithmId, _proofFamily, backendFamily]) => [
+      algorithmId,
+      backendFamily,
+    ]),
+    EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS,
+    "native required production-allowlisted rows must stay scoped to public ZK-ACE allowlist rows",
+  );
+  for (const [algorithmId, proofFamily, backendFamily] of productionAllowlistedNativeRows) {
+    assert.ok(
+      requiredAllowlistRustBackends.get(backendFamily)?.includes(proofFamily),
+      `native required production-allowlisted row ${algorithmId} must use a concrete Rust verifier profile`,
+    );
+  }
+
   for (const [label, text] of [
     ["C bridge privacy FFI", source("crates/connect_norito_bridge/src/lib.rs")],
     ["JS NAPI privacy FFI", source("crates/iroha_js_host/src/lib.rs")],
     ["Python PyO3 privacy FFI", source("python/iroha_python/iroha_python_rs/src/lib.rs")],
   ]) {
-    assert.match(
-      text,
-      /const\s+PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS:\s*&\[\(&str,\s*&str,\s*&str\)\][\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*anonymous-pgc-k-out-of-n[\s\S]*anonymous-pgc[\s\S]*zk-ace-pq-authorization-v0[\s\S]*stark\/fri\/sha256-goldilocks[\s\S]*stark-fri[\s\S]*orchard-halo2-actions-v1[\s\S]*halo2-pasta-action-bundle[\s\S]*halo2-ipa-orchard[\s\S]*pq-masp-stark-v0[\s\S]*stark-fri[\s\S]*pq-masp-stark-fri/,
-      `${label} must pin the required production privacy plan rows with proof and backend families`,
+    assert.deepEqual(
+      extractNativeRequiredProductionPlanRows(text, label),
+      EXPECTED_NATIVE_PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS,
+      `${label} must pin every required production privacy plan row with proof and backend families`,
     );
     assert.match(
       text,
-      /fn\s+privacy_required_production_plan_rows_are_present\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS[\s\S]*entry\.id\s*==\s*\*algorithm_id[\s\S]*entry\.proof_family\s*==\s*\*proof_family[\s\S]*entry\.backend_family\s*==\s*\*backend_family[\s\S]*privacy_entrypoints_include_production_proof_builder\s*\(\s*entry\.planned_entrypoints\s*,?\s*\)[\s\S]*\}/,
-      `${label} must validate required row proof families, backend families, and planned production proof builders`,
+      /fn\s+privacy_required_production_plan_rows_are_present\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS[\s\S]*let\s+mut\s+matching_rows\s*=\s*entries\.iter\(\)\.filter\(\|entry\|\s*entry\.id\s*==\s*\*algorithm_id\)[\s\S]*matching_rows\.next\(\)\s*,\s*matching_rows\.next\(\)[\s\S]*\(Some\(entry\),\s*None\)[\s\S]*entry\.proof_family\s*==\s*\*proof_family[\s\S]*entry\.backend_family\s*==\s*\*backend_family[\s\S]*privacy_entrypoints_include_production_proof_builder\s*\(\s*entry\.planned_entrypoints\s*,?\s*\)[\s\S]*\}/,
+      `${label} must validate exact required row cardinality, proof families, backend families, and planned production proof builders`,
     );
     assert.match(
       text,
@@ -1704,8 +1923,8 @@ test("native privacy FFI catalogs pin required production plan rows", () => {
     );
     assert.match(
       text,
-      /privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows[\s\S]*deriveOrchardWitness[\s\S]*ProofEnvelope[\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*wrong-backend[\s\S]*wrong-proof[\s\S]*planned_entrypoints\s*=\s*&\[\][\s\S]*planned production proof builder/,
-      `${label} must test missing, proof-drifted, backend-drifted, unplanned, helper-only, and proof-helper required rows`,
+      /privacy_algorithm_catalog_rejects_missing_or_misregistered_required_plan_rows[\s\S]*deriveOrchardWitness[\s\S]*ProofEnvelope[\s\S]*anonymous-pgc-k-out-of-n-v1[\s\S]*duplicate required production plan rows must be rejected[\s\S]*wrong-backend[\s\S]*wrong-proof[\s\S]*planned_entrypoints\s*=\s*&\[\][\s\S]*planned production proof builder/,
+      `${label} must test missing, duplicate, proof-drifted, backend-drifted, unplanned, helper-only, and proof-helper required rows`,
     );
   }
 });
@@ -2004,6 +2223,11 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
+      /privacy_capabilities_are_norito_v1_and_fail_closed[\s\S]*ZK-ACE native capability must be advertised[\s\S]*stark\/fri\/sha256-goldilocks[\s\S]*stark-fri[\s\S]*ZK-ACE native capability must not become production-ready only because its verifier backend is allowlisted[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST/,
+      `${label} must pin ZK-ACE native capabilities to concrete profile while fail-closed`,
+    );
+    assert.match(
+      text,
       /privacy_capability_invariants_reject_forged_production_readiness[\s\S]*halo2-production-ready[\s\S]*audit-signoff-pasta[\s\S]*buildMainnetReadyProof[\s\S]*claimed-mainnet-row[\s\S]*buildClaimedAuditProof/,
       `${label} must test production-ready/mainnet/audit exposed-label claims`,
     );
@@ -2026,6 +2250,16 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
       /const\s+PRIVACY_PRODUCTION_DISABLED_MESSAGE:\s*&str\s*=\s*"[^"]*exact protocol implementation[^"]*real proving[^"]*real verification[^"]*chain admission[^"]*cross-SDK parity[^"]*wallet\/state support[^"]*deterministic tests[^"]*fuzzing[^"]*performance gates[^"]*external audit[^"]*real protocol engine[^"]*Iroha production allowlist[^"]*"/,
       `${label} must enumerate every production-disabled gate in the public result message`,
     );
+    for (const snippet of [
+      "privacy production is disabled until exact protocol implementation",
+      "real protocol engine enablement",
+      "Iroha production allowlist evidence all pass",
+    ]) {
+      assert.ok(
+        text.includes(snippet),
+        `${label} production-disabled message constant must include ${snippet}`,
+      );
+    }
     assert.match(
       text,
       /privacy_failure_result\(\s*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,\s*PRIVACY_PRODUCTION_DISABLED_MESSAGE,\s*Some\(request\),\s*\)/,
@@ -2038,8 +2272,18 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
     );
     assert.match(
       text,
-      /privacy_verify_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"deterministic tests"[\s\S]*"fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)/,
-      `${label} must test that production-disabled proof results name every gate`,
+      /privacy_build_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*zk-ace-pq-authorization-v0[\s\S]*buildZkAceAuthorizationProofV1[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*stark-fri:zk_ace_pq_authorization_v0[\s\S]*Iroha production allowlist[\s\S]*!zk_ace_result\.message\.contains\("secret-witness"\)/,
+      `${label} must keep ZK-ACE build requests production-disabled without witness leakage`,
+    );
+    assert.match(
+      text,
+      /privacy_verify_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_verify_proof_v1|PrivacyProofOperationV1::Verify)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"deterministic tests"[\s\S]*"fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
+      `${label} must test that production-disabled verify results name every gate without proof leakage`,
+    );
+    assert.match(
+      text,
+      /privacy_verify_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*zk-ace-pq-authorization-v0[\s\S]*buildZkAceAuthorizationProofV1[\s\S]*candidate-zk-ace-proof[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*stark-fri:zk_ace_pq_authorization_v0[\s\S]*Iroha production allowlist[\s\S]*!zk_ace_result\.message\.contains\("candidate-zk-ace-proof"\)/,
+      `${label} must keep ZK-ACE verify requests production-disabled without proof leakage`,
     );
   }
 });
@@ -2209,8 +2453,13 @@ test("native privacy FFI hosts reject empty public inputs before production gate
     );
     assert.match(
       text,
-      /privacy_proof_ffi_rejects_empty_public_inputs_before_production_gate[\s\S]*public_inputs[\s\S]*non-empty[\s\S]*!result\.verified/,
-      `${label} must test empty public-input rejection`,
+      /privacy_build_proof_rejects_empty_public_inputs_before_production_gate[\s\S]*PrivacyProofOperationV1::Build[\s\S]*public_inputs[\s\S]*non-empty[\s\S]*!result\.verified/,
+      `${label} must test build empty public-input rejection`,
+    );
+    assert.match(
+      text,
+      /privacy_verify_proof_rejects_empty_public_inputs_before_production_gate[\s\S]*PrivacyProofOperationV1::Verify[\s\S]*public_inputs[\s\S]*non-empty[\s\S]*!result\.verified/,
+      `${label} must test verify empty public-input rejection`,
     );
   }
 });
@@ -2241,6 +2490,21 @@ test("native privacy FFI hosts bound reflected request fields before production 
       /const\s+PRIVACY_REQUEST_PROOF_MAX_BYTES:\s*usize\s*=\s*PRIVACY_NATIVE_ARCHIVE_MAX_BYTES\s*\/\s*2\s*;/,
       `${label} must bound proof bytes before dispatch`,
     );
+    const requestTextFieldsHelper = requireMatch(
+      text,
+      /fn\s+privacy_request_text_fields\([^)]*request:\s*&PrivacyProofRequestV1[^)]*\)\s*->\s*\[&str;\s*3\]\s*\{[\s\S]*?\}/,
+      `${label} request text-field enumerator`,
+    )[0];
+    for (const snippet of [
+      "&request.algorithm_id",
+      "&request.entrypoint",
+      "&request.vk_ref",
+    ]) {
+      assert.ok(
+        requestTextFieldsHelper.includes(snippet),
+        `${label} request text-field enumerator must include ${snippet}`,
+      );
+    }
     assert.match(
       text,
       /privacy_request_has_oversized_text_field\(&request\)[\s\S]*privacy proof request text fields exceed maximum length[\s\S]*None/,
@@ -2306,29 +2570,42 @@ test("native privacy FFI hosts bound reflected request fields before production 
       /request\.proof\.len\(\)\s*>\s*PRIVACY_REQUEST_PROOF_MAX_BYTES[\s\S]*privacy proof request proof exceeds maximum length[\s\S]*None/,
       `${label} must reject oversized proofs without request reflection`,
     );
+    const oversizedTextFieldTest = requireMatch(
+      text,
+      /fn\s+privacy_request_rejects_oversized_text_fields_without_reflection\([^)]*\)\s*\{[\s\S]*?windows\(oversized\.len\(\)\)[\s\S]*?\n\s*\}\s*\n\s*\}/,
+      `${label} oversized text-field regression`,
+    )[0];
+    for (const snippet of [
+      "PRIVACY_REQUEST_TEXT_FIELD_MAX_BYTES + 1",
+      '"algorithm_id"',
+      '"entrypoint"',
+      '"vk_ref"',
+      "maximum length",
+      "windows(oversized.len())",
+    ]) {
+      assert.ok(
+        oversizedTextFieldTest.includes(snippet),
+        `${label} oversized text-field regression must include ${snippet}`,
+      );
+    }
     assert.match(
       text,
-      /privacy_request_rejects_oversized_text_fields_without_reflection/,
-      `${label} must test oversized text-field rejection`,
-    );
-    assert.match(
-      text,
-      /privacy_request_rejects_control_text_fields_without_reflection/,
+      /privacy_request_rejects_control_text_fields_without_reflection[\s\S]*confidential-transfer-v2\\nforged[\s\S]*buildConfidentialTransferProofV2\\rforged[\s\S]*vk:test\\tforged[\s\S]*control characters/,
       `${label} must test control-character text-field rejection`,
     );
     assert.match(
       text,
-      /privacy_request_rejects_non_ascii_text_fields_without_reflection[\s\S]*unicode-text-never-echo[\s\S]*printable ASCII/,
+      /privacy_request_rejects_non_ascii_text_fields_without_reflection[\s\S]*unicode-text-never-echo[\s\S]*confidential-transfer-v2\{marker\}\\u\{200B\}[\s\S]*buildConfidentialTransferProofV2\{marker\}\\u\{2060\}[\s\S]*vk:test\{marker\}\\u\{FF1A\}spoof[\s\S]*printable ASCII/,
       `${label} must test non-ASCII text-field rejection without reflection`,
     );
     assert.match(
       text,
-      /privacy_request_rejects_unportable_text_fields_without_reflection[\s\S]*punctuation-text-never-echo[\s\S]*portable identifier/,
+      /privacy_request_rejects_unportable_text_fields_without_reflection[\s\S]*punctuation-text-never-echo[\s\S]*confidential-transfer-v2 \{marker\}[\s\S]*buildConfidentialTransferProofV2\\"\{marker\}\\"[\s\S]*vk:test\/\.\.\/\{marker\}[\s\S]*portable identifier/,
       `${label} must test unportable text-field rejection without reflection`,
     );
     assert.match(
       text,
-      /privacy_request_rejects_invalid_catalog_shapes_without_reflection[\s\S]*catalog-shape-text-never-echo[\s\S]*_confidential-transfer-v2[\s\S]*-confidential-transfer-v2[\s\S]*confidential-transfer-v2-\{marker\}_[\s\S]*confidential-transfer-v2-\{marker\}-[\s\S]*_buildConfidentialTransferProofV2\{marker\}[\s\S]*buildConfidentialTransferProofV2_\{marker\}[\s\S]*Iroha\._Privacy\.buildConfidentialTransferProofV2\{marker\}[\s\S]*Iroha\.Privacy_\.buildConfidentialTransferProofV2\{marker\}[\s\S]*catalog identifier shapes/,
+      /privacy_request_rejects_invalid_catalog_shapes_without_reflection[\s\S]*catalog-shape-text-never-echo[\s\S]*_confidential-transfer-v2[\s\S]*-confidential-transfer-v2[\s\S]*confidential-transfer-v2-\{marker\}_[\s\S]*confidential-transfer-v2-\{marker\}-[\s\S]*buildConfidentialTransferProofV2:\{marker\}[\s\S]*build-ConfidentialTransferProofV2\{marker\}[\s\S]*_buildConfidentialTransferProofV2\{marker\}[\s\S]*buildConfidentialTransferProofV2_\{marker\}[\s\S]*Iroha\._Privacy\.buildConfidentialTransferProofV2\{marker\}[\s\S]*Iroha\.Privacy_\.buildConfidentialTransferProofV2\{marker\}[\s\S]*catalog identifier shapes/,
       `${label} must test invalid catalog-shape request rejection without reflection`,
     );
     const emptyRequiredTextFieldTest = requireMatch(
@@ -2354,20 +2631,89 @@ test("native privacy FFI hosts bound reflected request fields before production 
       /privacy_request_rejects_exposed_production_claims_without_reflection[\s\S]*forged-mainnet-ready-algorithm[\s\S]*claimed-mainnet-algorithm[\s\S]*buildAuditSignoffProof[\s\S]*buildClaimedAuditProof[\s\S]*buildS\.e\.c\.u\.r\.i\.t\.yReviewPassedProof[\s\S]*externally-audited-confidential-transfer[\s\S]*audit-claim-confidential-transfer[\s\S]*production\/mainnet\/audit readiness/,
       `${label} must test production/mainnet/audit claim rejection without reflection`,
     );
-    assert.match(
+    const productionClaimTest = requireMatch(
       text,
-      /privacy_request_rejects_oversized_public_inputs_without_reflection/,
-      `${label} must test public-input rejection without reflection`,
+      /fn\s+privacy_request_rejects_exposed_production_claims_without_reflection\([^)]*\)\s*\{[\s\S]*?(?=\n\s*#\[test\])/,
+      `${label} production-claim request-field regression`,
+    )[0];
+    for (const snippet of [
+      "algorithm_id",
+      "forged-mainnet-ready-algorithm",
+      "claimed-mainnet-algorithm",
+      "entrypoint",
+      "buildAuditSignoffProof",
+      "buildClaimedAuditProof",
+      "buildS.e.c.u.r.i.t.yReviewPassedProof",
+      "vk_ref",
+      "externally-audited-confidential-transfer",
+      "audit-claim-confidential-transfer",
+      "production/mainnet/audit readiness",
+      "value.as_bytes()",
+    ]) {
+      assert.ok(
+        productionClaimTest.includes(snippet),
+        `${label} production-claim request-field regression must include ${snippet}`,
+      );
+    }
+    const oversizedPublicInputsTest = requireMatch(
+      text,
+      /fn\s+privacy_request_rejects_oversized_public_inputs_without_reflection\([^)]*\)\s*\{[\s\S]*?(?=\n\s*#\[test\])/,
+      `${label} oversized public-input regression`,
+    )[0];
+    for (const snippet of [
+      "PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES + 1",
+      '"public_inputs"',
+      '"public"',
+    ]) {
+      assert.ok(
+        oversizedPublicInputsTest.includes(snippet),
+        `${label} oversized public-input regression must include ${snippet}`,
+      );
+    }
+
+    const oversizedWitnessTest = requireMatch(
+      text,
+      /fn\s+privacy_request_rejects_oversized_witness_without_reflection\([^)]*\)\s*\{[\s\S]*?(?=\n\s*#\[test\])/,
+      `${label} oversized witness regression`,
+    )[0];
+    for (const snippet of [
+      "oversized-witness-never-echo",
+      "PRIVACY_REQUEST_WITNESS_MAX_BYTES + 1",
+      "copy_from_slice(marker)",
+      '"witness"',
+    ]) {
+      assert.ok(
+        oversizedWitnessTest.includes(snippet),
+        `${label} oversized witness regression must include ${snippet}`,
+      );
+    }
+    assert.ok(
+      oversizedWitnessTest.includes("assert_subslice_absent") ||
+        oversizedWitnessTest.includes("oversized witness marker was reflected"),
+      `${label} oversized witness regression must check encoded-result non-reflection`,
     );
-    assert.match(
+
+    const oversizedProofTest = requireMatch(
       text,
-      /privacy_request_rejects_oversized_witness_without_reflection/,
-      `${label} must test witness rejection without reflection`,
-    );
-    assert.match(
-      text,
-      /privacy_request_rejects_oversized_proof_without_reflection/,
-      `${label} must test proof rejection without reflection`,
+      /fn\s+privacy_request_rejects_oversized_proof_without_reflection\([^)]*\)\s*\{[\s\S]*?(?=\n\s*#\[test\])/,
+      `${label} oversized proof regression`,
+    )[0];
+    for (const snippet of [
+      "oversized-proof-never-echo",
+      "PRIVACY_REQUEST_PROOF_MAX_BYTES + 1",
+      "copy_from_slice(marker)",
+      '"proof"',
+      "PrivacyProofOperationV1::Verify",
+    ]) {
+      assert.ok(
+        oversizedProofTest.includes(snippet),
+        `${label} oversized proof regression must include ${snippet}`,
+      );
+    }
+    assert.ok(
+      oversizedProofTest.includes("assert_subslice_absent") ||
+        oversizedProofTest.includes("oversized proof marker was reflected"),
+      `${label} oversized proof regression must check encoded-result non-reflection`,
     );
   }
 });
@@ -2388,25 +2734,90 @@ test("native privacy FFI hosts keep failure results non-successful and proof-fre
       /debug_assert!\(privacy_failure_result_invariants_hold\(&result\)\)/,
       `${label} must assert failure-result invariants at construction`,
     );
-    assert.match(
+    const witnessHelper = requireMatch(
       text,
-      /fn\s+assert_privacy_result_does_not_serialize_witness\([^)]*result:\s*&PrivacyProofResultV1[^)]*witness:\s*&\[u8\][^)]*\)[\s\S]*result\.proof\.is_empty\(\)[\s\S]*privacy result message[\s\S]*Norito privacy result archive/,
-      `${label} must expose a witness non-reflection assertion helper`,
+      /fn\s+assert_privacy_result_does_not_serialize_witness\([^)]*result:\s*&PrivacyProofResultV1[^)]*witness:\s*&\[u8\][^)]*\)\s*\{[\s\S]*?\n\s*\}\n/,
+      `${label} witness non-reflection helper`,
+    )[0];
+    for (const snippet of [
+      "result.proof.is_empty()",
+      "failed privacy result must not carry a proof",
+      "privacy result message",
+      "Norito privacy result archive",
+      "assert_subslice_absent",
+    ]) {
+      assert.ok(
+        witnessHelper.includes(snippet),
+        `${label} witness non-reflection helper must include ${snippet}`,
+      );
+    }
+
+    const witnessFailureMatrix = requireMatch(
+      text,
+      /fn\s+privacy_failure_results_never_serialize_witness_material\([^)]*\)\s*\{[\s\S]*?(?=\n\s*#\[test\])/,
+      `${label} witness failure matrix`,
+    )[0];
+    for (const snippet of [
+      "witness-never-echo",
+      "PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM",
+      "PRIVACY_FFI_ERROR_INVALID_REQUEST",
+      "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED",
+      "wrong_vk_backend",
+      "wrong_vk_name",
+      "empty_public_inputs",
+      "disabled_build",
+      "disabled_verify",
+      "witness_shadow_verify",
+      "assert_privacy_result_does_not_serialize_witness",
+      "PrivacyProofOperationV1::Build",
+      "PrivacyProofOperationV1::Verify",
+    ]) {
+      assert.ok(
+        witnessFailureMatrix.includes(snippet),
+        `${label} witness failure matrix must include ${snippet}`,
+      );
+    }
+    assert.ok(
+      witnessFailureMatrix.includes("groth16-bls12-377:confidential_transfer_v2") ||
+        witnessFailureMatrix.includes("groth16-bls12-377:confidential_transfer_v2"),
+      `${label} witness failure matrix must include a wrong-backend verifier key`,
     );
-    assert.match(
-      text,
-      /privacy_failure_results_never_serialize_witness_material[\s\S]*witness-never-echo[\s\S]*groth16-bls12-377:confidential_transfer_v2[\s\S]*halo2-ipa-pasta:vk_test[\s\S]*empty_public_inputs[\s\S]*assert_privacy_result_does_not_serialize_witness/,
-      `${label} must test witness non-reflection on verifier-key and public-input failures`,
+    assert.ok(
+      witnessFailureMatrix.includes("halo2-ipa-pasta:vk_test"),
+      `${label} witness failure matrix must include a wrong verifier-key name`,
     );
     assert.match(
       text,
       /privacy_failure_results_preserve_error_invariants_without_proof_reflection/,
       `${label} must test proof-free failure results`,
     );
-    assert.match(
+    const proofNonReflectionTest = requireMatch(
       text,
-      /proof-never-echo[\s\S]*privacy_failure_result_invariants_hold\(&result\)[\s\S]*Norito privacy result archive|proof-never-echo[\s\S]*privacy_failure_result_invariants_hold\(&result\)[\s\S]*encoded privacy result/,
-      `${label} must test encoded proof-marker non-reflection`,
+      /fn\s+privacy_failure_results_preserve_error_invariants_without_proof_reflection\([^)]*\)\s*\{[\s\S]*?(?=\n\s*#\[test\]|\n\s*\}\s*$)/,
+      `${label} proof non-reflection regression`,
+    )[0];
+    for (const snippet of [
+      "proof-never-echo",
+      "build-proof-shadow",
+      "disabled-verify-proof",
+      "PrivacyProofOperationV1::Build",
+      "PrivacyProofOperationV1::Verify",
+      "privacy_failure_result_invariants_hold(&result)",
+    ]) {
+      assert.ok(
+        proofNonReflectionTest.includes(snippet),
+        `${label} proof non-reflection regression must include ${snippet}`,
+      );
+    }
+    assert.ok(
+      proofNonReflectionTest.includes("privacy failure result message") ||
+        proofNonReflectionTest.includes("privacy result message"),
+      `${label} proof non-reflection regression must check result message non-reflection`,
+    );
+    assert.ok(
+      proofNonReflectionTest.includes("Norito privacy result archive") ||
+        proofNonReflectionTest.includes("encoded privacy result"),
+      `${label} proof non-reflection regression must check encoded result bytes`,
     );
   }
 });
@@ -2737,6 +3148,50 @@ test("native privacy FFI archives use public operation schema bytes", () => {
 });
 
 test("pending privacy backend tags stay in cross-SDK parity", () => {
+  const publicRequiredPlanRows = extractPublicRequiredPrivacyPlanRows(
+    source("javascript/iroha_js/src/privacyAlgorithms.js"),
+    "JS source",
+  );
+  assert.deepEqual(
+    extractPublicRequiredPrivacyPlanRows(
+      source("javascript/iroha_js/dist/privacyAlgorithms.js"),
+      "JS dist",
+    ),
+    publicRequiredPlanRows,
+    "JS dist public required privacy plan rows must match source rows for pending backend classification",
+  );
+  const productionAllowlistedRequiredBackends = new Set(
+    EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS,
+  );
+  const requiredBackendLabels = publicRequiredPlanRows.map(
+    ([_algorithmId, _implementationStage, backendFamily]) => backendFamily,
+  );
+  const pendingRequiredBackendLabels = requiredBackendLabels
+    .filter((backendFamily) => !productionAllowlistedRequiredBackends.has(backendFamily))
+    .toSorted();
+  assert.deepEqual(
+    pendingRequiredBackendLabels,
+    [...EXPECTED_PENDING_PRIVACY_BACKEND_LABELS].toSorted(),
+    "public required backend families must match pending privacy backend tags until production allowlists pass",
+  );
+  assert.deepEqual(
+    requiredBackendLabels
+      .filter((backendFamily) => productionAllowlistedRequiredBackends.has(backendFamily))
+      .toSorted(),
+    [...EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS].toSorted(),
+    "public required backend families must document every production-allowlisted backend excluded from pending tags",
+  );
+  const productionAllowlistedRequiredRows = publicRequiredPlanRows
+    .filter(([_algorithmId, _implementationStage, backendFamily]) =>
+      productionAllowlistedRequiredBackends.has(backendFamily),
+    )
+    .map(([algorithmId, _implementationStage, backendFamily]) => [algorithmId, backendFamily]);
+  assert.deepEqual(
+    productionAllowlistedRequiredRows,
+    EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS,
+    "public required production-allowlisted backend rows must stay scoped to ZK-ACE",
+  );
+
   const rustBackendTags = source("crates/iroha_data_model/src/zk.rs");
   const swiftBackendTags = source("IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift");
   const javaBackendTags = source(
@@ -2875,6 +3330,31 @@ test("native chain proof admission uses explicit production verifier backend all
     /pub fn is_production_verify_backend_label\([^)]*\)\s*->\s*bool\s*\{[\s\S]*production_verify_backend_tag\(backend\)\.is_some\(\)/,
     "Rust verifier dispatch must expose a reusable production backend classifier",
   );
+  const rustProductionAllowlistTest = sliceBetween(
+    coreZk,
+    "fn production_verify_backend_allowlist_is_explicit",
+    "fn verify_backend_rejects_pending_production_labels_before_dispatch",
+    "Rust production verifier backend allowlist test",
+  );
+  const requiredAllowlistRustBackends = new Map(
+    EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS.map(
+      ([publicBackendLabel, ...rustBackendLabels]) => [publicBackendLabel, rustBackendLabels],
+    ),
+  );
+  assert.deepEqual(
+    [...requiredAllowlistRustBackends.keys()].toSorted(),
+    [...EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_BACKEND_LABELS].toSorted(),
+    "required production-plan backend exceptions must map every public label to a Rust verifier backend label",
+  );
+  for (const [publicBackendLabel, rustBackendLabels] of requiredAllowlistRustBackends.entries()) {
+    for (const rustBackendLabel of rustBackendLabels) {
+      assert.match(
+        rustProductionAllowlistTest,
+        new RegExp(`"${escapeRegExp(rustBackendLabel)}"[\\s\\S]*BackendTag::Stark`, "u"),
+        `required production-plan backend ${publicBackendLabel} must be explicitly covered by the Rust production allowlist test`,
+      );
+    }
+  }
   assert.match(
     worldIsi,
     /fn ensure_production_verifying_key_backend_id\([^)]*\)[\s\S]*!crate::zk::is_production_verify_backend_label\(backend\)[\s\S]*unsupported verifying key backends/,
@@ -3701,6 +4181,218 @@ test("Python privacy native wrappers require the complete FFI method surface", (
   );
 });
 
+test("privacy native ABI probes reject unsafe and out-of-range versions", () => {
+  for (const [label, text] of [
+    ["JS source crypto helper", source("javascript/iroha_js/src/crypto.js")],
+    ["JS dist crypto helper", source("javascript/iroha_js/dist/crypto.js")],
+  ]) {
+    assert.match(
+      text,
+      /const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff/,
+      `${label} must pin the maximum native privacy bridge ABI probe value`,
+    );
+    assert.match(
+      text,
+      /Number\.isSafeInteger\(version\)/,
+      `${label} must reject unsafe integer ABI probe values`,
+    );
+    assert.match(text, /version >= 0/, `${label} must reject negative ABI probe values`);
+    assert.match(
+      text,
+      /version <= PRIVACY_MAX_BRIDGE_ABI_VERSION/,
+      `${label} must reject ABI probe values wider than the native u32 contract`,
+    );
+  }
+
+  const jsPrivacyTests = source("javascript/iroha_js/test/privacyNative.test.js");
+  for (const snippet of [
+    "Number.NaN",
+    "Number.POSITIVE_INFINITY",
+    "Number.MAX_SAFE_INTEGER + 1",
+    "0x1_0000_0000",
+    "6.5",
+    "-1",
+  ]) {
+    assert.ok(
+      jsPrivacyTests.includes(snippet),
+      `JS privacy native tests must reject broken ABI probe value ${snippet}`,
+    );
+  }
+
+  const pythonCrypto = source("python/iroha_python/src/iroha_python/crypto.py");
+  assert.match(
+    pythonCrypto,
+    /_PRIVACY_MAX_BRIDGE_ABI_VERSION: Final\[int\] = 0xFFFF_FFFF/,
+    "Python privacy wrapper must pin the maximum native privacy bridge ABI probe value",
+  );
+  assert.match(pythonCrypto, /version < 0/, "Python privacy wrapper must reject negative ABI probe values");
+  assert.match(
+    pythonCrypto,
+    /version > _PRIVACY_MAX_BRIDGE_ABI_VERSION/,
+    "Python privacy wrapper must reject ABI probe values wider than the native u32 contract",
+  );
+
+  const pythonTests = source("python/iroha_python/tests/crypto_algorithms_test.py");
+  const abiTest = sliceBetween(
+    pythonTests,
+    "def test_privacy_native_availability_requires_abi_6",
+    "def test_privacy_native_availability_requires_complete_method_surface",
+    "Python broken privacy ABI probe test",
+  );
+  for (const snippet of ["-1", "6.5", "0x1_0000_0000", "10**100"]) {
+    assert.ok(
+      abiTest.includes(snippet),
+      `Python privacy native tests must reject broken ABI probe value ${snippet}`,
+    );
+  }
+});
+
+test("ZK-ACE public proof builders sanitize production-disabled native errors", () => {
+  const jsPrivacyNativeTests = source("javascript/iroha_js/test/privacyNative.test.js");
+  const pythonCatalogTests = source("python/iroha_python/tests/privacy_catalog_test.py");
+  const pythonCrypto = source("python/iroha_python/src/iroha_python/crypto.py");
+
+  for (const [label, text] of [
+    ["JS source crypto helper", source("javascript/iroha_js/src/crypto.js")],
+    ["JS dist crypto helper", source("javascript/iroha_js/dist/crypto.js")],
+  ]) {
+    assert.match(
+      text,
+      /const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0"[\s\S]*const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1"[\s\S]*const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0"[\s\S]*const ZK_ACE_PRODUCTION_DISABLED_MESSAGE[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*ZK_ACE_ALGORITHM_ID[\s\S]*ZK_ACE_PRODUCTION_ENTRYPOINT[\s\S]*ZK_ACE_PRODUCTION_VK_REF[\s\S]*Iroha production allowlist/,
+      `${label} must pin the exact fail-closed ZK-ACE production profile`,
+    );
+    assert.match(
+      text,
+      /function sanitizeZkAceNativeProverError[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*production\[- \]disabled[\s\S]*Iroha production allowlist[\s\S]*native ZK-ACE prover failed/,
+      `${label} must sanitize native ZK-ACE prover exceptions`,
+    );
+    assert.match(
+      text,
+      /const nativeArgs = zkAceTransferAuthorizationNativeArgs\(options\)[\s\S]*let nativeError;[\s\S]*try\s*\{[\s\S]*native\.zkAceBuildTransferAuthorizationV1\(\.\.\.nativeArgs\)[\s\S]*\} catch \(error\)[\s\S]*if \(nativeError !== undefined\)[\s\S]*throw sanitizeZkAceNativeProverError/,
+      `${label} must validate ZK-ACE inputs before sanitizing native errors`,
+    );
+    assert.match(
+      text,
+      /const U128_MAX = \(1n << 128n\) - 1n[\s\S]*function zkAceTransferAuthorizationNativeArgs[\s\S]*normalizePositiveU128Literal\(options\.amount, "amount"\)[\s\S]*function normalizePositiveU128Literal[\s\S]*typeof value === "bigint"[\s\S]*Number\.isSafeInteger\(value\)[\s\S]*\/\^\\d\+\$\/\.test\(normalized\)[\s\S]*amount <= 0n \|\| amount > U128_MAX/,
+      `${label} must reject malformed ZK-ACE transfer amounts before native dispatch`,
+    );
+  }
+
+  for (const [label, text] of [
+    ["JS source instruction builder", source("javascript/iroha_js/src/instructionBuilders.js")],
+    ["JS dist instruction builder", source("javascript/iroha_js/dist/instructionBuilders.js")],
+  ]) {
+    assert.match(
+      text,
+      /const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0"[\s\S]*const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1"[\s\S]*const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0"[\s\S]*const ZK_ACE_PRODUCTION_DISABLED_MESSAGE[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*ZK_ACE_ALGORITHM_ID[\s\S]*ZK_ACE_PRODUCTION_ENTRYPOINT[\s\S]*ZK_ACE_PRODUCTION_VK_REF[\s\S]*Iroha production allowlist/,
+      `${label} must pin the exact ZK-ACE witness-prover fail-closed profile`,
+    );
+    assert.match(
+      text,
+      /function sanitizeZkAceNativeAuthorizationProofError[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*production\[- \]disabled[\s\S]*Iroha production allowlist[\s\S]*native ZK-ACE prover failed/,
+      `${label} must sanitize direct ZK-ACE witness-prover exceptions`,
+    );
+    assert.match(
+      text,
+      /let nativeError;[\s\S]*try\s*\{[\s\S]*native\.zkAceBuildAuthorizationProofV1[\s\S]*\} catch \(error\)[\s\S]*if \(nativeError !== undefined\)[\s\S]*sanitizeZkAceNativeAuthorizationProofError/,
+      `${label} must route direct ZK-ACE witness-prover errors through the sanitizer`,
+    );
+  }
+
+  for (const snippet of [
+    "ZK-ACE transfer authorization sanitizes production-disabled native errors",
+    "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED",
+    "zk-ace-pq-authorization-v0",
+    "buildZkAceAuthorizationProofV1",
+    "stark-fri:zk_ace_pq_authorization_v0",
+    "Iroha production allowlist",
+    "js-zk-ace-private-secret-1234567",
+    "candidate-zk-ace-proof",
+  ]) {
+    assert.ok(
+      jsPrivacyNativeTests.includes(snippet),
+      `JS ZK-ACE native-error sanitizer test must include ${snippet}`,
+    );
+  }
+  assert.match(
+    jsPrivacyNativeTests,
+    /error\.message\.includes\(secret\.toString\("utf8"\)\),\s*false/,
+    "JS tests must prove ZK-ACE production-disabled native errors do not reflect witness material",
+  );
+  assert.match(
+    jsPrivacyNativeTests,
+    /error\.message\.includes\(proof\),\s*false/,
+    "JS tests must prove ZK-ACE production-disabled native errors do not reflect proof material",
+  );
+  for (const snippet of [
+    "ZK-ACE transfer authorization rejects malformed amounts before native dispatch",
+    "ZK-ACE transfer authorization canonicalizes positive u128 amounts before native dispatch",
+    "hostileAmount",
+    "stringified, false",
+    "nativeCalls, 0",
+    "1n << 128n",
+    'capturedAmounts, ["17", "23", u128Max.toString(10)]',
+  ]) {
+    assert.ok(
+      jsPrivacyNativeTests.includes(snippet),
+      `JS ZK-ACE amount preflight tests must include ${snippet}`,
+    );
+  }
+
+  assert.match(
+    pythonCrypto,
+    /_ZK_ACE_ALGORITHM_ID: Final\[str\] = "zk-ace-pq-authorization-v0"[\s\S]*_ZK_ACE_PRODUCTION_ENTRYPOINT: Final\[str\] = "buildZkAceAuthorizationProofV1"[\s\S]*_ZK_ACE_PRODUCTION_VK_REF: Final\[str\] = "stark-fri:zk_ace_pq_authorization_v0"[\s\S]*_ZK_ACE_PRODUCTION_DISABLED_MESSAGE[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*_ZK_ACE_ALGORITHM_ID[\s\S]*_ZK_ACE_PRODUCTION_ENTRYPOINT[\s\S]*_ZK_ACE_PRODUCTION_VK_REF[\s\S]*Iroha production allowlist/,
+    "Python crypto helper must pin the exact fail-closed ZK-ACE production profile",
+  );
+  assert.match(
+    pythonCrypto,
+    /def _zk_ace_sanitized_native_prover_error[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*production disabled[\s\S]*production-disabled[\s\S]*Iroha production allowlist[\s\S]*native ZK-ACE prover failed/,
+    "Python crypto helper must sanitize native ZK-ACE prover exceptions",
+  );
+  assert.match(
+    pythonCrypto,
+    /native_args = \([\s\S]*_normalize_positive_u128_literal\(amount, "amount"\)[\s\S]*native_error: Exception \| None = None[\s\S]*try:[\s\S]*_crypto\.zk_ace_build_transfer_authorization_v1\(\*native_args\)[\s\S]*except Exception as error:[\s\S]*native_error = error[\s\S]*if native_error is not None:[\s\S]*raise _zk_ace_sanitized_native_prover_error/,
+    "Python crypto helper must validate ZK-ACE inputs before sanitizing native errors",
+  );
+  assert.match(
+    pythonCrypto,
+    /_U128_MAX: Final\[int\] = \(1 << 128\) - 1[\s\S]*def _normalize_positive_u128_literal[\s\S]*isinstance\(value, bool\)[\s\S]*isinstance\(value, int\)[\s\S]*isinstance\(value, str\)[\s\S]*not normalized\.isdecimal\(\)[\s\S]*amount <= 0 or amount > _U128_MAX[\s\S]*_normalize_positive_u128_literal\(amount, "amount"\)/,
+    "Python crypto helper must reject malformed ZK-ACE transfer amounts before native dispatch",
+  );
+  for (const snippet of [
+    "test_zk_ace_python_proof_builder_sanitizes_production_disabled_native_errors",
+    "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED",
+    "zk-ace-pq-authorization-v0",
+    "buildZkAceAuthorizationProofV1",
+    "stark-fri:zk_ace_pq_authorization_v0",
+    "Iroha production allowlist",
+    "py-zk-ace-private-secret-1234567",
+    "candidate-zk-ace-proof",
+    "secret.decode() not in message",
+    "proof not in message",
+    "error.__context__ is None",
+  ]) {
+    assert.ok(
+      pythonCatalogTests.includes(snippet),
+      `Python ZK-ACE native-error sanitizer test must include ${snippet}`,
+    );
+  }
+  for (const snippet of [
+    "test_zk_ace_python_transfer_authorization_rejects_malformed_amounts_before_native",
+    "test_zk_ace_python_transfer_authorization_canonicalizes_positive_u128_amounts",
+    "HostileAmount",
+    "native.calls == 0",
+    "hostile_amount.stringified is False",
+    "1 << 128",
+    'native.amounts == ["17", "23", str((1 << 128) - 1)]',
+  ]) {
+    assert.ok(
+      pythonCatalogTests.includes(snippet),
+      `Python ZK-ACE amount preflight tests must include ${snippet}`,
+    );
+  }
+});
+
 test("mobile, Swift, and C# privacy native tests isolate hostile native request mutation", () => {
   const surfaces = [
     [
@@ -3778,6 +4470,8 @@ test("Swift privacy native tests reject malformed request archives before dispat
   );
 
   for (const pattern of [
+    /privacyNoritoFrame\(0x52\)/,
+    /empty-payload request must not reach native dispatch/,
     /Data\(\[0x01\]\)/,
     /invalidPrivacyNoritoFrame\(offset:\s*0,\s*value:\s*0x58\)/,
     /invalidPrivacyNoritoFrame\(offset:\s*4,\s*value:\s*1\)/,
@@ -4289,6 +4983,8 @@ test("Python privacy native tests reject adversarial malformed request archives 
     "Python invalid privacy request test",
   );
   assert.match(requestTest, /_FakePrivacyNativeMustNotDispatch\(\)/);
+  assert.match(requestTest, /empty_payload_request[\s\S]*_privacy_norito_frame\(0x52\)/);
+  assert.match(requestTest, /request_archive must contain a non-empty privacy request payload/);
   assert.match(requestTest, /_malformed_privacy_request_archives\(\)/);
   assert.match(requestTest, /privacy_build_proof_v1\(malformed_archive\)/);
   assert.match(requestTest, /privacy_verify_proof_v1\(bytearray\(malformed_archive\)\)/);
@@ -4335,6 +5031,24 @@ test("JS and Python privacy native tests pin sliced byte-view request handling",
   assert.match(pythonRequestTest, /privacy_build_proof_v1\(build_view\)/);
   assert.match(pythonRequestTest, /privacy_verify_proof_v1\(verify_view\)/);
   assert.match(pythonRequestTest, /all\(value == 0 for value in request\)/);
+
+  const pythonCrypto = source("python/iroha_python/src/iroha_python/crypto.py");
+  assert.match(pythonCrypto, /def _privacy_unsigned_byte_view/);
+  assert.match(pythonCrypto, /view\.format\s*!=\s*"B"[\s\S]*view\.itemsize\s*!=\s*1/);
+  assert.match(pythonCrypto, /request_archive must use unsigned byte elements/);
+
+  const pythonTypedRequestTest = sliceBetween(
+    pythonTests,
+    "def test_privacy_native_build_and_verify_reject_ambiguous_typed_request_archive",
+    "def test_privacy_native_build_and_verify_accept_max_header_padding",
+    "Python ambiguous typed request archive test",
+  );
+  assert.match(pythonTests, /from array import array/);
+  assert.match(pythonTests, /def _signed_byte_array/);
+  assert.match(pythonTypedRequestTest, /_FakePrivacyNativeMustNotDispatch\(\)/);
+  assert.match(pythonTypedRequestTest, /_signed_byte_array\(_PRIVACY_REQUEST_ARCHIVE\)/);
+  assert.match(pythonTypedRequestTest, /memoryview\(array\("H", \[0x5252\] \* 24\)\)/);
+  assert.match(pythonTypedRequestTest, /request_archive must use unsigned byte elements/);
 });
 
 test("JS and Python privacy native tests pin sliced byte-view native output handling", () => {
@@ -4384,6 +5098,19 @@ test("JS and Python privacy native tests pin sliced byte-view native output hand
   assert.match(pythonOutputTest, /native\.capabilities_backing\[native\.prefix_len\]\s*=\s*0x00/);
   assert.match(pythonOutputTest, /native\.build_backing\[native\.prefix_len\]\s*=\s*0x00/);
   assert.match(pythonOutputTest, /native\.verify_backing\[native\.prefix_len\]\s*=\s*0x00/);
+
+  const pythonTypedOutputTest = sliceBetween(
+    pythonTests,
+    "def test_privacy_native_wrappers_reject_ambiguous_typed_native_output",
+    "def test_privacy_native_wrappers_reject_missing_and_empty_native_output",
+    "Python ambiguous typed native output test",
+  );
+  assert.match(pythonTests, /class _FakeTypedOutputPrivacyNative/);
+  assert.match(pythonTests, /memoryview\(array\("H", \[0x4242\] \* 24\)\)/);
+  assert.match(pythonTests, /memoryview\(_signed_byte_array\(_PRIVACY_VERIFY_ARCHIVE\)\)/);
+  assert.match(pythonTypedOutputTest, /native privacy_capabilities_v1 output must use unsigned byte elements/);
+  assert.match(pythonTypedOutputTest, /native privacy_build_proof_v1 output must use unsigned byte elements/);
+  assert.match(pythonTypedOutputTest, /native privacy_verify_proof_v1 output must use unsigned byte elements/);
 });
 
 test("mobile and C# privacy native tests reject adversarial malformed request archives before dispatch", () => {
@@ -4407,6 +5134,10 @@ test("mobile and C# privacy native tests reject adversarial malformed request ar
         "invalidPrivacyNoritoWithExcessivePadding()",
         "invalidPrivacyNoritoFrame(31, 1)",
         "invalidPrivacyNoritoPayloadTamper()",
+        "privacyNoritoFrame(0x52)",
+        "empty-payload build request must not reach native dispatch",
+        "empty-payload verify request must not reach native dispatch",
+        "requestArchive must contain a non-empty privacy request payload",
         "Arrays.copyOf(malformedArchive, malformedArchive.length)",
       ],
     ],
@@ -4429,6 +5160,10 @@ test("mobile and C# privacy native tests reject adversarial malformed request ar
         "invalidPrivacyNoritoWithExcessivePadding()",
         "invalidPrivacyNoritoFrame(31, 1)",
         "invalidPrivacyNoritoPayloadTamper()",
+        "privacyNoritoFrame(0x52)",
+        "empty-payload build request must not reach native dispatch",
+        "empty-payload verify request must not reach native dispatch",
+        "requestArchive must contain a non-empty privacy request payload",
         "malformedArchive.copyOf()",
       ],
     ],
@@ -4451,6 +5186,8 @@ test("mobile and C# privacy native tests reject adversarial malformed request ar
         "InvalidPrivacyNoritoWithExcessivePadding()",
         "InvalidPrivacyNoritoFrame(31, 1)",
         "InvalidPrivacyNoritoPayloadTamper()",
+        "PrivacyNoritoFrame(0x52)",
+        "non-empty privacy request payload",
         "InvalidPrivacyRequestArchives()",
       ],
     ],
@@ -4851,11 +5588,17 @@ test("SDK privacy native tests reject malformed native output archives", () => {
       "def test_privacy_native_wrappers_defensively_copy_native_output_archives",
       [
         /bad_minor_version[\s\S]*\[5\]\s*=\s*1/,
+        /empty_payload_capabilities_result[\s\S]*_privacy_norito_frame\(0x50\)/,
+        /empty_payload_build_result[\s\S]*_privacy_norito_frame\(0x42\)/,
+        /empty_payload_verify_result[\s\S]*_privacy_norito_frame\(0x56\)/,
         /bad_declared_payload_length[\s\S]*_privacy_norito_frame_with_declared_payload_length\(0x42,\s*6\)/,
         /bad_oversized_declared_payload_length[\s\S]*_privacy_norito_frame_with_declared_payload_length\(\s*0x42,\s*0x8000000000000000/,
         /bad_field_bitset_flags[\s\S]*\[39\]\s*=\s*0x20/,
         /bad_checksum[\s\S]*\[31\]/,
         /bad_payload[\s\S]*\[44\]\s*\^=/,
+        /native privacy_capabilities_v1 returned empty privacy result payload/,
+        /native privacy_build_proof_v1 returned empty privacy result payload/,
+        /native privacy_verify_proof_v1 returned empty privacy result payload/,
       ],
     ],
     [
@@ -4864,6 +5607,9 @@ test("SDK privacy native tests reject malformed native output archives", () => {
       "func testRejectsInvalidNoritoNativeOutput",
       "func testRejectsWrongOperationSchemaNativeOutputs",
       [
+        "privacyNoritoFrame(0x50)",
+        "privacyNoritoFrame(0x42)",
+        "privacyNoritoFrame(0x56)",
         /invalidPrivacyNoritoFrame\(offset:\s*5,\s*value:\s*1\)/,
         /invalidPrivacyNoritoDeclaredPayloadLength\(schemaByte:\s*0x42\)/,
         /invalidPrivacyNoritoOversizedPayloadLength\(schemaByte:\s*0x42\)/,
@@ -4878,6 +5624,10 @@ test("SDK privacy native tests reject malformed native output archives", () => {
       "private static void rejectsInvalidNoritoNativeOutputs",
       "private static void rejectsWrongOperationSchemaNativeOutputs",
       [
+        "privacyNoritoFrame(0x50)",
+        "privacyNoritoFrame(0x42)",
+        "privacyNoritoFrame(0x56)",
+        "empty privacy result payload",
         "invalidPrivacyNoritoFrame(5, 1)",
         "invalidPrivacyNoritoDeclaredPayloadLength(0x42)",
         "invalidPrivacyNoritoOversizedPayloadLength(0x42)",
@@ -4892,6 +5642,10 @@ test("SDK privacy native tests reject malformed native output archives", () => {
       "fun rejectsInvalidNoritoNativeOutputs",
       "fun rejectsWrongOperationSchemaNativeOutputs",
       [
+        "privacyNoritoFrame(0x50)",
+        "privacyNoritoFrame(0x42)",
+        "privacyNoritoFrame(0x56)",
+        "empty privacy result payload",
         "invalidPrivacyNoritoFrame(5, 1)",
         "invalidPrivacyNoritoDeclaredPayloadLength(0x42)",
         "invalidPrivacyNoritoOversizedPayloadLength(0x42)",
@@ -4906,6 +5660,11 @@ test("SDK privacy native tests reject malformed native output archives", () => {
       "public void PrivacyNativeReadOutputRejectsInvalidNoritoArchiveAndFreesPointer",
       "public void PrivacyNativeReadOutputRejectsWrongOperationSchemaAndFreesPointer",
       [
+        "PrivacyNativeReadOutputRejectsEmptyPayloadSuccessArchiveAndFreesPointer",
+        "PrivacyNoritoFrame(0x50)",
+        "PrivacyNoritoFrame(0x42)",
+        "PrivacyNoritoFrame(0x56)",
+        "empty privacy result payload",
         "InvalidPrivacyNativeOutputArchives()",
         "InvalidPrivacyNoritoFrame(5, 1)",
         "InvalidPrivacyNoritoDeclaredPayloadLength(0x50)",
@@ -5117,18 +5876,29 @@ test("Swift privacy native availability requires valid Norito proof probes", () 
   );
 });
 
-test("privacy native availability proof probes use shared Norito request archives", () => {
+test("privacy native availability proof probes use shared Norito request archives and reject unknown operations", () => {
   const jsSrc = source("javascript/iroha_js/src/crypto.js");
   const jsDist = source("javascript/iroha_js/dist/crypto.js");
+  const jsPrivacyNativeTests = source("javascript/iroha_js/test/privacyNative.test.js");
   const pythonCrypto = source("python/iroha_python/src/iroha_python/crypto.py");
+  const pythonCryptoTests = source("python/iroha_python/tests/crypto_algorithms_test.py");
   const swiftNativeBridge = source("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift");
+  const swiftPrivacyBridge = source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift");
+  const swiftPrivacyTests = source("IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift");
   const javaBridge = source(
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
+  );
+  const javaBridgeTests = source(
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
   );
   const kotlinBridge = source(
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
   );
+  const kotlinBridgeTests = source(
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
+  );
   const csharpBridge = source("csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs");
+  const csharpTests = source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs");
   const connectBridge = source("crates/connect_norito_bridge/src/lib.rs");
   const jsHost = source("crates/iroha_js_host/src/lib.rs");
   const pythonRust = source("python/iroha_python/iroha_python_rs/src/lib.rs");
@@ -5271,7 +6041,43 @@ test("privacy native availability proof probes use shared Norito request archive
       /PRIVACY_NORITO_MAGIC[\s\S]*readBigUInt64LE\(23\)[\s\S]*privacyCrc64\(payload\)[\s\S]*readBigUInt64LE\(31\)/,
       `${label} privacy Norito frame validator must check magic, payload length, and CRC64`,
     );
+    assert.match(
+      sliceBetween(
+        text,
+        "function assertPrivacyNoritoArchive",
+        "function invokePrivacyNative",
+        `${label} privacy Norito frame validator`,
+      ),
+      /!Number\.isInteger\(expectedSchemaByte\)[\s\S]*expectedSchemaByte\s*<\s*0[\s\S]*expectedSchemaByte\s*>\s*0xff[\s\S]*unexpected privacy result schema/,
+      `${label} privacy Norito frame validator must require a concrete expected schema`,
+    );
+    assert.doesNotMatch(
+      sliceBetween(
+        text,
+        "function assertPrivacyNoritoArchive",
+        "function invokePrivacyNative",
+        `${label} privacy Norito frame validator`,
+      ),
+      /expectedSchemaByte\s*=\s*undefined|expectedSchemaByte\s*!==\s*undefined/,
+      `${label} privacy Norito frame validator must not treat missing schemas as wildcard matches`,
+    );
+    assert.match(
+      sliceBetween(
+        text,
+        "function privacyExpectedResultSchemaByte",
+        "function invokePrivacyNative",
+        `${label} privacy operation schema resolver`,
+      ),
+      /default:[\s\S]*not a supported privacy native operation/,
+      `${label} privacy native output decoder must reject unknown operation schemas`,
+    );
   }
+
+  assert.match(
+    jsPrivacyNativeTests,
+    /test\("privacy native wrappers reject wrong-operation result schemas"[\s\S]*privacyNoritoFrameWithSchemaOverride\(0x50,\s*21,\s*0x42\)[\s\S]*privacyNoritoFrameWithSchemaOverride\(0x42,\s*6,\s*0x56\)[\s\S]*privacyNoritoFrameWithSchemaOverride\(0x56,\s*21,\s*0x50\)[\s\S]*unexpected privacy result schema/,
+    "JS privacy native tests must pin wrong-operation result schema rejection",
+  );
 
   assert.match(
     sliceBetween(
@@ -5306,12 +6112,62 @@ test("privacy native availability proof probes use shared Norito request archive
   assert.match(
     sliceBetween(
       pythonCrypto,
+      "def _privacy_expected_result_schema_byte",
+      "_PRIVACY_NATIVE_METHODS",
+      "Python privacy operation schema resolver",
+    ),
+    /->\s*int:[\s\S]*except KeyError[\s\S]*not a supported privacy native operation/,
+    "Python privacy native output decoder must reject unknown operation schemas",
+  );
+  assert.match(
+    sliceBetween(
+      pythonCrypto,
       "def _assert_privacy_norito_archive",
       "_PRIVACY_NATIVE_METHODS",
       "Python privacy Norito frame validator",
     ),
     /archive_view\s*=\s*memoryview\(archive\)[\s\S]*_PRIVACY_NORITO_MAGIC[\s\S]*int\.from_bytes\(archive_view\[23:31\][\s\S]*int\.from_bytes\(archive_view\[31:39\][\s\S]*_privacy_crc64\(payload\)/,
     "Python privacy Norito frame validator must check magic, payload length, and CRC64",
+  );
+  assert.match(
+    sliceBetween(
+      pythonCrypto,
+      "def _assert_privacy_norito_archive",
+      "_PRIVACY_NATIVE_METHODS",
+      "Python privacy Norito frame validator",
+    ),
+    /expected_schema_byte:\s*int,[\s\S]*not isinstance\(expected_schema_byte,\s*int\)[\s\S]*expected_schema_byte\s*<\s*0[\s\S]*expected_schema_byte\s*>\s*0xFF[\s\S]*unexpected privacy result schema/,
+    "Python privacy Norito frame validator must require a concrete expected schema",
+  );
+  assert.doesNotMatch(
+    sliceBetween(
+      pythonCrypto,
+      "def _assert_privacy_norito_archive",
+      "_PRIVACY_NATIVE_METHODS",
+      "Python privacy Norito frame validator",
+    ),
+    /expected_schema_byte:\s*int\s*\|\s*None\s*=\s*None|expected_schema_byte\s+is\s+not\s+None/,
+    "Python privacy Norito frame validator must not treat missing schemas as wildcard matches",
+  );
+  assert.match(
+    sliceBetween(
+      pythonCrypto,
+      "def _assert_privacy_norito_archive",
+      "_PRIVACY_NATIVE_METHODS",
+      "Python privacy Norito frame validator",
+    ),
+    /payload_length\s*==\s*0[\s\S]*non-empty privacy request payload[\s\S]*empty privacy result payload/,
+    "Python privacy Norito frame validator must reject empty request and result payloads",
+  );
+  assert.match(
+    pythonCryptoTests,
+    /def test_privacy_norito_archive_validator_requires_explicit_expected_schema[\s\S]*for expected_schema_byte in \(None,\s*-1,\s*0x100,\s*0x42\)[\s\S]*expected_schema_byte=0x50/,
+    "Python privacy tests must pin explicit schema matching without None-schema wildcards",
+  );
+  assert.match(
+    pythonCryptoTests,
+    /def test_privacy_native_output_archive_rejects_unknown_operation_schema[\s\S]*privacy_unknown_v1[\s\S]*not a supported privacy native operation/,
+    "Python privacy tests must pin unknown operation schema rejection",
   );
 
   assert.match(
@@ -5333,6 +6189,31 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /let\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*Self\.isValidPrivacyNoritoArchive\(archive\)[\s\S]*Self\.hasNonEmptyPrivacyNoritoPayload\(archive\)[\s\S]*Self\.hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
     "Swift privacy availability probes must validate non-empty Norito result frames",
+  );
+  assert.match(
+    sliceBetween(
+      swiftNativeBridge,
+      "static func isValidPrivacyNativeProbeResult",
+      "private func probeKagemushaNativeAvailability",
+      "Swift privacy native probe result",
+    ),
+    /expectedSchemaByte:\s*UInt8\b/,
+    "Swift privacy availability probes must require expectedSchemaByte: UInt8",
+  );
+  assert.doesNotMatch(
+    sliceBetween(
+      swiftNativeBridge,
+      "static func isValidPrivacyNativeProbeResult",
+      "private func probeKagemushaNativeAvailability",
+      "Swift privacy native probe result",
+    ),
+    /expectedSchemaByte:\s*UInt8\?\s*=\s*nil/,
+    "Swift privacy availability probes must not expose a schema-less default",
+  );
+  assert.match(
+    swiftPrivacyTests,
+    /XCTAssertFalse\([\s\S]*privacyNoritoFrameWithPayload\(0x51\)[\s\S]*expectedSchemaByte:\s*0x50/,
+    "Swift privacy tests must reject a valid probe archive under the wrong explicit schema",
   );
   assert.match(
     sliceBetween(
@@ -5376,7 +6257,7 @@ test("privacy native availability proof probes use shared Norito request archive
   );
   assert.match(
     sliceBetween(
-      source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"),
+      swiftPrivacyBridge,
       "static func call(\n        bridgeAvailable: Bool",
       "\n    }\n}",
       "Swift privacy bridge output call",
@@ -5386,7 +6267,7 @@ test("privacy native availability proof probes use shared Norito request archive
   );
   assert.match(
     sliceBetween(
-      source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"),
+      swiftPrivacyBridge,
       "static func call(\n        bridgeAvailable: Bool",
       "\n    }\n}",
       "Swift privacy bridge output call",
@@ -5396,13 +6277,63 @@ test("privacy native availability proof probes use shared Norito request archive
   );
   assert.match(
     sliceBetween(
-      source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"),
+      swiftPrivacyBridge,
       "static func call(\n        bridgeAvailable: Bool",
       "\n    }\n}",
       "Swift privacy bridge output call",
     ),
     /NoritoNativeBridge\.hasNonEmptyPrivacyNoritoPayload\(archive\)/,
     "Swift public privacy bridge must reject empty result payloads",
+  );
+  assert.match(
+    sliceBetween(
+      swiftPrivacyBridge,
+      "static func call(\n        bridgeAvailable: Bool",
+      "\n    }\n}",
+      "Swift privacy bridge output call",
+    ),
+    /expectedSchemaByte:\s*UInt8\b/,
+    "Swift public privacy bridge must require explicit operation schemas before dispatch",
+  );
+  assert.doesNotMatch(
+    swiftPrivacyBridge,
+    /expectedSchemaByte:\s*UInt8\?\s*=\s*nil/,
+    "Swift public privacy bridge must not expose schema-less output helper defaults",
+  );
+  assert.match(
+    sliceBetween(
+      swiftNativeBridge,
+      "static func readPrivacyNativeOutput",
+      "var canUseConnectCrypto",
+      "Swift privacy native output decoder",
+    ),
+    /expectedSchemaByte:\s*UInt8\b/,
+    "Swift privacy native output decoder must require explicit operation schemas",
+  );
+  assert.doesNotMatch(
+    swiftNativeBridge,
+    /expectedSchemaByte:\s*UInt8\?\s*=\s*nil/,
+    "Swift privacy native output decoder must not expose schema-less output helper defaults",
+  );
+  assert.match(
+    swiftNativeBridge,
+    /static\s+func\s+hasPrivacyNoritoSchema\(_\s+archive:\s*Data,\s*expectedSchemaByte:\s*UInt8\)\s*->\s*Bool/,
+    "Swift native privacy schema validator must require a concrete expected schema",
+  );
+  assert.match(
+    swiftPrivacyBridge,
+    /private\s+static\s+func\s+hasPrivacyNoritoSchema\(\s*_\s+archive:\s*Data,\s*expectedSchemaByte:\s*UInt8\s*\)\s*->\s*Bool/,
+    "Swift public privacy schema validator must require a concrete expected schema",
+  );
+  assert.doesNotMatch(
+    swiftNativeBridge,
+    /hasPrivacyNoritoSchema[\s\S]{0,160}return\s+true/,
+    "Swift native privacy schema validator must not treat missing schemas as wildcard matches",
+  );
+  assert.doesNotMatch(
+    swiftPrivacyBridge,
+    /hasPrivacyNoritoSchema[\s\S]{0,160}return\s+true/,
+    "Swift public privacy schema validator must not treat missing schemas as wildcard matches",
   );
 
   assert.match(
@@ -5438,6 +6369,31 @@ test("privacy native availability proof probes use shared Norito request archive
   assert.match(
     sliceBetween(
       javaBridge,
+      "static byte[] call(",
+      "static byte[] invokeNativeOutput",
+      "Java privacy native request call",
+    ),
+    /expectedPrivacyResultSchema\(outputLabel\)[\s\S]*not a supported privacy native operation[\s\S]*invokeNativeOutput\(outputLabel/,
+    "Java privacy bridge must reject unknown operations before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
+      javaBridge,
+      "static byte[] requireNativeOutput",
+      "private static void requireNative",
+      "Java privacy native output decoder",
+    ),
+    /expectedSchemaByte\s*<\s*0[\s\S]*not a supported privacy native operation[\s\S]*hasPrivacyNoritoSchema\(output,\s*expectedSchemaByte\)/,
+    "Java privacy native output decoder must reject unknown operation schemas",
+  );
+  assert.match(
+    javaBridgeTests,
+    /rejectsUnknownOperationSchemaNativeOutputs[\s\S]*unsupported privacy operations must not reach native dispatch/,
+    "Java privacy tests must cover unknown operation-schema rejection before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
+      javaBridge,
       "static boolean returnsOutputProbe",
       "static boolean detectNativeAvailability",
       "Java privacy native probe result",
@@ -5464,6 +6420,41 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /hasNonEmptyPrivacyNoritoPayload\(output\)/,
     "Java privacy availability probes must reject empty result payloads",
+  );
+  assert.match(
+    sliceBetween(
+      javaBridge,
+      "static boolean returnsOutputProbe",
+      "static boolean detectNativeAvailability",
+      "Java privacy native probe result",
+    ),
+    /static\s+boolean\s+returnsOutputProbe\(\s*final\s+int\s+expectedSchemaByte/,
+    "Java privacy availability probes must require an explicit expected schema",
+  );
+  assert.doesNotMatch(
+    javaBridge,
+    /returnsOutputProbe\(\s*final\s+NativeByteArrayProbe\s+probe\s*\)/,
+    "Java privacy availability probes must not keep a schema-less overload",
+  );
+  assert.match(
+    javaBridgeTests,
+    /assert\s+!PrivacyNativeBridge\.returnsOutputProbe\(0x50,\s*\(\)\s*->\s*privacyNoritoFrameWithPayload\(0x51\)\);/,
+    "Java privacy tests must reject a valid probe archive under the wrong explicit schema",
+  );
+  assert.match(
+    sliceBetween(
+      javaBridge,
+      "static boolean hasPrivacyNoritoSchema",
+      "private static long[] buildPrivacyCrc64Table",
+      "Java privacy schema matcher",
+    ),
+    /expectedSchemaByte\s*<\s*0[\s\S]*return\s+false;/,
+    "Java privacy schema matcher must reject missing expected schemas",
+  );
+  assert.match(
+    javaBridgeTests,
+    /privacySchemaMatcherRequiresExplicitExpectedSchema[\s\S]*hasPrivacyNoritoSchema\(capabilities,\s*-1\)[\s\S]*hasPrivacyNoritoSchema\(capabilities,\s*0x50\)/,
+    "Java privacy tests must pin explicit schema matching without negative-schema wildcards",
   );
   assert.match(
     sliceBetween(
@@ -5509,6 +6500,41 @@ test("privacy native availability proof probes use shared Norito request archive
   assert.match(
     sliceBetween(
       kotlinBridge,
+      "internal fun call(",
+      "internal fun invokeNativeOutput",
+      "Kotlin privacy native request call",
+    ),
+    /expectedPrivacyResultSchema\(outputLabel\)[\s\S]*not a supported privacy native operation[\s\S]*invokeNativeOutput\(outputLabel\)/,
+    "Kotlin privacy bridge must reject unknown operations before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
+      kotlinBridge,
+      "internal fun requireNativeOutput",
+      "private fun loadLibrary",
+      "Kotlin privacy native output decoder",
+    ),
+    /expectedSchemaByte:\s*Int\s*=\s*expectedPrivacyResultSchema\(label\)[\s\S]*not a supported privacy native operation[\s\S]*expectedSchemaByte\s*<\s*0[\s\S]*hasPrivacyNoritoSchema\(output,\s*expectedSchemaByte\)/,
+    "Kotlin privacy native output decoder must reject unknown operation schemas",
+  );
+  assert.doesNotMatch(
+    sliceBetween(
+      kotlinBridge,
+      "internal fun requireNativeOutput",
+      "private fun loadLibrary",
+      "Kotlin privacy native output decoder",
+    ),
+    /expectedSchemaByte:\s*Int\?/,
+    "Kotlin privacy native output decoder must not accept nullable expected schemas",
+  );
+  assert.match(
+    kotlinBridgeTests,
+    /rejectsUnknownOperationSchemaNativeOutputs[\s\S]*-1[\s\S]*not a supported privacy native operation[\s\S]*unsupported privacy operations must not reach native dispatch/,
+    "Kotlin privacy tests must cover unknown operation-schema rejection before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
+      kotlinBridge,
       "internal fun returnsOutputProbe",
       "internal fun detectNativeAvailability",
       "Kotlin privacy native probe result",
@@ -5535,6 +6561,51 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /hasNonEmptyPrivacyNoritoPayload\(output\)/,
     "Kotlin privacy availability probes must reject empty result payloads",
+  );
+  assert.match(
+    sliceBetween(
+      kotlinBridge,
+      "internal fun returnsOutputProbe",
+      "internal fun detectNativeAvailability",
+      "Kotlin privacy native probe result",
+    ),
+    /expectedSchemaByte:\s*Int/,
+    "Kotlin privacy availability probes must require expectedSchemaByte: Int",
+  );
+  assert.doesNotMatch(
+    kotlinBridge,
+    /expectedSchemaByte:\s*Int\?\s*=\s*null/,
+    "Kotlin privacy availability probes must not expose a nullable schema default",
+  );
+  assert.match(
+    kotlinBridgeTests,
+    /assertFalse\(PrivacyNativeBridge\.returnsOutputProbe\(0x50\)\s*\{\s*privacyNoritoFrameWithPayload\(0x51\)\s*\}\)/,
+    "Kotlin privacy tests must reject a valid probe archive under the wrong explicit schema",
+  );
+  assert.match(
+    sliceBetween(
+      kotlinBridge,
+      "internal fun hasPrivacyNoritoSchema",
+      "private fun buildPrivacyCrc64Table",
+      "Kotlin privacy schema matcher",
+    ),
+    /expectedSchemaByte:\s*Int\b[\s\S]*val\s+expected\s*=\s*expectedSchemaByte/,
+    "Kotlin privacy schema matcher must require a concrete expected schema",
+  );
+  assert.doesNotMatch(
+    sliceBetween(
+      kotlinBridge,
+      "internal fun hasPrivacyNoritoSchema",
+      "private fun buildPrivacyCrc64Table",
+      "Kotlin privacy schema matcher",
+    ),
+    /\?:\s*return\s+true/,
+    "Kotlin privacy schema matcher must not treat missing schemas as wildcard matches",
+  );
+  assert.match(
+    kotlinBridgeTests,
+    /privacySchemaMatcherRequiresExplicitExpectedSchema[\s\S]*assertFalse\(PrivacyNativeBridge\.hasPrivacyNoritoSchema\(capabilities,\s*-1\)\)[\s\S]*assertTrue\(PrivacyNativeBridge\.hasPrivacyNoritoSchema\(capabilities,\s*0x50\)\)/,
+    "Kotlin privacy tests must pin explicit schema matching without negative-schema wildcards",
   );
   assert.match(
     sliceBetween(
@@ -5584,8 +6655,53 @@ test("privacy native availability proof probes use shared Norito request archive
       "private static int CheckedArchiveLength",
       "C# privacy native output decoder",
     ),
-    /ExpectedPrivacyResultSchemas\(symbol\)[\s\S]*HasNoritoSchema\(result,\s*schemas\)/,
+    /RequireExplicitPrivacyResultSchemas\(symbol,\s*expectedSchemaBytes\)[\s\S]*HasNoritoSchema\(result,\s*schemas\)/,
     "C# privacy native output decoder must reject wrong-operation result schemas",
+  );
+  assert.doesNotMatch(
+    sliceBetween(
+      csharpBridge,
+      "internal static byte[] ReadPrivacyOutput",
+      "private static int CheckedArchiveLength",
+      "C# privacy native output decoder",
+    ),
+    /expectedSchemaBytes\.Length\s*==\s*0\s*\?[\s\S]*ExpectedPrivacyResultSchemas\(symbol\)/,
+    "C# privacy native output decoder must not infer expected schemas from schema-less calls",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "internal static byte[] CallProof",
+      "private static void RequireAbi",
+      "C# privacy proof call",
+    ),
+    /RequireKnownPrivacyResultSymbol\(symbol\)[\s\S]*nativeCall\(request/,
+    "C# privacy bridge must reject unknown operations before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "private static byte[] RequireExplicitPrivacyResultSchemas",
+      "private static bool PrivacyResultSchemasEqual",
+      "C# privacy native output decoder",
+    ),
+    /RequireKnownPrivacyResultSymbol\(symbol\)[\s\S]*expectedSchemaBytes\s+is\s+null\s*\|\|[\s\S]*expectedSchemaBytes\.Length\s*==\s*0[\s\S]*requires explicit privacy result schemas[\s\S]*PrivacyResultSchemasEqual\(expectedSchemaBytes,\s*schemas\)/,
+    "C# privacy native output decoder must reject unknown operation schemas",
+  );
+  assert.match(
+    csharpTests,
+    /PrivacyNativeReadOutputRequiresExplicitExpectedSchemasAndFreesPointer[\s\S]*requires explicit privacy result schemas/,
+    "C# privacy tests must cover schema-less native output rejection",
+  );
+  assert.match(
+    csharpTests,
+    /PrivacyNativeReadOutputRejectsMismatchedExpectedSchemaSetAndFreesPointer[\s\S]*PrivacyBuildProofResultSchemaByte[\s\S]*expected privacy result schemas do not match/,
+    "C# privacy tests must cover mismatched expected-schema rejection",
+  );
+  assert.match(
+    csharpTests,
+    /PrivacyNativeRejectsUnknownOperationSchemaBeforeNativeDispatch[\s\S]*Assert\.False\(invoked\)/,
+    "C# privacy tests must cover unknown operation-schema rejection before native dispatch",
   );
   assert.match(
     sliceBetween(
@@ -5616,6 +6732,36 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /IsNoritoV1Archive\(output\)[\s\S]*&&\s*HasNonEmptyPrivacyNoritoPayload\(output\)[\s\S]*&&\s*HasNoritoSchema\(output,\s*expectedSchemaBytes\)/,
     "C# privacy availability probes must reject empty payloads and wrong-operation result schemas",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "internal static bool IsValidProbeResult",
+      "internal static byte[] PrivacyNativeAvailabilityProbeArchive",
+      "C# privacy native probe result",
+    ),
+    /expectedSchemaBytes\.Length\s*==\s*0/,
+    "C# privacy availability probes must reject schema-less success output",
+  );
+  assert.match(
+    csharpTests,
+    /Assert\.False\(IsValidProbeOutput\(0,\s*PrivacyNoritoFrameWithPayload\(0x51\)\)\);/,
+    "C# privacy tests must reject a valid probe archive when no expected schema is supplied",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "internal static bool HasNoritoSchema",
+      "private static ulong PrivacyCrc64",
+      "C# privacy schema matcher",
+    ),
+    /expectedSchemaBytes\.Length\s*==\s*0[\s\S]*return\s+false;/,
+    "C# privacy schema matcher must reject missing expected schemas",
+  );
+  assert.match(
+    csharpTests,
+    /PrivacyNativeSchemaMatcherRequiresExplicitExpectedSchemas[\s\S]*Assert\.False\(PrivacyNative\.HasNoritoSchema\(capabilitiesBytes\)\)[\s\S]*Assert\.True\(PrivacyNative\.HasNoritoSchema\(capabilitiesBytes,\s*0x50\)\)/,
+    "C# privacy tests must pin explicit schema matching without empty-schema wildcards",
   );
   assert.match(
     sliceBetween(

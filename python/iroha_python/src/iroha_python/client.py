@@ -11710,7 +11710,7 @@ class ToriiClient(_BaseToriiClient):
         from_account_id: str,
         to_account_id: str,
         asset_definition_id: str,
-        amount: Union[str, int, float, Decimal],
+        amount: Union[str, int],
         identity_commitment: Union[str, bytes, bytearray, memoryview],
         tx_digest: Union[str, bytes, bytearray, memoryview],
         domain_tag: str,

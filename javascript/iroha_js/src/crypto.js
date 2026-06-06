@@ -24,6 +24,17 @@ export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
 export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
 export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
 export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
+const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
+const KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
+const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
+const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
+const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0";
+const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
+  "native ZK-ACE prover returned PRIVACY_FFI_ERROR_PRODUCTION_DISABLED for " +
+  `${ZK_ACE_ALGORITHM_ID} ${ZK_ACE_PRODUCTION_ENTRYPOINT} ` +
+  `${ZK_ACE_PRODUCTION_VK_REF}: ` +
+  "Iroha production allowlist is not enabled for this audited row";
+const U128_MAX = (1n << 128n) - 1n;
 const PRIVACY_NORITO_HEADER_BYTES = 40;
 const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
 const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
@@ -539,14 +550,47 @@ export function buildZkAceTransferAuthorizationV1(options) {
     resolveNativeBinding(),
     "zkAceBuildTransferAuthorizationV1",
   );
-  const resultJson = native.zkAceBuildTransferAuthorizationV1(
+  const nativeArgs = zkAceTransferAuthorizationNativeArgs(options);
+  let resultJson;
+  let nativeError;
+  try {
+    resultJson = native.zkAceBuildTransferAuthorizationV1(...nativeArgs);
+  } catch (error) {
+    nativeError = error;
+  }
+  if (nativeError !== undefined) {
+    throw sanitizeZkAceNativeProverError(nativeError);
+  }
+  let result;
+  try {
+    result = JSON.parse(resultJson);
+  } catch (error) {
+    throw new Error(`native ZK-ACE prover returned invalid JSON: ${error.message}`);
+  }
+  return normalizeZkAceAuthorizationResult(result);
+}
+
+function sanitizeZkAceNativeProverError(error) {
+  const message = error?.message ?? String(error ?? "");
+  if (
+    /PRIVACY_FFI_ERROR_PRODUCTION_DISABLED|production[- ]disabled|Iroha production allowlist/i.test(
+      message,
+    )
+  ) {
+    return new Error(ZK_ACE_PRODUCTION_DISABLED_MESSAGE);
+  }
+  return new Error("native ZK-ACE prover failed");
+}
+
+function zkAceTransferAuthorizationNativeArgs(options) {
+  return [
     requiredString(options.fromAccountId ?? options.from, "fromAccountId"),
     requiredString(options.toAccountId ?? options.to, "toAccountId"),
     requiredString(
       options.assetDefinitionId ?? options.asset_definition_id ?? options.asset,
       "assetDefinitionId",
     ),
-    requiredString(String(options.amount ?? ""), "amount"),
+    normalizePositiveU128Literal(options.amount, "amount"),
     requiredString(options.chainId ?? options.chain_id, "chainId"),
     fixed32Buffer(options.identityRoot ?? options.identity_root, "identityRoot"),
     fixed32Buffer(options.identityBlinding ?? options.identity_blinding, "identityBlinding"),
@@ -560,14 +604,7 @@ export function buildZkAceTransferAuthorizationV1(options) {
         options.vk_commitment,
       "verifyingKeyCommitment",
     ),
-  );
-  let result;
-  try {
-    result = JSON.parse(resultJson);
-  } catch (error) {
-    throw new Error(`native ZK-ACE prover returned invalid JSON: ${error.message}`);
-  }
-  return normalizeZkAceAuthorizationResult(result);
+  ];
 }
 
 /**
@@ -784,13 +821,81 @@ function hasKagemushaRecursiveSpendNative(native) {
   return probeKagemushaRecursiveSpendNative(native);
 }
 
+function hasKagemushaRecursiveCompactPaymentTokenNative(native) {
+  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  if (
+    !native ||
+    !Number.isInteger(abiVersion) ||
+    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION ||
+    typeof native
+      .kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes !==
+      "function" ||
+    typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"
+  ) {
+    return false;
+  }
+  return (
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+        KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+      ),
+    ) &&
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaVerifyRecursiveCompactPaymentToken(KAGEMUSHA_NATIVE_PROBE_ARCHIVE),
+    )
+  );
+}
+
+function hasKagemushaCompactPaymentTokenNative(native) {
+  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  if (
+    !native ||
+    !Number.isInteger(abiVersion) ||
+    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION ||
+    typeof native.kagemushaProveVerifiedCompactPaymentTokenWithRecords !== "function"
+  ) {
+    return false;
+  }
+  return expectKagemushaNativeProbeRejection(() =>
+    native.kagemushaProveVerifiedCompactPaymentTokenWithRecords(
+      KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+    ),
+  );
+}
+
+function hasKagemushaRecursiveAggregationProofBundleNative(native) {
+  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  if (
+    !native ||
+    !Number.isInteger(abiVersion) ||
+    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION ||
+    typeof native
+      .kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes !==
+      "function"
+  ) {
+    return false;
+  }
+  return expectKagemushaNativeProbeRejection(() =>
+    native.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+      KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+      KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
+    ),
+  );
+}
+
 function kagemushaRecursiveSpendBridgeAbiVersion(native) {
   if (typeof native?.connectNoritoBridgeAbiVersion !== "function") {
     return 0;
   }
   try {
     const version = native.connectNoritoBridgeAbiVersion();
-    return typeof version === "number" && Number.isInteger(version) ? version : 0;
+    return typeof version === "number" &&
+      Number.isSafeInteger(version) &&
+      version >= 0 &&
+      version <= KAGEMUSHA_MAX_BRIDGE_ABI_VERSION
+      ? version
+      : 0;
   } catch {
     return 0;
   }
@@ -840,9 +945,12 @@ function probeKagemushaRecursiveSpendNative(native) {
   );
 }
 
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
+export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
@@ -874,11 +982,30 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDIN
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 
 export function preferredKagemushaOfflineSpendMode(
-  recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
+  recursiveSpendAvailable,
+  recursiveCompactAvailable,
 ) {
-  return recursiveSpendAvailable
-    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
-    : KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+  if (arguments.length === 0) {
+    return preferredKagemushaOfflineSpendModeForCapabilities(
+      isKagemushaRecursiveCompactPaymentTokenNativeAvailable(),
+      isKagemushaRecursiveSpendNativeAvailable(),
+    );
+  }
+  return preferredKagemushaOfflineSpendModeForCapabilities(
+    arguments.length >= 2 ? recursiveCompactAvailable : false,
+    recursiveSpendAvailable,
+  );
+}
+
+export function preferredKagemushaOfflineSpendModeForCapabilities(
+  recursiveCompactAvailable,
+  recursiveSpendAvailable,
+) {
+  void recursiveCompactAvailable;
+  if (recursiveSpendAvailable) {
+    return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
+  }
+  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
@@ -1047,6 +1174,7 @@ function callKagemushaRecursiveSpendNative(operation, requestArchive, archiveNam
   if (request.length === 0) {
     throw new Error(`${archiveName} must not be empty`);
   }
+  assertKagemushaNoritoArchive(request, archiveName);
   const native = ensureKagemushaRecursiveSpendNative(resolveNativeBinding(), operation);
   const result = native[operation](request);
   return kagemushaRecursiveSpendOutputToBuffer(result, operation);
@@ -1066,12 +1194,103 @@ function kagemushaRecursiveSpendOutputToBuffer(result, operation) {
   if (output.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES) {
     throw new Error(`native ${operation} returned oversized output`);
   }
+  assertKagemushaNoritoArchive(
+    output,
+    operation,
+    `native ${operation} returned invalid Norito archive`,
+    `native ${operation} returned empty Norito payload`,
+  );
   return output;
+}
+
+function assertKagemushaNoritoArchive(
+  output,
+  archiveName,
+  invalidMessage = `${archiveName} must be a valid Norito archive`,
+  emptyPayloadMessage = `${archiveName} must contain a non-empty Norito payload`,
+) {
+  const fail = () => {
+    throw new Error(invalidMessage);
+  };
+  if (output.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES) {
+    throw new Error(
+      `${archiveName} must not exceed ${KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES} bytes`,
+    );
+  }
+  if (output.length < PRIVACY_NORITO_HEADER_BYTES) {
+    fail();
+  }
+  if (!output.subarray(0, 4).equals(PRIVACY_NORITO_MAGIC)) {
+    fail();
+  }
+  if (output[4] !== 0 || output[5] !== 0 || output[22] !== 0) {
+    fail();
+  }
+  const flags = output[39];
+  if (
+    (flags & ~PRIVACY_NORITO_SUPPORTED_FLAGS_MASK) !== 0 ||
+    ((flags & PRIVACY_NORITO_FIELD_BITSET_FLAG) !== 0 &&
+      (flags & PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS) !==
+        PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS)
+  ) {
+    fail();
+  }
+  const payloadLengthBig = output.readBigUInt64LE(23);
+  if (payloadLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    fail();
+  }
+  const payloadLength = Number(payloadLengthBig);
+  if (payloadLength === 0) {
+    throw new Error(emptyPayloadMessage);
+  }
+  const minimumLength = PRIVACY_NORITO_HEADER_BYTES + payloadLength;
+  if (output.length < minimumLength) {
+    fail();
+  }
+  const paddingLength = output.length - minimumLength;
+  if (paddingLength > PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES) {
+    fail();
+  }
+  const padding = output.subarray(
+    PRIVACY_NORITO_HEADER_BYTES,
+    PRIVACY_NORITO_HEADER_BYTES + paddingLength,
+  );
+  if (padding.some((byte) => byte !== 0)) {
+    fail();
+  }
+  const payload = output.subarray(PRIVACY_NORITO_HEADER_BYTES + paddingLength);
+  if (privacyCrc64(payload) !== output.readBigUInt64LE(31)) {
+    fail();
+  }
 }
 
 export function isKagemushaRecursiveSpendNativeAvailable() {
   try {
     return hasKagemushaRecursiveSpendNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
+export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable() {
+  try {
+    return hasKagemushaRecursiveCompactPaymentTokenNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
+export function isKagemushaCompactPaymentTokenNativeAvailable() {
+  try {
+    return hasKagemushaCompactPaymentTokenNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
+export function isKagemushaRecursiveAggregationProofBundleNativeAvailable() {
+  try {
+    return hasKagemushaRecursiveAggregationProofBundleNative(resolveNativeBinding());
   } catch {
     return false;
   }
@@ -1121,10 +1340,12 @@ export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
   if (request.length === 0) {
     throw new Error("requestArchive must not be empty");
   }
+  assertKagemushaNoritoArchive(request, "requestArchive");
   const bundle = toBuffer(bundleArchive, "bundleArchive");
   if (bundle.length === 0) {
     throw new Error("bundleArchive must not be empty");
   }
+  assertKagemushaNoritoArchive(bundle, "bundleArchive");
   const native = ensureKagemushaRecursiveSpendNative(
     resolveNativeBinding(),
     "kagemushaRecursiveSpendLineageWitnessFromInitResult",
@@ -1153,14 +1374,17 @@ export function kagemushaRecursiveSpendLineageWitnessAppendResult(
   if (previousWitness.length === 0) {
     throw new Error("previousWitnessArchive must not be empty");
   }
+  assertKagemushaNoritoArchive(previousWitness, "previousWitnessArchive");
   const request = toBuffer(requestArchive, "requestArchive");
   if (request.length === 0) {
     throw new Error("requestArchive must not be empty");
   }
+  assertKagemushaNoritoArchive(request, "requestArchive");
   const bundle = toBuffer(bundleArchive, "bundleArchive");
   if (bundle.length === 0) {
     throw new Error("bundleArchive must not be empty");
   }
+  assertKagemushaNoritoArchive(bundle, "bundleArchive");
   const native = ensureKagemushaRecursiveSpendNative(
     resolveNativeBinding(),
     "kagemushaRecursiveSpendLineageWitnessAppendResult",
@@ -1193,6 +1417,114 @@ export function kagemushaRecursiveSpendRedeem(requestArchive) {
     "kagemushaRecursiveSpendRedeem",
     requestArchive,
   );
+}
+
+export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive) {
+  const recordBundle = toBuffer(recordBundleArchive, "recordBundleArchive");
+  if (recordBundle.length === 0) {
+    throw new Error("recordBundleArchive must not be empty");
+  }
+  assertKagemushaNoritoArchive(recordBundle, "recordBundleArchive");
+  const native = resolveNativeBinding();
+  if (!hasKagemushaCompactPaymentTokenNative(native)) {
+    throw new Error(
+      "Kagemusha compact payment-token prover requires native bridge ABI 6 with compact-token prover symbol",
+    );
+  }
+  const result = native.kagemushaProveVerifiedCompactPaymentTokenWithRecords(recordBundle);
+  return kagemushaRecursiveSpendOutputToBuffer(
+    result,
+    "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
+  );
+}
+
+export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+  recordBundleArchive,
+  pallasOpenEnvelopesArchive,
+) {
+  const recordBundle = toBuffer(recordBundleArchive, "recordBundleArchive");
+  if (recordBundle.length === 0) {
+    throw new Error("recordBundleArchive must not be empty");
+  }
+  assertKagemushaNoritoArchive(recordBundle, "recordBundleArchive");
+  const pallasOpenEnvelopes = toBuffer(
+    pallasOpenEnvelopesArchive,
+    "pallasOpenEnvelopesArchive",
+  );
+  if (pallasOpenEnvelopes.length === 0) {
+    throw new Error("pallasOpenEnvelopesArchive must not be empty");
+  }
+  assertKagemushaNoritoArchive(pallasOpenEnvelopes, "pallasOpenEnvelopesArchive");
+  const native = resolveNativeBinding();
+  if (!hasKagemushaRecursiveAggregationProofBundleNative(native)) {
+    throw new Error(
+      "Kagemusha recursive aggregation proof-bundle prover requires native bridge ABI 6 with recursive aggregation prover symbol",
+    );
+  }
+  const result =
+    native.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+      recordBundle,
+      pallasOpenEnvelopes,
+    );
+  return kagemushaRecursiveSpendOutputToBuffer(
+    result,
+    "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+  );
+}
+
+export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+  recordBundleArchive,
+  pallasOpenEnvelopesArchive,
+) {
+  const recordBundle = toBuffer(recordBundleArchive, "recordBundleArchive");
+  if (recordBundle.length === 0) {
+    throw new Error("recordBundleArchive must not be empty");
+  }
+  assertKagemushaNoritoArchive(recordBundle, "recordBundleArchive");
+  const pallasOpenEnvelopes = toBuffer(
+    pallasOpenEnvelopesArchive,
+    "pallasOpenEnvelopesArchive",
+  );
+  if (pallasOpenEnvelopes.length === 0) {
+    throw new Error("pallasOpenEnvelopesArchive must not be empty");
+  }
+  assertKagemushaNoritoArchive(pallasOpenEnvelopes, "pallasOpenEnvelopesArchive");
+  const native = resolveNativeBinding();
+  if (!hasKagemushaRecursiveCompactPaymentTokenNative(native)) {
+    throw new Error(
+      "recursive compact Kagemusha payment-token prover requires native bridge ABI 7 with compact prover and verifier symbols",
+    );
+  }
+  const result =
+    native.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+      recordBundle,
+      pallasOpenEnvelopes,
+    );
+  return kagemushaRecursiveSpendOutputToBuffer(
+    result,
+    "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
+  );
+}
+
+export function kagemushaVerifyRecursiveCompactPaymentToken(compactTokenArchive) {
+  const compactToken = toBuffer(compactTokenArchive, "compactTokenArchive");
+  if (compactToken.length === 0) {
+    throw new Error("compactTokenArchive must not be empty");
+  }
+  assertKagemushaNoritoArchive(compactToken, "compactTokenArchive");
+  const native = resolveNativeBinding();
+  if (!hasKagemushaRecursiveCompactPaymentTokenNative(native)) {
+    throw new Error(
+      "recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with compact prover and verifier symbols",
+    );
+  }
+  const result = native.kagemushaVerifyRecursiveCompactPaymentToken(compactToken);
+  if (typeof result !== "boolean") {
+    throw new Error(
+      "kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result",
+    );
+  }
+  return result;
 }
 
 function hasPrivacyNativeSurface(native) {
@@ -1248,7 +1580,12 @@ function privacyBridgeAbiVersion(native) {
   }
   try {
     const version = native.connectNoritoBridgeAbiVersion();
-    return typeof version === "number" && Number.isInteger(version) ? version : 0;
+    return typeof version === "number" &&
+      Number.isSafeInteger(version) &&
+      version >= 0 &&
+      version <= PRIVACY_MAX_BRIDGE_ABI_VERSION
+      ? version
+      : 0;
   } catch {
     return 0;
   }
@@ -1332,7 +1669,7 @@ function assertPrivacyNoritoArchive(
   output,
   operation,
   context = "native",
-  expectedSchemaByte = undefined,
+  expectedSchemaByte,
 ) {
   const fail = () => {
     if (context === "request") {
@@ -1340,6 +1677,16 @@ function assertPrivacyNoritoArchive(
     }
     throw new Error(`native ${operation} returned invalid Norito V1 archive`);
   };
+  if (
+    !Number.isInteger(expectedSchemaByte) ||
+    expectedSchemaByte < 0 ||
+    expectedSchemaByte > 0xff
+  ) {
+    if (context === "request") {
+      throw new Error(`${operation} must use the privacy request schema`);
+    }
+    throw new Error(`native ${operation} returned unexpected privacy result schema`);
+  }
   if (output.length < PRIVACY_NORITO_HEADER_BYTES) {
     fail();
   }
@@ -1391,10 +1738,7 @@ function assertPrivacyNoritoArchive(
   if (privacyCrc64(payload) !== output.readBigUInt64LE(31)) {
     fail();
   }
-  if (
-    expectedSchemaByte !== undefined &&
-    output.subarray(6, 22).some((byte) => byte !== expectedSchemaByte)
-  ) {
+  if (output.subarray(6, 22).some((byte) => byte !== expectedSchemaByte)) {
     if (context === "request") {
       throw new Error(`${operation} must use the privacy request schema`);
     }
@@ -1411,7 +1755,7 @@ function privacyExpectedResultSchemaByte(operation) {
     case "privacyVerifyProofV1":
       return PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE;
     default:
-      return undefined;
+      throw new Error(`native ${operation} is not a supported privacy native operation`);
   }
 }
 
@@ -1656,6 +2000,30 @@ function normalizeWholeNumberLiteral(value, name) {
     throw new Error(`${name} must be a whole-number string`);
   }
   return normalized;
+}
+
+function normalizePositiveU128Literal(value, name) {
+  let amount;
+  if (typeof value === "bigint") {
+    amount = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`${name} must be a positive decimal u128 string`);
+    }
+    amount = BigInt(value);
+  } else if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!/^\d+$/.test(normalized)) {
+      throw new Error(`${name} must be a positive decimal u128 string`);
+    }
+    amount = BigInt(normalized);
+  } else {
+    throw new Error(`${name} must be a positive decimal u128 string`);
+  }
+  if (amount <= 0n || amount > U128_MAX) {
+    throw new Error(`${name} must be a positive decimal u128 string`);
+  }
+  return amount.toString(10);
 }
 
 function toBufferField(payload, ...fieldNames) {

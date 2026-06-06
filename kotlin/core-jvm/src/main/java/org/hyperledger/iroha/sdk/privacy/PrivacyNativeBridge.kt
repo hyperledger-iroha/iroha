@@ -85,12 +85,14 @@ class PrivacyNativeBridge private constructor() {
             }
             check(bridgeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val outputLabel = "privacy $label"
+            val expectedSchemaByte = expectedPrivacyResultSchema(outputLabel)
+                ?: throw IllegalStateException("$outputLabel is not a supported privacy native operation")
             val request = requestArchive.copyOf()
             try {
                 return requireNativeOutput(
                     invokeNativeOutput(outputLabel) { nativeCall(request) },
                     outputLabel,
-                    expectedPrivacyResultSchema(outputLabel),
+                    expectedSchemaByte,
                 )
             } finally {
                 request.fill(0)
@@ -110,8 +112,12 @@ class PrivacyNativeBridge private constructor() {
         internal fun requireNativeOutput(
             output: ByteArray?,
             label: String,
-            expectedSchemaByte: Int? = expectedPrivacyResultSchema(label),
+            expectedSchemaByte: Int = expectedPrivacyResultSchema(label)
+                ?: throw IllegalStateException("$label is not a supported privacy native operation"),
         ): ByteArray {
+            if (expectedSchemaByte < 0) {
+                throw IllegalStateException("$label is not a supported privacy native operation")
+            }
             if (output == null) {
                 throw IllegalStateException("$label returned no output")
             }
@@ -158,7 +164,7 @@ class PrivacyNativeBridge private constructor() {
             PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE.copyOf()
 
         internal fun returnsOutputProbe(
-            expectedSchemaByte: Int? = null,
+            expectedSchemaByte: Int,
             probe: () -> ByteArray?,
         ): Boolean =
             try {
@@ -239,8 +245,8 @@ class PrivacyNativeBridge private constructor() {
                 else -> null
             }
 
-        private fun hasPrivacyNoritoSchema(output: ByteArray, expectedSchemaByte: Int?): Boolean {
-            val expected = expectedSchemaByte ?: return true
+        internal fun hasPrivacyNoritoSchema(output: ByteArray, expectedSchemaByte: Int): Boolean {
+            val expected = expectedSchemaByte
             val expectedByte = expected.toByte()
             for (index in 6 until 22) {
                 if (output[index] != expectedByte) {

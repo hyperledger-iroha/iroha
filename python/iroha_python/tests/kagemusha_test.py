@@ -12,6 +12,11 @@ RECURSIVE_AGGREGATION_METHOD = (
     "kagemusha_prove_verified_recursive_aggregation_proof_bundle"
     "_with_records_and_pallas_open_envelopes"
 )
+RECURSIVE_COMPACT_METHOD = (
+    "kagemusha_prove_verified_recursive_compact_payment_token"
+    "_with_records_and_pallas_open_envelopes"
+)
+RECURSIVE_COMPACT_VERIFY_METHOD = "kagemusha_verify_recursive_compact_payment_token"
 RECURSIVE_SPEND_METHODS = (
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
@@ -48,6 +53,24 @@ def _is_malformed_probe_archive(value: bytes) -> bool:
     return bytes(value) == MALFORMED_PROBE_ARCHIVE
 
 
+def _kagemusha_norito_frame(schema_byte: int) -> bytes:
+    frame = bytearray(40)
+    frame[:4] = b"NRT0"
+    frame[6:22] = bytes([schema_byte]) * 16
+    return bytes(frame)
+
+
+def _kagemusha_norito_frame_with_payload(schema_byte: int) -> bytes:
+    frame = bytearray(_kagemusha_norito_frame(schema_byte) + b"\x00\x00\xa5\x5a\x11")
+    frame[23:31] = (3).to_bytes(8, "little")
+    frame[31:39] = bytes([0xB9, 0xD3, 0xA8, 0x0C, 0xCD, 0x5D, 0x13, 0x24])
+    return bytes(frame)
+
+
+def _kagemusha_input_archive(schema_byte: int = 0x50) -> bytes:
+    return _kagemusha_norito_frame_with_payload(schema_byte)
+
+
 class _Native:
     def __init__(self) -> None:
         self.calls: list[tuple[str, bytes]] = []
@@ -58,7 +81,7 @@ class _Native:
             raise ValueError(f"invalid Kagemusha {context} probe archive")
 
     def kagemusha_recursive_spend_bridge_abi_version(self) -> int:
-        return 6
+        return kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION + 1
 
     def kagemusha_prove_verified_compact_payment_token_with_records(
         self,
@@ -66,7 +89,7 @@ class _Native:
     ) -> bytes:
         self._reject_probe("compact", record_bundle)
         self.calls.append(("compact", record_bundle))
-        return b"compact"
+        return _kagemusha_norito_frame_with_payload(0x31)
 
     def _recursive_aggregation(
         self,
@@ -77,32 +100,32 @@ class _Native:
         self.calls.append(
             ("recursive_aggregation", record_bundle + b"|" + pallas_open_envelopes)
         )
-        return b"recursive_aggregation"
+        return _kagemusha_norito_frame_with_payload(0x32)
 
     def kagemusha_recursive_spend_init(self, request: bytes) -> bytes:
         self._reject_probe("init", request)
         self.calls.append(("init", request))
-        return b"init"
+        return _kagemusha_norito_frame_with_payload(0x33)
 
     def kagemusha_recursive_spend_append(self, request: bytes) -> bytes:
         self._reject_probe("append", request)
         self.calls.append(("append", request))
-        return b"append"
+        return _kagemusha_norito_frame_with_payload(0x34)
 
     def kagemusha_recursive_spend_transition_profile_init(self, request: bytes) -> bytes:
         self._reject_probe("transition profile init", request)
         self.calls.append(("transition-profile-init", request))
-        return b"transition-profile-init"
+        return _kagemusha_norito_frame_with_payload(0x35)
 
     def kagemusha_recursive_spend_transition_profile_append(self, request: bytes) -> bytes:
         self._reject_probe("transition profile append", request)
         self.calls.append(("transition-profile-append", request))
-        return b"transition-profile-append"
+        return _kagemusha_norito_frame_with_payload(0x36)
 
     def kagemusha_recursive_spend_lineage_append_boundary(self, profile: bytes) -> bytes:
         self._reject_probe("lineage append boundary", profile)
         self.calls.append(("lineage-append-boundary", profile))
-        return b"lineage-append-boundary"
+        return _kagemusha_norito_frame_with_payload(0x37)
 
     def kagemusha_recursive_spend_lineage_witness_from_init_result(
         self,
@@ -111,7 +134,7 @@ class _Native:
     ) -> bytes:
         self._reject_probe("lineage init", request, bundle)
         self.calls.append(("lineage-init", request + b"|" + bundle))
-        return b"lineage-init"
+        return _kagemusha_norito_frame_with_payload(0x38)
 
     def kagemusha_recursive_spend_lineage_witness_append_result(
         self,
@@ -121,17 +144,17 @@ class _Native:
     ) -> bytes:
         self._reject_probe("lineage append", previous_witness, request, bundle)
         self.calls.append(("lineage-append", previous_witness + b"|" + request + b"|" + bundle))
-        return b"lineage-append"
+        return _kagemusha_norito_frame_with_payload(0x39)
 
     def kagemusha_recursive_spend_verify(self, request: bytes) -> bytes:
         self._reject_probe("verify", request)
         self.calls.append(("verify", request))
-        return b"verify"
+        return _kagemusha_norito_frame_with_payload(0x3A)
 
     def kagemusha_recursive_spend_redeem(self, request: bytes) -> bytes:
         self._reject_probe("redeem", request)
         self.calls.append(("redeem", request))
-        return b"redeem"
+        return _kagemusha_norito_frame_with_payload(0x3B)
 
 
 def test_recursive_kagemusha_helpers_reject_empty_requests(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -151,17 +174,70 @@ def test_recursive_kagemusha_helpers_reject_empty_requests(monkeypatch: pytest.M
     with pytest.raises(ValueError, match="profile_archive must not be empty"):
         kagemusha.kagemusha_recursive_spend_lineage_append_boundary(b"")
     with pytest.raises(ValueError, match="request_archive must not be empty"):
-        kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(b"", b"bundle")
+        kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
+            b"",
+            _kagemusha_input_archive(0x51),
+        )
     with pytest.raises(ValueError, match="bundle_archive must not be empty"):
-        kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(b"request", b"")
+        kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
+            _kagemusha_input_archive(0x52),
+            b"",
+        )
     with pytest.raises(ValueError, match="previous_witness_archive must not be empty"):
-        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(b"", b"request", b"bundle")
+        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            b"",
+            _kagemusha_input_archive(0x53),
+            _kagemusha_input_archive(0x54),
+        )
     with pytest.raises(ValueError, match="request_archive must not be empty"):
-        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(b"witness", b"", b"bundle")
+        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            _kagemusha_input_archive(0x55),
+            b"",
+            _kagemusha_input_archive(0x56),
+        )
     with pytest.raises(ValueError, match="bundle_archive must not be empty"):
-        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(b"witness", b"request", b"")
+        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            _kagemusha_input_archive(0x57),
+            _kagemusha_input_archive(0x58),
+            b"",
+        )
 
     assert native.calls == []
+
+
+def test_recursive_kagemusha_helpers_reject_malformed_norito_requests() -> None:
+    with pytest.raises(ValueError, match="request_archive must be a valid Norito archive"):
+        kagemusha.kagemusha_recursive_spend_init(b"\x01")
+    with pytest.raises(ValueError, match="profile_archive must be a valid Norito archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_append_boundary(b"\x01")
+    with pytest.raises(ValueError, match="bundle_archive must be a valid Norito archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
+            _kagemusha_input_archive(0x59),
+            b"\x01",
+        )
+    with pytest.raises(ValueError, match="request_archive must be a valid Norito archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            _kagemusha_input_archive(0x5A),
+            b"\x01",
+            _kagemusha_input_archive(0x5B),
+        )
+
+
+def test_recursive_kagemusha_helpers_reject_empty_payload_norito_requests() -> None:
+    with pytest.raises(
+        ValueError,
+        match="request_archive must contain a non-empty Norito payload",
+    ):
+        kagemusha.kagemusha_recursive_spend_verify(_kagemusha_norito_frame(0x5C))
+    with pytest.raises(
+        ValueError,
+        match="previous_witness_archive must contain a non-empty Norito payload",
+    ):
+        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            _kagemusha_norito_frame(0x5D),
+            _kagemusha_input_archive(0x5E),
+            _kagemusha_input_archive(0x5F),
+        )
 
 
 def test_kagemusha_native_prover_helpers_reject_empty_requests(
@@ -181,20 +257,123 @@ def test_kagemusha_native_prover_helpers_reject_empty_requests(
 
     with pytest.raises(ValueError, match="pallas_open_envelopes_archive must not be empty"):
         getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
-            b"record",
+            _kagemusha_input_archive(0xA1),
             b"",
+        )
+    with pytest.raises(ValueError, match="record_bundle_archive must not be empty"):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            b"",
+            b"pallas",
+        )
+    with pytest.raises(ValueError, match="pallas_open_envelopes_archive must not be empty"):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            _kagemusha_input_archive(0xA2),
+            b"",
+        )
+    with pytest.raises(ValueError, match="compact_token_archive must not be empty"):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(b"")
+    with pytest.raises(ValueError, match="compact_token_archive must be a valid Norito archive"):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(b"\x01")
+    with pytest.raises(
+        ValueError,
+        match="compact_token_archive must contain a non-empty Norito payload",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_norito_frame(0x4B)
         )
 
     assert native.calls == []
 
 
+def test_kagemusha_native_prover_helpers_reject_malformed_norito_requests() -> None:
+    with pytest.raises(
+        ValueError,
+        match="record_bundle_archive must be a valid Norito archive",
+    ):
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"\x01")
+    with pytest.raises(
+        ValueError,
+        match="record_bundle_archive must be a valid Norito archive",
+    ):
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            b"\x01",
+            _kagemusha_input_archive(0xB1),
+        )
+    with pytest.raises(
+        ValueError,
+        match="pallas_open_envelopes_archive must be a valid Norito archive",
+    ):
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_input_archive(0xB2),
+            b"\x01",
+        )
+    with pytest.raises(
+        ValueError,
+        match="pallas_open_envelopes_archive must be a valid Norito archive",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            _kagemusha_input_archive(0xB3),
+            b"\x01",
+        )
+
+
+def test_kagemusha_native_prover_helpers_reject_empty_payload_norito_requests() -> None:
+    with pytest.raises(
+        ValueError,
+        match="record_bundle_archive must contain a non-empty Norito payload",
+    ):
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_norito_frame(0xB4)
+        )
+    with pytest.raises(
+        ValueError,
+        match="record_bundle_archive must contain a non-empty Norito payload",
+    ):
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_norito_frame(0xB5),
+            _kagemusha_input_archive(0xB6),
+        )
+    with pytest.raises(
+        ValueError,
+        match="pallas_open_envelopes_archive must contain a non-empty Norito payload",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            _kagemusha_input_archive(0xB7),
+            _kagemusha_norito_frame(0xB8),
+        )
+
+
 def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.MonkeyPatch) -> None:
     native = _Native()
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+    record_bundle = _kagemusha_input_archive(0xB9)
+    pallas_open_envelopes = _kagemusha_input_archive(0xBA)
+    init_request = _kagemusha_input_archive(0x61)
+    append_request = _kagemusha_input_archive(0x62)
+    transition_init_request = _kagemusha_input_archive(0x63)
+    transition_append_request = _kagemusha_input_archive(0x64)
+    boundary_profile = _kagemusha_input_archive(0x65)
+    lineage_init_request = _kagemusha_input_archive(0x66)
+    lineage_init_bundle = _kagemusha_input_archive(0x67)
+    lineage_append_previous_witness = _kagemusha_input_archive(0x68)
+    lineage_append_request = _kagemusha_input_archive(0x69)
+    lineage_append_bundle = _kagemusha_input_archive(0x6A)
+    verify_request = _kagemusha_input_archive(0x6B)
+    redeem_request = _kagemusha_input_archive(0x6C)
 
     assert kagemusha.is_kagemusha_compact_payment_token_prover_available() is True
     assert kagemusha.is_kagemusha_recursive_aggregation_proof_bundle_prover_available() is True
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is False
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is False
     assert kagemusha.is_kagemusha_recursive_spend_available() is True
+    assert (
+        kagemusha.preferred_kagemusha_offline_spend_mode_for_capabilities(True, True)
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    )
+    assert (
+        kagemusha.preferred_kagemusha_offline_spend_mode_for_capabilities(False, True)
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    )
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode(True)
         == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
@@ -208,60 +387,210 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     )
     assert (
-        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"r")
-        == b"compact"
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            record_bundle
+        )
+        == _kagemusha_norito_frame_with_payload(0x31)
     )
     recursive_aggregation = getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)
-    assert recursive_aggregation(b"r", b"p") == b"recursive_aggregation"
-    assert kagemusha.kagemusha_recursive_spend_init(b"a") == b"init"
-    assert kagemusha.kagemusha_recursive_spend_append(bytearray(b"b")) == b"append"
     assert (
-        kagemusha.kagemusha_recursive_spend_transition_profile_init(b"ti")
-        == b"transition-profile-init"
+        recursive_aggregation(record_bundle, pallas_open_envelopes)
+        == _kagemusha_norito_frame_with_payload(0x32)
+    )
+    with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token prover"):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            record_bundle,
+            pallas_open_envelopes,
+        )
+    with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token verifier"):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_norito_frame_with_payload(0x4B)
+        )
+
+    def permissive_recursive_compact(
+        record_bundle: bytes,
+        pallas_open_envelopes: bytes,
+    ) -> bytes:
+        native.calls.append(
+            (
+                "permissive_recursive_compact",
+                record_bundle + b"|" + pallas_open_envelopes,
+            )
+        )
+        return b"permissive_recursive_compact"
+
+    setattr(native, RECURSIVE_COMPACT_METHOD, permissive_recursive_compact)
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is False
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is False
+    assert (
+        kagemusha.preferred_kagemusha_offline_spend_mode()
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    )
+    with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token prover"):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            record_bundle,
+            pallas_open_envelopes,
+        )
+    assert native.calls[-1] == (
+        "permissive_recursive_compact",
+        MALFORMED_PROBE_ARCHIVE + b"|" + MALFORMED_PROBE_ARCHIVE,
+    )
+
+    def recursive_compact(record_bundle: bytes, pallas_open_envelopes: bytes) -> bytes:
+        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes)
+        native.calls.append(
+            ("recursive_compact", record_bundle + b"|" + pallas_open_envelopes)
+        )
+        return _kagemusha_norito_frame_with_payload(0x4D)
+
+    setattr(native, RECURSIVE_COMPACT_METHOD, recursive_compact)
+    setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, lambda compact_token: True)
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is False
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is False
+    with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token verifier"):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_norito_frame_with_payload(0x4B)
+        )
+
+    def recursive_compact_verify(compact_token: bytes) -> bool:
+        native._reject_probe("recursive compact verify", compact_token)
+        native.calls.append(("recursive_compact_verify", compact_token))
+        return compact_token[6] == 0x4B
+
+    setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, recursive_compact_verify)
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is True
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is True
+    assert (
+        kagemusha.preferred_kagemusha_offline_spend_mode()
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     )
     assert (
-        kagemusha.kagemusha_recursive_spend_transition_profile_append(b"ta")
-        == b"transition-profile-append"
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            record_bundle,
+            pallas_open_envelopes,
+        )
+        == _kagemusha_norito_frame_with_payload(0x4D)
+    )
+    valid_recursive_compact_token = _kagemusha_norito_frame_with_payload(0x4B)
+    forged_recursive_compact_token = _kagemusha_norito_frame_with_payload(0x4C)
+    assert (
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(valid_recursive_compact_token)
+        is True
     )
     assert (
-        kagemusha.kagemusha_recursive_spend_lineage_append_boundary(b"profile")
-        == b"lineage-append-boundary"
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(forged_recursive_compact_token)
+        is False
+    )
+    assert (
+        kagemusha.kagemusha_recursive_spend_init(init_request)
+        == _kagemusha_norito_frame_with_payload(0x33)
+    )
+    assert (
+        kagemusha.kagemusha_recursive_spend_append(bytearray(append_request))
+        == _kagemusha_norito_frame_with_payload(0x34)
+    )
+    assert (
+        kagemusha.kagemusha_recursive_spend_transition_profile_init(transition_init_request)
+        == _kagemusha_norito_frame_with_payload(0x35)
+    )
+    assert (
+        kagemusha.kagemusha_recursive_spend_transition_profile_append(
+            transition_append_request
+        )
+        == _kagemusha_norito_frame_with_payload(0x36)
+    )
+    assert (
+        kagemusha.kagemusha_recursive_spend_lineage_append_boundary(boundary_profile)
+        == _kagemusha_norito_frame_with_payload(0x37)
     )
     assert (
         kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
-            b"request",
-            b"bundle",
+            lineage_init_request,
+            lineage_init_bundle,
         )
-        == b"lineage-init"
+        == _kagemusha_norito_frame_with_payload(0x38)
     )
     assert (
         kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
-            b"witness",
-            b"request",
-            b"bundle",
+            lineage_append_previous_witness,
+            lineage_append_request,
+            lineage_append_bundle,
         )
-        == b"lineage-append"
+        == _kagemusha_norito_frame_with_payload(0x39)
     )
-    assert kagemusha.kagemusha_recursive_spend_verify(memoryview(b"c")) == b"verify"
-    assert kagemusha.kagemusha_recursive_spend_redeem(b"d") == b"redeem"
+    assert (
+        kagemusha.kagemusha_recursive_spend_verify(memoryview(verify_request))
+        == _kagemusha_norito_frame_with_payload(0x3A)
+    )
+    assert (
+        kagemusha.kagemusha_recursive_spend_redeem(redeem_request)
+        == _kagemusha_norito_frame_with_payload(0x3B)
+    )
     assert native.calls == [
-        ("compact", b"r"),
-        ("recursive_aggregation", b"r|p"),
-        ("init", b"a"),
-        ("append", b"b"),
-        ("transition-profile-init", b"ti"),
-        ("transition-profile-append", b"ta"),
-        ("lineage-append-boundary", b"profile"),
-        ("lineage-init", b"request|bundle"),
-        ("lineage-append", b"witness|request|bundle"),
-        ("verify", b"c"),
-        ("redeem", b"d"),
+        ("compact", record_bundle),
+        ("recursive_aggregation", record_bundle + b"|" + pallas_open_envelopes),
+        ("permissive_recursive_compact", b"\x00|\x00"),
+        ("permissive_recursive_compact", b"\x00|\x00"),
+        ("permissive_recursive_compact", b"\x00|\x00"),
+        ("recursive_compact", record_bundle + b"|" + pallas_open_envelopes),
+        ("recursive_compact_verify", valid_recursive_compact_token),
+        ("recursive_compact_verify", forged_recursive_compact_token),
+        ("init", init_request),
+        ("append", append_request),
+        ("transition-profile-init", transition_init_request),
+        ("transition-profile-append", transition_append_request),
+        ("lineage-append-boundary", boundary_profile),
+        ("lineage-init", lineage_init_request + b"|" + lineage_init_bundle),
+        (
+            "lineage-append",
+            lineage_append_previous_witness
+            + b"|"
+            + lineage_append_request
+            + b"|"
+            + lineage_append_bundle,
+        ),
+        ("verify", verify_request),
+        ("redeem", redeem_request),
     ]
+
+
+def test_recursive_compact_payment_token_verifier_rejects_non_boolean_native_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+
+    def recursive_compact(record_bundle: bytes, pallas_open_envelopes: bytes) -> bytes:
+        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes)
+        return b"recursive_compact"
+
+    def non_boolean_verify(compact_token: bytes) -> bytes:
+        native._reject_probe("recursive compact verify", compact_token)
+        return b"not-a-boolean"
+
+    setattr(native, RECURSIVE_COMPACT_METHOD, recursive_compact)
+    setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, non_boolean_verify)
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is True
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is True
+    with pytest.raises(RuntimeError, match="returned non-boolean result"):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_norito_frame_with_payload(0x4B)
+        )
 
 
 def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     manifest = _shared_recursive_spend_manifest()
     assert manifest["schema"] == "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1"
+    assert (
+        kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+        == "recursive_compact_v1"
+    )
+    assert kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION == 7
+    assert (
+        kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
+        == "kagemusha-recursive-compact-v1"
+    )
     assert (
         manifest["bridge_abi_version"]
         == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION
@@ -430,7 +759,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     assert redeem_archive["norito_type"] == "KagemushaRecursiveSpendRedeemRequestV1"
     assert (
         redeem_archive["sha256_hex"]
-        == "b83b33541f50ab893ae356c1f42da60aaf81da95bc4daf871511509fc8eea5b2"
+        == "f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e"
     )
     assert redeem_archive["byte_len"] > 0
     assert len(base64.b64decode(redeem_archive["bytes_base64"])) > 0
@@ -440,7 +769,7 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
     assert redeem_instruction_archive["norito_type"] == "RedeemKagemushaRecursive"
     assert (
         redeem_instruction_archive["sha256_hex"]
-        == "a598660cbfe91a207b64a69b7a9dbdc985fd901c60fe886aecb4dead4115169e"
+        == "88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03"
     )
 
     assert (
@@ -474,11 +803,28 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
     for method_name in (
         "kagemusha_prove_verified_compact_payment_token_with_records",
         RECURSIVE_AGGREGATION_METHOD,
+        RECURSIVE_COMPACT_METHOD,
+        RECURSIVE_COMPACT_VERIFY_METHOD,
         *RECURSIVE_SPEND_METHODS,
     ):
         native = _Native()
         if method_name == RECURSIVE_AGGREGATION_METHOD:
             setattr(native, method_name, lambda record, pallas: b"accepted")
+        elif method_name == RECURSIVE_COMPACT_METHOD:
+            setattr(native, method_name, lambda record, pallas: b"accepted")
+
+            def rejecting_verify(archive: bytes) -> bool:
+                native._reject_probe("recursive compact verify", archive)
+                return False
+
+            setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, rejecting_verify)
+        elif method_name == RECURSIVE_COMPACT_VERIFY_METHOD:
+            def rejecting_recursive_compact(record: bytes, pallas: bytes) -> bytes:
+                native._reject_probe("recursive compact", record, pallas)
+                return b"accepted"
+
+            setattr(native, RECURSIVE_COMPACT_METHOD, rejecting_recursive_compact)
+            setattr(native, method_name, lambda archive: True)
         elif method_name == "kagemusha_recursive_spend_lineage_witness_from_init_result":
             setattr(native, method_name, lambda request, bundle: b"accepted")
         elif method_name == "kagemusha_recursive_spend_lineage_witness_append_result":
@@ -494,10 +840,40 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
                 kagemusha.is_kagemusha_recursive_aggregation_proof_bundle_prover_available()
                 is False
             )
+        elif method_name in (RECURSIVE_COMPACT_METHOD, RECURSIVE_COMPACT_VERIFY_METHOD):
+            assert (
+                kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available()
+                is False
+            )
+            if method_name == RECURSIVE_COMPACT_METHOD:
+                assert (
+                    kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available()
+                    is True
+                )
+                with pytest.raises(
+                    RuntimeError,
+                    match="recursive compact Kagemusha payment-token prover",
+                ):
+                    getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+                        _kagemusha_input_archive(0xBB),
+                        _kagemusha_input_archive(0xBC),
+                    )
+            else:
+                assert (
+                    kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available()
+                    is False
+                )
+                with pytest.raises(
+                    RuntimeError,
+                    match="recursive compact Kagemusha payment-token verifier",
+                ):
+                    getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+                        _kagemusha_norito_frame_with_payload(0x4B)
+                    )
         else:
             assert kagemusha.is_kagemusha_recursive_spend_available() is False
             with pytest.raises(RuntimeError, match="reject malformed probe archives"):
-                kagemusha.kagemusha_recursive_spend_verify(b"request")
+                kagemusha.kagemusha_recursive_spend_verify(_kagemusha_input_archive(0x74))
 
 
 def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> None:
@@ -507,6 +883,8 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         pytest.skip("package root crypto exports are unavailable")
 
     from iroha_python import (
+        is_kagemusha_recursive_compact_payment_token_verifier_available
+        as root_is_recursive_compact_verifier_available,
         requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output
         as root_requires_key_artifacts_for_append_output,
         requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
@@ -522,12 +900,20 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         in iroha_python.__all__
     )
     assert (
+        "is_kagemusha_recursive_compact_payment_token_verifier_available"
+        in iroha_python.__all__
+    )
+    assert (
         root_requires_key_artifacts_for_init
         is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
     )
     assert (
         root_requires_key_artifacts_for_append_output
         is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output
+    )
+    assert (
+        root_is_recursive_compact_verifier_available
+        is kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available
     )
 
 
@@ -1019,17 +1405,38 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
 def test_recursive_kagemusha_availability_requires_bridge_abi_6(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    native = _Native()
-    native.kagemusha_recursive_spend_bridge_abi_version = lambda: 5
-    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+    for abi_version in (
+        5,
+        True,
+        "6",
+        -1,
+        6.5,
+        0x1_0000_0000,
+        10**100,
+    ):
+        native = _Native()
+        native.kagemusha_recursive_spend_bridge_abi_version = (
+            lambda abi_version=abi_version: abi_version
+        )
+        setattr(native, RECURSIVE_COMPACT_METHOD, lambda record, pallas: b"compact")
+        setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, lambda token: True)
+        monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
-    assert kagemusha.is_kagemusha_recursive_spend_available() is False
-    assert (
-        kagemusha.preferred_kagemusha_offline_spend_mode()
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
-    )
-    with pytest.raises(RuntimeError, match="native bridge ABI 6"):
-        kagemusha.kagemusha_recursive_spend_init(b"request")
+        assert kagemusha.is_kagemusha_recursive_spend_available() is False
+        assert (
+            kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available()
+            is False
+        )
+        assert (
+            kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available()
+            is False
+        )
+        assert (
+            kagemusha.preferred_kagemusha_offline_spend_mode()
+            == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
+        )
+        with pytest.raises(RuntimeError, match="native bridge ABI 6"):
+            kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0x70))
 
 
 def test_recursive_kagemusha_availability_rejects_broken_abi_probe(
@@ -1049,7 +1456,7 @@ def test_recursive_kagemusha_availability_rejects_broken_abi_probe(
         == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
     )
     with pytest.raises(RuntimeError, match="native bridge ABI 6"):
-        kagemusha.kagemusha_recursive_spend_init(b"request")
+        kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0x71))
 
 
 def test_recursive_kagemusha_helpers_require_complete_abi_surface(
@@ -1092,7 +1499,7 @@ def test_recursive_kagemusha_helpers_require_complete_abi_surface(
         == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
     )
     with pytest.raises(RuntimeError, match="complete native bridge ABI 6 surface"):
-        kagemusha.kagemusha_recursive_spend_init(b"request")
+        kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0x72))
 
 
 @pytest.mark.parametrize("missing_method", RECURSIVE_SPEND_METHODS)
@@ -1106,7 +1513,7 @@ def test_recursive_kagemusha_helpers_reject_each_missing_abi_method(
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is False
     with pytest.raises(RuntimeError, match="complete native bridge ABI 6 surface"):
-        kagemusha.kagemusha_recursive_spend_verify(b"request")
+        kagemusha.kagemusha_recursive_spend_verify(_kagemusha_input_archive(0x73))
 
 
 def test_recursive_kagemusha_helpers_reject_empty_native_outputs(
@@ -1140,9 +1547,14 @@ def test_recursive_kagemusha_helpers_reject_empty_native_outputs(
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
     with pytest.raises(RuntimeError, match="returned empty output"):
-        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"record")
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_input_archive(0xC0)
+        )
     with pytest.raises(RuntimeError, match="returned empty output"):
-        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(b"record", b"pallas")
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_input_archive(0xC1),
+            _kagemusha_input_archive(0xC2),
+        )
 
     for helper in (
         kagemusha.kagemusha_recursive_spend_init,
@@ -1154,17 +1566,17 @@ def test_recursive_kagemusha_helpers_reject_empty_native_outputs(
         kagemusha.kagemusha_recursive_spend_redeem,
     ):
         with pytest.raises(RuntimeError, match="returned empty output"):
-            helper(b"request")
+            helper(_kagemusha_input_archive(0x80))
     with pytest.raises(RuntimeError, match="returned empty output"):
         kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
-            b"request",
-            b"bundle",
+            _kagemusha_input_archive(0x81),
+            _kagemusha_input_archive(0x82),
         )
     with pytest.raises(RuntimeError, match="returned empty output"):
         kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
-            b"witness",
-            b"request",
-            b"bundle",
+            _kagemusha_input_archive(0x83),
+            _kagemusha_input_archive(0x84),
+            _kagemusha_input_archive(0x85),
         )
 
 
@@ -1175,24 +1587,91 @@ def test_recursive_kagemusha_helpers_reject_oversized_native_outputs(
 
     def oversized_one(archive: bytes) -> bytes:
         native._reject_probe("oversized one", archive)
-        return b"abc"
+        return b"x" * 49
 
     def oversized_two(first: bytes, second: bytes) -> bytes:
         native._reject_probe("oversized two", first, second)
-        return b"abc"
+        return b"x" * 49
 
-    monkeypatch.setattr(kagemusha, "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES", 2)
+    monkeypatch.setattr(kagemusha, "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES", 48)
     native.kagemusha_prove_verified_compact_payment_token_with_records = oversized_one
     setattr(native, RECURSIVE_AGGREGATION_METHOD, oversized_two)
     native.kagemusha_recursive_spend_redeem = oversized_one
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
     with pytest.raises(RuntimeError, match="returned oversized output"):
-        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"record")
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_input_archive(0xC3)
+        )
     with pytest.raises(RuntimeError, match="returned oversized output"):
-        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(b"record", b"pallas")
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_input_archive(0xC4),
+            _kagemusha_input_archive(0xC5),
+        )
     with pytest.raises(RuntimeError, match="returned oversized output"):
-        kagemusha.kagemusha_recursive_spend_redeem(b"request")
+        kagemusha.kagemusha_recursive_spend_redeem(_kagemusha_input_archive(0x86))
+
+
+def test_recursive_kagemusha_helpers_reject_malformed_native_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+
+    def malformed_one(archive: bytes) -> bytes:
+        native._reject_probe("malformed one", archive)
+        return b"\x01"
+
+    def malformed_two(first: bytes, second: bytes) -> bytes:
+        native._reject_probe("malformed two", first, second)
+        return b"\x01"
+
+    native.kagemusha_prove_verified_compact_payment_token_with_records = malformed_one
+    setattr(native, RECURSIVE_AGGREGATION_METHOD, malformed_two)
+    native.kagemusha_recursive_spend_redeem = malformed_one
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_input_archive(0xC6)
+        )
+    with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_input_archive(0xC7),
+            _kagemusha_input_archive(0xC8),
+        )
+    with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
+        kagemusha.kagemusha_recursive_spend_redeem(_kagemusha_input_archive(0x87))
+
+
+def test_recursive_kagemusha_helpers_reject_empty_payload_native_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+
+    def empty_payload_one(archive: bytes) -> bytes:
+        native._reject_probe("empty payload one", archive)
+        return _kagemusha_norito_frame(0x4B)
+
+    def empty_payload_two(first: bytes, second: bytes) -> bytes:
+        native._reject_probe("empty payload two", first, second)
+        return _kagemusha_norito_frame(0x4C)
+
+    native.kagemusha_prove_verified_compact_payment_token_with_records = empty_payload_one
+    setattr(native, RECURSIVE_AGGREGATION_METHOD, empty_payload_two)
+    native.kagemusha_recursive_spend_redeem = empty_payload_one
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    with pytest.raises(RuntimeError, match="returned empty Norito payload"):
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_input_archive(0xC9)
+        )
+    with pytest.raises(RuntimeError, match="returned empty Norito payload"):
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_input_archive(0xCA),
+            _kagemusha_input_archive(0xCB),
+        )
+    with pytest.raises(RuntimeError, match="returned empty Norito payload"):
+        kagemusha.kagemusha_recursive_spend_redeem(_kagemusha_input_archive(0x88))
 
 
 def test_recursive_kagemusha_helpers_reject_missing_native_outputs(
@@ -1226,9 +1705,14 @@ def test_recursive_kagemusha_helpers_reject_missing_native_outputs(
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
     with pytest.raises(RuntimeError, match="returned no output"):
-        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"record")
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_input_archive(0xCC)
+        )
     with pytest.raises(RuntimeError, match="returned no output"):
-        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(b"record", b"pallas")
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_input_archive(0xCD),
+            _kagemusha_input_archive(0xCE),
+        )
 
     for helper in (
         kagemusha.kagemusha_recursive_spend_init,
@@ -1240,17 +1724,17 @@ def test_recursive_kagemusha_helpers_reject_missing_native_outputs(
         kagemusha.kagemusha_recursive_spend_redeem,
     ):
         with pytest.raises(RuntimeError, match="returned no output"):
-            helper(b"request")
+            helper(_kagemusha_input_archive(0x90))
     with pytest.raises(RuntimeError, match="returned no output"):
         kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
-            b"request",
-            b"bundle",
+            _kagemusha_input_archive(0x91),
+            _kagemusha_input_archive(0x92),
         )
     with pytest.raises(RuntimeError, match="returned no output"):
         kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
-            b"witness",
-            b"request",
-            b"bundle",
+            _kagemusha_input_archive(0x93),
+            _kagemusha_input_archive(0x94),
+            _kagemusha_input_archive(0x95),
         )
 
 
@@ -1285,9 +1769,14 @@ def test_recursive_kagemusha_helpers_reject_native_text_outputs(
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
     with pytest.raises(RuntimeError, match="returned text instead of Norito bytes"):
-        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"record")
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_input_archive(0xCF)
+        )
     with pytest.raises(RuntimeError, match="returned text instead of Norito bytes"):
-        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(b"record", b"pallas")
+        getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            _kagemusha_input_archive(0xD0),
+            _kagemusha_input_archive(0xD1),
+        )
 
     for helper in (
         kagemusha.kagemusha_recursive_spend_init,
@@ -1299,17 +1788,17 @@ def test_recursive_kagemusha_helpers_reject_native_text_outputs(
         kagemusha.kagemusha_recursive_spend_redeem,
     ):
         with pytest.raises(RuntimeError, match="returned text instead of Norito bytes"):
-            helper(b"request")
+            helper(_kagemusha_input_archive(0xA0))
     with pytest.raises(RuntimeError, match="returned text instead of Norito bytes"):
         kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
-            b"request",
-            b"bundle",
+            _kagemusha_input_archive(0xA1),
+            _kagemusha_input_archive(0xA2),
         )
     with pytest.raises(RuntimeError, match="returned text instead of Norito bytes"):
         kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
-            b"witness",
-            b"request",
-            b"bundle",
+            _kagemusha_input_archive(0xA3),
+            _kagemusha_input_archive(0xA4),
+            _kagemusha_input_archive(0xA5),
         )
 
 
@@ -1318,6 +1807,7 @@ def test_recursive_kagemusha_redeem_propagates_native_multi_hop_lineage_rejectio
 ) -> None:
     native = _Native()
     calls: list[bytes] = []
+    request = _kagemusha_input_archive(0xA6)
 
     def rejecting_redeem(request: bytes) -> bytes:
         native._reject_probe("redeem", request)
@@ -1331,8 +1821,8 @@ def test_recursive_kagemusha_redeem_propagates_native_multi_hop_lineage_rejectio
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is True
     with pytest.raises(RuntimeError, match=r"bundle\.accumulator\.hop_count"):
-        kagemusha.kagemusha_recursive_spend_redeem(b"request")
-    assert calls == [b"request"]
+        kagemusha.kagemusha_recursive_spend_redeem(request)
+    assert calls == [request]
 
 
 def test_recursive_kagemusha_helpers_propagate_forged_lineage_record_rejection(
@@ -1340,6 +1830,8 @@ def test_recursive_kagemusha_helpers_propagate_forged_lineage_record_rejection(
 ) -> None:
     native = _Native()
     calls: list[tuple[str, bytes]] = []
+    verify_request = _kagemusha_input_archive(0xA7)
+    redeem_request = _kagemusha_input_archive(0xA8)
 
     def rejecting_verify(request: bytes) -> bytes:
         native._reject_probe("verify", request)
@@ -1361,12 +1853,12 @@ def test_recursive_kagemusha_helpers_propagate_forged_lineage_record_rejection(
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is True
     with pytest.raises(RuntimeError, match=r"lineage_verifier_record\.commitment"):
-        kagemusha.kagemusha_recursive_spend_verify(b"verify-request")
+        kagemusha.kagemusha_recursive_spend_verify(verify_request)
     with pytest.raises(RuntimeError, match=r"lineage_verifier_record\.commitment"):
-        kagemusha.kagemusha_recursive_spend_redeem(b"redeem-request")
+        kagemusha.kagemusha_recursive_spend_redeem(redeem_request)
     assert calls == [
-        ("verify", b"verify-request"),
-        ("redeem", b"redeem-request"),
+        ("verify", verify_request),
+        ("redeem", redeem_request),
     ]
 
 
@@ -1375,6 +1867,7 @@ def test_recursive_kagemusha_transition_profile_append_propagates_forged_opening
 ) -> None:
     native = _Native()
     calls: list[bytes] = []
+    request = _kagemusha_input_archive(0xA9)
 
     def rejecting_transition_profile_append(request: bytes) -> bytes:
         native._reject_probe("transition profile append", request)
@@ -1390,10 +1883,8 @@ def test_recursive_kagemusha_transition_profile_append_propagates_forged_opening
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is True
     with pytest.raises(RuntimeError, match="hop domain metadata mismatch"):
-        kagemusha.kagemusha_recursive_spend_transition_profile_append(
-            b"transition-profile-request"
-        )
-    assert calls == [b"transition-profile-request"]
+        kagemusha.kagemusha_recursive_spend_transition_profile_append(request)
+    assert calls == [request]
 
 
 def test_recursive_kagemusha_availability_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1407,6 +1898,8 @@ def test_recursive_kagemusha_availability_fails_closed(monkeypatch: pytest.Monke
         == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1
     )
     with pytest.raises(RuntimeError, match="Kagemusha support"):
-        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(b"x")
+        kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            _kagemusha_input_archive(0xD2)
+        )
     with pytest.raises(RuntimeError, match="recursive Kagemusha support"):
-        kagemusha.kagemusha_recursive_spend_init(b"x")
+        kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0xAA))

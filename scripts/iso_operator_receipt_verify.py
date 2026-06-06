@@ -48,6 +48,17 @@ SUMMARY_DIGEST_FIELD = "summary_sha256"
 SUPPORTED_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+MAX_RECEIPT_JSON_BYTES = 4 * 1024 * 1024
+MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
+MAX_RAIL_XML_BYTES = 4 * 1024 * 1024
+MAX_RAIL_SIDECAR_JSON_BYTES = 16 * 1024
+MAX_HTTP_URL_CHARS = 2048
+LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
+IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
+MAX_RAIL_MESSAGE_ID_CHARS = 128
+RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
+SECRET_RESPONSE_PREVIEW_MARKERS = ("authorization", "bearer ", "private_key", "secret", "token")
 RAIL_SIDECAR_KEYS = {"message_type", "profile", "payload_sha256", "rail_message_id"}
 COMMON_RECEIPT_KEYS = {
     "version",
@@ -210,7 +221,80 @@ def _is_lower_hex_sha256(value: Any) -> bool:
     )
 
 
-def _read_regular_file(path: Path) -> bytes:
+def _reject_symlinked_existing_ancestors(path: Path) -> None:
+    current = Path(path.anchor) if path.is_absolute() else Path(".")
+    parts = path.parts[1:] if path.is_absolute() else path.parts
+    for part in parts:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(mode):
+            if path.is_absolute() and current.parent == Path(path.anchor):
+                continue
+            raise ReceiptError(f"{current} must not be a symlink")
+
+
+def _reject_raw_cli_path_smuggling(raw: str, label: str) -> None:
+    if not raw:
+        raise ReceiptError(f"{label} must be a non-empty path")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReceiptError(f"{label} must not contain control characters")
+    if raw != raw.strip():
+        raise ReceiptError(f"{label} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReceiptError(f"{label} must not contain whitespace")
+    if raw.startswith("-"):
+        raise ReceiptError(f"{label} must not start with a dash")
+    if "\\" in raw:
+        raise ReceiptError(f"{label} must use forward slashes")
+    if ";" in raw:
+        raise ReceiptError(f"{label} must not contain semicolon path parameters")
+    parts = raw.split("/")
+    checked_parts = parts[1:] if raw.startswith("/") else parts
+    if any(part == "" for part in checked_parts):
+        raise ReceiptError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise ReceiptError(f"{label} must not contain leading-dash path segments")
+    if any(part in {".", ".."} for part in checked_parts):
+        raise ReceiptError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 < len(raw_args):
+                    _reject_raw_cli_path_smuggling(raw_args[index + 1], flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                _reject_raw_cli_path_smuggling(arg[len(prefix) :], flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    limit_label: str = "input",
+) -> bytes:
+    if max_bytes is not None and max_bytes <= 0:
+        raise ReceiptError("max file bytes must be positive")
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
@@ -219,15 +303,24 @@ def _read_regular_file(path: Path) -> bytes:
         raise ReceiptError(f"{path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
         raise ReceiptError(f"{path} must be a regular file")
+    if max_bytes is not None and metadata.st_size > max_bytes:
+        raise ReceiptError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
             raise ReceiptError(f"{path} must be a regular file")
+        if max_bytes is not None and opened.st_size > max_bytes:
+            raise ReceiptError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            return handle.read()
+            limit = max_bytes + 1 if max_bytes is not None else -1
+            raw = handle.read(limit)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise ReceiptError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
+        return raw
     except FileNotFoundError as error:
         raise ReceiptError(f"{path} does not exist") from error
     except OSError as error:
@@ -239,17 +332,20 @@ def _read_regular_file(path: Path) -> bytes:
             os.close(fd)
 
 
-def _load_json(path: Path) -> Any:
-    raw = _read_regular_file(path)
+def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
+    raw = _read_regular_file(path, max_bytes=max_bytes, limit_label="JSON")
     try:
-        return json.loads(
+        value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
         )
     except UnicodeDecodeError as error:
         raise ReceiptError(f"{path} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
         raise ReceiptError(f"{path} is not valid JSON: {error}") from error
+    _reject_json_surrogates(value)
+    return value
 
 
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
@@ -267,6 +363,23 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         seen.add(key)
         result[key] = value
     return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ReceiptError(f"JSON contains non-finite numeric constant {value}")
+
+
+def _reject_json_surrogates(value: Any) -> None:
+    if isinstance(value, str):
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+            raise ReceiptError("JSON contains invalid Unicode surrogate")
+    elif isinstance(value, list):
+        for item in value:
+            _reject_json_surrogates(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _reject_json_surrogates(key)
+            _reject_json_surrogates(item)
 
 
 def digest_without_field(obj: dict[str, Any], digest_field: str) -> str:
@@ -339,6 +452,21 @@ def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
     return netloc.rsplit(":", 1)[0]
 
 
+def _raw_url_port_text(parsed: urllib.parse.ParseResult) -> str | None:
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        bracket = netloc.find("]")
+        if bracket == -1:
+            return None
+        remainder = netloc[bracket + 1 :]
+        if remainder.startswith(":"):
+            return remainder[1:]
+        return None
+    if ":" in netloc:
+        return netloc.rsplit(":", 1)[1]
+    return None
+
+
 def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
     raw_host = _raw_url_host(parsed)
     if "%" in raw_host:
@@ -347,6 +475,8 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise ReceiptError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise ReceiptError(f"{label} host must not end with a dot")
+    if len(raw_host) > 253:
+        raise ReceiptError(f"{label} host must be at most 253 characters")
     try:
         ipaddress.ip_address(raw_host)
         return
@@ -354,6 +484,7 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         pass
     if ":" in raw_host:
         raise ReceiptError(f"{label} host must be a valid IP address")
+    _reject_legacy_ipv4_host_notation(raw_host, label)
     labels = raw_host.split(".")
     if any(not part for part in labels):
         raise ReceiptError(f"{label} host must not contain empty labels")
@@ -368,6 +499,66 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
             raise ReceiptError(
                 f"{label} host labels must use lowercase ASCII letters, digits, or hyphens"
             )
+
+
+def _reject_legacy_ipv4_host_notation(raw_host: str, label: str) -> None:
+    parts = raw_host.split(".")
+    if len(parts) > 4:
+        return
+    saw_hex_part = False
+    for part in parts:
+        if part.startswith("0x"):
+            digits = part[2:]
+            if not digits or any(ch not in "0123456789abcdef" for ch in digits):
+                return
+            saw_hex_part = True
+        elif not part.isdigit():
+            return
+    if saw_hex_part:
+        raise ReceiptError(f"{label} host must not use legacy IPv4 numeric notation")
+
+
+def _reject_local_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+    *,
+    allow_insecure_http: bool,
+) -> None:
+    if allow_insecure_http:
+        return
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        raise ReceiptError(f"{label} must not use localhost")
+    if _host_uses_rebinding_suffix(hostname):
+        raise ReceiptError(f"{label} must not use local/private rebinding hostnames")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+    if not address.is_global:
+        raise ReceiptError(f"{label} must not use local, private, or reserved IP addresses")
+    if _address_embeds_non_global_ipv4(address):
+        raise ReceiptError(f"{label} must not embed local, private, or reserved IPv4 addresses")
+
+
+def _host_uses_rebinding_suffix(hostname: str) -> bool:
+    return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
+    )
+
+
+def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    embedded: ipaddress.IPv4Address | None = None
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            embedded = address.ipv4_mapped
+        elif address in NAT64_WELL_KNOWN_PREFIX or address in IPV4_COMPATIBLE_IPV6_PREFIX:
+            embedded = ipaddress.IPv4Address(int(address) & 0xFFFF_FFFF)
+        elif address.sixtofour is not None:
+            embedded = address.sixtofour
+        elif address.teredo is not None:
+            embedded = address.teredo[1]
+    return embedded is not None and not embedded.is_global
 
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
@@ -385,6 +576,10 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise ReceiptError(f"{label} path must not contain encoded dot or separator characters")
+    if "%3b" in lowered:
+        raise ReceiptError(f"{label} path must not contain encoded semicolon parameters")
+    if any(token in lowered for token in ("%23", "%3a", "%3f", "%40", "%5b", "%5d")):
+        raise ReceiptError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise ReceiptError(f"{label} path must not contain encoded percent characters")
 
@@ -409,6 +604,8 @@ def _require_clean_path_string(value: Any, label: str) -> str:
     path = _require_clean_string(value, label)
     if any(ch.isspace() for ch in path):
         raise ReceiptError(f"{label} must not contain whitespace")
+    if path.startswith("-"):
+        raise ReceiptError(f"{label} must not start with a dash")
     if "\\" in path:
         raise ReceiptError(f"{label} must use forward slashes")
     if ";" in path:
@@ -417,6 +614,8 @@ def _require_clean_path_string(value: Any, label: str) -> str:
     checked_parts = parts[1:] if path.startswith("/") else parts
     if any(part == "" for part in checked_parts):
         raise ReceiptError(f"{label} must not contain empty path segments")
+    if any(part.startswith("-") for part in checked_parts):
+        raise ReceiptError(f"{label} must not contain leading-dash path segments")
     if any(part in {".", ".."} for part in parts):
         raise ReceiptError(f"{label} must not contain dot or parent segments")
     return path
@@ -513,7 +712,7 @@ def _verify_persisted_metadata(
             raise ReceiptError(f"{label}.{key} does not match audit index record")
 
 
-def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str]:
+def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must be an object")
     _reject_unknown_keys(value, PERSISTED_HISTORY_KEYS, label)
@@ -521,10 +720,13 @@ def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str]:
     if status not in {"Pending", "Accepted", "Rejected"}:
         raise ReceiptError(f"{label}.status must be Pending, Accepted, or Rejected")
     code = _require_pacs002_code(value.get("pacs002_code"), f"{label}.pacs002_code")
-    _require_nonnegative_int(value.get("updated_at_ms"), f"{label}.updated_at_ms")
+    updated_at_ms = _require_nonnegative_int(
+        value.get("updated_at_ms"),
+        f"{label}.updated_at_ms",
+    )
     _require_optional_clean_string(value.get("detail"), f"{label}.detail")
     _require_optional_clean_string(value.get("reason_code"), f"{label}.reason_code")
-    return status, code
+    return status, code, updated_at_ms
 
 
 def _verify_persisted_record_source(
@@ -532,7 +734,7 @@ def _verify_persisted_record_source(
     path: Path,
     label: str,
 ) -> None:
-    value = _load_json(path)
+    value = _load_json(path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must contain a JSON object")
     _reject_unknown_keys(value, PERSISTED_RECORD_KEYS, label)
@@ -545,8 +747,11 @@ def _verify_persisted_record_source(
         raise ReceiptError(f"{label}.message_id does not match audit index record")
     if value.get("state") != index_record.get("state"):
         raise ReceiptError(f"{label}.state does not match audit index record")
-    _require_nonnegative_int(value.get("updated_at_ms"), f"{label}.updated_at_ms")
-    if value.get("updated_at_ms") != index_record.get("updated_at_ms"):
+    updated_at_ms = _require_nonnegative_int(
+        value.get("updated_at_ms"),
+        f"{label}.updated_at_ms",
+    )
+    if updated_at_ms != index_record.get("updated_at_ms"):
         raise ReceiptError(f"{label}.updated_at_ms does not match audit index record")
     _require_optional_nonnegative_int(value.get("settled_at_ms"), f"{label}.settled_at_ms")
     if value.get("settled_at_ms") != index_record.get("settled_at_ms"):
@@ -577,52 +782,80 @@ def _verify_persisted_record_source(
         raise ReceiptError(f"{label}.status_history must be a non-empty array")
     last_status = None
     last_code = None
+    last_updated_at_ms = None
+    previous_updated_at_ms = None
     for offset, entry in enumerate(history):
-        last_status, last_code = _verify_persisted_history_entry(
+        last_status, last_code, last_updated_at_ms = _verify_persisted_history_entry(
             entry,
             f"{label}.status_history[{offset}]",
         )
+        if (
+            previous_updated_at_ms is not None
+            and last_updated_at_ms < previous_updated_at_ms
+        ):
+            raise ReceiptError(
+                f"{label}.status_history[{offset}].updated_at_ms must not move backwards"
+            )
+        previous_updated_at_ms = last_updated_at_ms
     derived_code = _derived_pacs002_code(value, label)
     if derived_code != index_record.get("pacs002_code"):
         raise ReceiptError(f"{label}.pacs002_code does not match persisted state")
     if last_status != value.get("state") or last_code != derived_code:
         raise ReceiptError(f"{label}.status_history does not end with current status")
+    if last_updated_at_ms != updated_at_ms:
+        raise ReceiptError(f"{label}.status_history does not end at current updated_at_ms")
 
 
 def _require_https(url: str, *, allow_insecure_http: bool, label: str) -> None:
+    url_label = f"{label} URL"
+    if len(url) > MAX_HTTP_URL_CHARS:
+        raise ReceiptError(f"{url_label} must be no longer than {MAX_HTTP_URL_CHARS} characters")
     _reject_url_control_chars(url, label)
     _reject_url_percent_encoding_smuggling(url, label)
     if url != url.strip():
-        raise ReceiptError(f"{label} URL must not have surrounding whitespace")
+        raise ReceiptError(f"{url_label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in url):
-        raise ReceiptError(f"{label} URL must not contain whitespace")
+        raise ReceiptError(f"{url_label} must not contain whitespace")
     try:
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname
     except ValueError as error:
-        raise ReceiptError(f"{label} URL {url} is not valid: {error}") from error
+        raise ReceiptError(f"{url_label} is not valid: {error}") from error
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and allow_insecure_http
     ):
         if parsed.scheme == "http":
-            raise ReceiptError(f"{label} uses insecure HTTP URL {url}")
-        raise ReceiptError(f"{label} must use http or https URL, got {url}")
+            raise ReceiptError(f"{label} uses insecure HTTP URL")
+        raise ReceiptError(f"{url_label} must use http or https")
     try:
         port = parsed.port
     except ValueError as error:
-        raise ReceiptError(f"{label} URL {url} has invalid port: {error}") from error
+        raise ReceiptError(f"{url_label} has invalid port: {error}") from error
+    port_text = _raw_url_port_text(parsed)
+    if port_text == "":
+        raise ReceiptError(f"{url_label} must not include an empty port")
+    if port_text is not None:
+        if len(port_text) > 1 and port_text.startswith("0"):
+            raise ReceiptError(f"{url_label} port must not contain leading zeros")
+        if port == 0:
+            raise ReceiptError(f"{url_label} port must be positive")
     if (parsed.scheme == "https" and port == 443) or (
         parsed.scheme == "http" and port == 80
     ):
-        raise ReceiptError(f"{label} URL {url} must not explicitly specify the default port")
+        raise ReceiptError(f"{url_label} must not explicitly specify the default port")
     if not parsed.netloc or hostname is None or not hostname.strip():
-        raise ReceiptError(f"{label} URL {url} must include a host")
+        raise ReceiptError(f"{url_label} must include a host")
     if parsed.username is not None or parsed.password is not None:
-        raise ReceiptError(f"{label} URL {url} must not contain credentials")
-    _validate_url_host(parsed, f"{label} URL {url}")
+        raise ReceiptError(f"{url_label} must not contain credentials")
+    _validate_url_host(parsed, url_label)
+    _reject_local_url_host(
+        parsed,
+        url_label,
+        allow_insecure_http=allow_insecure_http,
+    )
     if parsed.params or parsed.query or parsed.fragment:
-        raise ReceiptError(f"{label} URL {url} must not contain params, query, or fragment")
-    _validate_url_path(parsed, f"{label} URL {url}")
+        raise ReceiptError(f"{url_label} must not contain params, query, or fragment")
+    _validate_url_path(parsed, url_label)
 
 
 def _check_status(receipt: dict[str, Any], path: Path, *, allow_failed: bool) -> None:
@@ -671,14 +904,21 @@ def _check_response_metadata(receipt: dict[str, Any], path: Path) -> None:
             raise ReceiptError(f"{path} response_body_preview must be a string")
         if len(response_body_preview) > 4096:
             raise ReceiptError(f"{path} response_body_preview exceeds 4096 characters")
-        if "bearer " in response_body_preview.lower():
-            raise ReceiptError(f"{path} response_body_preview contains bearer-token material")
+        if _response_preview_looks_secret(response_body_preview):
+            raise ReceiptError(f"{path} response_body_preview contains secret-looking material")
 
     error = receipt.get("error")
     if error is not None:
-        _normalize_optional_string(error, f"{path} error")
+        error = _normalize_optional_string(error, f"{path} error")
+        if _response_preview_looks_secret(error):
+            raise ReceiptError(f"{path} error contains secret-looking material")
     if receipt.get("ok") and error is not None:
         raise ReceiptError(f"{path} successful receipt must not record error")
+
+
+def _response_preview_looks_secret(preview: str) -> bool:
+    lowered = preview.lower()
+    return any(marker in lowered for marker in SECRET_RESPONSE_PREVIEW_MARKERS)
 
 
 def _verify_audit_index_record_source(record: Any, label: str) -> None:
@@ -718,6 +958,23 @@ def _verify_audit_index_record_source(record: Any, label: str) -> None:
     )
 
 
+def _reject_duplicate_audit_index_records(records: list[Any], label: str) -> None:
+    seen: dict[str, dict[str, int]] = {
+        "message_id": {},
+        "filename": {},
+        PERSISTED_RECORD_DIGEST_FIELD: {},
+    }
+    for offset, record in enumerate(records):
+        for field, field_seen in seen.items():
+            value = record[field]
+            if value in field_seen:
+                raise ReceiptError(
+                    f"{label}.records[{offset}].{field} duplicates "
+                    f"{label}.records[{field_seen[value]}].{field}: {value}"
+                )
+            field_seen[value] = offset
+
+
 def _verify_audit_index_source(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must contain a JSON object")
@@ -733,10 +990,12 @@ def _verify_audit_index_source(value: Any, label: str) -> dict[str, Any]:
         raise ReceiptError(f"{label} record_count does not match records length")
     for offset, record in enumerate(records):
         _verify_audit_index_record_source(record, f"{label}.records[{offset}]")
+    _reject_duplicate_audit_index_records(records, label)
     return value
 
 
 def _ensure_input_directory(path: Path, label: str) -> None:
+    _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
@@ -751,7 +1010,7 @@ def _record_store_dir(anchor: dict[str, Any], label: str) -> Path | None:
     store_dir = anchor.get("store_dir")
     if store_dir is None:
         return None
-    return Path(_require_clean_string(store_dir, f"{label}.store_dir"))
+    return Path(_require_clean_path_string(store_dir, f"{label}.store_dir"))
 
 
 def _verify_persisted_record_sources(
@@ -826,7 +1085,15 @@ def _verify_anchor_path_peers(
         return
     digest_anchor = export_dir / ANCHOR_DIR / f"{index_sha256}.notary.json"
     if digest_anchor.exists():
-        if _read_regular_file(digest_anchor) != _read_regular_file(anchor_path):
+        if _read_regular_file(
+            digest_anchor,
+            max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+            limit_label="JSON",
+        ) != _read_regular_file(
+            anchor_path,
+            max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES,
+            limit_label="JSON",
+        ):
             raise ReceiptError(
                 f"{receipt_path} latest anchor differs from digest-addressed peer"
             )
@@ -864,7 +1131,7 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
             raise ReceiptError(f"{path} references missing anchor_path {anchor_path}")
         return
 
-    anchor = _load_json(anchor_path)
+    anchor = _load_json(anchor_path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
     if not isinstance(anchor, dict):
         raise ReceiptError(f"{anchor_path} must contain a JSON object")
     _reject_unknown_keys(anchor, ANCHOR_KEYS, str(anchor_path))
@@ -903,7 +1170,7 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
     index_file = export_dir / INDEX_FILE
     if index_file.exists():
         exported_index = _verify_audit_index_source(
-            _load_json(index_file),
+            _load_json(index_file, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES),
             str(index_file),
         )
         if exported_index != audit_index:
@@ -942,6 +1209,21 @@ def _normalize_profile(value: Any, label: str) -> str | None:
     return profile
 
 
+def _normalize_rail_message_id(value: Any, label: str) -> str | None:
+    rail_message_id = _normalize_optional_string(
+        value,
+        label,
+        allow_embedded_whitespace=False,
+    )
+    if rail_message_id is None:
+        return None
+    if len(rail_message_id) > MAX_RAIL_MESSAGE_ID_CHARS:
+        raise ReceiptError(f"{label} must be at most {MAX_RAIL_MESSAGE_ID_CHARS} characters")
+    if RAIL_MESSAGE_ID_RE.fullmatch(rail_message_id) is None:
+        raise ReceiptError(f"{label} must be a canonical ASCII rail message id")
+    return rail_message_id
+
+
 def _verify_rail_sidecar(
     path: Path,
     sidecar_path: Path,
@@ -951,7 +1233,7 @@ def _verify_rail_sidecar(
     profile: str | None,
     rail_message_id: str | None,
 ) -> None:
-    sidecar = _load_json(sidecar_path)
+    sidecar = _load_json(sidecar_path, max_bytes=MAX_RAIL_SIDECAR_JSON_BYTES)
     if not isinstance(sidecar, dict):
         raise ReceiptError(f"{sidecar_path} must contain a JSON object")
     _reject_unknown_keys(sidecar, RAIL_SIDECAR_KEYS, str(sidecar_path))
@@ -965,10 +1247,9 @@ def _verify_rail_sidecar(
     )
     if sidecar_profile != profile:
         raise ReceiptError(f"{path} profile does not match source sidecar")
-    sidecar_rail_message_id = _normalize_optional_string(
+    sidecar_rail_message_id = _normalize_rail_message_id(
         sidecar.get("rail_message_id"),
         f"{sidecar_path} rail_message_id",
-        allow_embedded_whitespace=False,
     )
     if sidecar_rail_message_id != rail_message_id:
         raise ReceiptError(f"{path} rail_message_id does not match source sidecar")
@@ -991,10 +1272,9 @@ def _verify_rail_source(
             "production evidence must use colr.012"
         )
     profile = _normalize_profile(receipt.get("profile"), f"{path} profile")
-    rail_message_id = _normalize_optional_string(
+    rail_message_id = _normalize_rail_message_id(
         receipt.get("rail_message_id"),
         f"{path} rail_message_id",
-        allow_embedded_whitespace=False,
     )
 
     xml_path_raw = _require_clean_path_string(receipt.get("xml_path"), f"{path} xml_path")
@@ -1004,6 +1284,8 @@ def _verify_rail_source(
         f"{path} sidecar_path",
     )
     sidecar_path = Path(sidecar_path_raw)
+    if xml_path.suffix != ".xml":
+        raise ReceiptError(f"{path} xml_path must point to a .xml file")
     expected_sidecar = xml_path.with_suffix(xml_path.suffix + ".json")
     if sidecar_path.resolve() != expected_sidecar.resolve():
         raise ReceiptError(f"{path} sidecar_path must match xml_path sidecar")
@@ -1023,7 +1305,13 @@ def _verify_rail_source(
             raise ReceiptError(f"{path} references missing xml_path {xml_path}")
         return
 
-    actual = sha256_hex(_read_regular_file(xml_path))
+    actual = sha256_hex(
+        _read_regular_file(
+            xml_path,
+            max_bytes=MAX_RAIL_XML_BYTES,
+            limit_label="payload",
+        )
+    )
     if actual != payload_sha256:
         raise ReceiptError(f"{path} payload_sha256 does not match source XML {xml_path}")
 
@@ -1038,7 +1326,7 @@ def verify_receipt_file(
 ) -> dict[str, Any]:
     """Verify one operator receipt and return its parsed JSON object."""
 
-    receipt = _load_json(path)
+    receipt = _load_json(path, max_bytes=MAX_RECEIPT_JSON_BYTES)
     if not isinstance(receipt, dict):
         raise ReceiptError(f"{path} must contain a JSON object")
     if receipt.get("version") != RECEIPT_VERSION:
@@ -1081,6 +1369,7 @@ def verify_receipt_file(
 def discover_receipts(receipt_dir: Path) -> list[Path]:
     """Return receipt files in deterministic order."""
 
+    _reject_symlinked_existing_ancestors(receipt_dir.parent)
     try:
         metadata = receipt_dir.lstat()
     except FileNotFoundError as error:
@@ -1219,8 +1508,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        _preflight_cli_paths(argv, {"--receipt", "--receipt-dir"})
+        args = parser.parse_args(argv)
         return run(args)
     except ReceiptError as error:
         print(f"error: {error}", file=sys.stderr)

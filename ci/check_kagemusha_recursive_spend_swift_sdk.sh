@@ -9,4 +9,6 @@ cd "${ROOT_DIR}"
 "${SWIFTC_BIN}" -parse -parse-as-library \
   IrohaSwift/Sources/IrohaSwift/NativeBridge.swift \
   IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift \
-  IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift
+  IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift

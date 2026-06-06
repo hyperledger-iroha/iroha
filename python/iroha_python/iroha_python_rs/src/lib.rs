@@ -4147,9 +4147,68 @@ fn kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_
 }
 
 #[pyfunction]
+#[pyo3(
+    name = "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
+)]
+fn kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+    py: Python<'_>,
+    record_bundle_archive: &[u8],
+    pallas_open_envelopes_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+        decode_kagemusha_recursive_archive(
+            record_bundle_archive,
+            "Kagemusha recursive compact record bundle",
+        )?;
+    if pallas_open_envelopes_archive.is_empty() {
+        return Err(PyValueError::new_err(
+            "pallas_open_envelopes_archive must not be empty",
+        ));
+    }
+    let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        decode_kagemusha_recursive_archive(
+            pallas_open_envelopes_archive,
+            "Kagemusha recursive compact Pallas open-envelope archive",
+        )?;
+    let _ = (py, record_bundle, pallas_open_envelopes);
+    Err(PyRuntimeError::new_err(
+        iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
+    ))
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_verify_recursive_compact_payment_token")]
+fn kagemusha_verify_recursive_compact_payment_token_py(
+    compact_token_archive: &[u8],
+) -> PyResult<bool> {
+    let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+        decode_kagemusha_recursive_archive(
+            compact_token_archive,
+            "Kagemusha recursive compact payment token",
+        )?;
+    let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
+        .map_err(PyRuntimeError::new_err)?;
+    match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+        Err(err)
+            if err.contains(
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(err) => return Err(PyValueError::new_err(err)),
+        Ok(()) => {}
+    }
+    if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[pyfunction]
 #[pyo3(name = "kagemusha_recursive_spend_bridge_abi_version")]
 fn kagemusha_recursive_spend_bridge_abi_version_py() -> u32 {
-    6
+    7
 }
 
 #[pyfunction]
@@ -4522,6 +4581,9 @@ fn kagemusha_recursive_spend_verify_py(
 ) -> PyResult<Py<PyBytes>> {
     let request: iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 =
         decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend verify")?;
+    request
+        .validate_public_binding()
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
     let result = match request.block_height {
         Some(block_height) => {
             iroha_core::zk::kagemusha_recursive_spend_verify_result_with_lineage_record_at_height(
@@ -5636,6 +5698,17 @@ mod tests {
             "missing required production plan rows must be rejected",
         );
 
+        let mut duplicate_required: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
+        let duplicate = *PRIVACY_ALGORITHM_ENTRIES
+            .iter()
+            .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
+            .expect("required production plan row");
+        duplicate_required.push(duplicate);
+        assert!(
+            !privacy_required_production_plan_rows_are_present(&duplicate_required),
+            "duplicate required production plan rows must be rejected",
+        );
+
         let mut wrong_backend: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
         wrong_backend
             .iter_mut()
@@ -6107,6 +6180,34 @@ mod tests {
                 .iter()
                 .any(|entry| entry.algorithm_id == "orchard-halo2-actions-v1"),
         );
+        let zk_ace = decoded
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
+            .expect("ZK-ACE native capability must be advertised");
+        assert_eq!(zk_ace.proof_family, "stark/fri/sha256-goldilocks");
+        assert_eq!(zk_ace.backend_family, "stark-fri");
+        assert!(
+            !zk_ace.production_ready,
+            "ZK-ACE native capability must not become production-ready only because its verifier backend is allowlisted",
+        );
+        assert!(!zk_ace.production_gate.ready);
+        assert!(zk_ace.production_gate.audit_references.is_empty());
+        assert!(zk_ace.production_gate.gates.iter().all(|gate| !gate.passed));
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE)
+        );
+        assert!(
+            zk_ace
+                .production_gate
+                .missing
+                .iter()
+                .any(|missing| missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST)
+        );
         for algorithm in decoded.algorithms {
             assert!(!algorithm.production_ready);
             assert!(!algorithm.production_gate.ready);
@@ -6190,7 +6291,7 @@ mod tests {
             vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
             public_inputs: b"public".to_vec(),
             witness: Vec::new(),
-            proof: b"candidate proof".to_vec(),
+            proof: b"secret proof".to_vec(),
         };
         let verify_request_archive = public_privacy_request_archive(&verify_request);
         assert!(
@@ -7461,7 +7562,7 @@ mod tests {
     }
 
     #[test]
-    fn privacy_proof_ffi_rejects_empty_public_inputs_before_production_gate() {
+    fn privacy_build_proof_rejects_empty_public_inputs_before_production_gate() {
         let request = PrivacyProofRequestV1 {
             algorithm_id: "confidential-transfer-v2".to_owned(),
             entrypoint: "buildConfidentialTransferProofV2".to_owned(),
@@ -7471,6 +7572,28 @@ mod tests {
             proof: Vec::new(),
         };
         let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
+
+        assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
+        assert_eq!(result.algorithm_id, "confidential-transfer-v2");
+        assert_eq!(result.entrypoint, "buildConfidentialTransferProofV2");
+        assert!(result.message.contains("public_inputs"));
+        assert!(result.message.contains("non-empty"));
+        assert!(result.public_inputs.is_empty());
+        assert!(result.proof.is_empty());
+        assert!(!result.verified);
+    }
+
+    #[test]
+    fn privacy_verify_proof_rejects_empty_public_inputs_before_production_gate() {
+        let request = PrivacyProofRequestV1 {
+            algorithm_id: "confidential-transfer-v2".to_owned(),
+            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
+            vk_ref: "halo2-ipa-pasta:confidential_transfer_v2".to_owned(),
+            public_inputs: Vec::new(),
+            witness: Vec::new(),
+            proof: b"proof bytes".to_vec(),
+        };
+        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Verify);
 
         assert_eq!(result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST);
         assert_eq!(result.algorithm_id, "confidential-transfer-v2");
@@ -7667,6 +7790,28 @@ mod tests {
         assert!(result.proof.is_empty());
         assert!(!result.verified);
         assert!(!result.message.contains("secret"));
+
+        let zk_ace_request = privacy_request(
+            "zk-ace-pq-authorization-v0",
+            "buildZkAceAuthorizationProofV1",
+            Vec::new(),
+        );
+        let zk_ace_archive = public_privacy_request_archive(&zk_ace_request);
+        let zk_ace_result =
+            privacy_result_for_request_archive(&zk_ace_archive, PrivacyProofOperationV1::Build);
+
+        assert_eq!(
+            zk_ace_result.error_code,
+            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+        );
+        assert_eq!(zk_ace_result.algorithm_id, "zk-ace-pq-authorization-v0");
+        assert_eq!(zk_ace_result.entrypoint, "buildZkAceAuthorizationProofV1");
+        assert_eq!(zk_ace_result.vk_ref, "stark-fri:zk_ace_pq_authorization_v0");
+        assert_eq!(zk_ace_result.public_inputs, b"public-inputs");
+        assert!(zk_ace_result.message.contains("Iroha production allowlist"));
+        assert!(zk_ace_result.proof.is_empty());
+        assert!(!zk_ace_result.verified);
+        assert!(!zk_ace_result.message.contains("secret-witness"));
     }
 
     #[test]
@@ -7709,6 +7854,29 @@ mod tests {
         assert!(result.proof.is_empty());
         assert!(!result.verified);
         assert!(!result.message.contains("secret"));
+
+        let mut zk_ace_request = privacy_request(
+            "zk-ace-pq-authorization-v0",
+            "buildZkAceAuthorizationProofV1",
+            b"candidate-zk-ace-proof".to_vec(),
+        );
+        zk_ace_request.witness.clear();
+        let zk_ace_archive = public_privacy_request_archive(&zk_ace_request);
+        let zk_ace_result =
+            privacy_result_for_request_archive(&zk_ace_archive, PrivacyProofOperationV1::Verify);
+
+        assert_eq!(
+            zk_ace_result.error_code,
+            PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
+        );
+        assert_eq!(zk_ace_result.algorithm_id, "zk-ace-pq-authorization-v0");
+        assert_eq!(zk_ace_result.entrypoint, "buildZkAceAuthorizationProofV1");
+        assert_eq!(zk_ace_result.vk_ref, "stark-fri:zk_ace_pq_authorization_v0");
+        assert_eq!(zk_ace_result.public_inputs, b"public-inputs");
+        assert!(zk_ace_result.message.contains("Iroha production allowlist"));
+        assert!(zk_ace_result.proof.is_empty());
+        assert!(!zk_ace_result.verified);
+        assert!(!zk_ace_result.message.contains("candidate-zk-ace-proof"));
     }
 
     fn sample_kagemusha_recursive_spend_bundle() -> KagemushaRecursiveSpendBundleV1 {
@@ -8594,6 +8762,40 @@ mod tests {
         norito::to_bytes(&record_bundle).expect("encode empty Kagemusha record bundle")
     }
 
+    fn malformed_recursive_compact_token_archive_for_python() -> Vec<u8> {
+        let public_inputs = iroha_data_model::offline::KagemushaFoldedPublicInputs {
+            domain: iroha_data_model::offline::KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN.to_owned(),
+            aggregation_mode:
+                iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1,
+            chain_id: "python-recursive-compact-malformed"
+                .parse()
+                .expect("chain id"),
+            asset: AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").expect("domain id"),
+                "kgmpycompact".parse().expect("asset definition name"),
+            ),
+            initial_root: [0x11; 32],
+            final_root: [0x22; 32],
+            hop_count: 1,
+            nullifier_digest: Hash::new(b"python-recursive-compact-nullifiers"),
+            output_commitment_digest: Hash::new(b"python-recursive-compact-outputs"),
+            fold_digest: Hash::new(b"python-recursive-compact-fold"),
+            aggregation_transcript_digest: [0x33; 32],
+        };
+        let token = iroha_data_model::offline::KagemushaCompactPaymentToken {
+            public_inputs,
+            folded_proof: iroha_data_model::offline::KagemushaFoldedProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+                ),
+                public_inputs_hash: Hash::new(b"forged-python-recursive-compact-hash"),
+                proof: ProofBox::new(iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xC7]),
+            },
+        };
+        norito::to_bytes(&token).expect("encode malformed recursive compact token")
+    }
+
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
         PyProviderMetadata {
             provider_id: Some(provider_id.to_string()),
@@ -9012,8 +9214,58 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_python_function_is_six() {
-        assert_eq!(kagemusha_recursive_spend_bridge_abi_version_py(), 6);
+    fn kagemusha_recursive_spend_bridge_abi_version_python_function_is_additive_seven() {
+        assert_eq!(kagemusha_recursive_spend_bridge_abi_version_py(), 7);
+    }
+
+    #[test]
+    fn kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle() {
+        ensure_python();
+        Python::attach(|py| {
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &[1],
+                &[2],
+            )
+            .expect_err("recursive compact prover must reject malformed record bundle")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact record bundle archive"),
+                "unexpected recursive compact malformed-input error: {err}"
+            );
+
+            let record_archive = empty_kagemusha_record_bundle_archive();
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &record_archive,
+                &[2],
+            )
+            .expect_err("recursive compact prover must reject malformed Pallas archive")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact Pallas open-envelope archive"),
+                "unexpected recursive compact malformed-Pallas error: {err}"
+            );
+
+            let err = kagemusha_verify_recursive_compact_payment_token_py(&[1])
+                .expect_err("recursive compact verifier must reject malformed payment token")
+                .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact payment token archive"),
+                "unexpected recursive compact verifier malformed-input error: {err}"
+            );
+
+            let malformed_token = malformed_recursive_compact_token_archive_for_python();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(&malformed_token)
+                .expect_err("recursive compact verifier must reject malformed token binding")
+                .to_string();
+            assert!(
+                err.contains("public-input hash mismatch"),
+                "unexpected recursive compact malformed-binding error: {err}"
+            );
+        });
     }
 
     #[test]
@@ -9688,8 +9940,8 @@ mod tests {
     }
 
     #[test]
-    fn privacy_bridge_abi_version_python_function_is_six() {
-        assert_eq!(privacy_bridge_abi_version_py(), 6);
+    fn privacy_bridge_abi_version_python_function_is_additive_seven() {
+        assert_eq!(privacy_bridge_abi_version_py(), 7);
     }
 
     #[test]
@@ -9752,6 +10004,20 @@ mod tests {
             decode_from_bytes(output.bind(py).as_bytes())
                 .expect("decode recursive spend verify result")
         }
+        fn expect_request_error(
+            py: Python<'_>,
+            request: &KagemushaRecursiveSpendVerifyRequestV1,
+            expected: &str,
+        ) {
+            let archive = norito::to_bytes(request).expect("encode recursive spend verify request");
+            let err = kagemusha_recursive_spend_verify_py(py, &archive)
+                .expect_err("malformed verify request must reject")
+                .to_string();
+            assert!(
+                err.contains(expected),
+                "malformed verify request error `{err}` did not contain `{expected}`"
+            );
+        }
 
         ensure_python();
         Python::attach(|py| {
@@ -9760,20 +10026,22 @@ mod tests {
                 lineage_verifier_record: None,
                 block_height: None,
             };
+            let result = verify_result(py, &request);
+            assert!(!result.valid);
+            assert!(!result.chain_admissible);
+            assert!(!result.witnessless_redeem_supported);
+            assert!(result.lineage_witness_required_for_redeem);
+            assert!(
+                result.reason.contains("recursive spend proof envelope")
+                    || result.reason.contains("fixed-window table schedule digest"),
+                "malformed recursive proof envelope was not reported diagnostically: {}",
+                result.reason
+            );
 
             let mut trusted_setup_backend = request.clone();
             trusted_setup_backend.bundle.recursive_proof.proof =
                 ProofBox::new("halo2/kzg".into(), vec![0xA5; 64]);
-            let trusted_setup_result = verify_result(py, &trusted_setup_backend);
-            assert!(!trusted_setup_result.valid);
-            assert!(!trusted_setup_result.chain_admissible);
-            assert!(!trusted_setup_result.witnessless_redeem_supported);
-            assert!(trusted_setup_result.lineage_witness_required_for_redeem);
-            assert!(
-                trusted_setup_result.reason.contains("not supported"),
-                "trusted-setup recursive proof backend was not rejected clearly: {}",
-                trusted_setup_result.reason
-            );
+            expect_request_error(py, &trusted_setup_backend, "proof.backend");
 
             let mut stark_recursive_bundle = request.clone();
             stark_recursive_bundle.bundle.recursive_proof.proof =
@@ -9785,30 +10053,12 @@ mod tests {
                 "stark/fri/transparent-v1",
                 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
             );
-            let stark_result = verify_result(py, &stark_recursive_bundle);
-            assert!(!stark_result.valid);
-            assert!(!stark_result.chain_admissible);
-            assert!(!stark_result.witnessless_redeem_supported);
-            assert!(stark_result.lineage_witness_required_for_redeem);
-            assert!(
-                stark_result.reason.contains("proof.backend"),
-                "transparent STARK substitution was not rejected at proof.backend: {}",
-                stark_result.reason
-            );
+            expect_request_error(py, &stark_recursive_bundle, "proof.backend");
 
             let mut empty_recursive_proof = request;
             empty_recursive_proof.bundle.recursive_proof.proof =
                 ProofBox::new(ZK_BACKEND_HALO2_IPA.into(), Vec::new());
-            let empty_result = verify_result(py, &empty_recursive_proof);
-            assert!(!empty_result.valid);
-            assert!(!empty_result.chain_admissible);
-            assert!(!empty_result.witnessless_redeem_supported);
-            assert!(empty_result.lineage_witness_required_for_redeem);
-            assert!(
-                empty_result.reason.contains("proof.bytes"),
-                "empty recursive IPA proof was not rejected at proof.bytes: {}",
-                empty_result.reason
-            );
+            expect_request_error(py, &empty_recursive_proof, "proof.bytes");
         });
     }
 
@@ -9818,6 +10068,16 @@ mod tests {
         let mut bundle = sample_kagemusha_recursive_spend_bundle();
         bundle.recursive_proof.verifier_key_id.name =
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+        bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            fixed_bytes(b"python-recursive-spend-lineage-verify-scalar");
+        bundle.recursive_proof.public_inputs_hash = bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage recursive spend public-input hash");
         let request = KagemushaRecursiveSpendVerifyRequestV1 {
             bundle,
             lineage_verifier_record: None,
@@ -9826,19 +10086,12 @@ mod tests {
         let archive = norito::to_bytes(&request).expect("encode recursive spend verify request");
 
         Python::attach(|py| {
-            let output = kagemusha_recursive_spend_verify_py(py, &archive)
-                .expect("verify function returns a diagnostic result archive");
-            let result: KagemushaRecursiveSpendVerifyResultV1 =
-                decode_from_bytes(output.bind(py).as_bytes())
-                    .expect("decode recursive spend verify result");
-            assert!(!result.valid);
-            assert!(!result.chain_admissible);
-            assert!(!result.witnessless_redeem_supported);
-            assert!(result.lineage_witness_required_for_redeem);
+            let err = kagemusha_recursive_spend_verify_py(py, &archive)
+                .expect_err("reserved lineage verify request without a record must reject")
+                .to_string();
             assert!(
-                result.reason.contains("requires a lineage verifier record"),
-                "reserved lineage verification did not require a verifier record: {}",
-                result.reason
+                err.contains("lineage_verifier_record"),
+                "reserved lineage verification did not reject the malformed request: {err}"
             );
 
             let mut forged_record = sample_recursive_spend_lineage_verifier_record();
@@ -9850,19 +10103,12 @@ mod tests {
             };
             let archive =
                 norito::to_bytes(&forged_request).expect("encode forged lineage verify request");
-            let output = kagemusha_recursive_spend_verify_py(py, &archive)
-                .expect("verify function returns a diagnostic result archive for forged records");
-            let result: KagemushaRecursiveSpendVerifyResultV1 =
-                decode_from_bytes(output.bind(py).as_bytes())
-                    .expect("decode forged lineage verify result");
-            assert!(!result.valid);
-            assert!(!result.chain_admissible);
-            assert!(!result.witnessless_redeem_supported);
-            assert!(result.lineage_witness_required_for_redeem);
+            let err = kagemusha_recursive_spend_verify_py(py, &archive)
+                .expect_err("forged lineage verify request must reject")
+                .to_string();
             assert!(
-                result.reason.contains("commitment mismatch"),
-                "forged lineage verifier record was not rejected clearly: {}",
-                result.reason
+                err.contains("lineage_verifier_record.commitment"),
+                "forged lineage verifier record was not rejected clearly: {err}"
             );
         });
     }
@@ -16197,14 +16443,16 @@ fn privacy_algorithm_catalog_vk_ref_names_have_duplicates(
 fn privacy_required_production_plan_rows_are_present(entries: &[PrivacyAlgorithmEntry]) -> bool {
     PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS.iter().all(
         |(algorithm_id, proof_family, backend_family)| {
-            entries.iter().any(|entry| {
-                entry.id == *algorithm_id
-                    && entry.proof_family == *proof_family
-                    && entry.backend_family == *backend_family
-                    && privacy_entrypoints_include_production_proof_builder(
-                        entry.planned_entrypoints,
-                    )
-            })
+            let mut matching_rows = entries.iter().filter(|entry| entry.id == *algorithm_id);
+            matches!(
+                (matching_rows.next(), matching_rows.next()),
+                (Some(entry), None)
+                    if entry.proof_family == *proof_family
+                        && entry.backend_family == *backend_family
+                        && privacy_entrypoints_include_production_proof_builder(
+                            entry.planned_entrypoints,
+                        )
+            )
         },
     )
 }
@@ -16875,7 +17123,7 @@ fn privacy_capabilities_v1_py(py: Python<'_>) -> PyResult<Py<PyBytes>> {
 #[pyfunction]
 #[pyo3(name = "privacy_bridge_abi_version")]
 fn privacy_bridge_abi_version_py() -> u32 {
-    6
+    7
 }
 
 #[pyfunction]
@@ -16995,6 +17243,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_verify_recursive_compact_payment_token_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

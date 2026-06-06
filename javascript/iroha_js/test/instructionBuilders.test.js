@@ -1953,7 +1953,7 @@ zkAceNativeTest("ZK-ACE native transfer authorization feeds authorized transfer 
   assert.equal(transfer.proof.vk_ref.name, "zk_ace_pq_authorization_v0");
 });
 
-test("ZK-ACE builders reject malformed proof and replay inputs", () => {
+descriptorTest("ZK-ACE builders reject malformed proof and replay inputs", () => {
   const verifierKey = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0";
   const publicInputs = {
     identityCommitment: Buffer.alloc(32, 0x11),
@@ -2036,6 +2036,78 @@ test("ZK-ACE builders reject malformed proof and replay inputs", () => {
       }),
     /publicInputs\.version must be 1/,
   );
+  for (const amount of [
+    undefined,
+    null,
+    "",
+    " ",
+    "0",
+    "-1",
+    "+1",
+    "1.0",
+    "1e3",
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    0n,
+    -1n,
+    Number.MAX_SAFE_INTEGER + 1,
+    BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+    true,
+    [],
+    { toString: () => "17" },
+  ]) {
+    assert.throws(
+      () =>
+        buildZkAceAuthorizationProofV1({
+          publicInputs: { ...publicInputs, amount },
+          proofBytes: Buffer.from("proof"),
+          verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+        }),
+      /publicInputs\.amount|must be greater than zero|must be a non-negative integer|maximum JSON-safe integer|non-negative integer string/,
+    );
+    assert.throws(
+      () =>
+        buildZkAceAuthorizedTransferInstruction({
+          fromAccountId: ACCOUNT_ID_INPUT,
+          toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          amount,
+          identityCommitment: Buffer.alloc(32, 0x11),
+          txDigest: Buffer.alloc(32, 0x33),
+          chainId: "00000000-0000-0000-0000-000000000000",
+          replayNullifier: Buffer.alloc(32, 0x44),
+          policyHash: Buffer.alloc(32, 0x22),
+          proof: {
+            backend: "stark/fri/sha256-goldilocks",
+            proofBytes: Buffer.from("proof"),
+            verifyingKeyRef: verifierKey,
+            verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+          },
+        }),
+      /zkAceAuthorizedTransfer\.amount|must be greater than zero|must be a non-negative integer|maximum JSON-safe integer|non-negative integer string/,
+    );
+  }
+  const canonicalAmountTransfer = buildZkAceAuthorizedTransferInstruction({
+    fromAccountId: ACCOUNT_ID_INPUT,
+    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    amount: "00017",
+    identityCommitment: Buffer.alloc(32, 0x11),
+    txDigest: Buffer.alloc(32, 0x33),
+    chainId: "00000000-0000-0000-0000-000000000000",
+    replayNullifier: Buffer.alloc(32, 0x44),
+    policyHash: Buffer.alloc(32, 0x22),
+    proof: {
+      backend: "stark/fri/sha256-goldilocks",
+      proofBytes: Buffer.from("proof"),
+      verifyingKeyRef: verifierKey,
+      verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+    },
+  }).zk.SubmitZkAceAuthorizedTransfer;
+  assert.equal(canonicalAmountTransfer.amount, 17);
   assert.throws(
     () =>
       buildZkAceAuthorizedTransferInstruction({
