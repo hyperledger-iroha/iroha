@@ -805,19 +805,36 @@ track detailed unfinished engineering work.
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
   instead of drawing a runtime dummy key;
   Private Kaigi fee-spend execution now derives its synthetic fee-payer account
-  through checked Ed25519 seed expansion from the action hash;
+  through checked Ed25519 seed expansion from the action hash; SoraFS hybrid
+  KEM derived material now binds the recipient public keys and encapsulated
+  public transcript components through length-prefixed HKDF input with checked
+  capacity accounting, and SoraNet session-key HKDF extraction now
+  domain-separates and length-prefixes IKM components before expansion, with
+  NK2/NK3 interop vectors refreshed under both checked-in fixture bundles;
+  SoraNet deterministic SHAKE expansion now also frames its domain, label, part
+  count, and every absorbed component before deriving deterministic KEM,
+  simulated ML-DSA, dual-mix, or Noise-seed material, with checked-in fixture
+  bundles regenerated from the framed outputs;
   `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
-  public/private key formatting, `Signature::try_new` now routes SM2 through
-  checked private-key rebuild/signing helpers and SM2 key-pair/public-key
-  derivation now routes through `try_public_key`, SM2 private-key byte export now
-  exposes `PrivateKey::try_to_bytes` and routes exposed private-key multihash
-  formatting through checked payload extraction, secp256k1 message signing now
-  exposes `try_sign` and routes `Signature::try_new` through the fallible helper,
-  and secp256k1 recoverable prehash signing now checks the low-S recovery-id
-  parity flip before emitting EVM-compatible signatures; SM2 embedded-distid
-  payload decoding now returns `ParseError` for short length prefixes instead of
-  relying on a panic-only fixed-slice assertion, SM2 PEM export now wraps the
-  already encoded base64 `String` without a panic-only UTF-8 reconversion, SM2
+  public/private key formatting, public-key Norito serialization now routes
+  full-to-compact conversion through a checked payload extractor, and
+  `PublicKey::to_prefixed_string` now reuses the malformed compact-key marker
+  instead of unwrapping invalid internal key state, while `ExposedPrivateKey`
+  display and prefixed compatibility formatting now return a non-secret
+  invalid-private-key marker instead of unwrapping checked private-key
+  formatting; `Signature::try_new` now routes SM2 through checked private-key
+  rebuild/signing helpers and SM2 key-pair/public-key derivation now routes
+  through `try_public_key`, SM2 concrete public-key prefixed formatting now
+  returns a deterministic invalid-key marker instead of unwrapping checked
+  multihash encoding, SM2 private-key byte export now exposes
+  `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
+  through checked payload extraction, secp256k1 message signing now exposes
+  `try_sign` and routes `Signature::try_new` through the fallible helper, and
+  secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
+  flip before emitting EVM-compatible signatures; SM2 embedded-distid payload
+  decoding now returns `ParseError` for short length prefixes instead of relying
+  on a panic-only fixed-slice assertion, SM2 PEM export now wraps the already
+  encoded base64 `String` without a panic-only UTF-8 reconversion, SM2
   DER signature export now exposes `try_as_der` with checked short-form length
   encoding and routes the OpenSSL bridge through that fallible exporter before
   DER parsing, SM4-CCM now checks tag, nonce, AAD, payload, and counter-block

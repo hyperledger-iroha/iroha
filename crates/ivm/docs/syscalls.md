@@ -235,6 +235,7 @@ Smart‑contract helpers (Norito)
   - Parses `SubscriptionUsageDelta` from trigger args, increments usage counters, and updates subscription metadata.
 - 0xA9 CALL_CONTRACT — Args: `r10=&Blob(contract_address), r11=&Blob(entrypoint), r12=&Json(payload)` → `r10=ptr (&NoritoBytes(return))` or `0` — Gas: G_call_contract + request bytes + return bytes
   - Executes the callee in a child VM. The parent pays only the fixed request/return overhead; child instructions and child syscalls consume the child VM budget.
+  - If the callee entrypoint manifest declares `permission(...)`, the host checks the caller contract subject for the named direct or role-derived permission before launching the child VM; missing permission rejects the syscall with `PermissionDenied`.
 
 Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq

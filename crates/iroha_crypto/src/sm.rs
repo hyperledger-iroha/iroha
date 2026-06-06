@@ -322,14 +322,15 @@ impl Sm2PublicKey {
 
     /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
     /// embedding the distinguishing identifier alongside the SEC1 payload.
-    ///
-    /// # Panics
-    /// Panics if the public key cannot be encoded into SEC1 form, which indicates inconsistent key material.
     #[cfg(not(feature = "ffi_import"))]
     #[must_use]
     pub fn to_prefixed_string(&self) -> String {
-        self.try_to_prefixed_string()
-            .expect("SM2 key generated internally must encode to a prefixed multihash")
+        self.try_to_prefixed_string().unwrap_or_else(|_| {
+            format!(
+                "invalid-sm2-public-key:{}",
+                hex::encode(self.to_sec1_bytes(false))
+            )
+        })
     }
 
     /// Verify a message against the provided signature.
@@ -3586,6 +3587,7 @@ mod tests {
             prefixed.starts_with("sm2:"),
             "prefixed multihash must include sm2 prefix"
         );
+        assert_eq!(public.to_prefixed_string(), prefixed);
 
         let sec1 = public.to_sec1_bytes(false);
         let payload = encode_sm2_public_key_payload(public.distid(), &sec1).expect("SM2 payload");

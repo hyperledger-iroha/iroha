@@ -3466,8 +3466,7 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal(BeaconHeaderRootSlot64, evidence.BeaconFinality?["finalizedHeaderRoot"]);
         Assert.Equal(ExpectedSyncCommitteeRoot, evidence.BeaconFinality?["syncCommitteeRoot"]);
         Assert.Equal("64", evidence.BeaconFinality?["beaconSlot"]);
-        var finalityBranch = Assert.IsType<object[]>(evidence.BeaconFinality?["finalityBranch"]);
-        Assert.Equal(EthereumFinalityBranch, finalityBranch.Select(Assert.IsType<string>));
+        Assert.Equal(EthereumFinalityBranch, Assert.IsAssignableFrom<IReadOnlyList<string>>(evidence.BeaconFinality?["finalityBranch"]));
         Assert.Equal(EthereumSyncCommitteeSupermajorityBits, evidence.BeaconFinality?["syncCommitteeBits"]);
         Assert.Equal("0x" + string.Concat(Enumerable.Repeat("34", 96)), evidence.BeaconFinality?["syncCommitteeSignature"]);
         Assert.Equal(EthereumSyncCommitteeSupermajorityParticipation, evidence.BeaconFinality?["syncCommitteeParticipation"]);

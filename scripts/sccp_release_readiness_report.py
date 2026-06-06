@@ -23,6 +23,10 @@ ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
     "eth": "`eth_chainId == 0x1` (1)",
     "bsc": "`eth_chainId == 0x38` (56)",
 }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID = {
+    "eth": "1",
+    "bsc": "56",
+}.get(ACTIVE_LAUNCH_CHAIN)
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
@@ -1864,21 +1868,27 @@ def _active_launch_evm_live_metadata_blockers(
     evm_live_metadata = lane.get("evm_live_metadata")
     if not isinstance(evm_live_metadata, dict):
         evm_live_metadata = {}
-    expected_chain_ids = {
-        "eth": {"1", "0x1"},
-        "bsc": {"56", "0x38"},
-    }.get(ACTIVE_LAUNCH_CHAIN, set())
-    expected_chain_id_label = {
-        "eth": "1 (0x1)",
-        "bsc": "56 (0x38)",
-    }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+    expected_chain_id = ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
+    expected_chain_id_label = (
+        f"canonical decimal chain id {expected_chain_id}"
+        if expected_chain_id is not None
+        else "the configured mainnet chain id"
+    )
 
     blockers: list[str] = []
-    if evm_live_metadata.get("source_rpc_chain_id") not in expected_chain_ids:
+    source_chain_id = evm_live_metadata.get("source_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(source_chain_id, positive=True)
+        and source_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live eth_chainId must be {expected_chain_id_label}"
         )
-    if evm_live_metadata.get("destination_rpc_chain_id") not in expected_chain_ids:
+    destination_chain_id = evm_live_metadata.get("destination_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(destination_chain_id, positive=True)
+        and destination_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId must be {expected_chain_id_label}"
         )
@@ -1891,6 +1901,18 @@ def _active_launch_evm_live_metadata_blockers(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live block tag must be finalized"
         )
     return blockers
+
+
+def _is_canonical_decimal_text(value: Any, *, positive: bool) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if not all(symbol in "0123456789" for symbol in value):
+        return False
+    if len(value) > 1 and value.startswith("0"):
+        return False
+    if positive and value == "0":
+        return False
+    return True
 
 
 def _active_launch_release_checklist(

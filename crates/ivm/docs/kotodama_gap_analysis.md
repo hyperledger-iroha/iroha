@@ -14,7 +14,7 @@ Paths for reference:
 ## Summary
 - The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔
 - Contract-level localization (`kotoba { ... }`) is parsed, validated for duplicates/empties, and emitted into manifest translation tables for tooling. ✔
-- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus compiler-generated per-entrypoint permission/read/write hints. Static ISI keys, literal map keys, dynamic map paths, bounded dynamic state-map iteration, and native/anonymous escrow helpers with literal names or decodable Norito request payloads are represented precisely when possible. Manual `#[access(...)]` annotations are rejected; opaque dynamic ledger access may emit compiler-owned wildcard hints so the scheduler can use its dynamic prepass or conservative serialization path. ✔
+- Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus compiler-generated per-entrypoint permission/read/write hints. Core direct dispatch and nested `CALL_CONTRACT` dispatch consume entrypoint permission metadata and require the caller to hold the named permission directly or through a role before invocation. Static ISI keys, literal map keys, dynamic map paths, bounded dynamic state-map iteration, and native/anonymous escrow helpers with literal names or decodable Norito request payloads are represented precisely when possible. Manual `#[access(...)]` annotations are rejected; opaque dynamic ledger access may emit compiler-owned wildcard hints so the scheduler can use its dynamic prepass or conservative serialization path. ✔
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
 - Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute/data filters plus deterministic approved block/transaction pipeline filters, lower structured data-trigger blocks into manifest `EventFilterBox` values, support explicit trigger authority overrides, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are rejected. Inline ZK unshield builders now encode one or more input nullifier chunks plus optional private change output chunks. ✔
 
@@ -38,9 +38,9 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Norito pointer-wrapper helpers (`json`, `name`, `blob`, `norito_bytes`, and the other pointer constructors) accept string bindings, matching pointer values, and Blob/bytes payloads where appropriate; method-call sugar such as `payload.json()` and `payload.name()` lowers through the same typed constructor paths.
   - Durable `state` bindings are injected into each function’s scope, so accessing `state Foo ledger;` compiles without extra boilerplate.
   - Primitive effect analysis guards privileged syscalls: public (`kotoage`) functions that call mutating ledger helpers or ZK verify latch helpers must declare `permission(...)` or compilation fails, and `view` functions cannot call them transitively.
+  - Runtime contract dispatch enforces entrypoint `permission(...)` manifest metadata against direct and role-derived account permissions before invoking a VM, including nested `CALL_CONTRACT` child VMs.
   - Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalars; arithmetic preserves the alias and mixing alias types is rejected unless converted through `int`.
 - Missing:
-  - Permission annotations are validated at compile time, but runtime enforcement still relies on consuming manifest metadata.
   - Broader capability analysis for remaining non-latch syscall families is still incomplete, so new helper surfaces should add effect/hint tests when they are introduced.
 
 ### IR and Codegen
@@ -55,7 +55,7 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
 
 ## Samples vs. Implementation
 Modern samples compile, but the following grammar-level expectations remain unmet:
-- `permission(Role)` metadata now reaches manifests; end-to-end enforcement still depends on node admission wiring.
+- `permission(Role)` metadata reaches manifests and core dispatch enforces the named permission for direct contract calls, metadata-dispatched IVM calls, and nested `CALL_CONTRACT` calls.
 - Trigger registration works via `register_trigger`/`create_trigger`; DSL trigger declarations now emit manifest metadata and are auto-registered on contract instance activation.
 - Cross-contract calls and dynamic entrypoint dispatch are only described conceptually; the compiler only knows about intra-program calls.
 
@@ -67,6 +67,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Done: production artifacts carry compiler-generated access metadata, using compiler-owned wildcard manifests for dynamic ledger access that cannot be derived precisely yet.
 
 2) Permission and trigger plumbing
+- Done: runtime direct and nested contract dispatch consume manifest entrypoint `permission(...)` metadata and reject callers missing the named direct or role-derived permission.
 - Done: extend trigger DSL support to data filters, deterministic approved block/transaction pipeline filters, and explicit authority overrides.
 - Done: wire manifest trigger descriptors into runtime registration on activation/deactivation (local callbacks only).
 
@@ -84,7 +85,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Done: the Kotodama compiler, parser, semantic analysis, IR, linting, and tooling support now live in `crates/kotodama_lang`.
 
 ## Quick Wins (Low Risk, High Impact)
-- Done: lint now reports dynamic state paths and opaque host reads, while staying silent for compiler-hintable escrow helpers (non-literal trigger specs and state-map keys were already covered).
+- Done: lint now reports dynamic state paths and opaque host reads, while staying silent for compiler-hintable asset registration, literal transfer-domain routing, subscription context, inline ZK builders, and escrow helpers (non-literal trigger specs and state-map keys were already covered).
 - Done: compiler diagnostics now count literal trigger spec decode failures and production rejections include the trigger-specific access-hint reason.
 
 ## Known Limitations to Call Out in Docs
@@ -92,7 +93,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Entrypoint manifests emit complete hints for production artifacts.
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; v1 restricts them to unsigned integers (scale = 0), rejecting fractional values and decimal literals.
-- `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.
+- `permission(...)` annotations are enforced by compiler diagnostics, written into manifests, and consumed by core direct and nested contract dispatch before VM invocation.
 - Trigger declarations support time/execute/data filters plus deterministic approved block/transaction pipeline filters and explicit authority overrides; cross-contract callbacks are still rejected (local only).
 
 Keeping these limitations explicit helps set expectations and aids contributors in targeting the most valuable next steps.

@@ -8851,6 +8851,11 @@ Temporal properties:
   commit-certificate witness change, route that witness through the certified
   finality stack, install the commit-view witness, and complete the exact-source
   committed-delivery proof chain.
+- `FinalitySourceActionAlwaysMatchesCommitViewWitnessChange` proves that those
+  exact finality-source actions which change the nonzero commit-view witness
+  route that witness change through the certified finality stack, install the
+  commit-certificate witnesses, and complete the exact-source committed-delivery
+  proof chain.
 - `FinalitySourceActionAlwaysInstallsCommitViewWitness` proves that those
   exact finality-source actions install the commit-view witness as the active
   finality view, including the view-zero value-preserving case.
@@ -8997,6 +9002,9 @@ Temporal properties:
 - `CommittedPhaseEntryAlwaysInstallsCommitViewWitness` proves that every first
   entry into `Committed` installs the commit-view witness as the finality view,
   including the view-zero case where installation is value preserving.
+- `CommittedPhaseEntryAlwaysMatchesCommitViewWitnessChange` proves that any
+  first entry into `Committed` which changes the nonzero commit-view witness
+  also completes the certified commit-view witness-change proof chain.
 - `CommittedPhaseEntryAlwaysMatchesLiveCommitGateCrossing` proves that every
   first entry into `Committed` is exactly the transition where the live
   `CanCommit(...)` gate crosses from false to true.
