@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-06
 
+## 2026-06-06 WSL-safe plain cargo test defaults
+
+- Added repo-local Cargo config with `build.jobs = 2` so plain `cargo test`
+  does not default to logical-CPU build fan-out on WSL and memory-constrained
+  VMs.
+- Changed the shared integration-test and `iroha_test_network` network permit
+  defaults to one concurrent DA/RBC localnet, while keeping
+  `IROHA_TEST_NETWORK_PARALLELISM` and `IROHA_TEST_SERIALIZE_NETWORKS`
+  overrides for high-memory hosts and explicit serialization.
+- Updated README guidance to describe the conservative default and opt-in
+  throughput overrides.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network network_parallelism --lib -- --nocapture`
+  - `cargo test -p iroha_test_network serialization_overrides_parallelism_limit --lib -- --nocapture`
+  - `cargo test -p integration_tests serial_guard --lib -- --nocapture`
+  - `cargo test -p integration_tests network_parallelism_env_override_applies --lib -- --nocapture`
+  - `cargo test -p integration_tests serialization_overrides_parallelism_limit --lib -- --nocapture`
+
 ## 2026-06-06 WSL-safe full-test runner
 
 - Added `scripts/run_full_tests.sh --wsl-safe`, which defaults to

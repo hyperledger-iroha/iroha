@@ -462,6 +462,7 @@ const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
 // Keep test-network parallelism conservative; DA/RBC-heavy suites are resource intensive.
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
+const DEFAULT_NETWORK_PARALLELISM_LIMIT: usize = 1;
 const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
 const TEST_CONCURRENCY_MIN_THREADS: usize = 4;
 const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v1";
@@ -2053,11 +2054,7 @@ fn network_parallelism_limit() -> usize {
     {
         return parsed;
     }
-    let cores = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
-    let per_network = DEFAULT_NETWORK_PARALLELISM_PEERS.max(1);
-    cores.saturating_div(per_network).max(1)
+    DEFAULT_NETWORK_PARALLELISM_LIMIT
 }
 
 fn test_concurrency_threads() -> usize {
@@ -8593,6 +8590,17 @@ mod tests {
         let _parallel_guard = EnvVarRestore::set(NETWORK_PARALLELISM_ENV, "2");
         let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
         assert_eq!(network_parallelism_limit(), 2);
+    }
+
+    #[test]
+    fn network_parallelism_defaults_to_serial_networks() {
+        let _guard = lock_env_guard(&NETWORK_PERMIT_ENV_GUARD);
+        remove_env_var(NETWORK_PARALLELISM_ENV);
+        let _serialize_guard = EnvVarRestore::set(SERIALIZE_NETWORKS_ENV, "0");
+        assert_eq!(
+            network_parallelism_limit(),
+            DEFAULT_NETWORK_PARALLELISM_LIMIT
+        );
     }
 
     #[test]
