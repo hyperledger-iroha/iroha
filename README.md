@@ -49,6 +49,10 @@ Notes:
   command is clearer. Use `cargo test -p <crate>` for a focused crate suite.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
+- On WSL, make sure the Windows-side `.wslconfig` gives the VM enough memory,
+  swap, and host disk headroom for a large Rust workspace. If the VM is still
+  constrained, use `scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-wsl-tests`
+  to trade throughput for stability.
 - The workspace targets `std` (WASM/no-std builds are not supported).
 - Heavier local UI/media helpers are explicit features in default builds:
   `cargo run -p mochi-ui --features gui` for the egui desktop shell and

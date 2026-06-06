@@ -19,6 +19,7 @@ This crate hosts cross-component tests for Iroha.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.
 - Limit concurrent test networks with `IROHA_TEST_NETWORK_PARALLELISM=<N>` (default scales with CPU/min peers); set `IROHA_TEST_SERIALIZE_NETWORKS=1` to force one-at-a-time startup.
 - `scripts/run_full_tests.sh` now reuses the workspace-built `iroha3d`, `iroha`, and `kagami` binaries when they are available and isolates the integration-test permit directory by default.
+- For WSL or memory-constrained VMs, first size WSL memory/swap/host disk headroom appropriately; use `scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-wsl-tests` only when you still need a conservative local run.
 - For faster local full runs, `scripts/run_full_tests.sh --fast` routes all cargo calls through `scripts/cargo_fast.sh`; add `--fast-zero-debug` and `--fast-no-incremental` when you want the more aggressive local-throughput mode.
 
 ## Fixtures

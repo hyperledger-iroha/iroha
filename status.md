@@ -2,6 +2,24 @@
 
 Last updated: 2026-06-06
 
+## 2026-06-06 WSL-safe full-test runner
+
+- Added `scripts/run_full_tests.sh --wsl-safe`, which defaults to
+  `CARGO_BUILD_JOBS=2`, `--test-threads=1`,
+  `IROHA_TEST_NETWORK_PARALLELISM=4`, and serialized integration-test network
+  startup for WSL and memory-constrained VMs.
+- Added explicit `--cargo-jobs`, `--test-threads`,
+  `--network-parallelism`, and `--serialize-networks` flags so local test
+  runs can be tuned without memorizing environment variables.
+- Documented the WSL-safe command in the root README and integration-test
+  README as a constrained-host fallback, with Windows-side WSL memory/swap and
+  host disk headroom called out as the primary fix.
+- Validation:
+  - `bash -n scripts/run_full_tests.sh`
+  - `scripts/run_full_tests.sh --help`
+  - `scripts/run_full_tests.sh --cargo-jobs 0`
+    (failed fast with the expected positive-integer validation error)
+
 ## 2026-06-06 SM2 checked private-key payload formatting
 
 - Added `PrivateKey::try_payload()` and `PrivateKey::try_to_bytes()` so SM2
