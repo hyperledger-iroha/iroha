@@ -2,6 +2,83 @@
 
 Last updated: 2026-06-06
 
+## 2026-06-06 Torii DA pin-intent indexed-location verification
+
+- Replaced the remaining DA pin-intent "placeholder" wording in Torii handler
+  docs, OpenAPI, and MCP tool descriptions with the current indexed-location
+  lookup and verification contract.
+- Added handler-level DA pin-intent coverage that seeds Torii's live pin-intent
+  index, proves by lane/epoch/sequence, verifies the returned location payload
+  against the node state, and rejects a tampered indexed location.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii da::pin_intents::tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_da_pin_intents_endpoints_accept_body -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
+## 2026-06-06 Torii SoraFS CAR range middle-window coverage
+
+- Added Torii SoraFS CAR range coverage for a non-full, multi-chunk payload
+  window served from the middle of a stored manifest. The regression requests
+  exactly two aligned chunks, verifies the returned CAR against the original
+  manifest and expected byte range, and checks the emitted `Content-Range` and
+  `X-Sora-Chunk-Range` metadata.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii car_range_streams_verified_middle_chunk_window --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii car_range --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii storage_fetch_requires_capability_when_enforced --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
+## 2026-06-06 Torii DA commitment Merkle proof route coverage
+
+- Replaced stale DA commitment "placeholder" wording in Torii OpenAPI and MCP
+  surfaces with the current Merkle proof/verification contract.
+- Added handler-level DA commitment proof coverage that seeds a committed block
+  with a DA bundle, hydrates Torii's indexed store through Kura/block hashes,
+  proves by manifest hash, verifies the returned Merkle proof against the block
+  header commitment hash and lane policy, and rejects a tampered Merkle root.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii da::commitments::tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_da_commitments_endpoints_accept_body -- --nocapture`
+  - `cargo test -p iroha_torii --lib -- --nocapture` (`2277` passed, `2`
+    ignored)
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
+## 2026-06-06 Torii caller-scoped read signature hardening
+
+- Removed Torii's header-only caller identity fallback for app-facing
+  account-scoped reads: bare `X-Iroha-Account` headers now fail closed, while
+  canonical signed request headers still establish caller visibility.
+- Updated routed-read coverage so unsigned reads remain limited to public
+  dataspaces and signed callers retain access to their bound private
+  dataspaces; shortened the in-crate signed-header test nonce helper to stay
+  within the canonical request nonce bound for long account-id paths.
+- Repaired stale Torii production fixtures across SCCP launch-policy routing,
+  Nexus commit-QC signatures, SoraFS paid-manifest capability checks,
+  ISO20022 require-verified profile validation, ZK IVM verifying-key fixtures,
+  and ZK prover public-input reports so the crate-local library suite matches
+  current production admission rules.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --no-run`
+  - `cargo test -p iroha_torii torii_visibility_account_from_headers --lib -- --nocapture`
+  - `cargo test -p iroha_torii torii_partition_routes_by_visibility --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib -- --nocapture` (`2275` passed, `2`
+    ignored)
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
 ## 2026-06-06 C# Kagemusha record-backed prover parity
 
 - Added C# archive types and public wrappers for record-backed Kagemusha compact

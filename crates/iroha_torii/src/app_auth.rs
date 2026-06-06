@@ -23,6 +23,9 @@
 //!   rules.
 //! - The body hash is computed over the raw request body bytes.
 //! - Freshness validation rejects stale timestamps and replayed nonces.
+//! - `X-Iroha-Account` only identifies a caller when paired with a valid
+//!   signature or witness; bare account headers are rejected on caller-scoped
+//!   read paths.
 //!
 //! Some endpoints carry the same auth envelope inside a JSON body instead of
 //! HTTP headers. Those callers provide `account_id`, `timestamp_ms`, `nonce`,

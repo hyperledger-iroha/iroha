@@ -79,7 +79,7 @@ pub struct DaCommitmentProofResponse {
     pub proof: DaCommitmentProof,
 }
 
-/// Stateless verification response placeholder.
+/// Verification response for a DA commitment Merkle proof.
 #[derive(
     Debug,
     Clone,
@@ -283,11 +283,11 @@ fn verify_against_store(
 mod tests {
     use std::{num::NonZeroU32, sync::Arc};
 
-    use iroha_crypto::{Hash, Signature};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
-        block::BlockHeader,
+        block::{BlockHeader, builder::BlockBuilder},
         da::{
-            commitment::{DaCommitmentRecord, DaProofScheme, RetentionClass},
+            commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, RetentionClass},
             types::{BlobDigest, StorageTicketId},
         },
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
@@ -314,6 +314,10 @@ mod tests {
     }
 
     fn lane_config_with_entries(entries: &[(LaneId, DaProofScheme)]) -> ConfigLaneConfig {
+        ConfigLaneConfig::from_catalog(&lane_catalog_with_entries(entries))
+    }
+
+    fn lane_catalog_with_entries(entries: &[(LaneId, DaProofScheme)]) -> LaneCatalog {
         let max_lane = entries
             .iter()
             .map(|(lane, _)| lane.as_u32())
@@ -324,14 +328,13 @@ mod tests {
             .iter()
             .map(|(lane_id, scheme)| ModelLaneConfig {
                 id: *lane_id,
-                dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: format!("lane-{}", lane_id.as_u32()),
                 proof_scheme: *scheme,
                 ..ModelLaneConfig::default()
             })
             .collect();
-        let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");
-        ConfigLaneConfig::from_catalog(&catalog)
+        LaneCatalog::new(lane_count, lanes).expect("lane catalog")
     }
 
     fn store_with_records() -> DaCommitmentStore {
@@ -355,6 +358,52 @@ mod tests {
         state
             .set_nexus(nexus_cfg)
             .expect("enable Nexus lane catalog for tests");
+    }
+
+    fn app_with_da_commitment_bundle(records: Vec<DaCommitmentRecord>) -> crate::SharedAppState {
+        let mut app = mk_app_state_for_tests();
+        enable_nexus(&mut app);
+
+        let mut lane_entries: Vec<_> = records
+            .iter()
+            .map(|record| (record.lane_id, record.proof_scheme))
+            .collect();
+        lane_entries.sort_by_key(|(lane_id, _)| lane_id.as_u32());
+        lane_entries.dedup_by_key(|(lane_id, _)| lane_id.as_u32());
+        {
+            let app = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app.state).expect("unique core state");
+            let mut nexus_cfg = state.nexus_snapshot();
+            nexus_cfg.lane_catalog = lane_catalog_with_entries(&lane_entries);
+            state
+                .set_nexus(nexus_cfg)
+                .expect("seed Nexus DA lane policy for tests");
+        }
+
+        let bundle = DaCommitmentBundle::new(records);
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.set_da_commitments(Some(bundle));
+        let block = builder.build_with_signature(0, keypair.private_key());
+        let header = block.header();
+        let block_hash = block.hash();
+
+        app.kura
+            .store_block(Arc::new(block))
+            .expect("store DA commitment block");
+        let mut block_hashes = app.state.block_hashes.block();
+        block_hashes.push_for_tests(block_hash);
+        block_hashes.commit_for_tests();
+        app.state.update_latest_block_header_cache_for_tests(header);
+        app
     }
 
     #[test]
@@ -469,6 +518,73 @@ mod tests {
         );
         assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
         assert_ne!(bundle.policy_hash, Hash::prehashed([0; 32]));
+    }
+
+    #[tokio::test]
+    async fn prove_and_verify_handlers_roundtrip_merkle_proof_from_committed_block() {
+        let records = vec![
+            sample_record(1, 1, 1),
+            sample_record(1, 2, 0),
+            sample_record(2, 1, 5),
+        ];
+        let manifest = records[2].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app.clone()),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        let proof_response = response.expect("proof should be returned for committed bundle");
+        assert_eq!(proof_response.proof.location.block_height, 1);
+        assert_eq!(proof_response.proof.location.index_in_bundle, 2);
+        assert!(
+            !proof_response.proof.path.is_empty(),
+            "multi-record bundle should return a non-empty Merkle path"
+        );
+
+        let JsonBody(verification) =
+            super::handler_verify_commitment(State(app), NoritoJson(proof_response.proof))
+                .await
+                .expect("verify handler should succeed");
+        assert!(verification.valid, "proof should verify: {verification:?}");
+        assert!(verification.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn verify_handler_rejects_tampered_merkle_root() {
+        let records = vec![sample_record(1, 1, 1), sample_record(1, 2, 2)];
+        let manifest = records[1].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+
+        let JsonBody(response) = super::handler_prove_commitment(
+            State(app.clone()),
+            NoritoJson(DaCommitmentProofRequest {
+                manifest_hash: Some(manifest),
+                ..DaCommitmentProofRequest::default()
+            }),
+        )
+        .await
+        .expect("proof handler should succeed");
+        let mut proof = response.expect("proof should be returned").proof;
+        proof.root = Hash::prehashed([0xEE; 32]);
+
+        let JsonBody(verification) =
+            super::handler_verify_commitment(State(app), NoritoJson(proof))
+                .await
+                .expect("verify handler should succeed");
+        assert!(!verification.valid);
+        assert!(
+            verification
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("Merkle path")),
+            "unexpected verification error: {verification:?}"
+        );
     }
 
     #[tokio::test]

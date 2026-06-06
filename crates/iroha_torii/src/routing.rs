@@ -10976,7 +10976,8 @@ mod sccp_message_backend_tests {
         )
         .expect_err("TRON destination bindings must wait for their lane launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
 
         let err = validate_sccp_destination_binding_matches_configured_launch_policy(
@@ -10988,19 +10989,20 @@ mod sccp_message_backend_tests {
             "validated strict-disabled destination bindings must still wait for lane launch",
         );
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
     }
 
     #[test]
-    fn configured_bsc_mainnet_lane_launch_accepts_bsc_without_all_lanes() {
+    fn configured_ethereum_mainnet_lane_launch_accepts_eth_without_all_lanes() {
         let mut zk = iroha_core::state::default_zk_config();
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
         zk.sccp_destination_rollouts.clear();
         zk.sccp_route_allowlists.clear();
 
-        let domain = iroha_sccp::SCCP_DOMAIN_BSC;
+        let domain = iroha_sccp::SCCP_DOMAIN_ETH;
         let material = test_sccp_source_verifier_material_for_domain(domain, 0x20);
         let deployment = test_sccp_source_adapter_deployment_for_domain(domain, &material, 0x20);
         let rollout = test_sccp_destination_rollout_for_domain(domain, 0x20);
@@ -11019,9 +11021,9 @@ mod sccp_message_backend_tests {
             .push(test_actual_sccp_route_allowlist(&allowlist));
 
         sccp_configured_launch_ready_for_domain(&zk, domain)
-            .expect("complete BSC lane should pass without other lanes");
+            .expect("complete ETH lane should pass without other lanes");
         let err = sccp_configured_all_lanes_launch_ready(&zk)
-            .expect_err("single BSC lane must not satisfy all-lanes diagnostics");
+            .expect_err("single ETH lane must not satisfy all-lanes diagnostics");
         assert!(
             conversion_message(&err)
                 .is_some_and(|message| { message.contains("SCCP all-lanes launch policy") })
@@ -11029,12 +11031,13 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn configured_bsc_mainnet_lane_launch_rejects_eth() {
+    fn configured_ethereum_mainnet_lane_launch_rejects_bsc() {
         let zk = test_configured_sccp_all_lanes_zk_config();
-        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_ETH)
-            .expect_err("ETH must wait until its lane policy opens");
+        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_BSC)
+            .expect_err("BSC must wait until its lane policy opens");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 1")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 2")
         }));
     }
 
@@ -12094,8 +12097,14 @@ mod sccp_message_backend_tests {
             iroha_sccp::decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)
                 .expect("diagnostic artifact decodes");
         assert!(iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(&artifact));
-        assert_eq!(proof.range.start_height, 51);
-        assert_eq!(proof.range.end_height, 51);
+        assert_eq!(
+            proof.range.start_height,
+            artifact.public_inputs.finality_height
+        );
+        assert_eq!(
+            proof.range.end_height,
+            artifact.public_inputs.finality_height
+        );
         assert_eq!(
             proof.manifest_hash,
             iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed)
@@ -49709,8 +49718,8 @@ mod query_endpoint_tests {
         // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
         type Ident = String;
         let backend: Ident = "halo2/ipa".into();
-        let circuit_id = "tiny-add";
-        let envelope_circuit_id = "halo2/ipa:tiny-add";
+        let circuit_id = "tiny-add-public";
+        let envelope_circuit_id = "halo2/ipa:tiny-add-public";
         let seed_fixture = halo2_fixture_envelope(envelope_circuit_id, [0; 32]);
         let vk_box = seed_fixture
             .vk_box(backend.clone())
