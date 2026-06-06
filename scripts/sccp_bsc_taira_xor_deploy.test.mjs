@@ -30,6 +30,8 @@ const BSC_VERIFIER_ADDRESS = "0x4444444444444444444444444444444444444444";
 const HASH_11 = `0x${"11".repeat(32)}`;
 const HASH_22 = `0x${"22".repeat(32)}`;
 const HASH_33 = `0x${"33".repeat(32)}`;
+const HASH_44 = `0x${"44".repeat(32)}`;
+const HASH_55 = `0x${"55".repeat(32)}`;
 const DIAGNOSTIC_BSC_VERIFIER_KEY_HASH = [
   ...SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES,
 ][0];
@@ -128,6 +130,8 @@ const routeManifest = (overrides = {}) => {
     proofFamily: "stark-fri-v1",
     verifierCodeHash: HASH_11,
     verifierKeyHash: HASH_22,
+    proofArtifactHash: HASH_44,
+    provingKeyHash: HASH_55,
     destinationBridgeAddress: BSC_BRIDGE_ADDRESS,
     destinationBindingHash: bindingHash(),
     destinationBindingKey: bscDestinationBindingKey({
@@ -412,6 +416,10 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   assert.match(toml, new RegExp(`bsc_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"));
   assert.match(toml, new RegExp(`evm_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"));
   assert.match(toml, new RegExp(`tron_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"));
+  assert.match(toml, new RegExp(`proof_artifact_hash = "${HASH_44}"`, "u"));
+  assert.match(toml, new RegExp(`prover_artifact_hash = "${HASH_44}"`, "u"));
+  assert.match(toml, new RegExp(`circuit_artifact_hash = "${HASH_44}"`, "u"));
+  assert.match(toml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
   assert.match(toml, new RegExp(`destination_binding_hash = "${bindingHash()}"`, "u"));
   assert.match(toml, new RegExp(`taira_burn_record_artifact_sha256 = "${BURN_RECORD_SHA256}"`, "u"));
   assert.match(toml, /post_deploy_full_toml_ready = false/u);
@@ -504,6 +512,18 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [{ destinationRollout: { targetDomain: 1 } }, /SORA -> BSC/u],
     [{ destinationRollout: { verifierBackend: "tron-groth16-bn254-v1" } }, /verifier backend/u],
     [{ destinationRollout: { destinationBindingHash: HASH_33 } }, /binding hash/u],
+    [{ destinationRollout: { proofArtifactHash: undefined } }, /supplied together/u],
+    [
+      {
+        productionReady: true,
+        destinationRollout: {
+          proofArtifactHash: undefined,
+          provingKeyHash: undefined,
+        },
+      },
+      /productionReady requires proofArtifactHash and provingKeyHash/u,
+    ],
+    [{ destinationRollout: { provingKeyHash: HASH_22 } }, /provingKeyHash must not equal verifierKeyHash/u],
     [{ tairaXorBurnRecord: { artifactSha256: HASH_33 } }, /artifact sha256/u],
     [{ tairaXorBurnRecord: { settlementAssetDefinitionId: "xor#universal" } }, /Base58|alias/u],
     [{ sourceBridgeAddress: BSC_BRIDGE_ADDRESS }, /source bridge address aliases disagree/u],

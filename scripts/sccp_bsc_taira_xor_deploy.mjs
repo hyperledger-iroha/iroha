@@ -1221,6 +1221,28 @@ function normalizeRouteManifestForConfig(manifest) {
       readFirstString(destinationRollout, "verifierKeyHash", "verifier_key_hash"),
     "route manifest verifierKeyHash",
   );
+  const optionalRouteHash = (label, ...keys) => {
+    const value =
+      readFirstString(record, ...keys) || readFirstString(destinationRollout, ...keys);
+    return value ? normalizeHex32(value, label) : null;
+  };
+  const proofArtifactHash = optionalRouteHash(
+    "route manifest proofArtifactHash",
+    "proofArtifactHash",
+    "proof_artifact_hash",
+    "proverArtifactHash",
+    "prover_artifact_hash",
+    "circuitArtifactHash",
+    "circuit_artifact_hash",
+  );
+  const provingKeyHash = optionalRouteHash(
+    "route manifest provingKeyHash",
+    "provingKeyHash",
+    "proving_key_hash",
+  );
+  if (Boolean(proofArtifactHash) !== Boolean(provingKeyHash)) {
+    throw new Error("route manifest proofArtifactHash and provingKeyHash must be supplied together.");
+  }
   const diagnosticVerifierReasons = [
     diagnosticFlagReason(record, "route manifest"),
     diagnosticFlagReason(destinationRollout, "route manifest destinationRollout"),
@@ -1234,6 +1256,16 @@ function normalizeRouteManifestForConfig(manifest) {
       `route manifest productionReady cannot be true with diagnostic BSC verifier material: ${diagnosticVerifierReasons.join("; ")}.`,
     );
   }
+  if (productionReady && (!proofArtifactHash || !provingKeyHash)) {
+    throw new Error("route manifest productionReady requires proofArtifactHash and provingKeyHash.");
+  }
+  const roleSeparatedHashes = [
+    ["verifierCodeHash", verifierCodeHash],
+    ["verifierKeyHash", verifierKeyHash],
+    ["destinationBindingHash", null],
+    ["proofArtifactHash", proofArtifactHash],
+    ["provingKeyHash", provingKeyHash],
+  ];
   const expectedBindingKey = bscDestinationBindingKey({
     networkId: networkIdHex,
     verifierAddress,
@@ -1263,6 +1295,15 @@ function normalizeRouteManifestForConfig(manifest) {
   );
   if (destinationBindingHash !== expectedBindingHash) {
     throw new Error("route manifest destination binding hash does not match BSC deployment evidence.");
+  }
+  roleSeparatedHashes[2][1] = destinationBindingHash;
+  const seenRouteHashes = new Map();
+  for (const [label, value] of roleSeparatedHashes.filter(([, value]) => Boolean(value))) {
+    const previous = seenRouteHashes.get(value);
+    if (previous) {
+      throw new Error(`route manifest ${label} must not equal ${previous}.`);
+    }
+    seenRouteHashes.set(value, label);
   }
 
   const artifact = normalizeStrictBase64(
@@ -1343,6 +1384,8 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierAddress,
     verifierCodeHash,
     verifierKeyHash,
+    proofArtifactHash,
+    provingKeyHash,
     destinationBindingKey,
     destinationBindingHash,
     settlementAssetDefinitionId,
@@ -1465,6 +1508,22 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
     `tron_verifier_address = ${tomlString(route.verifierAddress, "tron_verifier_address")}`,
     `verifier_code_hash = ${tomlString(route.verifierCodeHash, "verifier_code_hash")}`,
     `verifier_key_hash = ${tomlString(route.verifierKeyHash, "verifier_key_hash")}`,
+    ...tomlOptionalStringLine(
+      "proof_artifact_hash",
+      route.proofArtifactHash,
+      "proof_artifact_hash",
+    ),
+    ...tomlOptionalStringLine(
+      "prover_artifact_hash",
+      route.proofArtifactHash,
+      "prover_artifact_hash",
+    ),
+    ...tomlOptionalStringLine(
+      "circuit_artifact_hash",
+      route.proofArtifactHash,
+      "circuit_artifact_hash",
+    ),
+    ...tomlOptionalStringLine("proving_key_hash", route.provingKeyHash, "proving_key_hash"),
     `destination_binding_key = ${tomlString(route.destinationBindingKey, "destination_binding_key")}`,
     `destination_binding_hash = ${tomlString(route.destinationBindingHash, "destination_binding_hash")}`,
     `taira_burn_record_settlement_asset_definition_id = ${tomlString(route.settlementAssetDefinitionId, "taira_burn_record_settlement_asset_definition_id")}`,

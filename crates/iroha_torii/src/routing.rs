@@ -6624,6 +6624,22 @@ pub struct SccpRouteManifestDestinationRolloutDto {
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
     pub verifier_key_hash: String,
+    /// Optional hex-encoded browser/local prover artifact digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub proof_artifact_hash: Option<String>,
+    /// Optional legacy alias for `proof_artifact_hash`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub prover_artifact_hash: Option<String>,
+    /// Optional legacy alias for `proof_artifact_hash`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub circuit_artifact_hash: Option<String>,
+    /// Optional hex-encoded proving key digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub proving_key_hash: Option<String>,
     /// Canonical destination binding hash.
     pub destination_binding_hash: String,
     /// Canonical destination binding key.
@@ -6998,6 +7014,10 @@ fn sccp_route_manifest_dto(
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             verifier_code_hash: manifest.verifier_code_hash.clone(),
             verifier_key_hash: manifest.verifier_key_hash.clone(),
+            proof_artifact_hash: manifest.proof_artifact_hash.clone(),
+            prover_artifact_hash: manifest.proof_artifact_hash.clone(),
+            circuit_artifact_hash: manifest.proof_artifact_hash.clone(),
+            proving_key_hash: manifest.proving_key_hash.clone(),
             destination_binding_hash: manifest.destination_binding_hash.clone(),
             destination_binding_key: manifest.destination_binding_key.clone(),
         },
@@ -12112,6 +12132,8 @@ mod sccp_message_backend_tests {
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
+            proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
+            proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -12191,6 +12213,24 @@ mod sccp_message_backend_tests {
         assert_eq!(
             dto.evm_verifier_address.as_deref(),
             Some("0x4444444444444444444444444444444444444444")
+        );
+        let proof_artifact_hash = format!("0x{}", "4c".repeat(32));
+        let proving_key_hash = format!("0x{}", "4d".repeat(32));
+        assert_eq!(
+            dto.destination_rollout.proof_artifact_hash.as_deref(),
+            Some(proof_artifact_hash.as_str())
+        );
+        assert_eq!(
+            dto.destination_rollout.prover_artifact_hash.as_deref(),
+            Some(proof_artifact_hash.as_str())
+        );
+        assert_eq!(
+            dto.destination_rollout.circuit_artifact_hash.as_deref(),
+            Some(proof_artifact_hash.as_str())
+        );
+        assert_eq!(
+            dto.destination_rollout.proving_key_hash.as_deref(),
+            Some(proving_key_hash.as_str())
         );
     }
 
