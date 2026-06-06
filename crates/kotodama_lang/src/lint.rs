@@ -204,11 +204,7 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "unregister_peer",
     "sc_execute_submit_ballot",
     "sc_execute_unshield",
-    "subscription_bill",
-    "subscription_record_usage",
     "resolve_account_alias",
-    "build_submit_ballot_inline",
-    "build_unshield_inline",
     "axt_begin",
     "axt_touch",
     "verify_ds_proof",
@@ -405,6 +401,39 @@ fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
         }
         _ => None,
     }
+}
+
+fn is_literal_domain_expr(expr: &Expr) -> bool {
+    let Expr::Call { name, args } = expr else {
+        return false;
+    };
+    matches!(name.as_str(), "domain" | "domain_id")
+        && args.len() == 1
+        && matches!(
+            args.first(),
+            Some(Expr::String(raw))
+                if iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
+        )
+}
+
+fn is_account_access_hint_expr(expr: &Expr) -> bool {
+    let Expr::Call { name, args } = expr else {
+        return false;
+    };
+    if name == "authority" && args.is_empty() {
+        return true;
+    }
+    name == "account_id"
+        && args.len() == 1
+        && matches!(
+            args.first(),
+            Some(Expr::String(raw))
+                if iroha_data_model::account::AccountId::parse_encoded(raw).is_ok()
+        )
+}
+
+fn transfer_domain_call_is_hintable(args: &[Expr]) -> bool {
+    args.len() == 3 && is_literal_domain_expr(&args[1]) && is_account_access_hint_expr(&args[2])
 }
 
 fn lint_nonliteral_state_paths(program: &Program, warnings: &mut Vec<LintWarning>) {
@@ -604,6 +633,8 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 !decode_query_request_literal(args)
                     .map(|query| query_request_is_hintable(&query))
                     .unwrap_or(false)
+            } else if name == "transfer_domain" {
+                !transfer_domain_call_is_hintable(args)
             } else if let Some(hintable) = escrow_call_is_hintable(name, args) {
                 !hintable
             } else {
@@ -1760,6 +1791,96 @@ fn main(asset: AssetDefinitionId, owner: AccountId) {
         assert!(
             !warnings.iter().any(|w| w.code == "opaque-access-hints"),
             "asset registration helpers should use compiler-derived asset keys"
+        );
+    }
+
+    #[test]
+    fn lint_subscription_helpers_are_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  subscription_bill();
+  subscription_record_usage();
+}
+"#,
+        )
+        .expect("parse subscription helpers");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "subscription helpers should use fixed compiler-derived context keys"
+        );
+    }
+
+    #[test]
+    fn lint_inline_zk_builders_are_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  let _ballot = build_submit_ballot_inline(
+    "election",
+    blob("ciphertext"),
+    blob("0000000000000000000000000000000000000000000000000000000000000000"),
+    "halo2",
+    blob("proof"),
+    blob("vk")
+  );
+  let _unshield = build_unshield_inline(
+    asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    authority(),
+    1,
+    blob("0000000000000000000000000000000000000000000000000000000000000000"),
+    "halo2",
+    blob("proof"),
+    blob("vk")
+  );
+}
+"#,
+        )
+        .expect("parse inline ZK builders");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "inline ZK builders only construct payloads and should not warn about access hints"
+        );
+    }
+
+    #[test]
+    fn lint_transfer_domain_literal_target_is_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  transfer_domain(
+    authority(),
+    domain("wonderland.universal"),
+    account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+  );
+}
+"#,
+        )
+        .expect("parse literal transfer_domain helper");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "literal transfer_domain access should be compiler-derived"
+        );
+    }
+
+    #[test]
+    fn lint_transfer_domain_dynamic_target_still_warns() {
+        let program = parse(
+            r#"
+fn main() {
+  let target = authority();
+  transfer_domain(authority(), domain("wonderland.universal"), target);
+}
+"#,
+        )
+        .expect("parse dynamic transfer_domain helper");
+        let warnings = lint_program(&program);
+        assert!(
+            warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "dynamic transfer_domain access should still warn"
         );
     }
 

@@ -636,8 +636,8 @@ fn da_paths() -> Map {
         "/v1/da/pin_intents/prove".to_owned(),
         Value::Object(json_post_operation(
             "DataAvailability",
-            "Fetch a DA pin intent proof placeholder.",
-            "Locate a pin intent by key and return the indexed location.",
+            "Fetch indexed DA pin intent location data.",
+            "Locate a pin intent by storage ticket, alias, manifest hash, or lane/epoch/sequence and return the indexed block location payload.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -647,8 +647,8 @@ fn da_paths() -> Map {
         "/v1/da/pin_intents/verify".to_owned(),
         Value::Object(json_post_operation(
             "DataAvailability",
-            "Verify a DA pin intent proof.",
-            "Verify a pin intent proof bundle.",
+            "Verify indexed DA pin intent location data.",
+            "Check that a provided DA pin intent location payload matches the node's current pin-intent index.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -7407,12 +7407,12 @@ fn da_commitments_prove_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Fetch a DA commitment proof placeholder.".to_owned()),
+        Value::String("Fetch a DA commitment Merkle proof.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Locates a DA commitment by manifest or lane/epoch/sequence and returns its indexed location. Inclusion proofs will be added once Merkle wiring lands."
+            "Locates a DA commitment by manifest or lane/epoch/sequence and returns a Merkle inclusion proof for the indexed block commitment bundle."
                 .to_owned(),
         ),
     );
@@ -7443,7 +7443,7 @@ fn da_commitments_verify_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Validates a provided DA commitment payload against the node's in-memory index. This is a placeholder until Merkle proofs are available."
+            "Validates a provided DA commitment Merkle proof against the node's indexed bundle, block header commitment hash, and configured lane proof policy."
                 .to_owned(),
         ),
     );

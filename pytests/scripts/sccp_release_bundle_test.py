@@ -29,6 +29,10 @@ PHASES = (
     "contract-smoke",
     "core-admission",
 )
+SUBSTRATE_DIAGNOSTIC_DOMAINS = (6, 7, 8)
+UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (
+    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
+)
 EVM_EVIDENCE_SCRIPT_FRAGMENTS = (
     "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
     "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
@@ -103,6 +107,51 @@ def load_verify_helpers():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)  # type: ignore[assignment]
     return module
+
+
+def test_release_bundle_active_evm_metadata_rejects_noncanonical_chain_id() -> None:
+    """Bundle verifier active launch checks must require decimal summary ids."""
+
+    verifier = load_verify_helpers()
+    label = (
+        f"domain {verifier.ACTIVE_LAUNCH_DOMAIN} "
+        f"({verifier.ACTIVE_LAUNCH_CHAIN})"
+    )
+    expected_chain_id = verifier.ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
+    assert expected_chain_id is not None
+    expected_source_blocker = (
+        f"{label}: {verifier.ACTIVE_LAUNCH_DISPLAY} source live eth_chainId "
+        f"must be canonical decimal chain id {expected_chain_id}"
+    )
+    expected_destination_blocker = (
+        f"{label}: {verifier.ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId "
+        f"must be canonical decimal chain id {expected_chain_id}"
+    )
+
+    valid_lane = {
+        "evm_live_metadata": {
+            "source_rpc_chain_id": expected_chain_id,
+            "source_block_tag": "finalized",
+            "destination_rpc_chain_id": expected_chain_id,
+            "destination_block_tag": "finalized",
+        },
+    }
+    assert verifier._active_launch_evm_live_metadata_blockers(label, valid_lane) == []
+
+    for noncanonical_chain_id in ("0x1", "01"):
+        lane = {
+            "evm_live_metadata": {
+                "source_rpc_chain_id": noncanonical_chain_id,
+                "source_block_tag": "finalized",
+                "destination_rpc_chain_id": noncanonical_chain_id,
+                "destination_block_tag": "finalized",
+            },
+        }
+
+        blockers = verifier._active_launch_evm_live_metadata_blockers(label, lane)
+
+        assert expected_source_blocker in blockers
+        assert expected_destination_blocker in blockers
 
 
 def load_bundle_module():
@@ -347,6 +396,74 @@ def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
         assert module.ACTIVE_LAUNCH_CHAIN == "eth"
         assert module.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
         assert module.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
+
+
+def test_release_bundle_verifier_guards_launch_scope_constant_inventory(
+    tmp_path: Path,
+) -> None:
+    """The strict verifier must pin SCCP launch-scope constants across sources."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_launch_scope_constant_inventory_errors() == []
+
+    sparse_rust = tmp_path / "lib.rs"
+    sparse_rust.write_text(
+        "pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 4] = [];\n",
+        encoding="utf-8",
+    )
+    sparse_all_lanes = tmp_path / "sccp_all_lanes_evidence.py"
+    sparse_all_lanes.write_text(
+        "SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (SCCP_DOMAIN_ETH,)\n",
+        encoding="utf-8",
+    )
+    sparse_report = tmp_path / "sccp_release_readiness_report.py"
+    sparse_report.write_text(
+        'ACTIVE_LAUNCH_CHAIN = "bsc"\nACTIVE_LAUNCH_POLICY = "BscMainnetLane"\n',
+        encoding="utf-8",
+    )
+
+    inventory = (
+        (
+            sparse_rust,
+            verifier.SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS[0][1],
+        ),
+        (
+            sparse_all_lanes,
+            verifier.SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS[1][1],
+        ),
+        (
+            sparse_report,
+            verifier.SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS[2][1],
+        ),
+    )
+
+    errors = verifier._sccp_launch_scope_constant_inventory_errors(inventory)
+
+    assert any(
+        "SCCP launch-scope constants source inventory" in error
+        and "SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5]" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP launch-scope constants source inventory" in error
+        and "SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP launch-scope constants source inventory" in error
+        and "SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP launch-scope constants source inventory" in error
+        and "ACTIVE_LAUNCH_DOMAIN = 1" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP launch-scope constants source inventory" in error
+        and 'ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"' in error
+        for error in errors
+    )
 
 
 def test_release_bundle_evidence_phase_requires_evm_script_suites() -> None:
@@ -1071,6 +1188,12 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     summary = json.loads(summary_json.read_text(encoding="utf-8"))
     assert summary["production_ready"] is True
     assert summary["release_checklist"]["ready"] is True
+    for payload in (report["evidence"], summary):
+        lanes_by_domain = {lane["domain"]: lane for lane in payload["lanes"]}
+        for domain in SUBSTRATE_DIAGNOSTIC_DOMAINS:
+            lane = lanes_by_domain[domain]
+            assert lane["production_ready"] is False
+            assert UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER in lane["blockers"]
 
     notes = notes_md.read_text(encoding="utf-8")
     assert "Status: READY" in notes
@@ -4021,6 +4144,78 @@ def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift(
     )
 
 
+def test_release_bundle_verifier_rejects_launch_scope_domain_drift(
+    tmp_path: Path,
+) -> None:
+    """All-lanes launch-scope domains must stay exact and disjoint."""
+
+    def mutate_summary(summary: dict) -> None:
+        summary["supported_launch_domains"] = [
+            1,
+            2,
+            3,
+            4,
+            5,
+            5,
+        ]
+        summary["unsupported_launch_domains"] = [6, 7, 1]
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_summary(report["evidence"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_summary(summary)
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence",
+        "all-lanes summary",
+    ):
+        assert (
+            f"{label} supported_launch_domains must be the supported launch remote domains"
+            in verified.stdout
+        )
+        assert (
+            f"{label} unsupported_launch_domains must be the diagnostic unsupported remote domains"
+            in verified.stdout
+        )
+        assert (
+            f"{label} supported_launch_domains contains duplicate domains"
+            in verified.stdout
+        )
+        assert (
+            f"{label} supported_launch_domains and unsupported_launch_domains must be disjoint"
+            in verified.stdout
+        )
+        assert (
+            f"{label} supported_launch_domains plus unsupported_launch_domains must match required_domains"
+            in verified.stdout
+        )
+
+
 def test_release_bundle_verifier_rejects_all_lanes_unknown_domain_and_chain_drift(
     tmp_path: Path,
 ) -> None:
@@ -4919,13 +5114,6 @@ def test_release_bundle_verifier_rejects_required_source_gate_audit_key_drift(
             "solana_full_light_client_gate_hash"
         )
         source_gate["audit_hashes"]["operator_override"] = gate_hash
-        substrate_gate = by_domain[6]["source_adapter_gate"]
-        substrate_gate_hash = substrate_gate["audit_hashes"].pop(
-            "substrate_runtime_storage_gate_hash"
-        )
-        substrate_gate["audit_hashes"]["runtime_storage_operator_note"] = (
-            substrate_gate_hash
-        )
 
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
@@ -4967,18 +5155,6 @@ def test_release_bundle_verifier_rejects_required_source_gate_audit_key_drift(
         assert (
             f"{label} audit_hashes missing field: solana_full_light_client_gate_hash"
         ) in verified.stdout
-    for label in (
-        "readiness report embedded evidence lane domain 6 source_adapter_gate",
-        "all-lanes summary lane domain 6 source_adapter_gate",
-    ):
-        assert (
-            f"{label} audit_hashes contains unexpected field: "
-            "runtime_storage_operator_note"
-        ) in verified.stdout
-        assert (
-            f"{label} audit_hashes missing field: "
-            "substrate_runtime_storage_gate_hash"
-        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_source_gate_audit_hash_role_reuse(
@@ -5002,16 +5178,6 @@ def test_release_bundle_verifier_rejects_source_gate_audit_hash_role_reuse(
         ton_gate["audit_hashes"][
             "ton_validator_set_transition_verifier_hash"
         ] = duplicated_audit_hash
-
-        substrate_lane = by_domain[8]
-        substrate_gate = substrate_lane["source_adapter_gate"]
-        destination_hash = substrate_lane["destination_binding"][
-            "destination_binding_hash"
-        ]
-        substrate_gate["gate_hash"] = destination_hash
-        substrate_gate["audit_hashes"]["substrate_runtime_storage_gate_hash"] = (
-            destination_hash
-        )
 
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
@@ -5057,11 +5223,6 @@ def test_release_bundle_verifier_rejects_source_gate_audit_hash_role_reuse(
             "audit_hashes.ton_validator_set_transition_verifier_hash must not "
             "reuse audit_hashes.ton_masterchain_config_verifier_hash"
         ) in verified.stdout
-        assert (
-            f"{label} lane domain 8 source_adapter_gate hash role "
-            "audit_hashes.substrate_runtime_storage_gate_hash must not reuse "
-            "destination_binding_hash"
-        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
@@ -5098,11 +5259,6 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
         tron_canary["block_timestamp"] = -1
         tron_canary["raw_data_owner_matches_transaction"] = False
         tron_canary["signature_recovers_to_owner"] = "true"
-
-        substrate_canary = by_domain[6]["route_allowlist"]["route_canary"]
-        substrate_canary["substrate_finalized_head"] = True
-        substrate_canary["substrate_runtime_code_hash"] = "0X" + "55" * 32
-        substrate_canary["substrate_runtime_spec_version"] = "01"
 
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
@@ -5214,19 +5370,6 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
     assert (
         "readiness report embedded evidence lane domain 5 route_allowlist "
         "route_canary signature_recovers_to_owner must be a boolean"
-    ) in verified.stdout
-    assert (
-        "readiness report embedded evidence lane domain 6 route_allowlist "
-        "route_canary substrate_finalized_head must be a canonical bytes32 hex string"
-    ) in verified.stdout
-    assert (
-        "readiness report embedded evidence lane domain 6 route_allowlist "
-        "route_canary substrate_runtime_code_hash must be a canonical bytes32 hex string"
-    ) in verified.stdout
-    assert (
-        "readiness report embedded evidence lane domain 6 route_allowlist "
-        "route_canary substrate_runtime_spec_version must be a canonical "
-        "decimal string"
     ) in verified.stdout
     assert (
         "all-lanes summary lane domain 1 route_allowlist route_canary "
@@ -5808,79 +5951,45 @@ def test_release_bundle_verifier_rejects_ton_route_canary_hash_role_reuse(
         ) in verified.stdout
 
 
-def test_release_bundle_verifier_rejects_substrate_route_canary_zero_runtime_hashes(
+def test_release_bundle_keeps_substrate_route_canaries_diagnostic_only(
     tmp_path: Path,
 ) -> None:
-    """Substrate route-canary runtime hashes must be non-zero bytes32 values."""
-
-    substrate_domains = (6, 7, 8)
-    runtime_hash_fields = ("substrate_finalized_head", "substrate_runtime_code_hash")
-
-    def mutate_lanes(lanes: list[dict]) -> None:
-        by_domain = {lane["domain"]: lane for lane in lanes}
-        for domain in substrate_domains:
-            substrate_canary = by_domain[domain]["route_allowlist"]["route_canary"]
-            for field in runtime_hash_fields:
-                substrate_canary[field] = "0x" + "00" * 32
+    """Substrate-family route canaries remain visible but non-launching."""
 
     output_dir = build_ready_bundle(tmp_path)
-    report_path = output_dir / "sccp-release-readiness.json"
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    mutate_lanes(report["evidence"]["lanes"])
-    report_path.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
     )
 
-    summary_path = output_dir / "sccp-all-lanes-summary.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    mutate_lanes(summary["lanes"])
-    summary_path.write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
-    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
-    rewrite_canonical_report_and_notes(output_dir)
-
-    verified = subprocess.run(
-        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    assert verified.returncode == 1
-    for domain in substrate_domains:
-        for label in (
-            f"readiness report embedded evidence lane domain {domain} "
-            "route_allowlist route_canary",
-            f"all-lanes summary lane domain {domain} route_allowlist route_canary",
-        ):
-            for field in runtime_hash_fields:
-                assert (
-                    f"{label} {field} must be a non-zero canonical "
-                    "bytes32 hex string"
-                ) in verified.stdout
+    for payload in (report["evidence"], summary):
+        lanes_by_domain = {lane["domain"]: lane for lane in payload["lanes"]}
+        for domain in SUBSTRATE_DIAGNOSTIC_DOMAINS:
+            lane = lanes_by_domain[domain]
+            canary = lane["route_allowlist"]["route_canary"]
+            assert canary["evidence_bound"] is True
+            assert canary["evidence_source"] == "substrate_finalized_runtime_snapshot"
+            assert lane["production_ready"] is False
+            assert UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER in lane["blockers"]
 
 
-def test_release_bundle_verifier_rejects_substrate_route_canary_hash_role_reuse(
+def test_release_bundle_verifier_checks_complete_substrate_diagnostic_schema(
     tmp_path: Path,
 ) -> None:
-    """Substrate route-canary hashes must not replay governed lane hash roles."""
+    """Complete unsupported diagnostic lanes must still be schema-checked."""
 
     def mutate_lanes(lanes: list[dict]) -> None:
-        by_domain = {lane["domain"]: lane for lane in lanes}
-        substrate_lane = by_domain[6]
-        substrate_canary = substrate_lane["route_allowlist"]["route_canary"]
-        substrate_canary["substrate_finalized_head"] = substrate_lane[
-            "source_record_hashes"
-        ]["source_verifier_material_hash"]
-        substrate_canary["substrate_runtime_code_hash"] = substrate_lane[
-            "destination_binding"
-        ]["destination_binding_hash"]
+        lane = next(lane for lane in lanes if lane["domain"] == 6)
+        assert all(lane["records"].values())
+        lane["blockers"] = ["operator override"]
+        lane["source_record_hashes"]["source_verifier_material_hash"] = (
+            "0X" + "aa" * 32
+        )
+        lane["source_adapter_gate"]["audit_hashes"]["operator_note"] = (
+            "0x" + "bb" * 32
+        )
 
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
@@ -5913,17 +6022,23 @@ def test_release_bundle_verifier_rejects_substrate_route_canary_hash_role_reuse(
 
     assert verified.returncode == 1
     for label in (
-        "readiness report embedded evidence lane domain 6 route_allowlist "
-        "route_canary",
-        "all-lanes summary lane domain 6 route_allowlist route_canary",
+        "readiness report embedded evidence lane domain 6",
+        "all-lanes summary lane domain 6",
     ):
         assert (
-            f"{label} hash role substrate_finalized_head must not reuse "
-            "source_verifier_material_hash"
+            f"{label} blockers must include the unsupported launch-scope blocker"
         ) in verified.stdout
         assert (
-            f"{label} hash role substrate_runtime_code_hash must not reuse "
-            "destination_binding_hash"
+            f"{label} blockers must contain only the unsupported launch-scope "
+            "blocker when diagnostic evidence is complete"
+        ) in verified.stdout
+        assert (
+            f"{label} source_record_hashes source_verifier_material_hash must "
+            "be a canonical bytes32 hex string"
+        ) in verified.stdout
+        assert (
+            f"{label} source_adapter_gate audit_hashes contains unexpected "
+            "field: operator_note"
         ) in verified.stdout
 
 
@@ -6198,9 +6313,6 @@ def test_release_bundle_verifier_rejects_route_canary_evidence_hash_role_reuse(
         by_domain[4]["route_allowlist"]["route_canary"]["evidence_hash"] = by_domain[
             4
         ]["route_allowlist"]["route_canary"]["ton_account_state_hash"]
-        by_domain[6]["route_allowlist"]["route_canary"]["evidence_hash"] = by_domain[
-            6
-        ]["route_allowlist"]["route_canary"]["substrate_runtime_code_hash"]
 
     output_dir = build_ready_bundle(tmp_path)
     report_path = output_dir / "sccp-release-readiness.json"
@@ -6253,10 +6365,6 @@ def test_release_bundle_verifier_rejects_route_canary_evidence_hash_role_reuse(
         (
             4,
             "hash role evidence_hash must not reuse ton_account_state_hash",
-        ),
-        (
-            6,
-            "hash role evidence_hash must not reuse substrate_runtime_code_hash",
         ),
     )
     for domain, failure in expected_failures:

@@ -8227,6 +8227,10 @@ pub struct SccpRouteManifest {
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
     pub verifier_key_hash: String,
+    /// Optional hex-encoded browser/local prover artifact digest.
+    pub proof_artifact_hash: Option<String>,
+    /// Optional hex-encoded proving key digest.
+    pub proving_key_hash: Option<String>,
     /// Canonical destination binding key.
     pub destination_binding_key: String,
     /// Hex-encoded canonical destination binding hash.

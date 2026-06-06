@@ -13,6 +13,17 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- SCCP launch scope is intentionally limited to non-Substrate families for now:
+  do not advertise support for Substrate/Polkadot-family networks, including
+  Kusama, Polkadot, SORA Kusama, SORA Polkadot, or SORA2, until governance
+  explicitly re-opens that scope. Existing Substrate/SORA2 notes and evidence
+  helpers are diagnostic/backlog material only. Complete unsupported diagnostic
+  rows in public release bundles still have to pass canonical summary-schema
+  checks and carry only the explicit unsupported launch-scope blocker.
+- SCCP active-launch readiness metadata must stay canonical: EVM live source
+  and destination chain ids in readiness summaries are decimal-only (`1` for
+  Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
+  as `0x1` and padded values such as `01` remain evidence blockers.
 - Keep Kagemusha offline-offline payments production-routed through the
   Reserved-lineage recursive spend path. Production packaging now has a
   portable Norito `KagemushaRecursiveSpendLineageKeyArtifactsV1` artifact for
@@ -549,7 +560,12 @@ and completed history lives in [`status.md`](./status.md).
   HTTP handler-path profiles for signed stored-cursor continuations, account
   alias projections, account-asset predicates, asset holders, committed-history
   contract activity, and generic aggregates, plus localhost socket profiles for
-  the same workload set. The `iroha_cli --all-targets` strict clippy gate now
+  the same workload set. Caller-scoped account reads now also require canonical
+  request signatures or witnesses for private dataspace visibility, so bare
+  `X-Iroha-Account` headers no longer create caller identity, and the Torii
+  library suite is green after aligning stale SCCP, SoraFS, ISO20022, and ZK
+  fixtures with current production admission rules. The
+  `iroha_cli --all-targets` strict clippy gate now
   covers the governance-instruction, IVM contract deploy, and Taikai helper
   targets with checked length/time arithmetic in the previously failing paths.
   The `iroha_crypto --all-targets` strict clippy gate is also green, covering
@@ -597,9 +613,15 @@ and completed history lives in [`status.md`](./status.md).
   and panic-only buffer assertions. The SoraFS paid-pin validation corridor is
   green across data-model SoraFS/DA-pin, Core pin-registry, Torii
   storage-pin/discovery, and gateway conformance filters as of 2026-06-04;
-  remaining breadth is historical fee-receipt/governance-pricing acceptance,
-  manifest-envelope/admission fail-closed coverage, streaming CAR ranges, and
-  SDK validation once Java is available. SoraNet relay handshake frame length-prefix
+  Torii DA commitment proof/verify routes are now also pinned with committed
+  block-backed Merkle proof round-trip coverage and OpenAPI/MCP contract text,
+  DA pin-intent proof/verify handlers are pinned against the live indexed
+  location store with tampered-location rejection and matching contract text,
+  and Torii SoraFS CAR range coverage now verifies a non-full middle-window
+  response spanning exactly two aligned chunks with `Content-Range` and
+  `X-Sora-Chunk-Range` metadata. Remaining breadth is SDK validation once Java
+  is available plus wider admission/manifest-envelope/full-corridor reruns not
+  covered by the current focused Torii SoraFS checks. SoraNet relay handshake frame length-prefix
   writes now use an explicit checked helper plus a compile-time `u16` maximum
   assertion so oversized relay hellos return `FrameTooLarge` instead of relying
   on a narrowing assertion. SoraNet constant-rate scheduler dequeue now handles
@@ -662,12 +684,29 @@ and completed history lives in [`status.md`](./status.md).
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
   instead of drawing a runtime dummy key;
   Private Kaigi fee-spend execution now derives its synthetic fee-payer account
-  through checked Ed25519 seed expansion from the action hash;
+  through checked Ed25519 seed expansion from the action hash; SoraFS hybrid
+  KEM derived material now binds the recipient public keys and encapsulated
+  public transcript components through length-prefixed HKDF input with checked
+  capacity accounting, and SoraNet session-key HKDF extraction now
+  domain-separates and length-prefixes IKM components before expansion, with
+  NK2/NK3 interop vectors refreshed under both checked-in fixture bundles;
+  SoraNet deterministic SHAKE expansion now also frames its domain, label, part
+  count, and every absorbed component before deriving deterministic KEM,
+  simulated ML-DSA, dual-mix, or Noise-seed material, with checked-in fixture
+  bundles regenerated from the framed outputs;
   `PublicKey::try_to_*` and
   `ExposedPrivateKey::try_to_*` give public/private key formatting
-  non-panicking routes; `Signature::try_new` now routes SM2 through checked
-  private-key rebuild/signing helpers and SM2 key-pair/public-key derivation now
-  routes through `try_public_key`; SM2 private-key byte export now exposes
+  non-panicking routes, public-key Norito serialization now routes
+  full-to-compact conversion through a checked payload extractor, and
+  `PublicKey::to_prefixed_string` now reuses the malformed compact-key marker
+  instead of unwrapping invalid internal key state, while `ExposedPrivateKey`
+  display and prefixed compatibility formatting now return a non-secret
+  invalid-private-key marker instead of unwrapping checked private-key
+  formatting; `Signature::try_new` now routes SM2 through checked private-key
+  rebuild/signing helpers and SM2 key-pair/public-key derivation now routes
+  through `try_public_key`; SM2 concrete public-key prefixed formatting now
+  returns a deterministic invalid-key marker instead of unwrapping checked
+  multihash encoding; SM2 private-key byte export now exposes
   `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
   through checked payload extraction; secp256k1 message signing now exposes
   `try_sign` and routes `Signature::try_new` through the fallible helper, and
@@ -2178,6 +2217,7 @@ and completed history lives in [`status.md`](./status.md).
   committed-phase certified finality-stack entry,
   committed-phase commit-certificate witness installation,
   committed-phase commit-certificate witness-change equivalence,
+  committed-phase commit-view witness-change matching,
   committed-phase commit-view witness installation,
   committed-phase live-commit gate crossing,
   committed-phase commit-artifact installation equivalence,
@@ -2303,6 +2343,7 @@ and completed history lives in [`status.md`](./status.md).
   finality-source post-commit progress quiescence,
   finality-source commit-certificate witness installation,
   finality-source commit-certificate witness-change matching,
+  finality-source commit-view witness-change matching,
   finality-source commit-view witness installation,
   finality-source NewView handoff isolation,
   commit-artifact exact-source committed-delivery completion,
@@ -6144,7 +6185,15 @@ operator-provided rollout bundles.
   source-adapter gate audit hashes that replay source material, source-adapter
   deployment, destination binding, route allowlist, route canary evidence, or
   sibling audit hash roles, and required source-gate blockers are promoted into
-  the lane-level preflight blockers.
+  the lane-level preflight blockers. Built-in SCCP source-verifier material is
+  now explicitly template-only: production readiness stays fail-closed unless
+  caller-supplied governed material and a matching source-adapter deployment
+  descriptor are both present, and adversarial tests prove template material
+  cannot be promoted by wrapping it in a matching-looking deployment record.
+  The all-lanes release summary now also publishes the supported launch-domain
+  set and the unsupported diagnostic-domain set as separate verified fields, so
+  release tooling can reject launch-scope tampering instead of inferring scope
+  only from lane blockers.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
@@ -6153,8 +6202,9 @@ placeholders behind the typed adapter variants so ETH/BSC/Solana/TON/TRON
 consensus/finality and receipt/message inclusion are checked against external
 chain rules. Substrate/Polkadot-family SCCP lanes are not part of the current
 supported launch scope; keep existing Substrate, Kusama, Polkadot, and SORA2
-evidence helpers gated as diagnostic/backlog-only surfaces until support is
-explicitly re-opened. For BSC, use the new offline source-bridge evidence
+evidence helpers gated as diagnostic/backlog-only surfaces, with production
+readiness and release-evidence summaries refusing to mark those lanes ready
+until support is explicitly re-opened. For BSC, use the new offline source-bridge evidence
 renderer, which now rejects BSC EVM-family template component hashes before
 rendering governance TOML and also rejects non-canonical BSC source-adapter
 OpenVerify VK hashes, plus the EVM live source and destination evidence
@@ -7154,6 +7204,11 @@ from wallet and service integrations.
 - Kotodama semantic effect analysis now treats ZK verify latch helpers as
   host-side effects: public entrypoints require `permission(...)`, and `view`
   functions reject direct or transitive calls into those helpers.
+- Core contract dispatch now consumes Kotodama manifest entrypoint
+  `permission(...)` metadata for both direct `ContractCall` and
+  metadata-dispatched IVM execution plus nested `CALL_CONTRACT` calls,
+  requiring callers to hold the named permission directly or through an
+  assigned role before the VM runs.
 - Preserve canonical Norito headers and wire layouts for blocks, transactions,
   SDK fixtures, and cross-library compatibility tests. The JavaScript pure
   Norito fallback now covers asset-definition registration frames, and

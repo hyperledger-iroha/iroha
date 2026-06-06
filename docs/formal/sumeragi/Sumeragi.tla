@@ -4443,6 +4443,12 @@ CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep ==
     /\ FinalityCertificateStackPresent'
     /\ CommitDisablesProgressActions'
 
+CommittedPhaseEntryMatchesCommitViewWitnessChangeStep ==
+  (/\ phase # "Committed"
+   /\ phase' = "Committed"
+   /\ commitView' # commitView) =>
+    CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
+
 FinalitySourceActionCompletesCommittedDeliveryFromExactSourceStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
    ~committed /\ committed') =>
@@ -4508,6 +4514,11 @@ FinalitySourceActionMatchesCommitCertificateWitnessChangeStep ==
     /\ CommitCertificateWitnessChangeMatchesCertifiedFinalityStackStep
     /\ CommitCertificateWitnessChangeInstallsCommitViewWitnessStep
     /\ CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
+
+FinalitySourceActionMatchesCommitViewWitnessChangeStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed' /\ commitView' # commitView) =>
+    CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
 
 FinalitySourceActionInstallsCommitViewWitnessStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
@@ -4927,6 +4938,9 @@ FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses ==
 FinalitySourceActionAlwaysMatchesCommitCertificateWitnessChange ==
   [] [FinalitySourceActionMatchesCommitCertificateWitnessChangeStep]_vars
 
+FinalitySourceActionAlwaysMatchesCommitViewWitnessChange ==
+  [] [FinalitySourceActionMatchesCommitViewWitnessChangeStep]_vars
+
 FinalitySourceActionAlwaysInstallsCommitViewWitness ==
   [] [FinalitySourceActionInstallsCommitViewWitnessStep]_vars
 
@@ -5031,6 +5045,9 @@ CommittedPhaseEntryAlwaysInstallsCommitCertificateWitnesses ==
 
 CommittedPhaseEntryAlwaysMatchesCommitCertificateWitnessChange ==
   [] [CommittedPhaseEntryMatchesCommitCertificateWitnessChangeStep]_vars
+
+CommittedPhaseEntryAlwaysMatchesCommitViewWitnessChange ==
+  [] [CommittedPhaseEntryMatchesCommitViewWitnessChangeStep]_vars
 
 CommittedPhaseEntryAlwaysInstallsCommitViewWitness ==
   [] [CommittedPhaseEntryInstallsCommitViewWitnessStep]_vars

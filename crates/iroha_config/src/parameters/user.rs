@@ -4432,6 +4432,14 @@ pub struct SccpRouteManifest {
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
     pub verifier_key_hash: String,
+    /// Optional hex-encoded browser/local prover artifact digest.
+    pub proof_artifact_hash: Option<String>,
+    /// Optional legacy alias for `proof_artifact_hash`.
+    pub prover_artifact_hash: Option<String>,
+    /// Optional legacy alias for `proof_artifact_hash`.
+    pub circuit_artifact_hash: Option<String>,
+    /// Optional hex-encoded proving key digest.
+    pub proving_key_hash: Option<String>,
     /// Canonical destination binding key.
     pub destination_binding_key: String,
     /// Hex-encoded canonical destination binding hash.
@@ -4558,11 +4566,100 @@ impl SccpRouteManifest {
                 .any(|hash| self.verifier_key_hash.trim().eq_ignore_ascii_case(hash))
     }
 
+    fn proof_artifact_hash(&self) -> Option<String> {
+        let value = Self::resolve_optional_alias(
+            "proof artifact hash",
+            &[
+                ("proof_artifact_hash", self.proof_artifact_hash.as_deref()),
+                ("prover_artifact_hash", self.prover_artifact_hash.as_deref()),
+                (
+                    "circuit_artifact_hash",
+                    self.circuit_artifact_hash.as_deref(),
+                ),
+            ],
+        );
+        if value.as_deref().is_some_and(str::is_empty) {
+            None
+        } else {
+            value
+        }
+    }
+
+    fn resolve_optional_alias(
+        role: &str,
+        aliases: &[(&'static str, Option<&str>)],
+    ) -> Option<String> {
+        let mut resolved: Option<(&'static str, String)> = None;
+        for (name, value) in aliases {
+            let Some(value) = value else {
+                continue;
+            };
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            if let Some((previous_name, previous_value)) = resolved.as_ref() {
+                assert!(
+                    previous_value == value,
+                    "SCCP route manifest {role} aliases disagree: `{previous_name}` = `{previous_value}` but `{name}` = `{value}`"
+                );
+            } else {
+                resolved = Some((*name, value.to_owned()));
+            }
+        }
+        resolved.map(|(_, value)| value)
+    }
+
     fn parse(self) -> actual::SccpRouteManifest {
         let uses_diagnostic_verifier_key_hash = self.uses_bsc_diagnostic_verifier_key_hash();
+        let proof_artifact_hash = self.proof_artifact_hash();
+        assert!(
+            proof_artifact_hash.is_some() == self.proving_key_hash.is_some(),
+            "SCCP route manifest proof_artifact_hash and proving_key_hash must be supplied together"
+        );
+        if let Some(proof_hash) = proof_artifact_hash.as_deref() {
+            for (label, value) in [
+                ("verifier_code_hash", self.verifier_code_hash.as_str()),
+                ("verifier_key_hash", self.verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    self.destination_binding_hash.as_str(),
+                ),
+            ] {
+                assert!(
+                    !proof_hash.trim().eq_ignore_ascii_case(value.trim()),
+                    "SCCP route manifest proof_artifact_hash must not equal {label}"
+                );
+            }
+        }
+        if let Some(proving_hash) = self.proving_key_hash.as_deref() {
+            for (label, value) in [
+                ("verifier_code_hash", self.verifier_code_hash.as_str()),
+                ("verifier_key_hash", self.verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    self.destination_binding_hash.as_str(),
+                ),
+                (
+                    "proof_artifact_hash",
+                    proof_artifact_hash.as_deref().unwrap_or_default(),
+                ),
+            ] {
+                assert!(
+                    !proving_hash.trim().eq_ignore_ascii_case(value.trim()),
+                    "SCCP route manifest proving_key_hash must not equal {label}"
+                );
+            }
+        }
         assert!(
             !(self.production_ready && uses_diagnostic_verifier_key_hash),
             "SCCP BSC route manifest production_ready cannot be true with diagnostic verifier material"
+        );
+        assert!(
+            !(self.production_ready
+                && self.counterparty_domain == 2
+                && (proof_artifact_hash.is_none() || self.proving_key_hash.is_none())),
+            "SCCP BSC route manifest production_ready requires proof_artifact_hash and proving_key_hash"
         );
         let source_bridge_address = self.source_bridge_address();
         let destination_verifier_address = self.destination_verifier_address();
@@ -4592,6 +4689,8 @@ impl SccpRouteManifest {
             tron_verifier_address: destination_verifier_address,
             verifier_code_hash: self.verifier_code_hash,
             verifier_key_hash: self.verifier_key_hash,
+            proof_artifact_hash,
+            proving_key_hash: self.proving_key_hash,
             destination_binding_key: self.destination_binding_key,
             destination_binding_hash: self.destination_binding_hash,
             taira_burn_record_settlement_asset_definition_id: self
@@ -4648,6 +4747,10 @@ mod sccp_route_manifest_user_config_tests {
             tron_verifier_address: Some(VERIFIER.to_owned()),
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
+            proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
+            prover_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
+            circuit_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
+            proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -4720,11 +4823,67 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
+    fn matching_proof_artifact_hash_aliases_are_allowed() {
+        let mut manifest = route_manifest();
+        let proof_hash = format!("0x{}", "5c".repeat(32));
+        manifest.proof_artifact_hash = Some(proof_hash.clone());
+        manifest.prover_artifact_hash = Some(proof_hash.clone());
+        manifest.circuit_artifact_hash = Some(proof_hash.clone());
+
+        let actual = manifest.parse();
+
+        assert_eq!(
+            actual.proof_artifact_hash.as_deref(),
+            Some(proof_hash.as_str())
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "source bridge address aliases disagree")]
     fn conflicting_source_bridge_aliases_are_rejected() {
         let mut manifest = route_manifest();
         manifest.source_bridge_address =
             Some("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "proof artifact hash aliases disagree")]
+    fn conflicting_proof_artifact_hash_aliases_are_rejected() {
+        let mut manifest = route_manifest();
+        manifest.prover_artifact_hash = Some(format!("0x{}", "5d".repeat(32)));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "proof_artifact_hash and proving_key_hash must be supplied together")]
+    fn route_manifest_requires_prover_hash_pairing() {
+        let mut manifest = route_manifest();
+        manifest.proving_key_hash = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "production_ready requires proof_artifact_hash and proving_key_hash")]
+    fn production_ready_bsc_route_requires_prover_hashes() {
+        let mut manifest = route_manifest();
+        manifest.production_ready = true;
+        manifest.proof_artifact_hash = None;
+        manifest.prover_artifact_hash = None;
+        manifest.circuit_artifact_hash = None;
+        manifest.proving_key_hash = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "proving_key_hash must not equal verifier_key_hash")]
+    fn route_manifest_rejects_reused_prover_hash_roles() {
+        let mut manifest = route_manifest();
+        manifest.proving_key_hash = Some(manifest.verifier_key_hash.clone());
 
         let _ = manifest.parse();
     }

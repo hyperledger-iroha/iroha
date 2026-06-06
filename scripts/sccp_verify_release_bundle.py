@@ -129,10 +129,59 @@ ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
     "eth": "`eth_chainId == 0x1` (1)",
     "bsc": "`eth_chainId == 0x38` (56)",
 }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID = {
+    "eth": "1",
+    "bsc": "56",
+}.get(ACTIVE_LAUNCH_CHAIN)
 ACTIVE_LAUNCH_EVM_CHAIN_ID_MARKER = {
     "eth": "eth_chainId == 0x1",
     "bsc": "eth_chainId == 0x38",
 }.get(ACTIVE_LAUNCH_CHAIN, "eth_chainId")
+SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            """pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5] = [
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+];""",
+            "pub const SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1: &str =",
+            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
+        ),
+    ),
+    (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            """SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+)""",
+            """SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(
+    domain
+    for domain in SCCP_CORE_REMOTE_DOMAINS
+    if domain not in SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS
+)""",
+            "SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (",
+            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "ACTIVE_LAUNCH_DOMAIN = 1",
+            'ACTIVE_LAUNCH_CHAIN = "eth"',
+            'ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"',
+            'ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"',
+            '"eth": "1",\n    "bsc": "56",',
+        ),
+    ),
+)
 ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
@@ -142,6 +191,21 @@ ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_SORA_KUSAMA,
     SCCP_DOMAIN_SORA_POLKADOT,
     SCCP_DOMAIN_SORA2,
+)
+ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = (
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+)
+ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS = tuple(
+    domain
+    for domain in ALL_LANES_REQUIRED_DOMAINS
+    if domain not in ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
+)
+ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER = (
+    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
 )
 ALL_LANES_CHAIN_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "eth",
@@ -3907,6 +3971,8 @@ CORRIDOR_KEYS = {
 ALL_LANES_SUMMARY_KEYS = {
     "production_ready",
     "required_domains",
+    "supported_launch_domains",
+    "unsupported_launch_domains",
     "lanes",
     "blockers",
     "release_checklist",
@@ -4829,6 +4895,19 @@ def _ethereum_noncanonical_chain_id_inventory_errors(
     )
 
 
+def _sccp_launch_scope_constant_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for launch-scope constants shared by SCCP tooling."""
+
+    if inventory is None:
+        inventory = SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP launch-scope constants",
+    )
+
+
 def _ethereum_beacon_rest_finalized_header_shape_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -5293,21 +5372,27 @@ def _active_launch_evm_live_metadata_blockers(
     evm_live_metadata = lane.get("evm_live_metadata")
     if not isinstance(evm_live_metadata, dict):
         evm_live_metadata = {}
-    expected_chain_ids = {
-        "eth": {"1", "0x1"},
-        "bsc": {"56", "0x38"},
-    }.get(ACTIVE_LAUNCH_CHAIN, set())
-    expected_chain_id_label = {
-        "eth": "1 (0x1)",
-        "bsc": "56 (0x38)",
-    }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+    expected_chain_id = ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
+    expected_chain_id_label = (
+        f"canonical decimal chain id {expected_chain_id}"
+        if expected_chain_id is not None
+        else "the configured mainnet chain id"
+    )
 
     blockers: list[str] = []
-    if evm_live_metadata.get("source_rpc_chain_id") not in expected_chain_ids:
+    source_chain_id = evm_live_metadata.get("source_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(source_chain_id, positive=True)
+        and source_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live eth_chainId must be {expected_chain_id_label}"
         )
-    if evm_live_metadata.get("destination_rpc_chain_id") not in expected_chain_ids:
+    destination_chain_id = evm_live_metadata.get("destination_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(destination_chain_id, positive=True)
+        and destination_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId must be {expected_chain_id_label}"
         )
@@ -9361,6 +9446,20 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         blockers = lane.get("blockers")
         if domain == ACTIVE_LAUNCH_DOMAIN and isinstance(blockers, list) and blockers:
             errors.append(f"{lane_label} blockers must be empty")
+        if domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS:
+            if lane.get("production_ready") is not False:
+                errors.append(
+                    f"{lane_label} production_ready must be false for unsupported "
+                    "diagnostic launch domains"
+                )
+            if (
+                isinstance(blockers, list)
+                and ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER not in blockers
+            ):
+                errors.append(
+                    f"{lane_label} blockers must include the unsupported "
+                    "launch-scope blocker"
+                )
         records = lane.get("records")
         if isinstance(records, dict):
             records_label = f"{lane_label} records"
@@ -9377,8 +9476,27 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         errors.extend(_true_field_errors(records_label, records, field))
                     else:
                         errors.extend(_boolean_field_errors(records_label, records, field))
-        if domain != ACTIVE_LAUNCH_DOMAIN and lane.get("production_ready") is False:
+        records_complete = isinstance(records, dict) and all(
+            records.get(field) is True for field in ALL_LANES_RECORD_KEYS
+        )
+        if (
+            domain != ACTIVE_LAUNCH_DOMAIN
+            and lane.get("production_ready") is False
+            and not (
+                domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS and records_complete
+            )
+        ):
             continue
+        if (
+            domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
+            and records_complete
+            and isinstance(blockers, list)
+            and blockers != [ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER]
+        ):
+            errors.append(
+                f"{lane_label} blockers must contain only the unsupported "
+                "launch-scope blocker when diagnostic evidence is complete"
+            )
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
             source_hashes_label = f"{lane_label} source_record_hashes"
@@ -9762,6 +9880,22 @@ def _all_lanes_summary_schema_errors(
             allow_empty=False,
         )
     )
+    errors.extend(
+        _integer_list_field_errors(
+            label,
+            summary,
+            "supported_launch_domains",
+            allow_empty=False,
+        )
+    )
+    errors.extend(
+        _integer_list_field_errors(
+            label,
+            summary,
+            "unsupported_launch_domains",
+            allow_empty=True,
+        )
+    )
     errors.extend(_list_field_errors(label, summary, "lanes"))
     errors.extend(_string_list_field_errors(label, summary, "blockers", allow_empty=True))
     blockers = summary.get("blockers")
@@ -9772,10 +9906,16 @@ def _all_lanes_summary_schema_errors(
     errors.extend(_all_lanes_lane_schema_errors(label, summary.get("lanes")))
     errors.extend(_all_lanes_route_canary_cross_lane_errors(label, summary.get("lanes")))
     required_domains = summary.get("required_domains")
+    supported_launch_domains = summary.get("supported_launch_domains")
+    unsupported_launch_domains = summary.get("unsupported_launch_domains")
     lanes = summary.get("lanes")
     if (
         isinstance(required_domains, list)
         and all(type(domain) is int for domain in required_domains)
+        and isinstance(supported_launch_domains, list)
+        and all(type(domain) is int for domain in supported_launch_domains)
+        and isinstance(unsupported_launch_domains, list)
+        and all(type(domain) is int for domain in unsupported_launch_domains)
         and isinstance(lanes, list)
         and all(
             isinstance(lane, dict) and type(lane.get("domain")) is int
@@ -9788,9 +9928,33 @@ def _all_lanes_summary_schema_errors(
         if len(set(lane_domains)) != len(lane_domains):
             errors.append(f"{label} lanes contain duplicate domains")
         expected_domains = list(ALL_LANES_REQUIRED_DOMAINS)
+        expected_supported_launch_domains = list(ALL_LANES_SUPPORTED_LAUNCH_DOMAINS)
+        expected_unsupported_launch_domains = list(ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS)
         if required_domains != expected_domains:
             errors.append(
                 f"{label} required_domains must be the production remote domains"
+            )
+        if supported_launch_domains != expected_supported_launch_domains:
+            errors.append(
+                f"{label} supported_launch_domains must be the supported launch remote domains"
+            )
+        if unsupported_launch_domains != expected_unsupported_launch_domains:
+            errors.append(
+                f"{label} unsupported_launch_domains must be the diagnostic unsupported remote domains"
+            )
+        if len(set(supported_launch_domains)) != len(supported_launch_domains):
+            errors.append(f"{label} supported_launch_domains contains duplicate domains")
+        if len(set(unsupported_launch_domains)) != len(unsupported_launch_domains):
+            errors.append(f"{label} unsupported_launch_domains contains duplicate domains")
+        if set(supported_launch_domains).intersection(unsupported_launch_domains):
+            errors.append(
+                f"{label} supported_launch_domains and unsupported_launch_domains must be disjoint"
+            )
+        if sorted(supported_launch_domains + unsupported_launch_domains) != sorted(
+            required_domains
+        ):
+            errors.append(
+                f"{label} supported_launch_domains plus unsupported_launch_domains must match required_domains"
             )
         if lane_domains != expected_domains:
             errors.append(f"{label} lane domains must be the production remote domains")
@@ -10373,6 +10537,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_sdk_receipt_metadata_guard_inventory_errors())
     errors.extend(_ethereum_native_receipt_finality_guard_inventory_errors())
     errors.extend(_ethereum_noncanonical_chain_id_inventory_errors())
+    errors.extend(_sccp_launch_scope_constant_inventory_errors())
     errors.extend(_ethereum_beacon_rest_finalized_header_shape_inventory_errors())
     errors.extend(_ethereum_beacon_rest_execution_payload_binding_inventory_errors())
     errors.extend(_ethereum_sync_committee_roster_inventory_errors())

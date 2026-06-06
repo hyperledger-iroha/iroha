@@ -805,19 +805,36 @@ track detailed unfinished engineering work.
   the transaction-gossip frame-cap probe now uses a fixed checked Ed25519 seed
   instead of drawing a runtime dummy key;
   Private Kaigi fee-spend execution now derives its synthetic fee-payer account
-  through checked Ed25519 seed expansion from the action hash;
+  through checked Ed25519 seed expansion from the action hash; SoraFS hybrid
+  KEM derived material now binds the recipient public keys and encapsulated
+  public transcript components through length-prefixed HKDF input with checked
+  capacity accounting, and SoraNet session-key HKDF extraction now
+  domain-separates and length-prefixes IKM components before expansion, with
+  NK2/NK3 interop vectors refreshed under both checked-in fixture bundles;
+  SoraNet deterministic SHAKE expansion now also frames its domain, label, part
+  count, and every absorbed component before deriving deterministic KEM,
+  simulated ML-DSA, dual-mix, or Noise-seed material, with checked-in fixture
+  bundles regenerated from the framed outputs;
   `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
-  public/private key formatting, `Signature::try_new` now routes SM2 through
-  checked private-key rebuild/signing helpers and SM2 key-pair/public-key
-  derivation now routes through `try_public_key`, SM2 private-key byte export now
-  exposes `PrivateKey::try_to_bytes` and routes exposed private-key multihash
-  formatting through checked payload extraction, secp256k1 message signing now
-  exposes `try_sign` and routes `Signature::try_new` through the fallible helper,
-  and secp256k1 recoverable prehash signing now checks the low-S recovery-id
-  parity flip before emitting EVM-compatible signatures; SM2 embedded-distid
-  payload decoding now returns `ParseError` for short length prefixes instead of
-  relying on a panic-only fixed-slice assertion, SM2 PEM export now wraps the
-  already encoded base64 `String` without a panic-only UTF-8 reconversion, SM2
+  public/private key formatting, public-key Norito serialization now routes
+  full-to-compact conversion through a checked payload extractor, and
+  `PublicKey::to_prefixed_string` now reuses the malformed compact-key marker
+  instead of unwrapping invalid internal key state, while `ExposedPrivateKey`
+  display and prefixed compatibility formatting now return a non-secret
+  invalid-private-key marker instead of unwrapping checked private-key
+  formatting; `Signature::try_new` now routes SM2 through checked private-key
+  rebuild/signing helpers and SM2 key-pair/public-key derivation now routes
+  through `try_public_key`, SM2 concrete public-key prefixed formatting now
+  returns a deterministic invalid-key marker instead of unwrapping checked
+  multihash encoding, SM2 private-key byte export now exposes
+  `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
+  through checked payload extraction, secp256k1 message signing now exposes
+  `try_sign` and routes `Signature::try_new` through the fallible helper, and
+  secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
+  flip before emitting EVM-compatible signatures; SM2 embedded-distid payload
+  decoding now returns `ParseError` for short length prefixes instead of relying
+  on a panic-only fixed-slice assertion, SM2 PEM export now wraps the already
+  encoded base64 `String` without a panic-only UTF-8 reconversion, SM2
   DER signature export now exposes `try_as_der` with checked short-form length
   encoding and routes the OpenSSL bridge through that fallible exporter before
   DER parsing, SM4-CCM now checks tag, nonce, AAD, payload, and counter-block
@@ -1542,6 +1559,20 @@ track detailed unfinished engineering work.
   pin-registry suite, Torii storage-pin/discovery suite, and integration gateway
   policy/conformance filter. The pass is green after the paid-pin adversarial
   coverage and proof-token hardening work.
+- Completed 2026-06-06: Torii DA commitment proof/verify routes are now pinned
+  at handler level with a committed block-backed Merkle proof round trip and a
+  tampered-root rejection. The OpenAPI and MCP descriptions now describe the
+  Merkle proof contract instead of the stale placeholder wording.
+- Completed 2026-06-06: Torii DA pin-intent proof/verify handlers are now
+  pinned against the live indexed `DaPinStore`: handler coverage proves by
+  lane/epoch/sequence, verifies the returned block location payload, rejects a
+  tampered indexed location, and the OpenAPI/MCP descriptions now describe the
+  indexed-location contract instead of placeholder proof language.
+- Completed 2026-06-06: Torii SoraFS CAR range coverage now includes a
+  non-full middle-of-manifest window spanning exactly two aligned chunks. The
+  regression verifies the streamed CAR against the manifest-bound byte range
+  and pins `Content-Range` plus `X-Sora-Chunk-Range` metadata for partial
+  responses.
 - SoraFS proof-token decode now uses checked cursor reads for fixed-width
   moderation-token fields with truncated-prefix regression coverage while
   rejecting unrepresentable issued/expiry UNIX-second fields before
@@ -1554,10 +1585,9 @@ track detailed unfinished engineering work.
   header encoding/decoding now uses the `base64` crate's checked no-alloc slice
   helpers instead of manual capacity arithmetic and panic-only buffer
   assertions.
-- Remaining breadth should include historical fee receipt acceptance after
-  governance pricing changes, manifest envelope validation, admission
-  fail-closed, streaming CAR range coverage, and SDK validation once Java is
-  available.
+- Remaining breadth should include SDK validation once Java is available and
+  any wider admission/manifest-envelope/full-corridor reruns not covered by the
+  current focused Torii SoraFS checks.
 
 ## Norito columnar and streaming validation follow-ups
 
@@ -2999,7 +3029,7 @@ track detailed unfinished engineering work.
     command still needs an uncontended end-to-end pass. The static OpenAPI JSON,
     version index, and unsigned latest/current manifests are refreshed and
     verify under the explicit first-release unsigned corridor.
-- Carry the Torii exposure-hardening slice through the next clean Cargo
+- Carry the Torii exposure-hardening slice through the remaining workspace
   validation corridor.
   - `cargo fmt --all` and `cargo check -p iroha_config -p iroha_torii` are
     green as of 2026-05-02 for the CORS/pre-auth, MCP tool-effect,
@@ -3013,6 +3043,14 @@ track detailed unfinished engineering work.
     and `cargo test -p iroha_torii tool_effects --lib` with
     `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-continue`. Fold the slice into the
     next workspace clippy/test corridor when validation budget allows.
+  - Completed 2026-06-06: app-facing caller-scoped account reads no longer
+    accept bare `X-Iroha-Account` as caller identity. Torii now requires
+    canonical request signatures or witnesses for private caller visibility,
+    while unsigned reads stay limited to public dataspace routes.
+  - Completed 2026-06-06: repaired the stale SCCP, SoraFS, ISO20022, ZK IVM,
+    and ZK prover fixtures that no longer matched production admission rules;
+    `cargo test -p iroha_torii --lib -- --nocapture` is green with `2275`
+    passed and `2` ignored.
 - Carry the Torii first-release API cleanup through the remaining release
   corridor.
   - The route/API/error-envelope implementation, focused Rust sidecar/client

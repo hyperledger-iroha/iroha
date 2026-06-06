@@ -4288,6 +4288,7 @@ public static class EthereumMainnetSccp
             string text => text,
             byte[] bytes => bytes.ToArray(),
             IReadOnlyDictionary<string, object?> dictionary => SnapshotDictionary(dictionary),
+            IReadOnlyList<string> list => list.ToArray(),
             IReadOnlyList<object?> list => list.Select(SnapshotValue).ToArray(),
             System.Collections.IDictionary dictionary => SnapshotDictionary(dictionary),
             System.Collections.IEnumerable enumerable => SnapshotEnumerable(enumerable),

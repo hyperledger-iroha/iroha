@@ -6624,6 +6624,22 @@ pub struct SccpRouteManifestDestinationRolloutDto {
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
     pub verifier_key_hash: String,
+    /// Optional hex-encoded browser/local prover artifact digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub proof_artifact_hash: Option<String>,
+    /// Optional legacy alias for `proof_artifact_hash`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub prover_artifact_hash: Option<String>,
+    /// Optional legacy alias for `proof_artifact_hash`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub circuit_artifact_hash: Option<String>,
+    /// Optional hex-encoded proving key digest.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub proving_key_hash: Option<String>,
     /// Canonical destination binding hash.
     pub destination_binding_hash: String,
     /// Canonical destination binding key.
@@ -6998,6 +7014,10 @@ fn sccp_route_manifest_dto(
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             verifier_code_hash: manifest.verifier_code_hash.clone(),
             verifier_key_hash: manifest.verifier_key_hash.clone(),
+            proof_artifact_hash: manifest.proof_artifact_hash.clone(),
+            prover_artifact_hash: manifest.proof_artifact_hash.clone(),
+            circuit_artifact_hash: manifest.proof_artifact_hash.clone(),
+            proving_key_hash: manifest.proving_key_hash.clone(),
             destination_binding_hash: manifest.destination_binding_hash.clone(),
             destination_binding_key: manifest.destination_binding_key.clone(),
         },
@@ -11022,7 +11042,8 @@ mod sccp_message_backend_tests {
         )
         .expect_err("TRON destination bindings must wait for their lane launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
 
         let err = validate_sccp_destination_binding_matches_configured_launch_policy(
@@ -11034,19 +11055,20 @@ mod sccp_message_backend_tests {
             "validated strict-disabled destination bindings must still wait for lane launch",
         );
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
     }
 
     #[test]
-    fn configured_bsc_mainnet_lane_launch_accepts_bsc_without_all_lanes() {
+    fn configured_ethereum_mainnet_lane_launch_accepts_eth_without_all_lanes() {
         let mut zk = iroha_core::state::default_zk_config();
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
         zk.sccp_destination_rollouts.clear();
         zk.sccp_route_allowlists.clear();
 
-        let domain = iroha_sccp::SCCP_DOMAIN_BSC;
+        let domain = iroha_sccp::SCCP_DOMAIN_ETH;
         let material = test_sccp_source_verifier_material_for_domain(domain, 0x20);
         let deployment = test_sccp_source_adapter_deployment_for_domain(domain, &material, 0x20);
         let rollout = test_sccp_destination_rollout_for_domain(domain, 0x20);
@@ -11065,9 +11087,9 @@ mod sccp_message_backend_tests {
             .push(test_actual_sccp_route_allowlist(&allowlist));
 
         sccp_configured_launch_ready_for_domain(&zk, domain)
-            .expect("complete BSC lane should pass without other lanes");
+            .expect("complete ETH lane should pass without other lanes");
         let err = sccp_configured_all_lanes_launch_ready(&zk)
-            .expect_err("single BSC lane must not satisfy all-lanes diagnostics");
+            .expect_err("single ETH lane must not satisfy all-lanes diagnostics");
         assert!(
             conversion_message(&err)
                 .is_some_and(|message| { message.contains("SCCP all-lanes launch policy") })
@@ -11075,12 +11097,13 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn configured_bsc_mainnet_lane_launch_rejects_eth() {
+    fn configured_ethereum_mainnet_lane_launch_rejects_bsc() {
         let zk = test_configured_sccp_all_lanes_zk_config();
-        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_ETH)
-            .expect_err("ETH must wait until its lane policy opens");
+        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_BSC)
+            .expect_err("BSC must wait until its lane policy opens");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 1")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 2")
         }));
     }
 
@@ -12112,6 +12135,8 @@ mod sccp_message_backend_tests {
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
+            proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
+            proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
             destination_binding_key: "evm:0:2:test-binding".to_owned(),
             destination_binding_hash: format!("0x{}", "47".repeat(32)),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -12191,6 +12216,24 @@ mod sccp_message_backend_tests {
         assert_eq!(
             dto.evm_verifier_address.as_deref(),
             Some("0x4444444444444444444444444444444444444444")
+        );
+        let proof_artifact_hash = format!("0x{}", "4c".repeat(32));
+        let proving_key_hash = format!("0x{}", "4d".repeat(32));
+        assert_eq!(
+            dto.destination_rollout.proof_artifact_hash.as_deref(),
+            Some(proof_artifact_hash.as_str())
+        );
+        assert_eq!(
+            dto.destination_rollout.prover_artifact_hash.as_deref(),
+            Some(proof_artifact_hash.as_str())
+        );
+        assert_eq!(
+            dto.destination_rollout.circuit_artifact_hash.as_deref(),
+            Some(proof_artifact_hash.as_str())
+        );
+        assert_eq!(
+            dto.destination_rollout.proving_key_hash.as_deref(),
+            Some(proving_key_hash.as_str())
         );
     }
 
@@ -12331,8 +12374,14 @@ mod sccp_message_backend_tests {
             iroha_sccp::decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)
                 .expect("diagnostic artifact decodes");
         assert!(iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(&artifact));
-        assert_eq!(proof.range.start_height, 51);
-        assert_eq!(proof.range.end_height, 51);
+        assert_eq!(
+            proof.range.start_height,
+            artifact.public_inputs.finality_height
+        );
+        assert_eq!(
+            proof.range.end_height,
+            artifact.public_inputs.finality_height
+        );
         assert_eq!(
             proof.manifest_hash,
             iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed)
@@ -49946,8 +49995,8 @@ mod query_endpoint_tests {
         // Avoid importing iroha_schema here to keep dev-deps minimal in this crate's tests.
         type Ident = String;
         let backend: Ident = "halo2/ipa".into();
-        let circuit_id = "tiny-add";
-        let envelope_circuit_id = "halo2/ipa:tiny-add";
+        let circuit_id = "tiny-add-public";
+        let envelope_circuit_id = "halo2/ipa:tiny-add-public";
         let seed_fixture = halo2_fixture_envelope(envelope_circuit_id, [0; 32]);
         let vk_box = seed_fixture
             .vk_box(backend.clone())

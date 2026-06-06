@@ -1264,6 +1264,48 @@ def active_evm_live_chain_id(report):
     }.get(report.ACTIVE_LAUNCH_CHAIN)
 
 
+def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id() -> None:
+    """Active launch metadata must not accept RPC-quantity or padded chain ids."""
+
+    report = load_report_module()
+    label = f"domain {report.ACTIVE_LAUNCH_DOMAIN} ({report.ACTIVE_LAUNCH_CHAIN})"
+    expected_chain_id = active_evm_live_chain_id(report)
+    assert expected_chain_id is not None
+    expected_source_blocker = (
+        f"{label}: {report.ACTIVE_LAUNCH_DISPLAY} source live eth_chainId "
+        f"must be canonical decimal chain id {expected_chain_id}"
+    )
+    expected_destination_blocker = (
+        f"{label}: {report.ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId "
+        f"must be canonical decimal chain id {expected_chain_id}"
+    )
+
+    valid_lane = {
+        "evm_live_metadata": {
+            "source_rpc_chain_id": expected_chain_id,
+            "source_block_tag": "finalized",
+            "destination_rpc_chain_id": expected_chain_id,
+            "destination_block_tag": "finalized",
+        },
+    }
+    assert report._active_launch_evm_live_metadata_blockers(label, valid_lane) == []
+
+    for noncanonical_chain_id in ("0x1", "01"):
+        lane = {
+            "evm_live_metadata": {
+                "source_rpc_chain_id": noncanonical_chain_id,
+                "source_block_tag": "finalized",
+                "destination_rpc_chain_id": noncanonical_chain_id,
+                "destination_block_tag": "finalized",
+            },
+        }
+
+        blockers = report._active_launch_evm_live_metadata_blockers(label, lane)
+
+        assert expected_source_blocker in blockers
+        assert expected_destination_blocker in blockers
+
+
 def fixed_hex32(seed: int) -> str:
     """Return a non-zero 32-byte hex fixture."""
 
@@ -4450,11 +4492,13 @@ def test_release_readiness_report_blocks_active_launch_evm_live_metadata_drift(
     governed = checklist["governed_deployment_evidence"]
     assert governed["ready"] is False
     assert (
-        "domain 1 (eth): Ethereum mainnet source live eth_chainId must be 1 (0x1)"
+        "domain 1 (eth): Ethereum mainnet source live eth_chainId must be "
+        "canonical decimal chain id 1"
         in governed["blockers"]
     )
     assert (
-        "domain 1 (eth): Ethereum mainnet destination live eth_chainId must be 1 (0x1)"
+        "domain 1 (eth): Ethereum mainnet destination live eth_chainId must be "
+        "canonical decimal chain id 1"
         in governed["blockers"]
     )
     assert (

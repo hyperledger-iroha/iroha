@@ -1631,6 +1631,11 @@ impl PublicKeyCompact {
         let algorithm = self.try_algorithm()?;
         PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
     }
+
+    fn try_from_full(public_key: &PublicKeyFull) -> Result<Self, ParseError> {
+        let payload = public_key.try_payload()?;
+        Ok(Self::new(public_key.algorithm(), payload.as_ref()))
+    }
 }
 
 impl From<PublicKeyFull> for PublicKeyCompact {
@@ -1642,10 +1647,11 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKeyCompact {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        let compact = PublicKeyCompact::from(
-            self.validated_full()
-                .map_err(|err| norito::core::Error::Message(err.to_string()))?,
-        );
+        let full = self
+            .validated_full()
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        let compact = PublicKeyCompact::try_from_full(&full)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
             &compact.algorithm_and_payload,
             writer,
@@ -1653,14 +1659,16 @@ impl norito::core::NoritoSerialize for PublicKeyCompact {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
             &compact.algorithm_and_payload,
         )
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
             &compact.algorithm_and_payload,
         )
@@ -2071,17 +2079,20 @@ impl norito::core::NoritoSerialize for PublicKey {
         let full = self
             .validated_full()
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let compact = PublicKeyCompact::from(full);
+        let compact = PublicKeyCompact::try_from_full(&full)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         norito::core::NoritoSerialize::serialize(&compact, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         norito::core::NoritoSerialize::encoded_len_hint(&compact)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         norito::core::NoritoSerialize::encoded_len_exact(&compact)
     }
 }
@@ -2571,6 +2582,10 @@ impl FromStr for ExposedPrivateKey {
 }
 
 impl ExposedPrivateKey {
+    fn malformed_private_key_marker(&self) -> String {
+        format!("invalid-private-key:{}", self.0.algorithm().as_static_str())
+    }
+
     /// Format as a canonical bare private-key multihash hex string.
     ///
     /// # Errors
@@ -2587,7 +2602,7 @@ impl ExposedPrivateKey {
 
     fn normalize(&self) -> String {
         self.try_to_multihash_string()
-            .expect("private key must encode to a canonical multihash string")
+            .unwrap_or_else(|_| self.malformed_private_key_marker())
     }
 
     #[cfg(not(feature = "ffi_import"))]
@@ -2607,7 +2622,7 @@ impl ExposedPrivateKey {
     /// Format as an algorithm-prefixed multihash string (e.g., "ml-dsa:...").
     pub fn to_prefixed_string(&self) -> String {
         self.try_to_prefixed_string()
-            .expect("private key must encode to an algorithm-prefixed multihash string")
+            .unwrap_or_else(|_| self.malformed_private_key_marker())
     }
 }
 
@@ -3644,6 +3659,25 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "ffi_import"))]
+    fn exposed_private_key_compat_formatters_match_checked_outputs() {
+        let (_, private_key) = KeyPair::try_from_seed(vec![0x55; 32], Algorithm::Ed25519)
+            .expect("checked Ed25519 seeded keypair")
+            .into_parts();
+        let exposed = ExposedPrivateKey(private_key);
+        let canonical = exposed
+            .try_to_multihash_string()
+            .expect("checked private multihash formatting");
+        let prefixed = exposed
+            .try_to_prefixed_string()
+            .expect("checked private prefixed formatting");
+
+        assert_eq!(exposed.to_string(), canonical);
+        assert_eq!(exposed.to_prefixed_string(), prefixed);
+        assert!(format!("{exposed:?}").contains(&canonical));
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_roundtrip_via_canonical_decode() {
         let pk: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -3732,6 +3766,22 @@ mod tests {
             algorithm_and_payload: ConstVec::new(Vec::new()),
         };
         assert!(PublicKeyFull::try_from(&missing_tag).is_err());
+    }
+
+    #[test]
+    fn public_key_compact_try_from_full_preserves_checked_payload() {
+        let public_key = KeyPair::try_from_seed(vec![0x56; 32], Algorithm::Ed25519)
+            .expect("checked Ed25519 seeded keypair")
+            .public_key()
+            .clone();
+        let (algorithm, payload) = public_key
+            .try_to_bytes()
+            .expect("generated public key must be well-formed");
+        let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
+        let compact = PublicKeyCompact::try_from_full(&full).expect("checked compact conversion");
+
+        assert_eq!(compact.try_algorithm().expect("algorithm tag"), algorithm);
+        assert_eq!(compact.try_payload().expect("payload"), payload);
     }
 
     #[test]
