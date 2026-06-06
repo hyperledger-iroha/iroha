@@ -11,8 +11,6 @@ use std::{
 };
 
 use bytes::{Buf, BufMut, BytesMut};
-#[cfg(not(feature = "noise_handshake"))]
-use iroha_crypto::SessionKey;
 #[cfg(feature = "noise_handshake")]
 use iroha_crypto::blake2::{
     Blake2bVar,
@@ -7191,8 +7189,7 @@ mod state {
                 }
                 #[cfg(not(feature = "noise_handshake"))]
                 {
-                    let session_key = SessionKey::new(secrets.session_key);
-                    Cryptographer::new(&session_key)?
+                    Cryptographer::new(&secrets.session_key)?
                 }
             };
             let kx = K::new();
@@ -7341,8 +7338,7 @@ mod state {
                 }
                 #[cfg(not(feature = "noise_handshake"))]
                 {
-                    let session_key = SessionKey::new(secrets.session_key);
-                    Cryptographer::new(&session_key)?
+                    Cryptographer::new(&secrets.session_key)?
                 }
             };
             let kx = K::new();

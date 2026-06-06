@@ -5355,7 +5355,10 @@ fn sccp_capabilities_operation() -> Map {
         Value::String(
             "Returns the local SCCP domain id, legacy proof backends, generic message proof \
              family, supported codecs, and the per-counterparty backend labels relayers should \
-             use for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+             use for the current launch networks: Ethereum, BSC, Solana, TON, and Tron. \
+             Substrate/Polkadot-family networks, including SORA2, SORA Kusama, and SORA \
+             Polkadot, are not supported for now; any helper metadata for those lanes is \
+             diagnostic/backlog-only."
                 .to_owned(),
         ),
     );
@@ -5390,7 +5393,10 @@ fn sccp_manifests_operation() -> Map {
         Value::String(
             "Returns the typed per-counterparty SCCP proof manifests used to derive chain-specific \
              backend labels, verifier targets, finality models, public inputs, and manifest seeds \
-             for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+             for the current launch networks: Ethereum, BSC, Solana, TON, and Tron. \
+             Substrate/Polkadot-family networks, including SORA2, SORA Kusama, and SORA \
+             Polkadot, are not supported for now; any helper metadata for those lanes is \
+             diagnostic/backlog-only."
                 .to_owned(),
         ),
     );

@@ -161,6 +161,8 @@ Validation rejects unsupported versions with
 - FHE execution policy:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - parameter-set binding must match by `(param_set, version)`.
   - `max_multiplication_depth` must not exceed parameter-set depth.
   - policy admission rejects `Proposed` or `Withdrawn` parameter-set lifecycle.
@@ -178,7 +180,15 @@ Validation rejects unsupported versions with
   - runtime execution enforces input commitment equality against stored
     ciphertext payload bytes before Add, Multiply, RotateLeft, or Bootstrap.
     `RotateLeft` is slot rotation by `rotation_steps`; `Bootstrap` requires the
-    registered bootstrap key for the job's evaluation-key bundle.
+    registered bootstrap key for the job's evaluation-key bundle plus a signed
+    `bootstrap_key_zero_refresh_proof` attachment whose statement hash matches
+    the policy-bound transcript digest over the BFV parameter set, public key,
+    evaluation-key bundle digest, refresh-transcript digest, bootstrap
+    transcript seed/key id/round capacity, and refresh ciphertexts. Its
+    verifier record must be active for the canonical Soracloud STARK circuit.
+    Current generated `BfvBootstrapKey` material advertises `RefreshOnlyV1`;
+    reserved full-bootstrap mode is rejected until BFV bootstrapping circuit
+    material is represented and verified.
 - Decryption authority policy:
   - `approver_ids` must be non-empty, unique, and strictly lexicographically sorted.
   - `ClientHeld` mode requires exactly one approver, `approver_quorum=1`,

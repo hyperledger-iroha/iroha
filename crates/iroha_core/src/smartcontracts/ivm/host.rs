@@ -68,6 +68,10 @@ use iroha_data_model::{
         asset::prelude::FindAssetById, error::QueryExecutionFail,
     },
     smart_contract::{ContractAddress, ContractAlias, ContractInstance},
+    soracloud::{
+        SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudHostOperationV1,
+        SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
+    },
     subscription::{
         ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata,
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
@@ -1456,6 +1460,102 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 decode_from_bytes(&owned)
             })
             .map_err(|_| ivm::VMError::DecodeError)
+    }
+
+    fn soracloud_operation_for_syscall(number: u32) -> Option<SoracloudHostOperationV1> {
+        match number {
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE => {
+                Some(SoracloudHostOperationV1::ReadCommittedState)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => {
+                Some(SoracloudHostOperationV1::EmitStateMutation)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => {
+                Some(SoracloudHostOperationV1::EmitMailboxMessage)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL => {
+                Some(SoracloudHostOperationV1::AppendJournal)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => {
+                Some(SoracloudHostOperationV1::PublishCheckpoint)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET => {
+                Some(SoracloudHostOperationV1::ReadSecret)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL => {
+                Some(SoracloudHostOperationV1::ReadCredential)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH => {
+                Some(SoracloudHostOperationV1::EgressFetch)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG => {
+                Some(SoracloudHostOperationV1::ReadConfig)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
+                Some(SoracloudHostOperationV1::ReadSecretEnvelope)
+            }
+            _ => None,
+        }
+    }
+
+    fn soracloud_payload_matches_operation(
+        payload: &SoracloudHostRequestPayloadV1,
+        operation: SoracloudHostOperationV1,
+    ) -> bool {
+        matches!(
+            (operation, payload),
+            (
+                SoracloudHostOperationV1::ReadCommittedState,
+                SoracloudHostRequestPayloadV1::ReadCommittedState(_)
+            ) | (
+                SoracloudHostOperationV1::EmitStateMutation,
+                SoracloudHostRequestPayloadV1::EmitStateMutation(_)
+            ) | (
+                SoracloudHostOperationV1::EmitMailboxMessage,
+                SoracloudHostRequestPayloadV1::EmitMailboxMessage(_)
+            ) | (
+                SoracloudHostOperationV1::AppendJournal,
+                SoracloudHostRequestPayloadV1::AppendJournal(_)
+            ) | (
+                SoracloudHostOperationV1::PublishCheckpoint,
+                SoracloudHostRequestPayloadV1::PublishCheckpoint(_)
+            ) | (
+                SoracloudHostOperationV1::ReadConfig,
+                SoracloudHostRequestPayloadV1::ReadConfig(_)
+            ) | (
+                SoracloudHostOperationV1::ReadSecretEnvelope,
+                SoracloudHostRequestPayloadV1::ReadSecretEnvelope(_)
+            ) | (
+                SoracloudHostOperationV1::ReadSecret,
+                SoracloudHostRequestPayloadV1::ReadSecret(_)
+            ) | (
+                SoracloudHostOperationV1::ReadCredential,
+                SoracloudHostRequestPayloadV1::ReadCredential(_)
+            ) | (
+                SoracloudHostOperationV1::EgressFetch,
+                SoracloudHostRequestPayloadV1::EgressFetch(_)
+            )
+        )
+    }
+
+    fn reject_soracloud_syscall(vm: &IVM, number: u32) -> Result<u64, ivm::VMError> {
+        let expected = Self::soracloud_operation_for_syscall(number)
+            .ok_or(ivm::VMError::UnknownSyscall(number))?;
+        let tlv = Self::decode_pointer_tlv(vm, vm.register(10), PointerType::SoracloudRequest)?;
+        let request: SoracloudHostRequestEnvelopeV1 =
+            decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+        if request.schema_version != SORACLOUD_HOST_REQUEST_VERSION_V1 {
+            return Err(ivm::VMError::DecodeError);
+        }
+        if request.operation != expected
+            || !Self::soracloud_payload_matches_operation(&request.payload, expected)
+        {
+            return Err(ivm::VMError::DecodeError);
+        }
+        Err(ivm::VMError::metered_not_implemented(
+            ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, tlv.payload.len(), 0),
+            number,
+        ))
     }
 
     /// Create a new host for the given authority.
@@ -7901,6 +8001,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
             }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
+            | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
+            | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
+            | ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
+            | ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL
+            | ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
+                Self::reject_soracloud_syscall(vm, number)
+            }
             // SM helper syscalls are gated by crypto configuration and forwarded to DefaultHost.
             ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
@@ -10579,6 +10691,82 @@ mod pointer_abi_tests {
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
+    }
+
+    fn soracloud_read_config_request() -> SoracloudHostRequestEnvelopeV1 {
+        SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::ReadConfig,
+            payload: SoracloudHostRequestPayloadV1::ReadConfig(
+                iroha_data_model::soracloud::SoracloudReadConfigRequestV1 {
+                    config_name: "runtime".to_owned(),
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn soracloud_syscalls_validate_request_then_reject_until_runtime_bound() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let request = soracloud_read_config_request();
+        let request_bytes = norito_blob(&request);
+        let request_ptr = store_tlv(&mut vm, PointerType::SoracloudRequest, &request_bytes);
+        vm.set_register(10, request_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &mut vm)
+            .expect_err("Soracloud runtime host is not bound in CoreHostImpl");
+        assert!(matches!(
+            err.as_unmetered(),
+            ivm::VMError::NotImplemented { syscall }
+                if *syscall == ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
+        ));
+        assert_eq!(
+            err.metered_gas(),
+            Some(ivm::gas::syscall_byte_gas(
+                ivm::gas::G_SORACLOUD,
+                request_bytes.len(),
+                0,
+            ))
+        );
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
+    fn soracloud_syscalls_reject_wrong_pointer_type() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let request = soracloud_read_config_request();
+        let request_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&request));
+        vm.set_register(10, request_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &mut vm)
+            .expect_err("wrong pointer type must fail before runtime rejection");
+        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
+    fn soracloud_syscalls_reject_operation_mismatch() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let request_ptr = store_tlv(
+            &mut vm,
+            PointerType::SoracloudRequest,
+            &norito_blob(&soracloud_read_config_request()),
+        );
+        vm.set_register(10, request_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET, &mut vm)
+            .expect_err("operation mismatch must fail before runtime rejection");
+        assert!(matches!(err, ivm::VMError::DecodeError));
+        assert!(host.queued.is_empty());
     }
 
     fn assert_create_role_syscall_queues_instruction(authority: AccountId) {

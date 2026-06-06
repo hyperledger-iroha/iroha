@@ -166,6 +166,8 @@ I18НИ00000061Х.
 - FHE башҡарыу сәйәсәте:
   - I18НИ00000104Х.
   - I18НИ00000105Х.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - параметрҙар йыйылмаһы бәйләү `(param_set, version)` тура килергә тейеш.
   - `max_multiplication_depth` параметрҙар ҡуйылған тәрәнлектән артмаҫҡа тейеш.
   - сәйәсәт ҡабул итеү `Proposed` йәки `Withdrawn` параметрҙары ҡуйылған йәшәү циклын кире ҡаға.

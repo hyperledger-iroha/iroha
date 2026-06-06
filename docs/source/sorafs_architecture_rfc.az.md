@@ -364,7 +364,7 @@ the signed envelopes.
 cryptographic framing for SF-4b. The helper encapsulates X25519 (`StaticSecret`
 → ephemeral public) and ML-KEM-768 (Kyber) material, feeds the concatenated
 secrets through HKDF-SHA3-256 with the domain strings
-`"sorafs.hybrid.kem.hkdf:v1"`/`"sorafs.hybrid.kem.material:v1"`/`"sorafs.hybrid.kem.rekey:v1"`,
+`"sorafs.hybrid.kem.hkdf:transcript-v1"`/`"sorafs.hybrid.kem.material:transcript-v1"`/`"sorafs.hybrid.kem.rekey:transcript-v1"`,
 and derives:
 
 - `encryption_key` — 32-byte ChaCha20-Poly1305 key used to seal the manifest or
@@ -378,7 +378,7 @@ The envelope serialises to Norito as:
 | Field | Type | Description |
 |-------|------|-------------|
 | `version` | `u8` | `1` for the initial release. |
-| `suite` | `String` | Canonical suite label (`"x25519-mlkem768-chacha20poly1305"`). |
+| `suite` | `String` | Canonical suite label (`"x25519-mlkem768-chacha20poly1305-transcript-v1"`). |
 | `kem.ephemeral_public` | `Vec<u8>` | Sender X25519 ephemeral public key. |
 | `kem.kyber_ciphertext` | `Vec<u8>` | Kyber encapsulation ciphertext. |
 | `nonce` | `[u8; 12]` | ChaCha20-Poly1305 nonce generated per envelope. |
@@ -392,7 +392,7 @@ anchoring the ciphertext to both the manifest digest and the CAR summary. The
 `--hybrid-envelope-{out,json-out}` so publishers can generate Norito-encoded
 `HybridPayloadEnvelopeV1` artefacts alongside manifests and CARs. The helper
 automatically adds `manifest.requires_envelope=true` and
-`manifest.hybrid_suite=x25519-mlkem768-chacha20poly1305` metadata, emits binary
+`manifest.hybrid_suite=x25519-mlkem768-chacha20poly1305-transcript-v1` metadata, emits binary
 and JSON envelopes on demand, and records envelope fingerprints in the CLI
 report for downstream tooling. Gateways and SDKs reuse the same helper so
 decryptors can round-trip without bespoke logic.

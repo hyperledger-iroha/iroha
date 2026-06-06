@@ -39,7 +39,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::KeyPair;
+use crate::{KeyPair, SessionKey};
 
 /// Domain separation tag for transcript hashing.
 const TRANSCRIPT_DOMAIN: &[u8] = b"soranet.transcript.v1";
@@ -51,9 +51,9 @@ const HYBRID_CLIENT_HELLO_TYPE: u8 = 0x11;
 const HYBRID_RELAY_RESPONSE_TYPE: u8 = 0x12;
 const PQFS_CLIENT_COMMIT_TYPE: u8 = 0x21;
 const PQFS_RELAY_RESPONSE_TYPE: u8 = 0x22;
-const NK2_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk2.confirm";
-const NK3_PRIMARY_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk3.confirm.primary";
-const NK3_FORWARD_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk3.confirm.forward";
+const NK2_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk2.confirm.v1";
+const NK3_PRIMARY_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk3.confirm.primary.v1";
+const NK3_FORWARD_CONFIRM_LABEL: &[u8] = b"soranet.handshake.nk3.confirm.forward.v1";
 
 const DILITHIUM3_SIGNATURE_LEN: usize = 2701;
 const ED25519_SIGNATURE_LEN: usize = 64;
@@ -92,17 +92,17 @@ const CAPABILITY_REQUIRED_FLAG: u8 = 0x01;
 #[repr(u8)]
 pub enum HandshakeSuite {
     /// Two-flight hybrid handshake mixing classical and PQ material.
-    Nk2Hybrid = 0x02,
+    Nk2Hybrid = 0x04,
     /// Forward-secure PQ handshake with dual commitments.
-    Nk3PqForwardSecure = 0x03,
+    Nk3PqForwardSecure = 0x05,
 }
 
 impl HandshakeSuite {
     /// Canonical label used when rendering the negotiated handshake flavour.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Nk2Hybrid => "nk2.hybrid",
-            Self::Nk3PqForwardSecure => "nk3.pq_forward_secure",
+            Self::Nk2Hybrid => "nk2.hybrid.v1",
+            Self::Nk3PqForwardSecure => "nk3.pq_forward_secure.v1",
         }
     }
 }
@@ -112,8 +112,8 @@ impl TryFrom<u8> for HandshakeSuite {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0x02 => Ok(Self::Nk2Hybrid),
-            0x03 => Ok(Self::Nk3PqForwardSecure),
+            0x04 => Ok(Self::Nk2Hybrid),
+            0x05 => Ok(Self::Nk3PqForwardSecure),
             other => Err(HarnessError::Validation(format!(
                 "unsupported handshake suite identifier {other:#04x}"
             ))),
@@ -512,6 +512,7 @@ fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
     }
     let mut suites = Vec::with_capacity(cap.value.len());
     let mut ignored = Vec::new();
+    let mut pre_release = Vec::new();
     for &id in &cap.value {
         // Ignore unknown suite identifiers for forward compatibility.
         match HandshakeSuite::try_from(id) {
@@ -521,8 +522,19 @@ fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
                 }
                 suites.push(suite);
             }
+            Err(_) if matches!(id, 0x02 | 0x03) => pre_release.push(id),
             Err(_) => ignored.push(id),
         }
+    }
+    if !pre_release.is_empty() {
+        let rejected = pre_release
+            .iter()
+            .map(|id| format!("{id:#04x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HarnessError::Validation(format!(
+            "pre-release handshake suite identifiers are not accepted: {rejected}"
+        )));
     }
     if suites.is_empty() {
         let unsupported = ignored
@@ -1446,18 +1458,18 @@ fn derive_kem_artifacts(
 ) -> SimulatedKemArtifacts {
     let labels = match variant {
         KemVariant::Primary => KemLabelSet {
-            client: b"soranet.kem.client.public",
-            relay: b"soranet.kem.relay.public",
-            ciphertext: b"soranet.kem.ciphertext",
-            confirmation: b"soranet.kem.confirmation",
-            shared: b"soranet.kem.shared",
+            client: b"soranet.kem.client.public.v1",
+            relay: b"soranet.kem.relay.public.v1",
+            ciphertext: b"soranet.kem.ciphertext.v1",
+            confirmation: b"soranet.kem.confirmation.v1",
+            shared: b"soranet.kem.shared.v1",
         },
         KemVariant::ForwardSecure => KemLabelSet {
-            client: b"soranet.kem.fs.client.public",
-            relay: b"soranet.kem.fs.relay.public",
-            ciphertext: b"soranet.kem.fs.ciphertext",
-            confirmation: b"soranet.kem.fs.confirmation",
-            shared: b"soranet.kem.fs.shared",
+            client: b"soranet.kem.fs.client.public.v1",
+            relay: b"soranet.kem.fs.relay.public.v1",
+            ciphertext: b"soranet.kem.fs.ciphertext.v1",
+            confirmation: b"soranet.kem.fs.confirmation.v1",
+            shared: b"soranet.kem.fs.shared.v1",
         },
     };
 
@@ -1522,17 +1534,19 @@ fn derive_handshake_material(
     let relay_static_public = X25519PublicKey::from(&StaticSecret::from(*relay_static)).to_bytes();
 
     let client_ephemeral_public = {
-        let secret = StaticSecret::from(derive_seed(
-            b"soranet.noise.client.ephemeral",
+        let seed = Zeroizing::new(derive_seed(
+            b"soranet.noise.client.ephemeral.v1",
             &[client_static.as_ref(), params.client_nonce],
         )?);
+        let secret = StaticSecret::from(*seed);
         X25519PublicKey::from(&secret).to_bytes()
     };
     let relay_ephemeral_public = {
-        let secret = StaticSecret::from(derive_seed(
-            b"soranet.noise.relay.ephemeral",
+        let seed = Zeroizing::new(derive_seed(
+            b"soranet.noise.relay.ephemeral.v1",
             &[relay_static.as_ref(), params.relay_nonce],
         )?);
+        let secret = StaticSecret::from(*seed);
         X25519PublicKey::from(&secret).to_bytes()
     };
 
@@ -1591,7 +1605,7 @@ fn build_nk2_artifacts(
     }
     let client_body = client_init.clone();
     let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.client",
+        b"soranet.sig.dilithium.hybrid.client.v1",
         &[
             material.client_static_bytes.as_ref(),
             client_body.as_slice(),
@@ -1601,7 +1615,7 @@ fn build_nk2_artifacts(
     );
     append_len_prefixed(&mut client_init, &client_dilithium)?;
     let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.client",
+        b"soranet.sig.ed25519.hybrid.client.v1",
         material.client_static_bytes.as_ref(),
         &[client_body.as_slice(), transcript_hash],
     )?;
@@ -1621,7 +1635,7 @@ fn build_nk2_artifacts(
     append_len_prefixed(&mut relay_response, transcript_hash)?;
     let relay_body = relay_response.clone();
     let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.relay",
+        b"soranet.sig.dilithium.hybrid.relay.v1",
         &[
             material.relay_static_bytes.as_ref(),
             client_init.as_slice(),
@@ -1632,7 +1646,7 @@ fn build_nk2_artifacts(
     );
     append_len_prefixed(&mut relay_response, &relay_dilithium)?;
     let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.relay",
+        b"soranet.sig.ed25519.hybrid.relay.v1",
         material.relay_static_bytes.as_ref(),
         &[
             client_init.as_slice(),
@@ -1708,7 +1722,7 @@ fn build_nk3_artifacts(
     let forward = &material.forward_secure_kem;
     let fs_commitment = Sha3_256::digest(forward.client_public.as_slice()).to_vec();
     let dual_mix = expand_material(
-        b"soranet.kem.dual.mix",
+        b"soranet.kem.dual.mix.v1",
         &[
             primary.shared_secret.as_slice(),
             forward.shared_secret.as_slice(),
@@ -1738,7 +1752,7 @@ fn build_nk3_artifacts(
     append_len_prefixed(&mut client_commit, &fs_commitment)?;
     let client_body = client_commit.clone();
     let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.client",
+        b"soranet.sig.dilithium.pqfs.client.v1",
         &[
             material.client_static_bytes.as_ref(),
             client_body.as_slice(),
@@ -1748,7 +1762,7 @@ fn build_nk3_artifacts(
     );
     append_len_prefixed(&mut client_commit, &client_dilithium)?;
     let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.client",
+        b"soranet.sig.ed25519.pqfs.client.v1",
         material.client_static_bytes.as_ref(),
         &[client_body.as_slice(), transcript_hash],
     )?;
@@ -1773,7 +1787,7 @@ fn build_nk3_artifacts(
     append_len_prefixed(&mut relay_response, &dual_mix)?;
     let relay_body = relay_response.clone();
     let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.relay",
+        b"soranet.sig.dilithium.pqfs.relay.v1",
         &[
             material.relay_static_bytes.as_ref(),
             client_commit.as_slice(),
@@ -1784,7 +1798,7 @@ fn build_nk3_artifacts(
     );
     append_len_prefixed(&mut relay_response, &relay_dilithium)?;
     let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.relay",
+        b"soranet.sig.ed25519.pqfs.relay.v1",
         material.relay_static_bytes.as_ref(),
         &[
             client_commit.as_slice(),
@@ -2133,15 +2147,15 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-001-success",
         description: "PQ-capable guard echoes ML-KEM-768 + Dilithium3",
-        client_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
-        relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+        client_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
+        relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "2c1f64028dbe42410d1921cd9a316bed4f8f5b52ffb62b4dcaf149048393ca8a",
         relay_nonce_hex: "d5f4f2f9c2b1a39e88bbd3c0a4f9e178d93e7bfacaf0c3e872b712f4a341c9de",
         resume_hash_hex: None,
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "fd92a86d953dfa161d27c79785d495108bfd6991d3ed3baff11752baff4e0bf8",
+        transcript_hash_hex: "33a45f0a24124d1e0cb4363aa9cdc473b81d2c8f81d2965a308d64165130642d",
         warnings: &[],
         expected_outcome: "success",
         expected_alarm: None,
@@ -2150,15 +2164,15 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-002-downgrade",
         description: "Relay strips snnet.pqkem; client aborts with downgrade alarm",
-        client_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
-        relay_hex: "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f1300040badc0de",
+        client_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
+        relay_hex: "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f1300040badc0de",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "1f2e3d4c5b6a79888796a5b4c3d2e1f00112233445566778899aabbccddeeff0",
         relay_nonce_hex: "2b64a7e5c1d3f4b2a9c8d7e6f5a4132233445566778899aabbccddeeff001122",
         resume_hash_hex: None,
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "8ff199b86cbc6a80b38321fbe8f6723ea705141f12bdbc940d573cce39379839",
+        transcript_hash_hex: "7f1160cbab026c202bab2098fb216e82869c053252b3ea99b266fc0e39eaed95",
         warnings: &["relay missing required snnet.pqkem"],
         expected_outcome: "downgrade_abort",
         expected_alarm: Some(AlarmSpec {
@@ -2172,15 +2186,15 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-006-constant-rate",
         description: "Client requires snnet.constant_rate; relay lacking TLV triggers downgrade",
-        client_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe020300020101",
-        relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+        client_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe020300020101",
+        relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "1f2e3d4c5b6a79888796a5b4c3d2e1f00112233445566778899aabbccddeeff0",
         relay_nonce_hex: "2b64a7e5c1d3f4b2a9c8d7e6f5a4132233445566778899aabbccddeeff001122",
         resume_hash_hex: None,
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "78e0c7782b4cfa1a6c0ffe750562776b986be13514ff7b7b42ac5a17936ff680",
+        transcript_hash_hex: "a639850117a5382b48a8f307614be5d05ecdd054b9211eb0e9162bdd5dc71f6c",
         warnings: &["relay missing required capability type=0x0203 (snnet.constant_rate)"],
         expected_outcome: "downgrade_abort",
         expected_alarm: None,
@@ -2189,15 +2203,15 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-003-digest-mismatch",
         description: "Relay echoes PQ TLVs but mutates the transcript commit digest",
-        client_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
-        relay_hex: "01010002010101020002010101030020ea157a5af59deee040cfc371a724790ed969d32295e05fea6a4ff4539449827501040002820302010001010202000200047f140004cafed00d",
+        client_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
+        relay_hex: "01010002010101020002010101030020ea157a5af59deee040cfc371a724790ed969d32295e05fea6a4ff4539449827501040002840502010001010202000200047f140004cafed00d",
         descriptor_commit_hex: "ea157a5af59deee040cfc371a724790ed969d32295e05fea6a4ff45394498275",
         client_nonce_hex: "abcdef0123456789fedcba98765432100123456789abcdef0011223344556677",
         relay_nonce_hex: "00112233445566778899aabbccddeeff112233445566778899aabbccddeeff11",
         resume_hash_hex: None,
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "a5d11071d76f3f367d1c03dcd9fc95200faf7e4c9d69c06f99a5ac2ed4b0917a",
+        transcript_hash_hex: "6db5c6766fa5f1473e62ca8ca2331881c5b4bfc911eb46664705ca2f941a64ab",
         warnings: &["relay transcript commit differs"],
         expected_outcome: "digest_mismatch",
         expected_alarm: None,
@@ -2206,15 +2220,15 @@ const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
         id: "snnet-cap-004-grease",
         description: "Negotiation succeeds while preserving GREASE TLVs for transcript hashing",
-        client_hex: "0101000201010102000201010104000282030202000280047f200004112233447f2100085566778899aabbcc",
-        relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f220004deadc0de7f2300080011223344556677",
+        client_hex: "0101000201010102000201010104000284050202000280047f200004112233447f2100085566778899aabbcc",
+        relay_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f220004deadc0de7f2300080011223344556677",
         descriptor_commit_hex: "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
         client_nonce_hex: "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00",
         relay_nonce_hex: "cafebabefeedface00112233445566778899aabbccddeeff0011223344556677",
         resume_hash_hex: Some("aabbccddeeff00112233445566778899"),
         kem_id: 1,
         sig_id: 1,
-        transcript_hash_hex: "3c2d5722530ebee2557851e6626033a9c90edb8507527d24f163019d98ff3ed8",
+        transcript_hash_hex: "84dc1ad92c7bf6c2ee7ec34a6025895b9c4fbf9f0c35befbba6c22696c50d33f",
         warnings: &[],
         expected_outcome: "success",
         expected_alarm: None,
@@ -2537,7 +2551,7 @@ fn build_session_artifacts(
 
     let dual_mix = if spec.suite == HandshakeSuite::Nk3PqForwardSecure {
         Some(expand_material(
-            b"soranet.kem.dual.mix",
+            b"soranet.kem.dual.mix.v1",
             &[
                 material.primary_kem.shared_secret.as_slice(),
                 material.forward_secure_kem.shared_secret.as_slice(),
@@ -2559,7 +2573,7 @@ fn build_session_artifacts(
 
     Ok(SessionArtifacts {
         handshake,
-        session_key,
+        session_key: session_key.payload().to_vec(),
         session_confirmation: nk2_confirmation,
         primary_shared: material.primary_kem.shared_secret.clone(),
         forward_shared,
@@ -2975,12 +2989,12 @@ pub const DEFAULT_DESCRIPTOR_COMMIT: [u8; 32] =
 
 /// Default capability vector advertised by clients during the handshake.
 pub const DEFAULT_CLIENT_CAPABILITIES: [u8; 40] = hex_literal::hex!(
-    "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe"
+    "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe"
 );
 
 /// Default capability vector advertised by relays during the handshake.
 pub const DEFAULT_RELAY_CAPABILITIES: [u8; 73] = hex_literal::hex!(
-    "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678"
+    "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678"
 );
 
 /// Parameters controlling the runtime handshake.
@@ -3018,7 +3032,7 @@ impl RuntimeParams<'_> {
 /// Shared handshake outcome containing the derived session key and metadata.
 pub struct SessionSecrets {
     /// Session key derived from the hybrid handshake via transcript-bound HKDF.
-    pub session_key: Vec<u8>,
+    pub session_key: SessionKey,
     /// Transcript hash binding descriptor, nonces, and capability TLVs.
     pub transcript_hash: [u8; 32],
     /// Negotiated handshake suite for the runtime session.
@@ -3166,28 +3180,28 @@ pub fn build_client_hello<R: TryCryptoRng>(
     let mut client_nonce = [0u8; 32];
     fill_random(rng, "building client hello nonce", &mut client_nonce)?;
 
-    let mut client_static_bytes = [0u8; NOISE_SECRET_LEN];
+    let mut client_static_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
     fill_random(
         rng,
         "building client static Noise secret",
-        &mut client_static_bytes,
+        client_static_bytes.as_mut(),
     )?;
-    let client_static_secret = StaticSecret::from(client_static_bytes);
+    let client_static_secret = StaticSecret::from(*client_static_bytes);
     let client_static_public = X25519PublicKey::from(&client_static_secret).to_bytes();
 
-    let mut client_ephemeral_bytes = [0u8; NOISE_SECRET_LEN];
+    let mut client_ephemeral_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
     fill_random(
         rng,
         "building client ephemeral Noise secret",
-        &mut client_ephemeral_bytes,
+        client_ephemeral_bytes.as_mut(),
     )?;
-    let client_ephemeral_secret = StaticSecret::from(client_ephemeral_bytes);
+    let client_ephemeral_secret = StaticSecret::from(*client_ephemeral_bytes);
     let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
 
-    let mut kem_seed = [0u8; 32];
-    fill_random(rng, "building client ML-KEM seed", &mut kem_seed)?;
+    let mut kem_seed = Zeroizing::new([0u8; 32]);
+    fill_random(rng, "building client ML-KEM seed", kem_seed.as_mut())?;
     let mut kem_rng = hedged_chacha20_rng(
-        HedgedRngSeed::from_entropy(kem_seed),
+        HedgedRngSeed::from_entropy(*kem_seed),
         b"soranet-handshake:client-kem",
     );
     let kem_keys = generate_mlkem_keypair(kem_profile.suite(), &mut kem_rng)
@@ -3236,9 +3250,9 @@ fn build_client_hello_nk2(
     }
     let client_body = client_init.clone();
     let placeholder_hash = [0u8; 32];
-    let static_secret_bytes = materials.static_secret.to_bytes();
+    let static_secret_bytes = Zeroizing::new(materials.static_secret.to_bytes());
     let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.client",
+        b"soranet.sig.dilithium.hybrid.client.v1",
         &[
             static_secret_bytes.as_ref(),
             client_body.as_slice(),
@@ -3248,7 +3262,7 @@ fn build_client_hello_nk2(
     );
     append_len_prefixed(&mut client_init, client_dilithium.as_slice())?;
     let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.client",
+        b"soranet.sig.ed25519.hybrid.client.v1",
         static_secret_bytes.as_ref(),
         &[client_body.as_slice(), placeholder_hash.as_ref()],
     )?;
@@ -3294,9 +3308,9 @@ fn build_client_hello_nk3(
     append_len_prefixed(&mut client_commit, forward_commitment.as_slice())?;
     let client_body = client_commit.clone();
     let placeholder_hash = [0u8; 32];
-    let static_secret_bytes = materials.static_secret.to_bytes();
+    let static_secret_bytes = Zeroizing::new(materials.static_secret.to_bytes());
     let client_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.client",
+        b"soranet.sig.dilithium.pqfs.client.v1",
         &[
             static_secret_bytes.as_ref(),
             client_body.as_slice(),
@@ -3306,7 +3320,7 @@ fn build_client_hello_nk3(
     );
     append_len_prefixed(&mut client_commit, client_dilithium.as_slice())?;
     let client_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.client",
+        b"soranet.sig.ed25519.pqfs.client.v1",
         static_secret_bytes.as_ref(),
         &[client_body.as_slice(), placeholder_hash.as_ref()],
     )?;
@@ -4057,18 +4071,22 @@ impl RelayNoiseState {
         let mut nonce = [0u8; 32];
         fill_random(rng, "building relay nonce", &mut nonce)?;
 
-        let mut ephemeral_bytes = [0u8; NOISE_SECRET_LEN];
+        let mut ephemeral_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
         fill_random(
             rng,
             "building relay ephemeral Noise secret",
-            &mut ephemeral_bytes,
+            ephemeral_bytes.as_mut(),
         )?;
-        let ephemeral_secret = StaticSecret::from(ephemeral_bytes);
+        let ephemeral_secret = StaticSecret::from(*ephemeral_bytes);
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret).to_bytes();
 
-        let mut static_bytes = [0u8; NOISE_SECRET_LEN];
-        fill_random(rng, "building relay static Noise secret", &mut static_bytes)?;
-        let static_secret = StaticSecret::from(static_bytes);
+        let mut static_bytes = Zeroizing::new([0u8; NOISE_SECRET_LEN]);
+        fill_random(
+            rng,
+            "building relay static Noise secret",
+            static_bytes.as_mut(),
+        )?;
+        let static_secret = StaticSecret::from(*static_bytes);
         let static_public = X25519PublicKey::from(&static_secret).to_bytes();
 
         Ok(Self {
@@ -4215,10 +4233,11 @@ fn build_hybrid_relay_response(
     append_len_prefixed(&mut relay_response, transcript.as_ref())?;
 
     let relay_body = relay_response.clone();
+    let static_secret_bytes = Zeroizing::new(noise.static_secret.to_bytes());
     let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.hybrid.relay",
+        b"soranet.sig.dilithium.hybrid.relay.v1",
         &[
-            noise.static_secret.to_bytes().as_ref(),
+            static_secret_bytes.as_ref(),
             client_init,
             relay_body.as_slice(),
             transcript.as_ref(),
@@ -4227,8 +4246,8 @@ fn build_hybrid_relay_response(
     );
     append_len_prefixed(&mut relay_response, &relay_dilithium)?;
     let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.hybrid.relay",
-        noise.static_secret.to_bytes().as_ref(),
+        b"soranet.sig.ed25519.hybrid.relay.v1",
+        static_secret_bytes.as_ref(),
         &[client_init, relay_body.as_slice(), transcript.as_ref()],
     )?;
     append_len_prefixed(&mut relay_response, &relay_ed)?;
@@ -4277,10 +4296,11 @@ fn build_pqfs_relay_response(
     append_len_prefixed(&mut relay_response, inputs.dual_mix)?;
 
     let relay_body = relay_response.clone();
+    let static_secret_bytes = Zeroizing::new(noise.static_secret.to_bytes());
     let relay_dilithium = expand_material(
-        b"soranet.sig.dilithium.pqfs.relay",
+        b"soranet.sig.dilithium.pqfs.relay.v1",
         &[
-            noise.static_secret.to_bytes().as_ref(),
+            static_secret_bytes.as_ref(),
             inputs.client_commit,
             relay_body.as_slice(),
             inputs.transcript.as_ref(),
@@ -4289,8 +4309,8 @@ fn build_pqfs_relay_response(
     );
     append_len_prefixed(&mut relay_response, &relay_dilithium)?;
     let relay_ed = derive_ed25519_signature(
-        b"soranet.sig.ed25519.pqfs.relay",
-        noise.static_secret.to_bytes().as_ref(),
+        b"soranet.sig.ed25519.pqfs.relay.v1",
+        static_secret_bytes.as_ref(),
         &[
             inputs.client_commit,
             relay_body.as_slice(),
@@ -4765,7 +4785,7 @@ struct SessionKeyInputs<'a> {
 
 fn derive_session_key_and_confirmation(
     inputs: SessionKeyInputs<'_>,
-) -> Result<(Vec<u8>, Vec<u8>), HarnessError> {
+) -> Result<(SessionKey, Vec<u8>), HarnessError> {
     let SessionKeyInputs {
         suite,
         transcript_hash,
@@ -4775,12 +4795,12 @@ fn derive_session_key_and_confirmation(
 
     let (session_label, confirm_label) = match suite {
         HandshakeSuite::Nk2Hybrid => (
-            b"soranet.handshake.nk2.session",
-            b"soranet.handshake.nk2.confirm",
+            b"soranet.handshake.nk2.session.v1",
+            b"soranet.handshake.nk2.confirm.v1",
         ),
         HandshakeSuite::Nk3PqForwardSecure => (
-            b"soranet.handshake.nk3.session",
-            b"soranet.handshake.nk3.confirm",
+            b"soranet.handshake.nk3.session.v1",
+            b"soranet.handshake.nk3.confirm.v1",
         ),
     };
 
@@ -4792,11 +4812,11 @@ fn derive_session_key_and_confirmation(
             let forward = forward_shared.ok_or(HarnessError::NotImplemented(
                 "nk3 forward-secure key schedule requires dual ML-KEM secret",
             ))?;
-            let dual_mix = expand_material(
-                b"soranet.kem.dual.mix",
+            let dual_mix = Zeroizing::new(expand_material(
+                b"soranet.kem.dual.mix.v1",
                 &[primary_shared, forward, transcript_hash],
                 forward.len(),
-            );
+            ));
             hkdf_sha3_256_from_ikm_parts(
                 Some(transcript_hash),
                 &[
@@ -4809,25 +4829,25 @@ fn derive_session_key_and_confirmation(
         }
     };
 
-    let mut session_key = vec![0u8; 32];
-    hk.expand(session_label, &mut session_key)
+    let mut session_key = Zeroizing::new(vec![0u8; 32]);
+    hk.expand(session_label, session_key.as_mut_slice())
         .map_err(|_| HarnessError::Kdf)?;
 
     let confirmation = if suite == HandshakeSuite::Nk2Hybrid {
-        let mut confirm = vec![0u8; 32];
+        let mut confirm = Zeroizing::new(vec![0u8; 32]);
         let hk_confirm = Hkdf::<Sha3_256>::new(Some(transcript_hash), primary_shared);
         hk_confirm
-            .expand(NK2_CONFIRM_LABEL, &mut confirm)
+            .expand(NK2_CONFIRM_LABEL, confirm.as_mut_slice())
             .map_err(|_| HarnessError::Kdf)?;
-        confirm
+        confirm.to_vec()
     } else {
-        let mut confirm = vec![0u8; 32];
-        hk.expand(confirm_label, &mut confirm)
+        let mut confirm = Zeroizing::new(vec![0u8; 32]);
+        hk.expand(confirm_label, confirm.as_mut_slice())
             .map_err(|_| HarnessError::Kdf)?;
-        confirm
+        confirm.to_vec()
     };
 
-    Ok((session_key, confirmation))
+    Ok((SessionKey::from_zeroizing_vec(session_key), confirmation))
 }
 
 fn hkdf_sha3_256_from_ikm_parts(
@@ -4870,7 +4890,7 @@ fn compute_dual_mix(
     transcript_hash: &[u8; 32],
 ) -> Vec<u8> {
     expand_material(
-        b"soranet.kem.dual.mix",
+        b"soranet.kem.dual.mix.v1",
         &[primary_shared, forward_shared, transcript_hash],
         forward_shared.len(),
     )
@@ -5074,6 +5094,54 @@ mod tests {
     }
 
     #[test]
+    fn handshake_suite_decoder_accepts_only_first_release_wire_ids() {
+        assert_eq!(
+            HandshakeSuite::try_from(0x04).expect("nk2 suite id"),
+            HandshakeSuite::Nk2Hybrid
+        );
+        assert_eq!(
+            HandshakeSuite::try_from(0x05).expect("nk3 suite id"),
+            HandshakeSuite::Nk3PqForwardSecure
+        );
+        assert!(
+            HandshakeSuite::try_from(0x02).is_err(),
+            "old pre-release NK2 id must be rejected"
+        );
+        assert!(
+            HandshakeSuite::try_from(0x03).is_err(),
+            "old pre-release NK3 id must be rejected"
+        );
+        assert_eq!(HandshakeSuite::Nk2Hybrid.label(), "nk2.hybrid.v1");
+        assert_eq!(
+            HandshakeSuite::Nk3PqForwardSecure.label(),
+            "nk3.pq_forward_secure.v1"
+        );
+    }
+
+    #[test]
+    fn default_capability_vectors_advertise_first_release_suites() {
+        for (label, vector) in [
+            ("client", DEFAULT_CLIENT_CAPABILITIES.as_slice()),
+            ("relay", DEFAULT_RELAY_CAPABILITIES.as_slice()),
+        ] {
+            let caps = parse_capabilities(vector).expect("default capabilities parse");
+            let suite_cap = caps
+                .iter()
+                .find(|cap| cap.ty == CAPABILITY_SUITE_LIST)
+                .unwrap_or_else(|| panic!("{label} suite_list capability present"));
+            assert_eq!(
+                suite_cap.value,
+                vec![
+                    u8::from(HandshakeSuite::Nk2Hybrid),
+                    u8::from(HandshakeSuite::Nk3PqForwardSecure),
+                ],
+                "{label} suite_list uses first-release IDs"
+            );
+            assert!(suite_cap.required, "{label} suite_list is required");
+        }
+    }
+
+    #[test]
     fn update_suite_list_rejects_oversized_suite_list() {
         let suites = vec![HandshakeSuite::Nk2Hybrid; usize::from(u16::MAX) + 1];
         let err = super::update_suite_list(&DEFAULT_CLIENT_CAPABILITIES, &suites, false)
@@ -5099,9 +5167,9 @@ mod tests {
             ty: CAPABILITY_SUITE_LIST,
             value: vec![
                 u8::from(HandshakeSuite::Nk2Hybrid),
-                0x01,
+                0x7D,
                 u8::from(HandshakeSuite::Nk3PqForwardSecure),
-                0x01,
+                0x7E,
             ],
             required: false,
         };
@@ -5114,6 +5182,25 @@ mod tests {
             ]
         );
         assert!(!list.required);
+    }
+
+    #[test]
+    fn parse_suite_list_rejects_only_pre_release_ids() {
+        let cap = CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![0x02, 0x03],
+            required: true,
+        };
+        let err =
+            parse_suite_list(&cap).expect_err("pre-release-only suite list must not negotiate");
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("pre-release handshake suite identifiers"));
+                assert!(message.contains("0x02"));
+                assert!(message.contains("0x03"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -5553,6 +5640,12 @@ mod tests {
         skip_len_prefixed_payload(frame, &mut offset);
         offset += 3;
         offset..offset + NOISE_SECRET_LEN
+    }
+
+    fn client_hello_suite_byte_index(frame: &[u8]) -> usize {
+        let mut offset = 1;
+        skip_len_prefixed_payload(frame, &mut offset);
+        offset
     }
 
     fn client_hello_static_range(frame: &[u8]) -> Range<usize> {
@@ -6316,7 +6409,7 @@ mod tests {
 
         let dilithium = cursor.read_len_prefixed().expect("dilithium signature");
         let expected_dilithium = expand_material(
-            b"soranet.sig.dilithium.pqfs.relay",
+            b"soranet.sig.dilithium.pqfs.relay.v1",
             &[
                 noise.static_secret.to_bytes().as_ref(),
                 client_commit,
@@ -6329,7 +6422,7 @@ mod tests {
 
         let ed_signature = cursor.read_len_prefixed().expect("ed25519 signature");
         let expected_ed = derive_ed25519_signature(
-            b"soranet.sig.ed25519.pqfs.relay",
+            b"soranet.sig.ed25519.pqfs.relay.v1",
             noise.static_secret.to_bytes().as_ref(),
             &[client_commit, relay_body, transcript.as_ref()],
         )
@@ -6474,6 +6567,59 @@ mod tests {
     }
 
     #[test]
+    fn suite_negotiation_rejects_old_ids_even_when_first_release_ids_present() {
+        let client_caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![
+                0x02,
+                u8::from(HandshakeSuite::Nk3PqForwardSecure),
+                u8::from(HandshakeSuite::Nk2Hybrid),
+            ],
+            required: true,
+        }];
+        let relay_caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![0x03, u8::from(HandshakeSuite::Nk2Hybrid)],
+            required: true,
+        }];
+
+        let err = negotiate_handshake_suite(&client_caps, &relay_caps)
+            .expect_err("suite lists containing old IDs must fail");
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("pre-release handshake suite identifiers"));
+                assert!(message.contains("0x02"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn suite_negotiation_rejects_pre_release_only_suite_lists() {
+        let client_caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![0x02, 0x03],
+            required: true,
+        }];
+        let relay_caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![0x02, 0x03],
+            required: true,
+        }];
+
+        let err = negotiate_handshake_suite(&client_caps, &relay_caps)
+            .expect_err("old-only suite lists must fail");
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("pre-release handshake suite identifiers"));
+                assert!(message.contains("0x02"));
+                assert!(message.contains("0x03"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn suite_negotiation_errors_when_relay_omits_capability() {
         let client = suite_list_tlv(
             false,
@@ -6567,7 +6713,10 @@ mod tests {
             client_secrets.handshake_suite,
             relay_secrets.handshake_suite
         );
-        assert_eq!(client_secrets.session_key, relay_secrets.session_key);
+        assert_eq!(
+            client_secrets.session_key.payload(),
+            relay_secrets.session_key.payload()
+        );
         assert_eq!(
             client_secrets.transcript_hash,
             relay_secrets.transcript_hash
@@ -6605,6 +6754,47 @@ mod tests {
         assert_eq!(client_state.handshake_suite, HandshakeSuite::Nk2Hybrid);
         assert!(client_state.forward_kem_public.is_none());
         assert!(client_state.forward_kem_secret.is_none());
+    }
+
+    #[test]
+    fn process_client_hello_rejects_pre_release_nk2_suite_byte_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(9102);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk2 client");
+        let suite_idx = client_hello_suite_byte_index(&client_hello);
+        assert_eq!(client_hello[suite_idx], u8::from(HandshakeSuite::Nk2Hybrid));
+        client_hello[suite_idx] = 0x02;
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("pre-release NK2 suite id must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("unsupported handshake suite identifier 0x02"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -6664,7 +6854,10 @@ mod tests {
 
         assert_eq!(client_secrets.handshake_suite, HandshakeSuite::Nk2Hybrid);
         assert_eq!(relay_secrets.handshake_suite, HandshakeSuite::Nk2Hybrid);
-        assert_eq!(client_secrets.session_key, relay_secrets.session_key);
+        assert_eq!(
+            client_secrets.session_key.payload(),
+            relay_secrets.session_key.payload()
+        );
         assert_eq!(
             client_secrets.transcript_hash,
             relay_secrets.transcript_hash
@@ -6752,6 +6945,56 @@ mod tests {
     }
 
     #[test]
+    fn process_client_hello_rejects_pre_release_nk3_suite_byte_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(9103);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk3 client");
+        let suite_idx = client_hello_suite_byte_index(&client_hello);
+        assert_eq!(
+            client_hello[suite_idx],
+            u8::from(HandshakeSuite::Nk3PqForwardSecure)
+        );
+        client_hello[suite_idx] = 0x03;
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("pre-release NK3 suite id must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("unsupported handshake suite identifier 0x03"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn process_client_hello_handles_nk3_suite() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
@@ -6824,7 +7067,10 @@ mod tests {
             relay_secrets.handshake_suite,
             HandshakeSuite::Nk3PqForwardSecure
         );
-        assert_eq!(client_secrets.session_key, relay_secrets.session_key);
+        assert_eq!(
+            client_secrets.session_key.payload(),
+            relay_secrets.session_key.payload()
+        );
         assert_eq!(
             client_secrets.transcript_hash,
             relay_secrets.transcript_hash
@@ -6922,7 +7168,10 @@ mod tests {
             client_secrets.handshake_suite,
             relay_secrets.handshake_suite
         );
-        assert_eq!(client_secrets.session_key, relay_secrets.session_key);
+        assert_eq!(
+            client_secrets.session_key.payload(),
+            relay_secrets.session_key.payload()
+        );
         assert_eq!(
             client_secrets.transcript_hash,
             relay_secrets.transcript_hash
@@ -7458,11 +7707,11 @@ mod tests {
     #[test]
     fn simulate_handshake_surfaces_warnings() {
         let client_caps = decode_hex(
-            "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+            "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
         )
         .expect("client hex");
         let relay_caps = decode_hex(
-            "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f1300040badc0de",
+            "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f1300040badc0de",
         )
         .expect("relay hex");
         let descriptor_commit =
@@ -7499,11 +7748,11 @@ mod tests {
     #[test]
     fn simulation_report_json_renders_expected_fields() {
         let client_caps = decode_hex(
-            "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+            "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
         )
         .expect("client hex");
         let relay_caps = decode_hex(
-            "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+            "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
         )
         .expect("relay hex");
         let descriptor_commit =
@@ -7537,10 +7786,11 @@ mod tests {
             .get("transcript_hash_hex")
             .and_then(Value::as_str)
             .expect("transcript hash");
-        assert!(transcript_hash.starts_with("fd92a86d"));
+        assert_eq!(transcript_hash.len(), 64);
+        assert!(transcript_hash.chars().all(|ch| ch.is_ascii_hexdigit()));
         assert_eq!(
             value.get("handshake_suite").and_then(Value::as_str),
-            Some("nk2.hybrid")
+            Some("nk2.hybrid.v1")
         );
         assert!(value.get("client_capabilities").is_some());
         assert!(value.get("relay_capabilities").is_some());
@@ -7550,11 +7800,11 @@ mod tests {
     #[test]
     fn simulation_report_json_filters_warnings() {
         let client_caps = decode_hex(
-            "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+            "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
         )
         .expect("client hex");
         let relay_caps = decode_hex(
-            "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f1300040badc0de",
+            "0102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f1300040badc0de",
         )
         .expect("relay hex");
         let descriptor_commit =
@@ -7608,7 +7858,7 @@ mod tests {
         })
         .expect("nk3 schedule");
 
-        assert_ne!(nk2_session, nk3_session);
+        assert_ne!(nk2_session.payload(), nk3_session.payload());
         assert_ne!(nk2_confirm, nk3_confirm);
     }
 
@@ -7639,13 +7889,15 @@ mod tests {
         let transcript = [0xAB; 32];
         let primary = [0xCD; 32];
 
-        let err = derive_session_key_and_confirmation(SessionKeyInputs {
+        let err = match derive_session_key_and_confirmation(SessionKeyInputs {
             suite: HandshakeSuite::Nk3PqForwardSecure,
             transcript_hash: &transcript,
             primary_shared: &primary,
             forward_shared: None,
-        })
-        .expect_err("nk3 schedule without forward secret must error");
+        }) {
+            Ok(_) => panic!("nk3 schedule without forward secret must error"),
+            Err(err) => err,
+        };
 
         match err {
             HarnessError::NotImplemented(message) => {

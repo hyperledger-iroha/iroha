@@ -1,6 +1,6 @@
 //! Prebuild minimal IVM sample bytecode files for integration tests.
 //!
-//! This utility writes small placeholder `.to` files under
+//! This utility writes small deterministic `.to` fixture files under
 //! `crates/ivm/target/prebuilt/samples/` and a `build_config.toml` indicating
 //! the current profile. The integration tests and CLI look for these files by
 //! name when performing executor upgrades.

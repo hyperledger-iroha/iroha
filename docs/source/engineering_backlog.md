@@ -6,6 +6,15 @@ The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
 track detailed unfinished engineering work.
 
+## SCCP launch-scope note
+
+- Substrate/Polkadot-family networks are not supported in the current SCCP
+  launch scope, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and
+  SORA2. Existing Substrate-family runtime wrappers, evidence helpers, and
+  relay notes are diagnostic/backlog material only; they should not be treated
+  as remaining release blockers or advertised as production network support
+  unless governance explicitly re-opens that scope.
+
 ## FHE/RAM-LFE first-release follow-ups
 
 - Replace the current deterministic plaintext-modulus-multiple BFV-shaped
@@ -33,8 +42,9 @@ track detailed unfinished engineering work.
   by round index instead of reusing one refresh ciphertext. Key-owner
   diagnostics now also verify that generated rotation and bootstrap public
   refresh ciphertexts decrypt to zero under the matching secret key, including
-  a bundle-level check over every rotation and bootstrap refresh mask, while
-  public admission still needs proof-carrying full bootstrap key material.
+  a bundle-level check over every rotation and bootstrap refresh mask, and
+  public bootstrap admission now requires a verifier-backed statement proof
+  envelope.
   Public deterministic transcript checks now recompute rotation and bootstrap
   encrypted-zero refresh material from the advertised seed, public key, key id,
   and round count, rejecting wrong-seed, key-id-drifted, or tampered refresh
@@ -49,14 +59,28 @@ track detailed unfinished engineering work.
   stable
   domain-separated digest over the parameter set, public key, evaluation-key
   digest, and transcript metadata, giving governance/admission code a
-  canonical value to bind before the final proof-carrying bootstrap key format
-  lands. The crypto layer now also exposes exact-lift and bounded-noise
+  canonical value to bind in the bootstrap-key proof envelope. The crypto layer
+  now also exposes exact-lift and bounded-noise transcript-bound
   bootstrap-key zero-refresh proof statement digests that bind parameters,
-  public key, key id, refresh-round capacity, and every public refresh
-  ciphertext under mode-separated domains; proof attachment/admission remains
-  unfinished, but future verifiers now have a canonical public statement hash
-  for this key material. Direct crypto refresh-transcript validation/digesting and Soracloud
-  transcript digesting now also preflight the advertised BFV public-key shape
+  public key, evaluation-key digest, refresh-transcript digest, bootstrap
+  transcript seed/key id/round capacity, and every public refresh ciphertext
+  under mode-separated domains. `RunSoracloudFheJob` now carries an
+  optional bootstrap-key proof attachment, provenance signs it, and Core
+  requires it for bootstrap execution while checking the policy-bound
+  statement hash against an active Soracloud STARK verifier record or
+  preverified proof cache entry. The verifier registry now rejects canonical
+  Soracloud bootstrap verifier records whose registry id, namespace, circuit
+  version, public-input schema hash, gas schedule, or active inline key
+  material drift from the governed v1 profile, moving those rollout failures
+  to `RegisterVerifyingKey`/`UpdateVerifyingKey` admission. BFV bootstrap keys
+  now carry an explicit `RefreshOnlyV1` mode, and reserved full-bootstrap mode
+  fails closed until real bootstrapping circuit material exists, so the current
+  refresh bridge cannot be mislabeled as full bootstrapping. Bundle
+  validation/digesting applies the same mode gate before transcript-bound
+  bootstrap proof statements can be produced. Remaining production work is the
+  full BFV bootstrapping path. Direct crypto
+  refresh-transcript validation/digesting and Soracloud transcript digesting
+  now also preflight the advertised BFV public-key shape
   before evaluation-key bundle validation, so malformed transcript key material
   cannot be masked by unrelated bundle-shape errors. The lower-level crypto
   bundle validator now enforces the same public metadata preflight for direct
@@ -67,12 +91,11 @@ track detailed unfinished engineering work.
   Standalone refresh-key transcript
   generators/validators reject the same empty or oversized public seed
   metadata before deriving or recomputing encrypted-zero masks. Soracloud FHE
-  execution policies now carry that digest,
+  execution policies now carry the refresh-transcript inventory digest,
   `RunSoracloudFheJob` signs the transcript inventory in the provenance
   payload, and core rejects jobs whose supplied refresh transcript is
-  unbounded or does not match the governance-bound digest. This is an admission
-  hardening step for the current refresh path, not the final proof-carrying
-  bootstrap key format.
+  unbounded or does not match the governance-bound digest. This hardens the
+  current refresh path while the full BFV bootstrapping engine remains open.
   Bundle-level owner diagnostics now also verify that relinearization entries
   decrypt to scaled `s^2` residues and Galois entries decrypt to scaled
   automorphed-secret residues under the matching secret key, with key-switch

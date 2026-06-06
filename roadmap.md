@@ -13,19 +13,50 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- SoraFS/SoraNet first-release KDF identifier cleanup is complete: SoraFS
+  envelopes remain V1/version 1 with the transcript-bound hybrid suite label,
+  SoraNet advertises only NK2/NK3 suite IDs `0x04`/`0x05`, and old pre-release
+  suite labels/IDs are intentionally rejected. Keep future fixture and SDK work
+  aligned with the regenerated `snnet-interop-nk{2,3}-v1.json` contents rather
+  than adding compatibility aliases.
 - SCCP launch scope is intentionally limited to non-Substrate families for now:
   do not advertise support for Substrate/Polkadot-family networks, including
   Kusama, Polkadot, SORA Kusama, SORA Polkadot, or SORA2, until governance
   explicitly re-opens that scope. Existing Substrate/SORA2 notes and evidence
   helpers are diagnostic/backlog material only. Complete unsupported diagnostic
   rows in public release bundles still have to pass canonical summary-schema
-  checks and carry only the explicit unsupported launch-scope blocker. Torii
-  configured-launch gates must use the supported launch-domain set instead of
-  the full diagnostic-domain list.
+  checks and carry only the explicit unsupported launch-scope blocker. The
+  strict release verifier now also scans the Rust SCCP constants, all-lanes
+  evidence generator, and readiness reporter for the same supported-domain set,
+  unsupported blocker text, and active Ethereum launch policy. Public
+  user-prover submission surfaces are likewise limited to supported launch
+  lanes (`eth,bsc`, `tron`, `sol`, and `ton`); a reintroduced `substrate`
+  production submission row is rejected until that support scope re-opens.
+  Torii public SCCP discovery must use the same supported-domain set:
+  `/v1/sccp/capabilities`, `/v1/sccp/manifests`, and wallet route manifests
+  must not advertise SORA2, SORA Kusama, SORA Polkadot, or generic
+  Substrate/Polkadot lanes while they remain outside launch scope. Optional
+  runtime SCALE capability fields must also stay absent from public discovery
+  until that launch scope is explicitly re-opened. Torii configured-launch
+  gates must use the supported launch-domain set instead of the full diagnostic
+  domain list, and configured all-lanes launch readiness must also iterate only
+  that supported-domain set, so Substrate-family diagnostic records cannot
+  satisfy or block production launch checks while they remain out of scope.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1` and padded values such as `01` remain evidence blockers.
+- SCCP release readiness reports and release bundles must keep native EVM
+  prover artifact paths role-unique across the attached native prover manifest
+  and published readiness summary, so proof artifacts, proving/verifier keys,
+  parity fixtures, self-tests, and per-SDK implementation artifacts cannot
+  silently reuse another role's file. The release bundle builder rejects that
+  path reuse during input validation before copying native prover payloads,
+  including not-ready diagnostic bundles.
+- SCCP corridor phase evidence must also stay source-unique: downloaded
+  `--phase-evidence-dir` logs and explicit `--phase-evidence` assignments
+  cannot set the same phase twice, so release reports and bundles cannot
+  silently replace one hashed phase transcript with another.
 - Keep Kagemusha offline-offline payments production-routed through the
   Reserved-lineage recursive spend path. Production packaging now has a
   portable Norito `KagemushaRecursiveSpendLineageKeyArtifactsV1` artifact for
@@ -2175,7 +2206,14 @@ and completed history lives in [`status.md`](./status.md).
   recomputation, corridor inventories, crypto rows, or user-prover surfaces.
 - Keep public SCCP release bundles rooted in immutable extracted directories;
   strict bundle verification now rejects a symlinked bundle root or a
-  non-directory verifier input before reading the manifest.
+  non-directory verifier input before reading the manifest. The bundle builder
+  now rejects symlinked source inputs or source-path ancestors before copying
+  evidence TOML, phase logs, native prover manifests, or native prover
+  payloads, including `--allow-not-ready` diagnostic bundles. Bundle output
+  directories and existing non-root output-path ancestors must not be symlinks
+  before creation or forced replacement. Bundle source paths and output
+  directories containing ASCII control characters are rejected during input
+  validation before any bundle directory is created.
 - Keep public SCCP release manifests as verifier roots, not published artifacts;
   strict bundle verification now rejects any `manifest.json` row inside the
   manifest artifact table.
@@ -2184,8 +2222,10 @@ and completed history lives in [`status.md`](./status.md).
   instead of comparing only files.
 - Keep public SCCP release artifact paths printable and reviewer-safe; the
   readiness report, bundle builder, and strict verifier now reject ASCII control
-  characters in manifest, report, and extracted bundle entry paths before they
-  can reach Markdown tables or diagnostics.
+  characters and Markdown-unsafe path characters (`|`, backticks, `<`, and `>`)
+  in public artifact paths, copied source filenames, native prover
+  manifest-relative payload paths, manifest/report metadata, and extracted
+  bundle entries before they can reach Markdown tables or diagnostics.
 - Keep public SCCP release evidence UTF-8 fail-closed; strict verification now
   reports non-UTF-8 manifest JSON, readiness JSON, all-lanes summary JSON,
   readiness Markdown, and release-note attachments as structured bundle
@@ -2356,6 +2396,9 @@ and completed history lives in [`status.md`](./status.md).
   finality NewView handoff cleanup,
   finality-source exact-source committed-delivery completion,
   finality-source certified-source stack classification,
+  finality-source finality-latch change matching,
+  finality-source committed-phase entry matching,
+  finality-source finality-certificate stack installation,
   finality-source commit-or-delivery source classification,
   finality-source exact source-effect classification,
   finality-source quorum-gate satisfaction,
@@ -2367,7 +2410,10 @@ and completed history lives in [`status.md`](./status.md).
   finality-source commit-view witness-change matching,
   finality-source commit-view witness installation,
   finality-source NewView handoff isolation,
+  finality-source current-view commit witness exactness,
+  committed-phase current-view commit witness exactness,
   commit-artifact exact-source committed-delivery completion,
+  commit-artifact current-view witness exactness,
   commit-certificate exact-source committed-delivery completion,
   commit-view exact-source committed-delivery completion,
   finality-latch exact-source committed-delivery completion,
@@ -2384,6 +2430,9 @@ and completed history lives in [`status.md`](./status.md).
   post-finality progress-action quiescence,
   honest/fault roster-budgeted vote counters, RBC delivery stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
+  frontier future-promotion fresh second-slot installation,
+  frontier terminal outcome exclusivity,
+  frontier promotion-ready wrapper cleanup,
   validation redrive labels, raw QC signer-bitmap population counting, and
   signer-index normalization, precommit vote-progress counting, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record
@@ -2479,14 +2528,15 @@ and completed history lives in [`status.md`](./status.md).
   `iroha_sccp` verifier crate, core bridge-proof admission tests, and on-chain
   EVM/TRON Groth16 contract smoke coverage for post-generation payload,
   finality-height, and finality-block public-signal drift.
-- EVM/BSC, TRON, Solana, TON, and Substrate user-prover readiness rows now
+- Supported EVM/BSC, TRON, Solana, and TON user-prover readiness rows now
   include per-SDK helper symbol maps for JavaScript/web, Python, Swift,
   Kotlin/JVM, and Java Android. Those maps carry the native source-proof,
-  source-state, full-light-client audit, or runtime-storage proof-generation
-  helpers where applicable alongside the final proof request and submission
-  helpers. Release bundles therefore cannot claim the portal/mobile native proof
-  paths without explicitly carrying the UI proof-generation surfaces for each
-  consumer SDK.
+  source-state, or full-light-client audit proof-generation helpers where
+  applicable alongside the final proof request and submission helpers. Release
+  bundles therefore cannot claim the portal/mobile native proof paths without
+  explicitly carrying the UI proof-generation surfaces for each consumer SDK;
+  Substrate runtime-storage helper maps remain diagnostic/backlog-only while
+  Substrate/Polkadot networks are outside launch scope.
 - Solana, TON, and Substrate native submission helpers now apply the same native
   recursive payload corridor to verifier-program/message-body/runtime-call
   `bundleBytes` as they already apply to proof bytes: bundles must be non-empty,
@@ -2684,7 +2734,9 @@ and completed history lives in [`status.md`](./status.md).
   or blocker scalar lists, all-lanes required-domain drift from published lane
   domains, all-lanes domain roster or chain-label drift from the production
   remote lanes, non-ready or blocked all-lanes root or lane summaries,
-  missing-record lane flags, blocked release-checklist items, malformed all-lanes lane
+  missing-record lane flags, blocked release-checklist items, duplicate
+  release-checklist gate ids in report/embedded-evidence/summary roots,
+  duplicate public blocker strings, malformed all-lanes lane
   record/hash/source-gate/destination-binding/route sections, zero governed
   source/destination/route hashes, zero destination bridge addresses, missing
   or misplaced lane-specific destination binding network/bridge fields,
@@ -2737,13 +2789,15 @@ and completed history lives in [`status.md`](./status.md).
   completion sentinel, phase-block command fragments, and phase-specific
   success markers during public bundle review.
   The report now also renders the user-prover SDK submission surfaces for each
-  production lane, distinguishing EVM/TRON Torii bridge-proof submit payloads
-  from native Solana instruction, TON BOC, and Substrate runtime-call envelopes
-  that portal/mobile provers submit on-chain. Each surface row uses the
+  supported production lane, distinguishing EVM/TRON Torii bridge-proof submit
+  payloads from native Solana instruction and TON BOC envelopes that
+  portal/mobile provers submit on-chain. Substrate runtime-call submission
+  helper material remains diagnostic/backlog-only while Substrate/Polkadot
+  networks are outside launch scope. Each surface row uses the
   user-side proof backend labels consumed by the SDK request builders
   (`sccp-solana-recursive-mainnet-v1`, `ton-contract-v1`,
-  `substrate-runtime-v1`, `evm-groth16-bn254-v1`, and
-  `tron-groth16-bn254-v1`) and is tied back to the required JavaScript, Python,
+  `evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`) and is tied back to the
+  required JavaScript, Python,
   Swift, Kotlin, Java Android, and core-admission corridor phases, with EVM/TRON
   additionally requiring contract-smoke coverage. The Solana destination
   manifest still binds the `solana-program-v1` target verifier backend, while
@@ -7215,11 +7269,26 @@ from wallet and service integrations.
   including manifest-sourced builds, generated interfaces, schema docs,
   profile-aware doctor/smoke commands, and Kotodama test/debug loops.
 - Static compiler-derived access descriptors now cover the formerly opaque
-  peer, subscription, VRF epoch seed, AXT, Soracloud host, and native/anonymous
-  escrow helper syscalls with literal names or decodable Norito request
-  payloads; dynamic, malformed, and test-mode-only helper payloads
-  intentionally remain fail-closed instead of reintroducing wildcard
-  production manifests.
+  peer, subscription, VRF epoch seed, AXT, Soracloud host, native/anonymous
+  escrow, literal nullifier, transfer-batch, and smart-contract lifecycle
+  helper syscalls with literal names or decodable Norito request payloads;
+  dynamic, malformed, and test-mode-only helper payloads intentionally remain
+  fail-closed instead of reintroducing wildcard production manifests.
+- Standalone `DefaultHost` ZK batch verification now mirrors the runtime
+  status-vector ABI for Halo2 IPA/Pasta envelopes, including deterministic
+  backend, curve, max-k, envelope-size, proof-size, and batch-size gates.
+  `CoreHost` remains the registry-bound runtime verifier for node execution.
+- `CoreHostImpl` now explicitly covers the ABI-listed Soracloud host syscall
+  numbers by validating `SoracloudRequest` TLVs, schema versions, operations,
+  and payload variants, then failing closed with metered `NotImplemented` and no
+  queued ISI during ordinary contract execution. Dedicated Soracloud handler
+  execution continues to use `irohad`'s runtime `SoracloudIvmHost` for
+  response-producing dispatch.
+- Kotodama test-host entrypoint helpers now support tuple-returning entrypoints
+  through deterministic multi-register returns, and the IVM/Kotodama docs now
+  describe implemented contract bodies, dynamic contract calls, DefaultHost ZK
+  batch verification, and execution-proof helpers as current behavior instead
+  of future or placeholder work.
 - Literal `create_trigger(json(...))` specs that cannot be decoded for access
   metadata now report a dedicated compiler diagnostic and manifest skip reason,
   while production mode continues to reject the incomplete access metadata.
@@ -7238,6 +7307,14 @@ from wallet and service integrations.
   metadata-dispatched IVM execution plus nested `CALL_CONTRACT` calls,
   requiring callers to hold the named permission directly or through an
   assigned role before the VM runs.
+- Manifest trigger registration now supports namespaced callbacks by resolving
+  the callback target at activation time to an already active contract address
+  or alias; unresolved aliases, inactive targets, and non-public callback
+  entrypoints fail activation.
+- Kotodama internal helper functions can pass durable scalar, map, struct, and
+  tuple `state` handles, including maps with aggregate values, through
+  deterministic flattened child handles. Public entrypoints still reject
+  `state` parameters.
 - Preserve canonical Norito headers and wire layouts for blocks, transactions,
   SDK fixtures, and cross-library compatibility tests. The JavaScript pure
   Norito fallback now covers asset-definition registration frames, and
@@ -7390,8 +7467,8 @@ or ABI behavior.
   Key-owner diagnostics now also verify that generated public rotation and
   bootstrap refresh ciphertexts decrypt to zero under the matching secret key,
   including a bundle-level check over every rotation and bootstrap refresh
-  mask, while public admission still depends on future proof-carrying
-  bootstrap key material. Public deterministic transcript checks now recompute
+  mask, and public bootstrap admission now requires a verifier-backed statement
+  proof envelope. Public deterministic transcript checks now recompute
   rotation and bootstrap encrypted-zero refresh material from the advertised
   seed, public key, key id, and round count, rejecting wrong-seed,
   key-id-drifted, or tampered refresh ciphertexts without requiring a secret
@@ -7403,12 +7480,27 @@ or ABI behavior.
   metadata bounded by the shared BFV evaluation-key rotation cap plus a stable
   domain-separated digest over the parameter set, public key, evaluation-key
   digest, and transcript seed metadata, giving governance/admission code a
-  canonical value to bind before the final proof-carrying bootstrap key format
-  lands. The crypto layer now also exposes exact-lift and bounded-noise
+  canonical value to bind in the bootstrap-key proof envelope. The crypto layer
+  now also exposes exact-lift and bounded-noise transcript-bound
   bootstrap-key zero-refresh proof statement digests that bind parameters,
-  public key, key id, refresh-round capacity, and every public refresh
-  ciphertext under mode-separated domains, giving the future proof-carrying
-  key-material verifier a canonical statement hash. Soracloud transcript digesting now preflights the advertised BFV
+  public key, evaluation-key digest, refresh-transcript digest, bootstrap
+  transcript seed/key id/round capacity, and every public refresh ciphertext
+  under mode-separated domains. `RunSoracloudFheJob` now carries an
+  optional bootstrap-key proof attachment, provenance signs it, and Core
+  requires it for bootstrap execution while checking the policy-bound
+  statement hash against an active Soracloud STARK verifier record or
+  preverified proof cache entry. The verifier registry now rejects canonical
+  Soracloud bootstrap verifier records whose registry id, namespace, circuit
+  version, public-input schema hash, gas schedule, or active inline key
+  material drift from the governed v1 profile, moving those rollout failures
+  to `RegisterVerifyingKey`/`UpdateVerifyingKey` admission. BFV bootstrap keys
+  now carry an explicit `RefreshOnlyV1` mode, and reserved full-bootstrap mode
+  fails closed until real bootstrapping circuit material exists, so the current
+  refresh bridge cannot be mislabeled as full bootstrapping. Bundle
+  validation/digesting applies the same mode gate before transcript-bound
+  bootstrap proof statements can be produced. Remaining work is the full BFV
+  bootstrapping path. Soracloud transcript digesting
+  now preflights the advertised BFV
   public-key shape before evaluation-key bundle validation, so malformed
   transcript key material is reported at the public-key boundary instead of
   being masked by unrelated bundle-shape errors. The crypto bundle validator
@@ -7416,11 +7508,11 @@ or ABI behavior.
   preflight for direct callers. Standalone refresh-key transcript
   generators/validators also reject empty or oversized public seeds before
   deriving or recomputing encrypted-zero masks. Soracloud FHE execution
-  policies now carry that digest,
+  policies now carry the refresh-transcript inventory digest,
   `RunSoracloudFheJob` signs the transcript inventory in the provenance
   payload, and core rejects jobs whose supplied refresh transcript does not
-  match the governance-bound digest. This hardens the current refresh path but
-  does not replace the final proof-carrying bootstrap key format. The same
+  match the governance-bound digest. This hardens the current refresh path
+  while the full BFV bootstrapping engine remains open. The same
   bundle-level owner diagnostic now verifies relinearization entries against
   scaled `s^2` residues and Galois entries against scaled automorphed-secret
   residues, rejecting non-plaintext-multiple key-switch residuals and residual

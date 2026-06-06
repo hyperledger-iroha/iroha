@@ -44,11 +44,20 @@ cargo fmt --all
 
 Notes:
 
-- Plain `cargo test` from the repository root runs every workspace member.
-  `cargo test --workspace` is kept in examples when an explicit full-workspace
-  command is clearer. Use `cargo test -p <crate>` for a focused crate suite.
+- Plain `cargo test` from the repository root runs the default workspace
+  members; use `cargo test --workspace` when an explicit full-workspace run is
+  needed. Use `cargo test -p <crate>` for a focused crate suite.
+- The repo-local Cargo config caps default build parallelism at `jobs = 2` so
+  large Rust test builds do not overcommit WSL or memory-constrained VMs. On a
+  high-memory machine, override this with `cargo test -j <N>` or
+  `CARGO_BUILD_JOBS=<N> cargo test`.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
+- On WSL, make sure the Windows-side `.wslconfig` gives the VM enough memory,
+  swap, and host disk headroom for a large Rust workspace. Plain `cargo test`
+  is now conservative by default; if the VM is still constrained, use
+  `scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-wsl-tests` to
+  also serialize libtest execution.
 - The workspace targets `std` (WASM/no-std builds are not supported).
 - Heavier local UI/media helpers are explicit features in default builds:
   `cargo run -p mochi-ui --features gui` for the egui desktop shell and

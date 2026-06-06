@@ -49573,17 +49573,16 @@ pub(crate) mod tests_runtime_handlers {
             post_deploy_full_toml_ready: None,
             post_deploy_source_bridge_config_hash: None,
             post_deploy_source_event_transaction_id: None,
+            post_deploy_source_event_explorer_url: None,
             post_deploy_route_canary_evidence_hash: None,
             post_deploy_route_canary_transaction_id: None,
+            post_deploy_route_canary_explorer_url: None,
             post_deploy_offline_full_toml_sha256: None,
         }
     }
 
-    static SCCP_BUNDLE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-        LazyLock::new(|| tokio::sync::Mutex::new(()));
-
     async fn sccp_bundle_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
-        SCCP_BUNDLE_TEST_LOCK.lock().await
+        routing::lock_sccp_bundle_cache_for_tests().await
     }
 
     #[tokio::test]
@@ -49697,28 +49696,17 @@ pub(crate) mod tests_runtime_handlers {
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
-        let runtime_response = routing::handle_v1_sccp_message_runtime_envelope(
+        let runtime_err = routing::handle_v1_sccp_message_runtime_envelope(
             app.state.as_ref(),
             hex::encode(bundle.commitment.message_id),
         )
         .await
-        .expect("runtime response");
-        assert_eq!(
-            runtime_response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(b"application/octet-stream".as_slice())
-        );
-        let runtime_bytes = axum::body::to_bytes(runtime_response.into_body(), usize::MAX)
-            .await
-            .expect("runtime body");
-        assert_eq!(
-            runtime_bytes.as_ref(),
-            iroha_sccp::sccp_runtime_envelope_bytes_from_message_bundle(&bundle)
-                .expect("runtime envelope")
-                .as_slice()
-        );
+        .expect_err("unsigned SORA-origin runtime export must require signed Nexus finality");
+        assert!(query_conversion_message(&runtime_err).is_some_and(|message| {
+            message.contains(
+                "SCCP SORA-origin message bundle Nexus finality proof failed cryptographic verification",
+            )
+        }));
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -49795,28 +49783,17 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(decoded.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
 
-        let runtime_response = routing::handle_v1_sccp_message_runtime_envelope(
+        let runtime_err = routing::handle_v1_sccp_message_runtime_envelope(
             app.state.as_ref(),
             hex::encode(message_id),
         )
         .await
-        .expect("runtime response");
-        assert_eq!(
-            runtime_response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(b"application/octet-stream".as_slice())
-        );
-        let runtime_bytes = axum::body::to_bytes(runtime_response.into_body(), usize::MAX)
-            .await
-            .expect("runtime body");
-        assert_eq!(
-            runtime_bytes.as_ref(),
-            iroha_sccp::sccp_runtime_envelope_bytes_from_message_bundle(&decoded)
-                .expect("runtime envelope")
-                .as_slice()
-        );
+        .expect_err("unsigned SORA-origin runtime export must require signed Nexus finality");
+        assert!(query_conversion_message(&runtime_err).is_some_and(|message| {
+            message.contains(
+                "SCCP SORA-origin message bundle Nexus finality proof failed cryptographic verification",
+            )
+        }));
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -50038,23 +50015,20 @@ pub(crate) mod tests_runtime_handlers {
             decoded_json.message_proof_path,
             "/v1/sccp/artifacts/message/{message_id}"
         );
-        assert_eq!(
-            decoded_json.runtime_proof_family.as_deref(),
-            Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1)
-        );
-        assert_eq!(
-            decoded_json.runtime_verifier_backend.as_deref(),
-            Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1)
-        );
-        assert_eq!(
-            decoded_json.message_runtime_bundle_path.as_deref(),
-            Some("/v1/sccp/proofs/message/{message_id}/runtime-scale")
-        );
+        assert!(decoded_json.runtime_proof_family.is_none());
+        assert!(decoded_json.runtime_verifier_backend.is_none());
+        assert!(decoded_json.message_runtime_bundle_path.is_none());
         assert_eq!(
             decoded_json.message_job_path,
             "/v1/sccp/jobs/message/{message_id}"
         );
         assert_eq!(decoded_json.proof_manifest_path, "/v1/sccp/manifests");
+        assert!(decoded_json.counterparties.iter().all(|entry| {
+            entry.chain != "substrate"
+                && entry.chain != "sora-kusama"
+                && entry.chain != "sora-polkadot"
+                && entry.chain != "sora2"
+        }));
         let ton = decoded_json
             .counterparties
             .iter()

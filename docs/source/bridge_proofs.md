@@ -14,14 +14,29 @@ for now, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and SORA2.
 The Substrate/SORA2 runtime, SCALE, and relay details below are retained as
 diagnostic/backlog operator design notes only and must not be advertised as
 production network support until that launch scope is explicitly re-opened.
+Torii public SCCP discovery follows the same rule: `/v1/sccp/capabilities`,
+`/v1/sccp/manifests`, and configured wallet route manifests advertise only the
+supported launch remote domains (`eth`, `bsc`, `sol`, `ton`, and `tron`).
+Substrate-family route configuration and runtime SCALE helper endpoints may
+remain in diagnostic evidence, but Substrate routes and the optional
+`runtime_proof_family`, `runtime_verifier_backend`, and
+`message_runtime_bundle_path` capability fields are filtered out of public
+wallet/prover discovery while that launch scope is closed.
+Configured all-lanes launch readiness uses the same supported-domain inventory:
+complete or malformed Substrate-family diagnostic records cannot open a
+production lane and cannot block supported-domain launch checks.
 
 ## Human relay model
 
-SCCP relay to the SORA2 `sccp-bridge` pallet is a manual operator flow. The
-production path does not assume an off-chain worker, node-side daemon, or
-automated relayer service. A human relay operator uses a bridge web interface to
-review a Nexus/Iroha SCCP message, fetch the pallet-ready proof envelope, and
-sign the corresponding SORA2 extrinsic through a wallet.
+Launch-scope warning: this SORA2 relay model is a backlog/design note only.
+SCCP will not support Substrate/Polkadot-family production networks for now.
+
+If that scope is re-opened later, SCCP relay to the SORA2 `sccp-bridge` pallet
+would use a manual operator flow. The design does not assume an off-chain
+worker, node-side daemon, or automated relayer service. A human relay operator
+would use a bridge web interface to review a Nexus/Iroha SCCP message, fetch
+the pallet-ready proof envelope, and sign the corresponding SORA2 extrinsic
+through a wallet.
 
 The relay operator is only a courier and transaction fee payer. Authorization
 comes from source-chain finality, Nexus commitment binding, and the
@@ -30,8 +45,9 @@ may govern channel configuration, but it does not approve bridge transactions.
 A malformed or unauthorized relay transaction is expected to be rejected
 on-chain.
 
-The bridge UI should perform the following checks before preparing a wallet
-transaction:
+If Substrate/Polkadot support is re-opened later and Torii advertises the
+runtime SCALE capability fields again, the bridge UI should perform the
+following checks before preparing a wallet transaction:
 
 - fetch `/v1/sccp/capabilities` and confirm `runtime_proof_family =
   runtime-scale-v1` and `runtime_verifier_backend = sora-nexus-runtime-v1`;
@@ -45,28 +61,32 @@ transaction:
   `submit_message_proof`, `submit_token_add_proof`, `submit_token_pause_proof`,
   or `submit_token_resume_proof`.
 
-For the runtime SCALE path, the SORA2 call uses `proof_family =
+For that future runtime SCALE path, the SORA2 call would use `proof_family =
 runtime-scale-v1`, `verifier_backend = sora-nexus-runtime-v1`, and
-`bundle_bytes` equal to the raw response body from the `/runtime-scale` endpoint.
-`proof_bytes` and `public_inputs` are retained for non-runtime verifier backends
-and may be empty for this runtime envelope path.
+`bundle_bytes` equal to the raw response body from the `/runtime-scale`
+endpoint. `proof_bytes` and `public_inputs` are retained for non-runtime
+verifier backends and may be empty for this runtime envelope path.
 
 ## User-side prover SDKs
 
 Web portals and mobile apps are expected to gather source-chain witness data,
 invoke an app-linked prover, and submit the resulting proof package on-chain.
 The JavaScript, Python, Swift, Kotlin, and Java Android SDKs expose local-first
-SCCP proof request wrappers for Solana, TON, EVM-family ETH/BSC, TRON, and
-Substrate-family runtime destination flows, plus source-adapter transcript
-helpers for the witness hashes consumed by those lanes and Substrate-family
-GRANDPA lanes. The wrappers do not fabricate cryptographic proofs: they
+SCCP proof request wrappers for Solana, TON, EVM-family ETH/BSC, and TRON,
+plus source-adapter transcript helpers for the witness hashes consumed by
+those supported launch lanes. Substrate/Polkadot-family runtime wrappers and
+GRANDPA helpers remain diagnostic/backlog-only and must not be documented or
+advertised as supported production network flows until that launch scope is
+explicitly re-opened. The wrappers do not fabricate cryptographic proofs: they
 normalize the canonical transparent public inputs, SCCP bundle bytes, source
 proof bytes, statement hash, destination binding hash, and any verifier
 deployment binding material before calling the prover supplied by the app.
-The ETH/BSC receipt-proof, TON shard-proof, and Substrate-family storage-proof
-transcript helpers fail closed on an all-zero source event digest before
-hashing source witness material, matching the on-chain requirement that a source
-proof commits to a concrete emitted SCCP event.
+The ETH/BSC receipt-proof and TON shard-proof transcript helpers fail closed on
+an all-zero source event digest before hashing source witness material,
+matching the on-chain requirement that a source proof commits to a concrete
+emitted SCCP event. Diagnostic Substrate-family storage-proof transcript
+helpers keep the same fail-closed behavior but remain outside production launch
+support.
 BSC mainnet inbound SDK facades, including the native Swift, Kotlin/JVM, Java
 Android, and .NET surfaces, also fail closed on malformed receipt-observed
 source events before local prover callbacks: a log from the configured source
@@ -78,21 +98,24 @@ calling the UI resolver, including accepted non-string sequence byte inputs, so
 provider-side normalization or mutation cannot alter the proof request that the
 portal or mobile app is displaying to the user.
 Dynamic JavaScript and Python linked-prover callbacks for TON, EVM-family,
-TRON, and Substrate-family flows share the same callback snapshot contract:
+TRON, and diagnostic Substrate-family flows share the same callback snapshot
+contract:
 callback-visible request objects and nested metadata are frozen where those
 flows expose structured request metadata, and `bundleBytes`/`sourceProofBytes`
 accessors return defensive copies before proof wrapping.
 Swift, Kotlin/JVM, and Java Android final-proof callback regressions now pin
 the same source-proof byte snapshot behavior for EVM-family, TRON, TON, and
-Substrate-family proof engines alongside their existing bundle-byte snapshot
-checks.
+diagnostic Substrate-family proof engines alongside their existing bundle-byte
+snapshot checks.
 Core admission tests pin the same production gate ordering: lane-specific
 source-adapter evidence is checked before destination or route activation. The
 active launch policy is Ethereum-mainnet lane readiness, so complete Ethereum
 mainnet source-proof, source-adapter deployment, destination-rollout,
 route-allowlist, and route-canary records can open without waiting for BSC,
-Solana, TON, TRON, or Substrate-family lanes. Non-Ethereum lanes remain
-fail-closed until their own launch policy opens, while the all-lanes checker
+Solana, TON, or TRON.
+Non-Ethereum lanes remain fail-closed until their own launch policy opens, while
+Substrate/Polkadot-family rows remain unsupported launch-scope diagnostics and
+the all-lanes checker
 remains as a diagnostic and release-evidence consistency helper. Strict
 release-bundle verification applies complete cryptographic-evidence row checks
 to the active Ethereum launch lane and keeps future-lane rows diagnostic until
@@ -759,21 +782,26 @@ attachments. It also owns the lane/SDK helper inventory for the cryptographic
 proof-generation entrypoints that must be visible to portal and mobile apps, so
 a weakened report generator cannot drop Solana/TON full-light-client proof
 builders, source-state provers, EVM/TRON receipt/source-proof helpers,
-Substrate runtime-storage proof builders, or on-chain submission helpers from
-copied release rows. It also requires every user-prover row to stay gated by the web,
+or supported on-chain submission helpers from copied production release rows.
+Substrate runtime-storage proof-builder inventories remain diagnostic/backlog
+material while Substrate/Polkadot-family networks are outside the supported
+launch scope. It also requires every user-prover row to stay gated by the web,
 Python, Swift, Kotlin, Java Android, and core-admission phases, with
 contract-smoke evidence still mandatory for EVM-family and TRON contract-backed
 proof backends. It independently pins the public row inventory to the production
 lane/backend pairs (`eth,bsc`/EVM Groth16, `tron`/TRON Groth16, `sol`/Solana
-recursive, `ton`/TON contract, and `substrate`/Substrate runtime), rejecting
-duplicates, unknown lanes, missing rows, or backend id drift before release
-attachments can pass verification. The same public bundle verifier pins the
+recursive, and `ton`/TON contract), rejecting duplicates, unknown lanes,
+missing rows, backend id drift, or any reintroduced `substrate` production
+submission row before release attachments can pass verification. The same
+public bundle verifier pins the
 cryptographic evidence table to the production SCCP domain/chain inventory,
 rejecting duplicate domains, unknown domains, missing domains, and chain-label
 drift before comparing each row to embedded all-lanes evidence. Each public
 cryptographic evidence row must also use the route-canary source and
 source-adapter gate policy for its production domain, including exact named
-audit hashes for source-gated Solana, TON, TRON, and Substrate-family lanes.
+audit hashes for source-gated Solana, TON, and TRON production lanes.
+Substrate-family rows remain diagnostic/backlog-only while
+Substrate/Polkadot-family networks are outside the supported launch scope.
 Those maps also require the user-owned prover hooks, including JavaScript/web
 `witnessProvider` and `proveFn`, Python `witness_provider` and `prove`,
 Swift witness-provider protocols and `ProveFunction` typealiases, Kotlin proof
@@ -793,6 +821,10 @@ claimed phase block. The public bundle verifier owns the required corridor
 phase inventory as well as the transcript inventory, so a weakened report
 generator cannot shrink the production corridor by omitting a required SDK,
 contract-smoke, Rust verifier, evidence-script, or core-admission phase. A
+downloaded phase-evidence directory and explicit `--phase-evidence` arguments
+must not assign the same phase twice; the readiness reporter and bundle builder
+reject duplicate or overriding phase evidence before publishing hashes or
+copying release artifacts. A
 phase artifact with only the phase marker and the completion sentinel is
 rejected unless the same block also contains the Rust, script, SDK,
 contract-smoke, or core-admission command fragments on the
@@ -4664,7 +4696,10 @@ live canary evidence, or missing phase logs cannot be accidentally published as
 a ready release. If `--force` is used to replace an output directory, the
 builder refuses dangerous targets and refuses any output directory that contains
 the input TOML or phase transcript sources, so evidence cannot be deleted before
-it is copied into the bundle. For production-ready bundles, the builder now runs
+it is copied into the bundle. The output directory itself and any existing
+non-root output-path ancestor must not be a symlink before creation or forced
+replacement, keeping release artifacts out of filesystem aliases. For
+production-ready bundles, the builder now runs
 the strict verifier against its own output and prints the verified
 `manifest_sha256` root before reporting success; run
 `python3 scripts/sccp_verify_release_bundle.py <bundle-dir>` again after upload
@@ -4713,13 +4748,26 @@ release checklist table must match the embedded all-lanes evidence summary, so
 public release notes cannot rename, omit, or reorder checklist gates while
 keeping the underlying evidence unchanged; checklist roots and gate rows also
 reject unknown fields, malformed gate ids/titles, and malformed blocker lists
-so operator approvals cannot be hidden in ignored JSON members. The manifest
+plus duplicate gate ids and duplicate blocker strings in the readiness report,
+embedded all-lanes evidence, and standalone all-lanes summary, so operator
+approvals cannot be hidden in ignored JSON members or ambiguous repeated rows.
+The manifest
 artifact set and order must
 exactly match the required reports, copied evidence inputs, copied corridor
 logs referenced by known passed phases in the readiness report, and final
 release-notes attachment, so a hash-bound but unreviewed appendix, unknown
 phase log, or regenerated artifact table cannot be smuggled into an
-otherwise verified bundle. The verifier owns the production-corridor phase
+otherwise verified bundle.
+Native EVM prover bundle artifacts are also role-separated by path: the bundle
+manifest, proof artifact, proving key, verifier key, cross-SDK parity fixture,
+self-test fixture, and per-SDK implementation artifacts cannot reuse another
+native prover role's file path in either the attached native manifest or the
+published readiness-report summary, and the standalone readiness generator
+reports the same blocker before a release bundle is built. The release bundle
+builder also rejects duplicated native prover payload paths during input
+validation, including `--allow-not-ready` runs, before creating a partially
+copied bundle.
+The verifier owns the production-corridor phase
 inventory and requires every known phase to be marked `passed` with a
 hash-bound artifact at the canonical
 `corridor/<phase>.log` path, so a tampered readiness JSON cannot skip, move, or
@@ -4755,6 +4803,16 @@ labels are non-empty strings and required phases are lists of non-empty strings.
 For a production release bundle, the row-level validation status must be
 `passed` and `validation_blockers` must be empty, so a blocked portal/mobile
 proof path cannot hide behind top-level ready flags.
+The bundle builder also rejects symlinked source inputs or source-path
+ancestors before copying evidence TOML, corridor phase logs, native prover
+manifests, or native prover payloads into the release attachment, including
+`--allow-not-ready` diagnostic bundles. Source paths and output directories
+containing ASCII control characters are likewise rejected during input
+validation before any bundle directory is created. Public release artifact
+paths, copied source filenames, and native prover manifest-relative payload
+paths containing Markdown-unsafe characters (`|`, backticks, `<`, or `>`) are
+also rejected before they can enter readiness Markdown, release-note tables, or
+strict-verifier diagnostics.
 The verifier also
 rejects
 non-directory or symlinked bundle roots, non-canonical or escaping manifest
@@ -4764,8 +4822,8 @@ omitted required artifacts,
 non-canonical manifest/readiness-report/summary JSON serialization,
 duplicate keys in public JSON roots,
 non-UTF-8 public JSON and Markdown roots,
-control characters in manifest, readiness-report, or extracted bundle artifact
-paths,
+control characters or Markdown-unsafe characters in manifest,
+readiness-report, or extracted bundle artifact paths,
 unknown corridor phase statuses or evidence keys,
 blocked corridor roots,
 non-canonical corridor phase-log paths,
@@ -6206,11 +6264,8 @@ as Nexus-origin messages from block-level SCCP records.
   - local hub domain/chain identity (`SORA`);
   - the SCCP burn registry backend;
   - the generic message proof family (`stark-fri-v1`);
-  - the SORA2 runtime proof family (`runtime-scale-v1`) and verifier backend
-    (`sora-nexus-runtime-v1`);
-  - the runtime SCALE envelope paths used by the bridge UI for wallet
-    submission:
-    - `/v1/sccp/proofs/message/{message_id}/runtime-scale`
+  - no runtime SCALE proof family, verifier backend, or runtime envelope path
+    while Substrate/Polkadot-family lanes remain outside launch scope;
   - the typed SCCP message proof-artifact discovery path (`/v1/sccp/artifacts/message/{message_id}`);
   - the normalized SCCP counterparty proof-job discovery path (`/v1/sccp/jobs/message/{message_id}`);
   - the SCCP proof-manifest discovery path (`/v1/sccp/manifests`);

@@ -1,4 +1,4 @@
-//! `DefaultHost` does not apply batch-verifier gates for `ZK_VERIFY_BATCH`.
+//! `DefaultHost` applies batch-verifier gates for `ZK_VERIFY_BATCH`.
 
 use iroha_zkp_halo2 as h2;
 use ivm::{
@@ -16,6 +16,15 @@ fn make_tlv(payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     tlv.extend_from_slice(&h);
     tlv
+}
+
+fn decode_statuses(vm: &ivm::IVM) -> Vec<u8> {
+    let output = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("batch output tlv");
+    assert_eq!(output.type_id, PointerType::NoritoBytes);
+    norito::decode_from_bytes(output.payload).expect("status vector")
 }
 
 fn dummy_envelope(n: u32, curve: h2::ZkCurveId) -> h2::OpenVerifyEnvelope {
@@ -51,7 +60,7 @@ fn dummy_envelope(n: u32, curve: h2::ZkCurveId) -> h2::OpenVerifyEnvelope {
 }
 
 #[test]
-fn verify_batch_reports_disabled_before_batch_size_and_backend_gates() {
+fn verify_batch_enforces_batch_size_before_per_item_gates() {
     let payload = norito::to_bytes(&vec![
         dummy_envelope(8, h2::ZkCurveId::Pallas),
         dummy_envelope(8, h2::ZkCurveId::Pallas),
@@ -62,7 +71,7 @@ fn verify_batch_reports_disabled_before_batch_size_and_backend_gates() {
     let cfg = ZkHalo2Config {
         enabled: true,
         curve: ZkCurve::Pallas,
-        backend: ZkHalo2Backend::Unsupported,
+        backend: ZkHalo2Backend::Ipa,
         max_k: 18,
         verifier_budget_ms: 50,
         verifier_max_batch: 1,
@@ -77,11 +86,11 @@ fn verify_batch_reports_disabled_before_batch_size_and_backend_gates() {
         .expect("syscall ok");
 
     assert_eq!(vm.register(10), 0);
-    assert_eq!(vm.register(11), host::ERR_DISABLED);
+    assert_eq!(vm.register(11), host::ERR_BATCH);
 }
 
 #[test]
-fn verify_batch_reports_disabled_before_curve_and_k_gates() {
+fn verify_batch_returns_status_vector_for_curve_and_k_gates() {
     let payload =
         norito::to_bytes(&vec![dummy_envelope(4096, h2::ZkCurveId::Bn254)]).expect("encode batch");
     let tlv = make_tlv(&payload);
@@ -103,6 +112,8 @@ fn verify_batch_reports_disabled_before_curve_and_k_gates() {
     host.syscall(syscalls::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
         .expect("syscall ok");
 
-    assert_eq!(vm.register(10), 0);
-    assert_eq!(vm.register(11), host::ERR_DISABLED);
+    assert_ne!(vm.register(10), 0);
+    assert_eq!(vm.register(11), host::ERR_CURVE);
+    assert_eq!(vm.register(12), 0);
+    assert_eq!(decode_statuses(&vm), vec![0]);
 }

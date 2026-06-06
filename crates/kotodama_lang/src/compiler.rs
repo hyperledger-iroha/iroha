@@ -770,7 +770,7 @@ impl Default for CompilerOptions {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use iroha_data_model::DomainId;
+    use iroha_data_model::{DomainId, asset::id::AssetDefinitionId};
 
     use super::{
         AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
@@ -2916,16 +2916,38 @@ fn main() {
     }
 
     #[test]
-    fn fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_opaque_access() {
-        let src = r#"
-kotoage fn apply_batch() permission(Admin) {
-  let batch = norito_bytes("00");
+    fn fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_exact_access() {
+        let from = sample_account_id();
+        let to = sample_account_id_alt();
+        let asset_definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition");
+        let batch = iroha_data_model::isi::transfer::TransferAssetBatch::new(vec![
+            iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
+                from.clone(),
+                to.clone(),
+                asset_definition.clone(),
+                7_u64,
+            ),
+            iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
+                to.clone(),
+                from.clone(),
+                asset_definition.clone(),
+                3_u64,
+            ),
+        ]);
+        let batch_hex = hex::encode(norito::to_bytes(&batch).expect("batch request"));
+        let src = format!(
+            r#"
+kotoage fn apply_batch() permission(Admin) {{
+  let batch = norito_bytes("0x{batch_hex}");
   transfer_v1_batch_apply(batch);
-}
-"#;
+}}
+"#
+        );
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
+            .compile_source_with_manifest(&src)
             .expect("compile transfer_v1_batch_apply builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
@@ -2956,13 +2978,26 @@ kotoage fn apply_batch() permission(Admin) {
             .iter()
             .find(|entry| entry.name == "apply_batch")
             .expect("apply_batch entrypoint");
-        assert_eq!(apply_batch.access_hints_complete, Some(false));
-        assert_eq!(
-            apply_batch.access_hints_skipped,
-            vec!["opaque ISI access is not compiler-resolved".to_string()]
-        );
-        assert!(apply_batch.read_keys.is_empty());
-        assert!(apply_batch.write_keys.is_empty());
+        assert_eq!(apply_batch.access_hints_complete, Some(true));
+        assert!(apply_batch.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&apply_batch.read_keys);
+        assert_taira_supported_access_keys(&apply_batch.write_keys);
+        for account in [&from, &to] {
+            let key = super::key_asset(&iroha_data_model::asset::AssetId::of(
+                asset_definition.clone(),
+                account.clone(),
+            ));
+            assert!(
+                apply_batch.read_keys.iter().any(|actual| actual == &key),
+                "missing transfer batch read key {key}; got {:?}",
+                apply_batch.read_keys
+            );
+            assert!(
+                apply_batch.write_keys.iter().any(|actual| actual == &key),
+                "missing transfer batch write key {key}; got {:?}",
+                apply_batch.write_keys
+            );
+        }
     }
 
     #[test]
@@ -7146,6 +7181,153 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_static_smart_contract_lifecycle_helpers() {
+        let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            7,
+            &sample_account_id(),
+            0,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            code_hash: Some(code_hash),
+            abi_hash: None,
+            compiler_fingerprint: Some("test".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let register_code_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest },
+            )
+            .expect("register manifest request"),
+        );
+        let register_bytes_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+                    code_hash,
+                    code: vec![0, 1, 2, 3],
+                },
+            )
+            .expect("register bytes request"),
+        );
+        let activate_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                    contract_address: contract_address.clone(),
+                    code_hash,
+                },
+            )
+            .expect("activate request"),
+        );
+        let remove_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes {
+                    code_hash,
+                    reason: Some("test cleanup".to_owned()),
+                },
+            )
+            .expect("remove request"),
+        );
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn lifecycle() permission(Admin) {{
+    register_smart_contract_code(norito_bytes("0x{register_code_hex}"));
+    register_smart_contract_bytes(norito_bytes("0x{register_bytes_hex}"));
+    activate_contract_instance(norito_bytes("0x{activate_hex}"));
+    remove_smart_contract_bytes(norito_bytes("0x{remove_hex}"));
+  }}
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("static smart contract lifecycle helpers should have complete access hints");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected contract lifecycle access hints");
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
+        assert!(!hints.read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY));
+        assert!(
+            !hints
+                .write_keys
+                .iter()
+                .any(|key| key == GLOBAL_WILDCARD_KEY)
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let lifecycle = entrypoints
+            .iter()
+            .find(|entry| entry.name == "lifecycle")
+            .expect("lifecycle entrypoint");
+        assert_eq!(lifecycle.access_hints_complete, Some(true));
+        assert!(lifecycle.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&lifecycle.read_keys);
+        assert_taira_supported_access_keys(&lifecycle.write_keys);
+
+        for key in [
+            super::key_contract_code(&code_hash),
+            super::key_contract_manifest(&code_hash),
+            super::key_contract_instance(&contract_address),
+            super::key_contract_instance_code_hash(&code_hash),
+        ] {
+            assert!(
+                lifecycle.read_keys.iter().any(|actual| actual == &key),
+                "missing lifecycle read key {key}; got {:?}",
+                lifecycle.read_keys
+            );
+        }
+        for key in [
+            super::key_contract_code(&code_hash),
+            super::key_contract_manifest(&code_hash),
+            super::key_contract_instance(&contract_address),
+            super::key_contract_instance_code_hash(&code_hash),
+        ] {
+            assert!(
+                lifecycle.write_keys.iter().any(|actual| actual == &key),
+                "missing lifecycle write key {key}; got {:?}",
+                lifecycle.write_keys
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_literal_nullifier_helper() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn consume() permission(Admin) {
+    use_nullifier(42);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("literal nullifier should have complete access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let consume = entrypoints
+            .iter()
+            .find(|entry| entry.name == "consume")
+            .expect("consume entrypoint");
+        assert_eq!(consume.access_hints_complete, Some(true));
+        assert!(consume.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&consume.read_keys);
+        assert_taira_supported_access_keys(&consume.write_keys);
+        let nullifier_key = super::key_nullifier(42);
+        assert_eq!(consume.read_keys, [nullifier_key.clone()]);
+        assert_eq!(consume.write_keys, [nullifier_key]);
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_static_peer_helpers() {
         let public_key = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
         let peer = iroha_data_model::peer::PeerId::from(
@@ -7626,6 +7808,32 @@ seiyaku Test {{
                     .expect("authority literal"),
             )
         );
+    }
+
+    #[test]
+    fn manifest_trigger_decl_preserves_namespaced_callback() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn arm() {}
+  register_trigger wake {
+    call callee::run;
+    on time pre_commit;
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let arm = entrypoints
+            .iter()
+            .find(|entry| entry.name == "arm")
+            .expect("arm entrypoint");
+        assert_eq!(arm.triggers.len(), 1);
+        let callback = &arm.triggers[0].callback;
+        assert_eq!(callback.namespace.as_deref(), Some("callee"));
+        assert_eq!(callback.entrypoint, "run");
     }
 
     #[test]
@@ -9819,6 +10027,7 @@ impl Compiler {
             derive_isi_access_hints(
                 &ir_prog,
                 &string_map,
+                &int_const_map,
                 &authority_account_temps,
                 &dataref_kind_map,
                 &instruction_literal_access_map,
@@ -10401,7 +10610,7 @@ impl Compiler {
                                 })?;
                             if idx >= regalloc::ARG_REGS.len() {
                                 return Err(format!(
-                                    "too many return values in function: {} > {} (argument `{}` requires stack passing, which is not yet supported)",
+                                    "too many function parameters: {} > {} (argument `{}` exceeds the ABI v1 register argument limit)",
                                     func.params.len(),
                                     regalloc::ARG_REGS.len(),
                                     name
@@ -12465,6 +12674,7 @@ impl Compiler {
                                 &mut code,
                                 encode_addi(13, 0, if *returns_pointer { 1 } else { 0 })?,
                             );
+                            push_word(&mut code, encode_addi(14, 0, 1)?);
                             push_syscall(
                                 &mut code,
                                 syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
@@ -12472,6 +12682,75 @@ impl Compiler {
                             if let Some(dest) = dest {
                                 let (rd, spilled, imm) = dst_reg(dest);
                                 push_word(&mut code, encode_addi(rd, 10, 0)?);
+                                spill_back(dest, rd, spilled, imm, &mut code)?;
+                            }
+                        }
+                        Instr::InvokeEntrypointAsMulti {
+                            dests,
+                            actor,
+                            entrypoint,
+                            payload,
+                            return_pointer_mask,
+                        } => {
+                            if dests.len() > regalloc::MAX_RETURN_VALUES {
+                                return Err(format!(
+                                    "too many return values in invoke_entrypoint_as: {} > {}",
+                                    dests.len(),
+                                    regalloc::MAX_RETURN_VALUES
+                                ));
+                            }
+                            if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Blob, actor_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(actor, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            if let Some(entrypoint_raw) = string_map.get(&(func_idx, *entrypoint)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    11,
+                                    DataKey(DataKind::Blob, entrypoint_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(entrypoint, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, rs, 0)?);
+                            }
+                            if let Some(payload_raw) = string_map.get(&(func_idx, *payload)) {
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
+                                    emit_literal_stub(
+                                        &mut code,
+                                        &mut fixups,
+                                        12,
+                                        data_key_for_pointer(*kind, payload_raw),
+                                    );
+                                } else {
+                                    let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                                }
+                            } else {
+                                let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                            }
+                            let return_pointer_mask = i16::try_from(*return_pointer_mask)
+                                .map_err(|_| "return pointer mask does not fit ADDI immediate")?;
+                            let return_count = i16::try_from(dests.len())
+                                .map_err(|_| "return count does not fit ADDI immediate")?;
+                            push_word(&mut code, encode_addi(13, 0, return_pointer_mask)?);
+                            push_word(&mut code, encode_addi(14, 0, return_count)?);
+                            push_syscall(
+                                &mut code,
+                                syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
+                            );
+                            for (idx, dest) in dests.iter().enumerate() {
+                                let source_reg = (regalloc::RET_REG + idx) as u8;
+                                let (rd, spilled, imm) = dst_reg(dest);
+                                push_word(&mut code, encode_addi(rd, source_reg, 0)?);
                                 spill_back(dest, rd, spilled, imm, &mut code)?;
                             }
                         }
@@ -16317,6 +16596,7 @@ fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
 fn derive_isi_access_hints(
     ir_prog: &ir::Program,
     string_map: &HashMap<(usize, ir::Temp), String>,
+    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
@@ -16334,6 +16614,7 @@ fn derive_isi_access_hints(
                     instr,
                     func_idx,
                     string_map,
+                    int_const_map,
                     authority_account_temps,
                     dataref_kind_map,
                     instruction_literal_access_map,
@@ -16453,6 +16734,7 @@ fn record_isi_access(
     instr: &ir::Instr,
     func_idx: usize,
     string_map: &HashMap<(usize, ir::Temp), String>,
+    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
@@ -16475,8 +16757,13 @@ fn record_isi_access(
     };
     match instr {
         ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => {}
-        ir::Instr::TransferBatchApply { .. } => {
-            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+        ir::Instr::TransferBatchApply { payload } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_transfer_asset_batch_access(raw, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
         }
         ir::Instr::CallContract { .. } => {}
         ir::Instr::EscrowOpenOffer { escrow, asset, .. } => {
@@ -16831,11 +17118,22 @@ fn record_isi_access(
         | ir::Instr::DebugPrint { .. }
         | ir::Instr::DebugLog { .. }
         | ir::Instr::CommitOutput => {}
-        ir::Instr::UseNullifier { .. } => {
-            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+        ir::Instr::UseNullifier { nullifier } => {
+            let Some(raw) = int_const_map.get(&(func_idx, *nullifier)).copied() else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            let Ok(value) = u64::try_from(raw) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            add_nullifier_rw(access_set, value);
         }
-        ir::Instr::SmartContractLifecycle { .. } => {
-            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+        ir::Instr::SmartContractLifecycle { payload, syscall } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_smart_contract_lifecycle_access(raw, *syscall, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
         }
         ir::Instr::ZkRootsGet { payload, .. } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
@@ -16955,6 +17253,7 @@ fn record_isi_access(
             }
         }
         ir::Instr::InvokeEntrypointAs { .. }
+        | ir::Instr::InvokeEntrypointAsMulti { .. }
         | ir::Instr::ExpectRejectAs { .. }
         | ir::Instr::ActorAccount { .. }
         | ir::Instr::ActorPublicKey { .. }
@@ -17098,6 +17397,70 @@ fn record_vrf_epoch_seed_access(raw: &str, access_set: &mut AccessSets) -> Optio
     access_set.reads.insert(format!("vrf:epoch_seed:{epoch}"));
     if fallback_to_latest {
         access_set.reads.insert("vrf:epoch_seed:latest".to_owned());
+    }
+    Some(())
+}
+
+fn record_smart_contract_lifecycle_access(
+    raw: &str,
+    syscall: u32,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    use iroha_data_model::isi::smart_contract_code as DMScode;
+
+    let payload = decode_norito_literal_payload(raw)?;
+    match syscall {
+        syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
+            let request: DMScode::RegisterSmartContractCode =
+                norito::decode_from_bytes(&payload).ok()?;
+            let code_hash = request.manifest.code_hash.as_ref()?;
+            add_contract_code_r(access_set, code_hash);
+            add_contract_manifest_rw(access_set, code_hash);
+        }
+        syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
+            let request: DMScode::RegisterSmartContractBytes =
+                norito::decode_from_bytes(&payload).ok()?;
+            add_contract_code_rw(access_set, &request.code_hash);
+        }
+        syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
+            let request: DMScode::ActivateContractInstance =
+                norito::decode_from_bytes(&payload).ok()?;
+            add_contract_code_r(access_set, &request.code_hash);
+            add_contract_manifest_r(access_set, &request.code_hash);
+            add_contract_instance_rw(access_set, &request.contract_address);
+            add_contract_instance_code_hash_rw(access_set, &request.code_hash);
+        }
+        syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
+            let request: DMScode::RemoveSmartContractBytes =
+                norito::decode_from_bytes(&payload).ok()?;
+            add_contract_code_rw(access_set, &request.code_hash);
+            add_contract_manifest_r(access_set, &request.code_hash);
+            add_contract_instance_code_hash_r(access_set, &request.code_hash);
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+fn record_transfer_asset_batch_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
+    let payload = decode_norito_literal_payload(raw)?;
+    let batch: iroha_data_model::isi::transfer::TransferAssetBatch =
+        norito::decode_from_bytes(&payload).ok()?;
+    record_transfer_asset_batch_entries_access(&batch, access_set)
+}
+
+fn record_transfer_asset_batch_entries_access(
+    batch: &iroha_data_model::isi::transfer::TransferAssetBatch,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    if batch.entries().is_empty() {
+        return None;
+    }
+    for entry in batch.entries() {
+        let source = AssetId::of(entry.asset_definition().clone(), entry.from().clone());
+        let destination = AssetId::of(entry.asset_definition().clone(), entry.to().clone());
+        add_asset_rw(access_set, &source);
+        add_asset_rw(access_set, &destination);
     }
     Some(())
 }
@@ -17446,6 +17809,9 @@ fn record_instruction_box_access(
         };
         add_asset_def_detail_rw(access_set, instr.asset(), &key);
         return Some(());
+    }
+    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::transfer::TransferAssetBatch>() {
+        return record_transfer_asset_batch_entries_access(instr, access_set);
     }
 
     {
@@ -18174,6 +18540,26 @@ fn key_peer(id: &iroha_data_model::peer::PeerId) -> String {
     format!("peer:{id}")
 }
 
+fn key_contract_manifest(code_hash: &iroha_crypto::Hash) -> String {
+    format!("contract.manifest:{code_hash}")
+}
+
+fn key_contract_code(code_hash: &iroha_crypto::Hash) -> String {
+    format!("contract.code:{code_hash}")
+}
+
+fn key_contract_instance(address: &iroha_data_model::smart_contract::ContractAddress) -> String {
+    format!("contract.instance:{address}")
+}
+
+fn key_contract_instance_code_hash(code_hash: &iroha_crypto::Hash) -> String {
+    format!("contract.instance.code_hash:{code_hash}")
+}
+
+fn key_nullifier(value: u64) -> String {
+    format!("nullifier:{value}")
+}
+
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
     format!("nft.detail:{id}:{key}")
 }
@@ -18317,6 +18703,51 @@ fn add_anonymous_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
 
 fn add_peer_rw(set: &mut AccessSets, id: &iroha_data_model::peer::PeerId) {
     let key = key_peer(id);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_manifest_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    set.reads.insert(key_contract_manifest(code_hash));
+}
+
+fn add_contract_manifest_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    let key = key_contract_manifest(code_hash);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_code_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    set.reads.insert(key_contract_code(code_hash));
+}
+
+fn add_contract_code_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    let key = key_contract_code(code_hash);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_instance_rw(
+    set: &mut AccessSets,
+    address: &iroha_data_model::smart_contract::ContractAddress,
+) {
+    let key = key_contract_instance(address);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_instance_code_hash_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    set.reads.insert(key_contract_instance_code_hash(code_hash));
+}
+
+fn add_contract_instance_code_hash_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    let key = key_contract_instance_code_hash(code_hash);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_nullifier_rw(set: &mut AccessSets, value: u64) {
+    let key = key_nullifier(value);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
@@ -18675,6 +19106,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::VrfEpochSeed { .. }
             | ir::Instr::CallContract { .. }
             | ir::Instr::InvokeEntrypointAs { .. }
+            | ir::Instr::InvokeEntrypointAsMulti { .. }
             | ir::Instr::ExpectRejectAs { .. }
             | ir::Instr::ActorAccount { .. }
             | ir::Instr::ActorPublicKey { .. }
@@ -18753,6 +19185,32 @@ fn build_entrypoint_descriptors(
         hint_report_by_name.insert(&func.name, report);
     }
 
+    let mut trigger_anchor_names = typed
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            TypedItem::Function(func)
+                if entrypoint_kind_from_modifiers(&func.modifiers).is_some() =>
+            {
+                Some(func.name.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if trigger_anchor_names.is_empty()
+        && let Some(func) = typed.items.iter().find_map(|item| match item {
+            TypedItem::Function(func)
+                if func.modifiers.kind == FunctionKind::Free && func.name == "main" =>
+            {
+                Some(func)
+            }
+            _ => None,
+        })
+    {
+        trigger_anchor_names.push(func.name.clone());
+    }
+    let namespaced_trigger_anchor = trigger_anchor_names.first().cloned();
+
     let mut triggers_by_name: HashMap<String, Vec<TriggerDescriptor>> = HashMap::new();
     for trigger in &typed.triggers {
         let descriptor = TriggerDescriptor {
@@ -18766,8 +19224,18 @@ fn build_entrypoint_descriptors(
                 entrypoint: trigger.call.entrypoint.clone(),
             },
         };
+        let trigger_anchor = if trigger.call.namespace.is_some() {
+            namespaced_trigger_anchor.clone().ok_or_else(|| {
+                format!(
+                    "trigger `{}` has a namespaced callback but the contract has no entrypoint descriptor to carry it",
+                    trigger.id
+                )
+            })?
+        } else {
+            trigger.call.entrypoint.clone()
+        };
         triggers_by_name
-            .entry(trigger.call.entrypoint.clone())
+            .entry(trigger_anchor)
             .or_default()
             .push(descriptor);
     }

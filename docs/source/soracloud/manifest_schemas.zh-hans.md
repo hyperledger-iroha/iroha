@@ -166,6 +166,8 @@ Rust 定义位于 `crates/iroha_data_model/src/soracloud.rs` 中。
 - FHE执行政策：
   - `max_plaintext_bytes <= max_ciphertext_bytes`。
   - `max_output_ciphertexts <= max_input_ciphertexts`。
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - 参数集绑定必须与 `(param_set, version)` 匹配。
   - `max_multiplication_depth` 不得超过参数设置深度。
   - 策略准入拒绝 `Proposed` 或 `Withdrawn` 参数集生命周期。

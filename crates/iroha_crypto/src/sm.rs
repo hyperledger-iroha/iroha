@@ -421,8 +421,10 @@ impl Sm2PrivateKey {
     ///
     /// # Errors
     /// Returns [`ParseError`] if `secret` is not a valid SM2 scalar.
-    pub fn new(distid: impl Into<String>, secret: [u8; 32]) -> Result<Self, ParseError> {
-        Self::from_bytes(distid, &secret)
+    pub fn new(distid: impl Into<String>, mut secret: [u8; 32]) -> Result<Self, ParseError> {
+        let key = Self::from_bytes(distid, &secret);
+        secret.zeroize();
+        key
     }
 
     /// Parse an SM2 private key from a byte slice.
@@ -435,12 +437,13 @@ impl Sm2PrivateKey {
         }
         let distid = distid.into();
         validate_distid(&distid)?;
-        let mut buf = [0u8; 32];
+        let mut buf = Zeroizing::new([0u8; 32]);
         buf.copy_from_slice(secret);
-        SecretKey::from_slice(&buf).map_err(|_| ParseError("invalid SM2 private key".into()))?;
+        SecretKey::from_slice(buf.as_ref())
+            .map_err(|_| ParseError("invalid SM2 private key".into()))?;
         Ok(Self {
             distid,
-            secret: Secret::new(Zeroizing::new(buf)),
+            secret: Secret::new(buf),
         })
     }
 
@@ -515,10 +518,12 @@ impl Sm2PrivateKey {
             let mut hasher = Sha512::new();
             hasher.update(seed);
             hasher.update(counter.to_be_bytes());
-            let digest = hasher.finalize();
-            let mut candidate = [0u8; 32];
+            let mut digest = hasher.finalize();
+            let mut candidate = Zeroizing::new([0u8; 32]);
             candidate.copy_from_slice(&digest[..32]);
-            if let Ok(key) = Self::new(distid.clone(), candidate) {
+            let key = Self::from_bytes(distid.clone(), candidate.as_ref());
+            digest.zeroize();
+            if let Ok(key) = key {
                 return Ok(key);
             }
             counter = counter
@@ -614,10 +619,11 @@ impl Sm2PrivateKey {
     }
 
     pub(crate) fn from_secret_key(distid: String, secret: &SecretKey) -> Result<Self, ParseError> {
-        let bytes = secret.to_bytes();
-        let mut buf = [0u8; 32];
+        let mut bytes = secret.to_bytes();
+        let mut buf = Zeroizing::new([0u8; 32]);
         buf.copy_from_slice(bytes.as_ref());
-        Self::new(distid, buf)
+        bytes.zeroize();
+        Self::from_bytes(distid, buf.as_ref())
     }
 }
 

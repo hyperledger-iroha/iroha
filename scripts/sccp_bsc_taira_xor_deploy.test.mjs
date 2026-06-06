@@ -17,6 +17,7 @@ import {
   buildMergedBscTairaXorRouteConfigToml,
   main,
   isKnownDiagnosticBscVerifierKeyHash,
+  isSmokeFixtureGroth16VerifierMaterial,
   normalizeBscRpcUrl,
   normalizeVerifierMaterial,
   unsafeSecretReason,
@@ -32,9 +33,24 @@ const HASH_22 = `0x${"22".repeat(32)}`;
 const HASH_33 = `0x${"33".repeat(32)}`;
 const HASH_44 = `0x${"44".repeat(32)}`;
 const HASH_55 = `0x${"55".repeat(32)}`;
+const HASH_66 = `0x${"66".repeat(32)}`;
+const HASH_77 = `0x${"77".repeat(32)}`;
+const SOURCE_EVENT_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_55}`;
+const ROUTE_CANARY_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_77}`;
 const DIAGNOSTIC_BSC_VERIFIER_KEY_HASH = [
   ...SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES,
 ][0];
+const SMOKE_FIXTURE_G1 = ["1", "2"];
+const SMOKE_FIXTURE_G2 = [
+  "10857046999023057135944570762232829481370756359578518086990519993285655852781",
+  "11559732032986387107991004021392285783925812861821192530917403151452391805634",
+  "8495653923123431417604973247489272438418190587263600148770280649306958101930",
+  "4082367875863433681332203403145435568316851327593401208105741076214120093531",
+];
+const SMOKE_FIXTURE_IC = Array.from(
+  { length: 10 },
+  () => SMOKE_FIXTURE_G1,
+).flat();
 const BURN_RECORD_BYTES = Buffer.from(
   "bsc taira xor burn-record artifact fixture for route-config tests",
   "utf8",
@@ -173,10 +189,12 @@ const routeManifest = (overrides = {}) => {
   };
   const postDeployLiveEvidence = {
     fullTomlReady: false,
-    sourceBridgeConfigHash: `0x${"44".repeat(32)}`,
-    sourceEventTransactionId: `0x${"55".repeat(32)}`,
-    routeCanaryEvidenceHash: `0x${"66".repeat(32)}`,
-    routeCanaryTransactionId: `0x${"77".repeat(32)}`,
+    sourceBridgeConfigHash: HASH_44,
+    sourceEventTransactionId: HASH_55,
+    sourceEventExplorerUrl: SOURCE_EVENT_EXPLORER_URL,
+    routeCanaryEvidenceHash: HASH_66,
+    routeCanaryTransactionId: HASH_77,
+    routeCanaryExplorerUrl: ROUTE_CANARY_EXPLORER_URL,
     ...postDeployOverrides,
   };
   return {
@@ -243,9 +261,15 @@ test("BSC deployment evidence accepts only matching live readback", () => {
 
   assert.equal(evidence.routeId, "taira_bsc_xor");
   assert.equal(evidence.assetKey, "xor");
-  assert.equal(evidence.destinationRollout.destinationBindingHash, bindingHash());
+  assert.equal(
+    evidence.destinationRollout.destinationBindingHash,
+    bindingHash(),
+  );
   assert.equal(evidence.bscContractReadback.bridgeVerifierKeyHash, HASH_22);
-  assert.doesNotMatch(JSON.stringify(evidence), /private[_-]?key|mnemonic|seed/iu);
+  assert.doesNotMatch(
+    JSON.stringify(evidence),
+    /private[_-]?key|mnemonic|seed/iu,
+  );
 });
 
 test("BSC deployment evidence rejects duplicate contract addresses", () => {
@@ -270,12 +294,24 @@ test("BSC deployment readback rejects drift and incomplete contracts", () => {
     [readyReadback({ codePresent: { token: false } }), /token bytecode/u],
     [readyReadback({ tokenBridgeAddress: BSC_TOKEN_ADDRESS }), /token bridge/u],
     [readyReadback({ tokenBridgeLocked: false }), /must be locked/u],
-    [readyReadback({ sourceBridgeOwner: BSC_SOURCE_BRIDGE_ADDRESS }), /source bridge owner/u],
-    [readyReadback({ bridgeDestinationBindingHash: HASH_33 }), /destination binding/u],
-    [readyReadback({ bridgeVerifierAddress: BSC_BRIDGE_ADDRESS }), /verifier address/u],
+    [
+      readyReadback({ sourceBridgeOwner: BSC_SOURCE_BRIDGE_ADDRESS }),
+      /source bridge owner/u,
+    ],
+    [
+      readyReadback({ bridgeDestinationBindingHash: HASH_33 }),
+      /destination binding/u,
+    ],
+    [
+      readyReadback({ bridgeVerifierAddress: BSC_BRIDGE_ADDRESS }),
+      /verifier address/u,
+    ],
     [readyReadback({ bridgeVerifierCodeHash: HASH_33 }), /verifier code hash/u],
     [readyReadback({ bridgeVerifierKeyHash: HASH_33 }), /verifier key hash/u],
-    [readyReadback({ bridgeNetworkId: `0x${"38".padStart(64, "0")}` }), /network id/u],
+    [
+      readyReadback({ bridgeNetworkId: `0x${"38".padStart(64, "0")}` }),
+      /network id/u,
+    ],
     [readyReadback({ bridgeSourceDomain: 2 }), /domains/u],
     [readyReadback({ bridgeTargetDomain: 1 }), /domains/u],
   ];
@@ -297,7 +333,10 @@ test("BSC deployment readback rejects drift and incomplete contracts", () => {
 
 test("BSC deployment helper rejects unsafe secret-like evidence material", () => {
   assert.equal(unsafeSecretReason({ public: "ok" }), "");
-  assert.match(unsafeSecretReason({ nested: { private_key: "0xabc" } }), /private key/u);
+  assert.match(
+    unsafeSecretReason({ nested: { private_key: "0xabc" } }),
+    /private key/u,
+  );
   assert.match(
     unsafeSecretReason({
       notes:
@@ -340,17 +379,40 @@ test("BSC verifier material normalization rejects foreign or malformed inputs", 
   assert.equal(normalized.ic.length, 20);
 
   assert.throws(
-    () => normalizeVerifierMaterial(verifierMaterial({ proofFamily: "groth16-only" })),
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({ proofFamily: "groth16-only" }),
+      ),
     /proofFamily/u,
   );
   assert.throws(
-    () => normalizeVerifierMaterial(verifierMaterial({ networkId: `0x${"38".padStart(64, "0")}` })),
+    () =>
+      normalizeVerifierMaterial(
+        verifierMaterial({ networkId: `0x${"38".padStart(64, "0")}` }),
+      ),
     /BSC testnet/u,
   );
-  assert.throws(() => normalizeVerifierMaterial(verifierMaterial({ sourceDomain: 2 })), /SORA -> BSC/u);
-  assert.throws(() => normalizeVerifierMaterial(verifierMaterial({ targetDomain: 1 })), /SORA -> BSC/u);
-  assert.throws(() => normalizeVerifierMaterial(verifierMaterial({ ic: [1, 2] })), /20 uint256/u);
-  assert.throws(() => normalizeVerifierMaterial({ ...verifierMaterial(), verifierKeyHash: HASH_22, alpha1: [0] }), /2 uint256/u);
+  assert.throws(
+    () => normalizeVerifierMaterial(verifierMaterial({ sourceDomain: 2 })),
+    /SORA -> BSC/u,
+  );
+  assert.throws(
+    () => normalizeVerifierMaterial(verifierMaterial({ targetDomain: 1 })),
+    /SORA -> BSC/u,
+  );
+  assert.throws(
+    () => normalizeVerifierMaterial(verifierMaterial({ ic: [1, 2] })),
+    /20 uint256/u,
+  );
+  assert.throws(
+    () =>
+      normalizeVerifierMaterial({
+        ...verifierMaterial(),
+        verifierKeyHash: HASH_22,
+        alpha1: [0],
+      }),
+    /2 uint256/u,
+  );
 });
 
 test("BSC verifier material reports diagnostic key material before deployment", () => {
@@ -376,6 +438,26 @@ test("BSC verifier material reports diagnostic key material before deployment", 
   );
 });
 
+test("BSC verifier material rejects smoke-test generator-point fixtures", () => {
+  const smokeFixtureMaterial = verifierMaterial({
+    alpha1: SMOKE_FIXTURE_G1,
+    beta2: SMOKE_FIXTURE_G2,
+    gamma2: SMOKE_FIXTURE_G2,
+    delta2: SMOKE_FIXTURE_G2,
+    ic: SMOKE_FIXTURE_IC,
+  });
+
+  const normalized = normalizeVerifierMaterial(smokeFixtureMaterial);
+  assert.equal(isSmokeFixtureGroth16VerifierMaterial(smokeFixtureMaterial), true);
+  assert.equal(normalized.fixtureShaped, true);
+  assert.match(
+    normalized.diagnosticVerifierReasons.join(" "),
+    /smoke-test Groth16 fixture/u,
+  );
+
+  assert.equal(isSmokeFixtureGroth16VerifierMaterial(verifierMaterial()), false);
+});
+
 test("BSC route-config writes backend-compatible TOML with BSC deployment evidence", () => {
   const toml = buildBscTairaXorRouteConfigToml(routeManifest(), {
     "allow-unready": "true",
@@ -389,41 +471,195 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   assert.match(toml, /counterparty_domain = 2/u);
   assert.match(toml, /verifier_target = "EvmContract"/u);
   assert.match(toml, /sccp_allow_unready_transparent_proofs = true/u);
-  assert.match(toml, new RegExp(`taira_xor_token_address = "${BSC_TOKEN_ADDRESS}"`, "u"));
-  assert.match(toml, new RegExp(`taira_xor_bridge_address = "${BSC_BRIDGE_ADDRESS}"`, "u"));
-  assert.match(toml, new RegExp(`source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`, "u"));
   assert.match(
     toml,
-    new RegExp(`sccp_bsc_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`, "u"),
+    new RegExp(`taira_xor_token_address = "${BSC_TOKEN_ADDRESS}"`, "u"),
   );
   assert.match(
     toml,
-    new RegExp(`bsc_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`, "u"),
+    new RegExp(`taira_xor_bridge_address = "${BSC_BRIDGE_ADDRESS}"`, "u"),
   );
   assert.match(
     toml,
-    new RegExp(`sccp_tron_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`, "u"),
+    new RegExp(`source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`, "u"),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `sccp_bsc_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
+      "u",
+    ),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `bsc_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
+      "u",
+    ),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `sccp_tron_source_bridge_address = "${BSC_SOURCE_BRIDGE_ADDRESS}"`,
+      "u",
+    ),
   );
   assert.match(
     toml,
     new RegExp(`destination_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
   );
-  assert.match(toml, new RegExp(`verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"));
   assert.match(
     toml,
-    new RegExp(`sccp_bsc_destination_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
+    new RegExp(`verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
   );
-  assert.match(toml, new RegExp(`bsc_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"));
-  assert.match(toml, new RegExp(`evm_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"));
-  assert.match(toml, new RegExp(`tron_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"));
+  assert.match(
+    toml,
+    new RegExp(
+      `sccp_bsc_destination_verifier_address = "${BSC_VERIFIER_ADDRESS}"`,
+      "u",
+    ),
+  );
+  assert.match(
+    toml,
+    new RegExp(`bsc_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
+  );
+  assert.match(
+    toml,
+    new RegExp(`evm_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
+  );
+  assert.match(
+    toml,
+    new RegExp(`tron_verifier_address = "${BSC_VERIFIER_ADDRESS}"`, "u"),
+  );
   assert.match(toml, new RegExp(`proof_artifact_hash = "${HASH_44}"`, "u"));
   assert.match(toml, new RegExp(`prover_artifact_hash = "${HASH_44}"`, "u"));
   assert.match(toml, new RegExp(`circuit_artifact_hash = "${HASH_44}"`, "u"));
   assert.match(toml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
-  assert.match(toml, new RegExp(`destination_binding_hash = "${bindingHash()}"`, "u"));
-  assert.match(toml, new RegExp(`taira_burn_record_artifact_sha256 = "${BURN_RECORD_SHA256}"`, "u"));
+  assert.match(
+    toml,
+    new RegExp(`destination_binding_hash = "${bindingHash()}"`, "u"),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `taira_burn_record_artifact_sha256 = "${BURN_RECORD_SHA256}"`,
+      "u",
+    ),
+  );
   assert.match(toml, /post_deploy_full_toml_ready = false/u);
+  assert.match(
+    toml,
+    new RegExp(
+      `post_deploy_source_event_explorer_url = "${SOURCE_EVENT_EXPLORER_URL}"`,
+      "u",
+    ),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `post_deploy_route_canary_explorer_url = "${ROUTE_CANARY_EXPLORER_URL}"`,
+      "u",
+    ),
+  );
   assert.doesNotMatch(toml, /private[_-]?key|mnemonic|seed[_-]?phrase/iu);
+});
+
+test("BSC route-config requires explicit post-deploy evidence for production-ready manifests", () => {
+  const productionReadyManifest = (postDeployOverrides = {}) =>
+    routeManifest({
+      productionReady: true,
+      disabledReason: undefined,
+      postDeployLiveEvidence: {
+        fullTomlReady: true,
+        offlineFullTomlSha256: HASH_33,
+        ...postDeployOverrides,
+      },
+    });
+
+  const toml = buildBscTairaXorRouteConfigToml(productionReadyManifest());
+  assert.match(toml, /production_ready = true/u);
+  assert.match(
+    toml,
+    new RegExp(`post_deploy_offline_full_toml_sha256 = "${HASH_33}"`, "u"),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `post_deploy_source_event_explorer_url = "${SOURCE_EVENT_EXPLORER_URL}"`,
+      "u",
+    ),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `post_deploy_route_canary_explorer_url = "${ROUTE_CANARY_EXPLORER_URL}"`,
+      "u",
+    ),
+  );
+
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({ fullTomlReady: false }),
+      ),
+    /fullTomlReady true/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({ sourceEventExplorerUrl: undefined }),
+      ),
+    /sourceEventExplorerUrl/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({ routeCanaryExplorerUrl: undefined }),
+      ),
+    /routeCanaryExplorerUrl/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({ offlineFullTomlSha256: undefined }),
+      ),
+    /offlineFullTomlSha256/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          sourceEventExplorerUrl: `https://bscscan.com/tx/${HASH_55}`,
+        }),
+      ),
+    /BSC testnet explorer/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          routeCanaryExplorerUrl: `https://testnet.bscscan.com/tx/${HASH_55}`,
+        }),
+      ),
+    /transaction hash must match/u,
+  );
+});
+
+test("BSC route-config refuses production-ready manifests with disabled reasons", () => {
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        routeManifest({
+          productionReady: true,
+          disabledReason: "operator left this route disabled",
+          postDeployLiveEvidence: {
+            fullTomlReady: true,
+            offlineFullTomlSha256: HASH_33,
+          },
+        }),
+      ),
+    /productionReady cannot be true when disabledReason is set/u,
+  );
 });
 
 test("BSC route-config refuses non-production manifests unless explicitly allowed", () => {
@@ -434,7 +670,10 @@ test("BSC route-config refuses non-production manifests unless explicitly allowe
       }),
     /allow-unready/u,
   );
-  assert.match(buildBscTairaXorRouteConfigToml(routeManifest()), /allow_unready/u);
+  assert.match(
+    buildBscTairaXorRouteConfigToml(routeManifest()),
+    /allow_unready/u,
+  );
 });
 
 test("BSC route-config refuses production-ready diagnostic verifier manifests", () => {
@@ -494,7 +733,11 @@ test("BSC route-config can merge into TAIRA config while preserving zk settings"
     1,
   );
   assert.throws(
-    () => buildMergedBscTairaXorRouteConfigToml("[[zk.sccp_route_manifests]]\n", routeManifest()),
+    () =>
+      buildMergedBscTairaXorRouteConfigToml(
+        "[[zk.sccp_route_manifests]]\n",
+        routeManifest(),
+      ),
     /already contains/u,
   );
 });
@@ -506,13 +749,35 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [{ chain: "bsc-mainnet" }, /chain/u],
     [{ chainIdHex: "0x38" }, /chainIdHex/u],
     [{ networkIdHex: `0x${"38".padStart(64, "0")}` }, /networkIdHex/u],
+    [{ destinationBinding: { networkIdHex: HASH_33 } }, /networkIdHex.*aliases disagree/u],
     [{ counterpartyDomain: 1 }, /counterpartyDomain/u],
     [{ verifierTarget: "TronContract" }, /verifierTarget/u],
-    [{ bscBridgeAddress: BSC_TOKEN_ADDRESS }, /distinct/u],
+    [{ bscBridgeAddress: BSC_TOKEN_ADDRESS }, /bridge address aliases disagree|distinct/u],
+    [{ tokenAddress: BSC_SOURCE_BRIDGE_ADDRESS }, /token address aliases disagree/u],
+    [{ bridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS }, /bridge address aliases disagree/u],
+    [
+      { destinationRollout: { destinationBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS } },
+      /bridge address aliases disagree/u,
+    ],
     [{ destinationRollout: { targetDomain: 1 } }, /SORA -> BSC/u],
-    [{ destinationRollout: { verifierBackend: "tron-groth16-bn254-v1" } }, /verifier backend/u],
-    [{ destinationRollout: { destinationBindingHash: HASH_33 } }, /binding hash/u],
-    [{ destinationRollout: { proofArtifactHash: undefined } }, /supplied together/u],
+    [
+      { destinationRollout: { verifierBackend: "tron-groth16-bn254-v1" } },
+      /verifier backend/u,
+    ],
+    [{ verifierCodeHash: HASH_77 }, /verifierCodeHash aliases disagree/u],
+    [{ verifierKeyHash: HASH_77 }, /verifierKeyHash aliases disagree/u],
+    [
+      { destinationRollout: { destinationBindingHash: HASH_33 } },
+      /binding hash/u,
+    ],
+    [{ destinationBindingHash: HASH_77 }, /destination binding hash aliases disagree/u],
+    [{ destinationBindingKey: "stale-binding-key" }, /destination binding key aliases disagree/u],
+    [{ proofArtifactHash: HASH_77 }, /proofArtifactHash aliases disagree/u],
+    [{ provingKeyHash: HASH_77 }, /provingKeyHash aliases disagree/u],
+    [
+      { destinationRollout: { proofArtifactHash: undefined } },
+      /supplied together/u,
+    ],
     [
       {
         productionReady: true,
@@ -523,17 +788,44 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       },
       /productionReady requires proofArtifactHash and provingKeyHash/u,
     ],
-    [{ destinationRollout: { provingKeyHash: HASH_22 } }, /provingKeyHash must not equal verifierKeyHash/u],
+    [
+      { destinationRollout: { provingKeyHash: HASH_22 } },
+      /provingKeyHash must not equal verifierKeyHash/u,
+    ],
     [{ tairaXorBurnRecord: { artifactSha256: HASH_33 } }, /artifact sha256/u],
-    [{ tairaXorBurnRecord: { settlementAssetDefinitionId: "xor#universal" } }, /Base58|alias/u],
-    [{ sourceBridgeAddress: BSC_BRIDGE_ADDRESS }, /source bridge address aliases disagree/u],
-    [{ destinationVerifierAddress: BSC_BRIDGE_ADDRESS }, /verifier address aliases disagree/u],
+    [
+      { tairaXorBurnRecord: { settlementAssetDefinitionId: "xor#universal" } },
+      /Base58|alias/u,
+    ],
+    [
+      { sourceBridgeAddress: BSC_BRIDGE_ADDRESS },
+      /source bridge address aliases disagree/u,
+    ],
+    [
+      { destinationVerifierAddress: BSC_BRIDGE_ADDRESS },
+      /verifier address aliases disagree/u,
+    ],
+    [
+      { postDeployLiveEvidence: { full_toml_ready: true } },
+      /fullTomlReady aliases disagree/u,
+    ],
+    [
+      { postDeployLiveEvidence: { source_bridge_config_hash: HASH_77 } },
+      /sourceBridgeConfigHash aliases disagree/u,
+    ],
+    [
+      { postDeployLiveEvidence: { sourceEventTransactionUrl: ROUTE_CANARY_EXPLORER_URL } },
+      /sourceEventExplorerUrl|transaction hash/u,
+    ],
     [{ secret_key: "0xabc" }, /private key|secrets/u],
   ];
 
   for (const [overrides, reason] of cases) {
     assert.throws(
-      () => buildBscTairaXorRouteConfigToml(routeManifest(overrides), { "allow-unready": "true" }),
+      () =>
+        buildBscTairaXorRouteConfigToml(routeManifest(overrides), {
+          "allow-unready": "true",
+        }),
       reason,
     );
   }
@@ -543,7 +835,10 @@ test("BSC route-config command writes an operator overlay", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-"));
   const manifestPath = join(dir, "manifest.json");
   const out = join(dir, "route.toml");
-  await writeFile(manifestPath, `${JSON.stringify(routeManifest(), null, 2)}\n`);
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+  );
 
   const result = await main([
     "route-config",
@@ -559,9 +854,18 @@ test("BSC route-config command writes an operator overlay", async () => {
   assert.equal(result.routeId, "taira_bsc_xor");
   const toml = await readFile(out, "utf8");
   assert.match(toml, /route_id = "taira_bsc_xor"/u);
-  assert.match(toml, /source_bridge_address = "0x3333333333333333333333333333333333333333"/u);
-  assert.match(toml, /destination_verifier_address = "0x4444444444444444444444444444444444444444"/u);
-  assert.match(toml, /tron_verifier_address = "0x4444444444444444444444444444444444444444"/u);
+  assert.match(
+    toml,
+    /source_bridge_address = "0x3333333333333333333333333333333333333333"/u,
+  );
+  assert.match(
+    toml,
+    /destination_verifier_address = "0x4444444444444444444444444444444444444444"/u,
+  );
+  assert.match(
+    toml,
+    /tron_verifier_address = "0x4444444444444444444444444444444444444444"/u,
+  );
 });
 
 test("BSC deploy command refuses to broadcast without explicit testnet confirmation", async () => {
@@ -587,6 +891,9 @@ test("BSC deploy command refuses to broadcast without explicit testnet confirmat
 test("BSC deploy command rejects missing signer and unsafe local RPC before network use", async () => {
   const envName = "SCCP_BSC_TEST_DEPLOYER_PRIVATE_KEY";
   const previous = process.env[envName];
+  const dir = await mkdtemp(join(tmpdir(), "bsc-deploy-test-"));
+  const verifierFile = join(dir, "verifier.json");
+  await writeFile(verifierFile, JSON.stringify(verifierMaterial()), "utf8");
   try {
     delete process.env[envName];
     await assert.rejects(
@@ -594,7 +901,7 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
         main([
           "deploy",
           "--verifier",
-          "missing-verifier.json",
+          verifierFile,
           "--broadcast",
           "true",
           "--confirm-testnet",
@@ -611,7 +918,7 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
         main([
           "deploy",
           "--verifier",
-          "missing-verifier.json",
+          verifierFile,
           "--broadcast",
           "true",
           "--confirm-testnet",
@@ -630,6 +937,40 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
       process.env[envName] = previous;
     }
   }
+});
+
+test("BSC deploy command refuses smoke-test verifier material before signer or RPC use", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bsc-smoke-fixture-"));
+  const verifierFile = join(dir, "verifier.json");
+  await writeFile(
+    verifierFile,
+    JSON.stringify(
+      verifierMaterial({
+        alpha1: SMOKE_FIXTURE_G1,
+        beta2: SMOKE_FIXTURE_G2,
+        gamma2: SMOKE_FIXTURE_G2,
+        delta2: SMOKE_FIXTURE_G2,
+        ic: SMOKE_FIXTURE_IC,
+      }),
+    ),
+    "utf8",
+  );
+
+  await assert.rejects(
+    () =>
+      main([
+        "deploy",
+        "--verifier",
+        verifierFile,
+        "--broadcast",
+        "true",
+        "--confirm-testnet",
+        "taira_bsc_xor",
+        "--allow-diagnostic-verifier",
+        "true",
+      ]),
+    /refuses deterministic smoke-test Groth16 fixture/u,
+  );
 });
 
 test("BSC deployment helper self-test covers public evidence and secret scanning", async () => {

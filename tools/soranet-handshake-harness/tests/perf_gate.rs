@@ -133,8 +133,8 @@ fn load_fixture(id: &str) -> PerfFixture {
     let parsed: InteropFixture = norito::json::from_str(&contents).expect("parse interop fixture");
 
     let suite = match parsed.suite.as_str() {
-        "nk2.hybrid" => HandshakeSuite::Nk2Hybrid,
-        "nk3.pq_forward_secure" => HandshakeSuite::Nk3PqForwardSecure,
+        "nk2.hybrid.v1" => HandshakeSuite::Nk2Hybrid,
+        "nk3.pq_forward_secure.v1" => HandshakeSuite::Nk3PqForwardSecure,
         other => panic!("unsupported suite {other}"),
     };
 

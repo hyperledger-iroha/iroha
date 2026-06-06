@@ -66,14 +66,19 @@ impl<C: BlsConfiguration> PublicKey<C> {
 // Private key wrapper holds the scalar
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecretKey<C: BlsConfiguration> {
-    bytes: [u8; 32], // stable on-wire layout (w3f-compatible)
+    bytes: Zeroizing<[u8; 32]>, // stable on-wire layout (w3f-compatible)
     _m: PhantomData<C>,
 }
 impl<C: BlsConfiguration> SecretKey<C> {
     pub fn to_bytes(&self) -> [u8; 32] {
-        self.bytes
+        *self.bytes
     }
-    fn from_bytes(bytes: [u8; 32]) -> Self {
+
+    pub(crate) fn to_zeroizing_bytes(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.bytes)
+    }
+
+    fn from_bytes(bytes: Zeroizing<[u8; 32]>) -> Self {
         Self {
             bytes,
             _m: PhantomData,
@@ -82,7 +87,7 @@ impl<C: BlsConfiguration> SecretKey<C> {
 }
 impl<C: BlsConfiguration> zeroize::Zeroize for SecretKey<C> {
     fn zeroize(&mut self) {
-        self.bytes.fill(0);
+        self.bytes.zeroize();
     }
 }
 
@@ -104,22 +109,22 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
                 let seed = checked_os_seed("key generation")?;
-                let bytes = if C::NORMAL {
+                let bytes = Zeroizing::new(if C::NORMAL {
                     w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(seed.as_slice()).to_bytes()
                 } else {
                     w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(seed.as_slice())
                         .to_bytes()
-                };
-                Self::secret_key_from_generated_bytes(&bytes)?
+                });
+                Self::secret_key_from_generated_bytes(bytes.as_slice())?
             }
             KeyGenOption::UseSeed(ref mut seed) => {
-                let bytes = if C::NORMAL {
+                let bytes = Zeroizing::new(if C::NORMAL {
                     w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(seed).to_bytes()
                 } else {
                     w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(seed).to_bytes()
-                };
+                });
                 seed.zeroize();
-                Self::secret_key_from_generated_bytes(&bytes)?
+                Self::secret_key_from_generated_bytes(bytes.as_slice())?
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
@@ -130,13 +135,13 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 
     fn secret_key_from_generated_bytes(bytes: &[u8]) -> Result<SecretKey<C>, Error> {
-        let mut arr = [0u8; 32];
+        let mut arr = Zeroizing::new([0u8; 32]);
         if bytes.len() != arr.len() {
             return Err(Error::KeyGen(
                 "invalid generated BLS secret key length".into(),
             ));
         }
-        arr.copy_from_slice(bytes);
+        arr.as_mut().copy_from_slice(bytes);
         Ok(SecretKey::from_bytes(arr))
     }
 
@@ -148,11 +153,11 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         // Produce signature with w3f to match canonical encoding exactly.
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         if C::NORMAL {
-            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(&sk.bytes)
+            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(sk.bytes.as_ref())
                 .map_err(|err| Error::Signing(err.to_string()))?;
             Ok(sk_w.sign(&msg).to_bytes())
         } else {
-            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(&sk.bytes)
+            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(sk.bytes.as_ref())
                 .map_err(|err| Error::Signing(err.to_string()))?;
             Ok(sk_w.sign(&msg).to_bytes())
         }
@@ -161,11 +166,11 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     pub fn derive_public_key(sk: &SecretKey<C>) -> Result<PublicKey<C>, ParseError> {
         // Public key depends on orientation; derive via w3f to ensure stable encoding
         let pk_bytes = if C::NORMAL {
-            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(&sk.bytes)
+            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(sk.bytes.as_ref())
                 .map_err(|err| ParseError(err.to_string()))?;
             sk_w.into_public().to_bytes()
         } else {
-            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(&sk.bytes)
+            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(sk.bytes.as_ref())
                 .map_err(|err| ParseError(err.to_string()))?;
             sk_w.into_public().to_bytes()
         };
@@ -279,8 +284,8 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(payload)
                 .map_err(|_| ParseError("invalid BLS secret key".to_string()))?;
         }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(payload);
+        let mut arr = Zeroizing::new([0u8; 32]);
+        arr.as_mut().copy_from_slice(payload);
         Ok(SecretKey::from_bytes(arr))
     }
 }
@@ -672,6 +677,39 @@ mod tests {
             BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![9; 16])).expect("BLS keypair");
         let sig = BlsImpl::<CSmall>::sign(b"xyz", &sk).expect("BLS sign");
         assert!(BlsImpl::<CSmall>::verify(b"xyz", &sig, &pk).is_ok());
+    }
+
+    fn assert_seeded_keypair_deterministic<C: BlsConfiguration>() {
+        let (public_one, private_one) =
+            BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(vec![0x42; 24]))
+                .expect("first seeded BLS keypair");
+        let (public_two, private_two) =
+            BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(vec![0x42; 24]))
+                .expect("second seeded BLS keypair");
+
+        assert_eq!(public_one.to_bytes(), public_two.to_bytes());
+        assert_eq!(private_one.to_bytes(), private_two.to_bytes());
+    }
+
+    #[test]
+    fn seeded_keypairs_are_deterministic() {
+        assert_seeded_keypair_deterministic::<CNormal>();
+        assert_seeded_keypair_deterministic::<CSmall>();
+    }
+
+    #[test]
+    fn secret_key_clone_preserves_bytes_and_signing() {
+        let (public_key, secret_key) =
+            BlsImpl::<CNormal>::try_keypair(KeyGenOption::UseSeed(vec![0x5B; 24]))
+                .expect("seeded BLS keypair");
+        let cloned = secret_key.clone();
+
+        assert_eq!(secret_key.to_bytes(), cloned.to_bytes());
+
+        let signature = BlsImpl::<CNormal>::sign(b"cloned bls secret key", &cloned)
+            .expect("clone signs messages");
+        BlsImpl::<CNormal>::verify(b"cloned bls secret key", &signature, &public_key)
+            .expect("clone signature verifies");
     }
 
     #[test]
