@@ -274,7 +274,7 @@ register_trigger wake {
 བཀོལ་སྤྱོད་ཀྱི་བཟོ་བཀོད།
 - `info(string|int)`: གིས་ OUTPUT བརྒྱུད་དེ་ གཞི་བཀོད་འབད་ཡོད་པའི་བྱུང་ལས་/འཕྲིན་དོན་ཅིག་ བཏོནམ་ཨིན།
 - `hash(blob) -> Blob*`: གིས་ Norito-ཨིན་ཀོཌི་འབད་ཡོད་པའི་ཧེ་ཤི་འདི་ བློ་བོའི་སྦེ་སླར་ལོག་འབདཝ་ཨིན།
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` དང་ `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI བཟོ་བསྐྲུན་པ། སྒྲུབ་རྟགས་ཚུ་ཆ་མཉམ་རང་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ཀྱི་ ཚིག་དོན་ཚུ་འོང་དགོཔ་ཨིན།(ཡིག་རྒྱུན་གྱི་ཚིག་དོན་ཡང་ན་ ཚིག་དོན་ལས་ དཔག་བྱེད་བཟོ་བསྐྲུན་པ་ཚུ་)། `nullifier32` དང་ `inputs32` འདི་ ཏག་ཏག་སྦེ་ 32 བཱའིཊི་ཚུ་ (raw ཡིག་རྒྱུན་ཡང་ན་ `0x` hex) དང་ `amount` འདི་ ནེ་གེ་མེན་མེན་དགོ།
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` དང་ `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: inline ISI བཟོ་བསྐྲུན་པ། སྒྲུབ་རྟགས་ཚུ་ཆ་མཉམ་རང་ བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ཀྱི་ ཚིག་དོན་ཚུ་འོང་དགོཔ་ཨིན།(ཡིག་རྒྱུན་གྱི་ཚིག་དོན་ཡང་ན་ ཚིག་དོན་ལས་ དཔག་བྱེད་བཟོ་བསྐྲུན་པ་ཚུ་)། `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: ཧོསིཊི་ལས་རིམ་ཐོ་བཀོད་ལག་ལེན་འཐབ་ཐོག་ལས་ ཇེ་ཨེསི་ཨོ་ཨེན་ཀོཌི་ཚུ་ཨིན་ (སྔོན་སྒྲིག་ཐོ་བཀོད་ཀྱིས་ `QueryRequest` དང་ `QueryResponse` ལུ་རྒྱབ་སྐྱོར་འབདཝ་ཨིན་ བཀའ་རྒྱ་/ཚོང་འབྲེལ་དཔེ་ཚད་ཚུ་གི་ཁ་སྐོང་ལུ་)།
 - `decode_schema(Name*, Blob|bytes) -> Json*`: ཌི་ཀོཌི་ཚུ་ Norito བཱའིཊི་ཚུ་ ཧོསིཊི་འཆར་གཞི་ཐོ་བཀོད་ལག་ལེན་འཐབ་ཐོག་ལས་ཨིན།

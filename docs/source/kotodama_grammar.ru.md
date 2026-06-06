@@ -259,7 +259,7 @@ Builtins хоста/syscall (мапятся на SCALL; точные номер�
 Утилитарные builtins
 - `info(string|int)`: эмитит структурированное событие/сообщение через OUTPUT.
 - `hash(blob) -> Blob*`: возвращает Norito‑кодированный хэш как Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` и `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline‑конструкторы ISI; все аргументы должны быть compile‑time литералами (строковые литералы или конструкторы указателей из литералов). `nullifier32` и `inputs32` должны быть ровно 32 байта (сырая строка или hex `0x`), а `amount` должен быть неотрицательным.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` и `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: inline‑конструкторы ISI; все аргументы должны быть compile‑time литералами (строковые литералы или конструкторы указателей из литералов). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `pointer_to_norito(ptr) -> NoritoBytes*`: оборачивает существующий TLV pointer‑ABI как NoritoBytes для хранения или передачи.
 - `isqrt(int) -> int`: целочисленный квадратный корень (`floor(sqrt(x))`) реализован как opcode IVM.

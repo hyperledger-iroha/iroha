@@ -611,7 +611,8 @@ and completed history lives in [`status.md`](./status.md).
   `KeyPair::try_from_seed`, `KeyPair::try_random`, and
   `KeyPair::try_random_with_algorithm` give ML-DSA/GOST/SM2/BLS key generation
   non-panicking routes, with ML-DSA seeded-keygen HKDF expansion now propagated
-  as `Error::KeyGen` instead of relying on a panic-only assertion, and GOST
+  as `Error::KeyGen` instead of relying on a panic-only assertion and the S2
+  nonce offset conversion using the same `Error::KeyGen` route, and GOST
   deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
   components while preserving the previous contiguous seed transcript;
@@ -665,10 +666,26 @@ and completed history lives in [`status.md`](./status.md).
   `PublicKey::try_to_*` and
   `ExposedPrivateKey::try_to_*` give public/private key formatting
   non-panicking routes; `Signature::try_new` now routes SM2 through checked
-  private-key rebuild/signing helpers; and ML-DSA import, `Signature::try_new`,
-  and typed `SignatureOf::try_*` constructors also reject secrets whose
-  recomputed public material or embedded `tr = H(pk)` public hash is
-  inconsistent before signing.
+  private-key rebuild/signing helpers and SM2 key-pair/public-key derivation now
+  routes through `try_public_key`; SM2 private-key byte export now exposes
+  `PrivateKey::try_to_bytes` and routes exposed private-key multihash formatting
+  through checked payload extraction; secp256k1 message signing now exposes
+  `try_sign` and routes `Signature::try_new` through the fallible helper, and
+  secp256k1 recoverable prehash signing now checks the low-S recovery-id parity
+  flip before emitting EVM-compatible signatures; SM2 embedded-distid payload
+  decoding now returns `ParseError` for short length prefixes instead of relying
+  on a panic-only fixed-slice assertion; SM2 PEM export now wraps the already
+  encoded base64 `String` without a panic-only UTF-8 reconversion; SM2 DER
+  signature export now exposes `try_as_der` with checked short-form length
+  encoding and routes the OpenSSL bridge through that fallible exporter before
+  DER parsing; SM4-CCM now checks tag, nonce, AAD, payload, and counter-block
+  length narrowing through its existing encrypt/decrypt `Result` paths; the SM
+  signature shim's SM4 self-test block now uses the infallible fixed-key
+  constructor instead of
+  `new_from_slice(...).expect(...)`; and ML-DSA import, `Signature::try_new`, and
+  typed `SignatureOf::try_*` constructors also reject secrets whose recomputed
+  public material or embedded `tr = H(pk)` public hash is inconsistent before
+  signing.
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
   direct validation and direct/OS-backed signing, and expose fallible public-key
   reconstruction from secret material. SoraNet PQ labeled-HKDF derivation now
@@ -710,8 +727,10 @@ and completed history lives in [`status.md`](./status.md).
   BLS-enabled builds. Merkle leaf iteration now stops cleanly on an
   unexpected missing leaf slot instead of relying on panic-only internal layout
   assertions, and parent recomputation now stops if malformed in-memory state
-  lacks a computed parent slot, while decoded tree layout validation remains
-  strict. The multihash `VarUint` codec now decodes through checked `u128`
+  lacks a computed parent slot. Compact Merkle proof conversion and verification
+  now share a fixed direction-bitset depth cap instead of converting
+  `u32::BITS` through panic-only assertions, while decoded tree layout
+  validation remains strict. The multihash `VarUint` codec now decodes through checked `u128`
   accumulation plus final bounded conversion, accepts valid max-width integer
   encodings, rejects oversized canonical varints including high final-chunk
   bits above `u128::MAX`, and constructs continuation bits without unchecked
@@ -958,7 +977,10 @@ and completed history lives in [`status.md`](./status.md).
 	  `u64` modulo arithmetic before converting back to `usize`, avoiding
 	  target-width-dependent behavior for large public rotation-key step counts.
 	  Programmed RAM-LFE BFV hidden-program admission now also caps v1 instruction
-	  tapes at the canonical 64-slot, four-instruction shape before execution. The
+	  tapes at the canonical 64-slot, four-instruction shape before execution, and
+	  requires `LoadConst`, `AddPlain`, `SubPlain`, and `MulPlain` immediates to be
+	  canonical `F_257` values before public-program digests or programmed parameters
+	  are admitted. The
 	  feature-gated BFV acceleration selector now falls back
 	  to deterministic scalar schoolbook multiplication for zero or overflowed
   derived convolution lengths, and its CRT-NTT helper path now rejects invalid
@@ -2273,9 +2295,14 @@ and completed history lives in [`status.md`](./status.md).
   finality NewView handoff cleanup,
   finality-source exact-source committed-delivery completion,
   finality-source certified-source stack classification,
+  finality-source commit-or-delivery source classification,
+  finality-source exact source-effect classification,
   finality-source quorum-gate satisfaction,
+  finality-source commit-artifact change matching,
+  finality-source live commit-gate crossing,
   finality-source post-commit progress quiescence,
   finality-source commit-certificate witness installation,
+  finality-source commit-certificate witness-change matching,
   finality-source commit-view witness installation,
   finality-source NewView handoff isolation,
   commit-artifact exact-source committed-delivery completion,
@@ -3091,14 +3118,17 @@ and completed history lives in [`status.md`](./status.md).
   hop proof decoding. Native batch preflight also exposes that manifest digest,
   and hop-bound batch preflight binds it with the schedule digest and ordered
   checked-hop proof hashes. The data model now also has a proof-carrying
-  recursive aggregation public-input bundle whose 43 public instance columns
+  recursive aggregation public-input bundle whose 59 public instance columns
   bind transparent no-trusted-setup proof metadata to the recursive evidence
-  digest, aggregation transcript digest, verifier-parameter fingerprint,
-  fixed-window schedule digest, shared-table manifest digest, table-base digest,
-  native witness-batch digest, recursive spend proof-chain digest, reserved
-  recursive verifier scalar-projection digest, opening length, witness count,
-  and hop count while rejecting backend, circuit-id, public-input-hash, empty
-  proof payloads, and evidence-field substitution. The proof-bundle guard is
+  digest, folded public input hash, aggregation transcript digest,
+  verifier-parameter fingerprint, fixed-window schedule digest,
+  shared-table manifest digest, table-base digest, native witness-batch digest,
+  recursive spend proof-chain digest, non-circular transition-profile binding
+  digest, Reserved-lineage append opening preflight digest, compact
+  Reserved-lineage append-boundary digest, reserved recursive verifier
+  scalar-projection digest, opening length, witness count, and hop count while
+  rejecting backend, circuit-id, public-input-hash, empty proof payloads, and
+  evidence-field substitution. The proof-bundle guard is
   pinned to the
   canonical transparent Halo2 IPA/Pasta recursive aggregation circuit; supported
   STARK/FRI labels remain hop-transcript material only and cannot stand in for
@@ -3114,7 +3144,7 @@ and completed history lives in [`status.md`](./status.md).
   prevalidates that bundle against active Kagemusha verifier records by checking
   the non-empty transparent Halo2 IPA envelope, canonical circuit id, verifier-key hash,
   public-input schema,
-  empty auxiliary bytes, exactly 43 one-row Pasta instance columns, proof-size
+  empty auxiliary bytes, exactly 59 one-row Pasta instance columns, proof-size
   cap, inline key length, and verifier-key commitment, rejecting shortened,
   extended, or multi-row recursive instance vectors before semantic public-input
   comparison. The shared Halo2 proof-envelope parser also rejects trailing
@@ -3126,7 +3156,7 @@ and completed history lives in [`status.md`](./status.md).
   The detached-evidence prover and raw metadata evidence builder are
   crate-private implementation helpers, leaving the public proof-bundle API on
   the record-backed native Pallas preflight/open-envelope paths. The
-  ZK1 public-instance parser remains bounded but now admits this 43-column
+  ZK1 public-instance parser remains bounded but now admits this 59-column
   recursive aggregation envelope through core and the native bridge. This
   remains a reserved evidence surface until the recursive verifier proof
   itself is complete. Recursive spendable offline cash now uses a separate
@@ -6119,9 +6149,12 @@ operator-provided rollout bundles.
   per-validator deployment bundles rather than hand-edited production configs.
 
 **Next checkpoints:** continue replacing remaining SCCP source-chain verifier
-placeholders behind the typed adapter variants so ETH/BSC/Solana/TON/TRON/
-Substrate consensus/finality and receipt/message inclusion are checked against
-external chain rules. For BSC, use the new offline source-bridge evidence
+placeholders behind the typed adapter variants so ETH/BSC/Solana/TON/TRON
+consensus/finality and receipt/message inclusion are checked against external
+chain rules. Substrate/Polkadot-family SCCP lanes are not part of the current
+supported launch scope; keep existing Substrate, Kusama, Polkadot, and SORA2
+evidence helpers gated as diagnostic/backlog-only surfaces until support is
+explicitly re-opened. For BSC, use the new offline source-bridge evidence
 renderer, which now rejects BSC EVM-family template component hashes before
 rendering governance TOML and also rejects non-canonical BSC source-adapter
 OpenVerify VK hashes, plus the EVM live source and destination evidence
@@ -6154,8 +6187,9 @@ light-client update/state branches not discharged inside that deployed source-ad
 circuit. The ETH/BSC adapter proof shapes are now preflight-bounded across Rust
 and the web/mobile SDK helper surfaces: ETH caps sync committees at 512
 authorities and 64 transition proofs, while BSC caps validator sets at 255
-validators and 64 transition proofs before transcript hashing. For
-Substrate-family lanes, use the offline
+validators and 64 transition proofs before transcript hashing. Backlog-only
+Substrate-family work remains out of the active supported launch scope; if
+support is re-opened, use the offline
 source evidence renderer, which now rejects Substrate-family template component
 hashes, including the runtime storage-proof verifier hash, and non-canonical
 source-adapter OpenVerify VK hashes before rendering governance TOML using the
@@ -7102,9 +7136,24 @@ from wallet and service integrations.
   including manifest-sourced builds, generated interfaces, schema docs,
   profile-aware doctor/smoke commands, and Kotodama test/debug loops.
 - Static compiler-derived access descriptors now cover the formerly opaque
-  peer, subscription, VRF epoch seed, AXT, and Soracloud host helper syscalls;
-  dynamic, malformed, and test-mode-only helper payloads intentionally remain
-  fail-closed instead of reintroducing wildcard production manifests.
+  peer, subscription, VRF epoch seed, AXT, Soracloud host, and native/anonymous
+  escrow helper syscalls with literal names or decodable Norito request
+  payloads; dynamic, malformed, and test-mode-only helper payloads
+  intentionally remain fail-closed instead of reintroducing wildcard
+  production manifests.
+- Literal `create_trigger(json(...))` specs that cannot be decoded for access
+  metadata now report a dedicated compiler diagnostic and manifest skip reason,
+  while production mode continues to reject the incomplete access metadata.
+- The IVM mock WSV unshield path now accounts for `Unshield::outputs` private
+  change commitments, advances shielded roots, emits commitment events, and
+  preflights duplicate nullifiers before any mutation.
+- Kotodama `build_unshield_inline(...)` now keeps the existing 7-argument form
+  and also accepts optional `outputs32` private change commitments, encoding
+  concatenated 32-byte input/output chunks into the canonical Norito
+  `Unshield` instruction used by the vendor bridge.
+- Kotodama semantic effect analysis now treats ZK verify latch helpers as
+  host-side effects: public entrypoints require `permission(...)`, and `view`
+  functions reject direct or transitive calls into those helpers.
 - Preserve canonical Norito headers and wire layouts for blocks, transactions,
   SDK fixtures, and cross-library compatibility tests. The JavaScript pure
   Norito fallback now covers asset-definition registration frames, and
@@ -7271,7 +7320,11 @@ or ABI behavior.
   domain-separated digest over the parameter set, public key, evaluation-key
   digest, and transcript seed metadata, giving governance/admission code a
   canonical value to bind before the final proof-carrying bootstrap key format
-  lands. Soracloud transcript digesting now preflights the advertised BFV
+  lands. The crypto layer now also exposes exact-lift and bounded-noise
+  bootstrap-key zero-refresh proof statement digests that bind parameters,
+  public key, key id, refresh-round capacity, and every public refresh
+  ciphertext under mode-separated domains, giving the future proof-carrying
+  key-material verifier a canonical statement hash. Soracloud transcript digesting now preflights the advertised BFV
   public-key shape before evaluation-key bundle validation, so malformed
   transcript key material is reported at the public-key boundary instead of
   being masked by unrelated bundle-shape errors. The crypto bundle validator
@@ -7335,8 +7388,13 @@ or ABI behavior.
   chain, rejects decomposition chains that can alias base digits,
   basis-extends canonical key-switch digits through the digit-specific
   basis-extension helper without requiring the evaluator target to cover the
-  full source-chain product, and drives rounded multiplication, Galois, and
-  packed `RotateLeft` bridges while matching the scalar bounded-noise outputs.
+  full source-chain product, rejects basis-extended digit-count and RNS
+  limb-shape drift at validation, and drives rounded multiplication, Galois,
+  and packed `RotateLeft` bridges while matching the scalar bounded-noise
+  outputs. Direct key-switch component decomposition and digit
+  basis-extension helpers now enforce source/target decomposition-base
+  coverage before malformed polynomial shapes can mask the public chain
+  descriptor failure.
   Rounded ciphertext multiplication now has an RNS exact raw-product bridge
   that decomposes ciphertext components as centered residues, reconstructs
   signed negacyclic products before `t/q` scale-and-rounding, and relinearizes
@@ -7375,7 +7433,12 @@ or ABI behavior.
   conversion primitive available for checked RNS arithmetic. Soracloud FHE
   parameter governance plus input-admission statement
   hashes now bind that digest beside the parameter and evaluator RNS-chain
-  digests. Soracloud registered bounded-noise runtime coverage now also drives
+  digests. Portable FHE input-admission proof validation now rejects cheap
+  attachment metadata before BFV bound capacity (backend consistency,
+  canonical verifier id, verifier-key commitment metadata, and envelope-hash
+  presence), while still rejecting over-capacity BFV bounds before decoded
+  `OpenVerifyEnvelope` admission, verifier dispatch, and verifier-record
+  lookup. Soracloud registered bounded-noise runtime coverage now also drives
   two-round Bootstrap through the registered RNS refresh bridge, verifies the
   decrypted multi-slot output, and checks the propagated key-authorized
   centered-noise bound at the runtime boundary; the same bounded wrapper
@@ -7540,6 +7603,33 @@ or ABI behavior.
   now reject public seed and plaintext metadata before exact residual or rounded
   capacity failures. Bounded Galois key generation now rejects public
   automorphism and seed metadata before rounded-capacity failures.
+  Bounded Galois switch and packed `RotateLeft` execution wrappers now reject
+  public Galois-key metadata, rotation schedules, and key-set metadata before
+  rounded-capacity failures. Bounded outer `RotateLeft` execution wrappers now
+  reject public rotation metadata before rounded-capacity failures. Bounded
+  affine execution wrappers now reject public circuit metadata before
+  caller-supplied RNS/capacity corridor failures. Key-authorized exact and
+  bounded bootstrap bound propagation now rejects public bootstrap key-id and
+  round-count metadata before caller input-bound failures while preserving full
+  refresh-key shape validation after public bound checks. Bounded
+  plaintext scalar and polynomial execution wrappers now reject public
+  scalar/plaintext metadata before rounded-capacity failures. Bounded scalar and
+  plaintext-polynomial bound propagation now rejects invalid public
+  scalar/plaintext metadata before rounded-capacity failures while preserving
+  oversized input-bound precedence on otherwise valid profiles. Bounded
+  ciphertext multiplication bound propagation now rejects invalid public
+  relinearization-key metadata before rounded-capacity failures while preserving
+  oversized input-bound precedence on otherwise valid profiles. Bounded Galois
+  key-switch and packed `RotateLeft` bound propagation now reject invalid public
+  Galois metadata, rotation schedules, and key-set metadata before
+  rounded-capacity failures while preserving oversized input-bound precedence on
+  otherwise valid profiles. Bounded affine, outer `RotateLeft`, and bootstrap
+  refresh bound propagation now rejects invalid public circuit, rotation,
+  round-count, and bootstrap-key-id metadata before rounded-capacity failures
+  while preserving the existing valid-profile precedence: oversized input bounds
+  remain first for affine, outer-slot, and direct bootstrap bounds, and
+  key-authorized bootstrap bounds keep key-id/round metadata ahead of full
+  bootstrap-key shape.
   Soracloud BFV refresh-transcript admission now also derives its deterministic
   seed, bootstrap key-id, rotation-transcript, and bootstrap max-round caps from
   the public `iroha_crypto` constants.

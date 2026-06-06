@@ -262,7 +262,7 @@ Host/syscall builtins (SCALL میں map ہوتے ہیں؛ درست نمبرز iv
 Utility builtins
 - `info(string|int)`: OUTPUT کے ذریعے structured event/message emit کرتا ہے۔
 - `hash(blob) -> Blob*`: Norito‑encoded hash بطور Blob واپس دیتا ہے۔
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` اور `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI builders؛ تمام آرگومنٹس compile‑time literals ہونے چاہئیں (string literals یا literal‑based pointer constructors)۔ `nullifier32` اور `inputs32` بالکل 32 bytes ہونے چاہئیں (raw string یا `0x` hex)، اور `amount` غیر منفی ہونا چاہیے۔
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` اور `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: inline ISI builders؛ تمام آرگومنٹس compile‑time literals ہونے چاہئیں (string literals یا literal‑based pointer constructors)۔ `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `pointer_to_norito(ptr) -> NoritoBytes*`: موجودہ pointer‑ABI TLV کو NoritoBytes کے طور پر wrap کرتا ہے تاکہ ذخیرہ/منتقلی ہو سکے۔
 - `isqrt(int) -> int`: integer square root (`floor(sqrt(x))`) بطور IVM opcode۔

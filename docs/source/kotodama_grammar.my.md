@@ -274,7 +274,7 @@ host/syscall builtins (SCALL သို့ မြေပုံ၊ ivm.md ရှိ
 အသုံးဝင်ပုံများ
 - `info(string|int)`- OUTPUT မှတစ်ဆင့် ဖွဲ့စည်းတည်ဆောက်ထားသော အစီအစဉ်/မက်ဆေ့ဂျ်ကို ထုတ်လွှတ်သည်။
 - `hash(blob) -> Blob*`- Blob အဖြစ် Norito-ကုဒ်ဝှက်ထားသော hash ကို ပြန်ပေးသည်။
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` နှင့် `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`- inline ISI တည်ဆောက်သူများ၊ အငြင်းအခုံအားလုံးသည် compile-time literals (string literals သို့မဟုတ် literals မှ pointer constructors) ဖြစ်ရပါမည်။ `nullifier32` နှင့် `inputs32` သည် 32 bytes (အကြမ်းမျဉ်း သို့မဟုတ် `0x` hex) အတိအကျဖြစ်ရမည်၊ `amount` သည် အနုတ်လက္ခဏာမဟုတ်ရပါ။
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` နှင့် `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`- inline ISI တည်ဆောက်သူများ၊ အငြင်းအခုံအားလုံးသည် compile-time literals (string literals သို့မဟုတ် literals မှ pointer constructors) ဖြစ်ရပါမည်။ `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`- မှာယူမှု/ကုန်သွယ်မှုနမူနာများအပြင် အမှာစာ/ကုန်သွယ်မှုနမူနာများအပြင် DefaultRegistry သည် `QueryResponse` ကို အသုံးပြု၍ JSON ကို ကုဒ်လုပ်သည်။
 - `decode_schema(Name*, Blob|bytes) -> Json*`- host schema registry ကို အသုံးပြု၍ Norito bytes ကို ကုဒ်လုပ်သည်။

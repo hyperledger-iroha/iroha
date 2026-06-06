@@ -3,7 +3,6 @@
 pub mod mldsa65 {
     use core::{
         array,
-        convert::TryFrom,
         ptr::{addr_of, addr_of_mut},
     };
 
@@ -200,11 +199,12 @@ pub mod mldsa65 {
         }
 
         let mut s2 = Polyveck::default();
+        let s2_nonce = polyveck_s2_nonce()?;
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_polyveck_uniform_eta(
                 addr_of_mut!(s2),
                 rhoprime.as_ptr(),
-                u16::try_from(L).expect("L fits into u16"),
+                s2_nonce,
             );
         }
 
@@ -269,6 +269,12 @@ pub mod mldsa65 {
             .map_err(|err| Error::KeyGen(err.to_string()))?;
 
         Ok((public_key, private_key))
+    }
+
+    fn polyveck_s2_nonce() -> Result<u16, Error> {
+        u16::try_from(L).map_err(|_| {
+            Error::KeyGen(String::from("ML-DSA S2 nonce offset does not fit into u16"))
+        })
     }
 
     #[allow(unsafe_code)]
@@ -342,6 +348,14 @@ pub mod mldsa65 {
             let recovered = public_key_from_secret(&secret).expect("recover public key");
 
             assert_eq!(public, recovered);
+        }
+
+        #[test]
+        fn seeded_keygen_s2_nonce_uses_canonical_l_offset() {
+            assert_eq!(
+                polyveck_s2_nonce().expect("derive S2 nonce offset"),
+                u16::try_from(L).expect("test constant fits u16")
+            );
         }
 
         #[test]

@@ -1392,15 +1392,15 @@ opening lengths, rejects
 all-zero schedule/manifest/base commitments, and rejects schedule or manifest
 commitments that do not match the declared opening length before hop proof
 decoding. The data model also defines proof-carrying recursive aggregation
-public inputs and bundles whose 55 public instance columns bind a transparent
-no-trusted-setup proof payload to the recursive evidence digest, aggregation
-transcript digest, verifier-parameter fingerprint, fixed-window schedule
-digest, shared-table manifest digest, table-base digest, native witness-batch
-digest, recursive spend proof-chain digest, non-circular transition-profile
-binding digest, Reserved-lineage append opening preflight digest, compact
-Reserved-lineage append-boundary digest, reserved recursive verifier
-scalar-projection digest, verifier opening length, witness count, and hop count
-while rejecting backend,
+public inputs and bundles whose 59 public instance columns bind a transparent
+no-trusted-setup proof payload to the recursive evidence digest, folded public
+input hash, aggregation transcript digest, verifier-parameter fingerprint,
+fixed-window schedule digest, shared-table manifest digest, table-base digest,
+native witness-batch digest, recursive spend proof-chain digest,
+non-circular transition-profile binding digest, Reserved-lineage append opening
+preflight digest, compact Reserved-lineage append-boundary digest, reserved
+recursive verifier scalar-projection digest, verifier opening length, witness
+count, and hop count while rejecting backend,
 circuit-id, public-input-hash, and evidence-field substitution. That
 proof-carrying bundle is pinned to the
 canonical transparent Halo2 IPA/Pasta recursive aggregation circuit and rejects
@@ -1423,7 +1423,7 @@ This evidence binding is consumed by the ABI-7 recursive compact prover rather
 than rederived by SDKs from each compact-hop Halo2 proof envelope.
 Core preverification for that proof-carrying bundle now checks the transparent
 Halo2 IPA `OpenVerifyEnvelope`, canonical circuit id, verifier-key hash,
-public-input schema, empty auxiliary metadata, exactly 55 one-row Pasta public
+public-input schema, empty auxiliary metadata, exactly 59 one-row Pasta public
 instance columns, the fixed-window schedule and shared-table manifest digests
 for the declared opening length, proof-size cap, active Kagemusha
 verifier-record namespace, inline verifier-key length, and verifier-key
@@ -1435,13 +1435,13 @@ suffix bytes, rejects ZK1 inner proof envelopes with unexpected or duplicate
 verification, even when a forged verifier record and proof envelope are
 self-consistent about the folded-token verifier-key commitment and `vk_hash`.
 Core also
-keeps the ZK1 public-instance parser bounded while allowing the 55-column
+keeps the ZK1 public-instance parser bounded while allowing the 59-column
 recursive aggregation envelope through the native bridge and backend verifier.
 It also ships the transparent Halo2 IPA semantic proof/prover/verifier path for
 the recursive aggregation evidence layout. The semantic circuit constrains the
 opening-length corridor, binds the fixed-window schedule and shared-table
 manifest digest limbs to the selected opening width, constrains the hop-count
-corridor and witness-count equality, and rejects eight non-zero digest groups
+corridor and witness-count equality, and rejects nine non-zero digest groups
 without trusted setup. Recursive verifier-key containers carry a `CID1`
 circuit-id TLV so registry commitments stay circuit-family-separated even if
 the underlying small Halo2 verifier-key bytes collide, and backend verification

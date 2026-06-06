@@ -288,6 +288,11 @@ const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &[
     "subscription_record_usage",
     "use_nullifier",
     "commit_output",
+    "zk_verify_transfer",
+    "zk_verify_unshield",
+    "zk_verify_batch",
+    "zk_vote_verify_ballot",
+    "zk_vote_verify_tally",
 ];
 
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
@@ -3580,17 +3585,26 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::BuildUnshieldInline => {
-            if arg_typed.len() != 7
-                || !(arg_typed[0].ty == Type::AssetDefinitionId
-                    && arg_typed[1].ty == Type::AccountId
-                    && is_int_like(&arg_typed[2].ty)
-                    && is_blob_like(&arg_typed[3].ty)
-                    && arg_typed[4].ty == Type::String
-                    && is_blob_like(&arg_typed[5].ty)
-                    && is_blob_like(&arg_typed[6].ty))
-            {
+            let valid_without_outputs = arg_typed.len() == 7
+                && arg_typed[0].ty == Type::AssetDefinitionId
+                && arg_typed[1].ty == Type::AccountId
+                && is_int_like(&arg_typed[2].ty)
+                && is_blob_like(&arg_typed[3].ty)
+                && arg_typed[4].ty == Type::String
+                && is_blob_like(&arg_typed[5].ty)
+                && is_blob_like(&arg_typed[6].ty);
+            let valid_with_outputs = arg_typed.len() == 8
+                && arg_typed[0].ty == Type::AssetDefinitionId
+                && arg_typed[1].ty == Type::AccountId
+                && is_int_like(&arg_typed[2].ty)
+                && is_blob_like(&arg_typed[3].ty)
+                && is_blob_like(&arg_typed[4].ty)
+                && arg_typed[5].ty == Type::String
+                && is_blob_like(&arg_typed[6].ty)
+                && is_blob_like(&arg_typed[7].ty);
+            if !(valid_without_outputs || valid_with_outputs) {
                 return Err(SemanticError {
-                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)".into(),
+                    message: "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, [Blob|bytes outputs32,] string backend, Blob|bytes proof, Blob|bytes vk)".into(),
                 });
             }
             Ok(TypedExpr {
@@ -8379,6 +8393,38 @@ mod tests {
         assert!(
             err.message.contains(
                 "view function `f` cannot call `helper` because `helper` performs instruction emission"
+            ),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn public_entrypoints_reject_zk_verify_without_permission() {
+        let program = parse(
+            "seiyaku Demo { kotoage fn verify(payload: Blob) { zk_verify_unshield(payload); } }",
+        )
+        .expect("parse public zk verify");
+        let err = analyze(&program).expect_err("public zk verify should require permission");
+        assert!(
+            err.message.contains(
+                "public function `verify` calls privileged operations but is missing `permission(...)`"
+            ),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_transitive_zk_verify() {
+        let program = parse(
+            "seiyaku Demo { fn helper(payload: Blob) { zk::verify_transfer(payload); } view fn f(payload: Blob) -> int { helper(payload); return 1; } }",
+        )
+        .expect("parse transitive zk verify");
+        let err = analyze(&program).expect_err("view zk verify should fail");
+        assert!(
+            err.message.contains(
+                "view function `f` cannot call `helper` because `helper` performs host side effects"
             ),
             "unexpected error message: {}",
             err.message

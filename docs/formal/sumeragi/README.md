@@ -8819,10 +8819,26 @@ Temporal properties:
   classifier covering complete-stack installation, committed-phase entry,
   live commit-gate crossing, commit witnesses, NewView isolation, exact
   source effects, and quorum gates.
+- `FinalitySourceActionSourceAlwaysIsCommitOrDelivery` proves that those exact
+  finality-source actions are classified as commit/RBC delivery sources and
+  exclude timeout, NewView, RBC setup/progress, proposal/prepare, Byzantine
+  fault, and GST bookkeeping steps on the latch-flip transition.
+- `FinalitySourceActionSourceEffectsAlwaysExact` proves that those exact
+  finality-source actions are mutually exclusive on the latch-flip transition
+  and install the source-specific vote, stake, commit-certificate, commit-view,
+  RBC delivery, and preserved evidence deltas.
 - `FinalitySourceActionQuorumGatesAlwaysHold` proves that those exact
   finality-source actions are backed directly by their finalizing
   `CanCommit(...)` gate, prepare quorum, honest-support threshold, stake quorum,
   active-view evidence, and RBC delivery evidence.
+- `FinalitySourceActionAlwaysMatchesCommitArtifactsChange` proves that those
+  exact finality-source actions force committed-phase entry and commit-artifact
+  changes to agree, then route the installed commit artifacts through the
+  certified finality stack and exact-source committed-delivery proof chain.
+- `FinalitySourceActionAlwaysMatchesLiveCommitGateCrossing` proves that those
+  exact finality-source actions match the live commit-gate crossing from
+  `~CanCommit(...)` to `CanCommit(...)` and leave the post-state live
+  finality/RBC evidence predicates consistent with the committed latch.
 - `FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery` proves
   that those exact finality-source actions also leave the post-state with every
   proposal, vote, view-change, RBC, timeout, Byzantine-fault, and post-GST
@@ -8830,6 +8846,11 @@ Temporal properties:
 - `FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses` proves that
   those exact finality-source actions install the latched commit-certificate
   vote and stake witnesses from the post-state live counters.
+- `FinalitySourceActionAlwaysMatchesCommitCertificateWitnessChange` proves that
+  those exact finality-source actions align committed-phase entry with the
+  commit-certificate witness change, route that witness through the certified
+  finality stack, install the commit-view witness, and complete the exact-source
+  committed-delivery proof chain.
 - `FinalitySourceActionAlwaysInstallsCommitViewWitness` proves that those
   exact finality-source actions install the commit-view witness as the active
   finality view, including the view-zero value-preserving case.

@@ -6245,6 +6245,29 @@ fn verify_soracloud_fhe_refresh_transcript_digest(
             "fhe evaluation-key refresh transcript digest does not match the execution policy",
         ));
     }
+    if let Some(expected) = policy.bootstrap_key_zero_refresh_proof_statement_digest {
+        let actual = transcript
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                params,
+                evaluation_keys,
+                policy.refresh_transcript_mode,
+            )
+            .map_err(|err| invalid_parameter(err.to_string()))?
+            .ok_or_else(|| {
+                invalid_parameter(
+                    "fhe bootstrap-key proof statement digest requires bootstrap key material",
+                )
+            })?;
+        if actual != expected {
+            return Err(invalid_parameter(
+                "fhe bootstrap-key proof statement digest does not match the execution policy",
+            ));
+        }
+    } else if policy.max_bootstrap_count > 0 {
+        return Err(invalid_parameter(
+            "fhe bootstrap-capable policy must bind bootstrap-key proof statement digest",
+        ));
+    }
     Ok(())
 }
 

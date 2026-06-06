@@ -882,6 +882,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             to,
             amount,
             inputs,
+            outputs,
             backend,
             proof,
             vk,
@@ -891,6 +892,9 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*to);
             f(*amount);
             f(*inputs);
+            if let Some(outputs) = outputs {
+                f(*outputs);
+            }
             f(*backend);
             f(*proof);
             f(*vk);

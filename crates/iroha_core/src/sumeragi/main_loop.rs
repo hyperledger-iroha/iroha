@@ -39934,6 +39934,50 @@ impl Actor {
                 );
                 return false;
             }
+            let missing_qc_frontier_recovery_owner = self.frontier_recovery.is_some_and(|state| {
+                state.frontier_height == height && state.last_cause == "missing_qc"
+            });
+            let nonleader_empty_frontier_missing_qc_recovery = !self
+                .local_is_round_leader(height, current_view)
+                && !Self::frontier_consensus_ingress_queued(queue_depths)
+                && (missing_qc_frontier_recovery_owner
+                    || !self.frontier_recovery_exists_at_height(height));
+            let empty_frontier_missing_qc_recovery_first = !proposal_seen
+                && matches!(direct_cause, ViewChangeCause::MissingQc)
+                && !frontier_pending_exists
+                && (current_view == 0 || nonleader_empty_frontier_missing_qc_recovery)
+                && !self.exact_frontier_body_repair_active_at_height(height)
+                && !pre_reset_passive_frontier_slot_without_external_dependency
+                && !self.frontier_slot_passive_catchup_active_at_height(height)
+                && !tx_backlog_reacquire_exhausted_for_rotation;
+            if empty_frontier_missing_qc_recovery_first {
+                let allow_recovery_rotation = self.frontier_recovery.is_some_and(|state| {
+                    state.frontier_height == height
+                        && state.last_cause == "missing_qc"
+                        && matches!(state.phase, FrontierRecoveryPhase::RotateArmed)
+                });
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    missing_qc_actionable_dependency_signals,
+                    allow_recovery_rotation,
+                    "routing dependency-backed empty contiguous-frontier missing_qc through unified frontier recovery instead of emitting an immediate direct rotation"
+                );
+                let advanced = matches!(
+                    self.advance_frontier_recovery(
+                        "missing_qc",
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        allow_recovery_rotation,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
+                return advanced;
+            }
             if matches!(direct_cause, ViewChangeCause::MissingQc)
                 && !self.try_reserve_missing_qc_height_stall_rotation_window(
                     height,

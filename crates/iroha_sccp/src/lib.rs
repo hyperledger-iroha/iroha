@@ -362,6 +362,19 @@ pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 8] = [
     SCCP_DOMAIN_SORA2,
 ];
 
+/// Remote SCCP domains in the current supported production launch scope.
+pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5] = [
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+];
+
+/// Standard blocker for Substrate/Polkadot-family SCCP lanes while they are out of scope.
+pub const SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1: &str =
+    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope";
+
 pub const SCCP_MSG_PREFIX_BURN_V1: &[u8] = b"sccp:burn:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_ADD_V1: &[u8] = b"sccp:token:add:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_PAUSE_V1: &[u8] = b"sccp:token:pause:v1";
@@ -4580,6 +4593,11 @@ pub fn is_supported_domain(domain_id: u32) -> bool {
     )
 }
 
+/// Return whether a remote SCCP domain is in the current supported production launch scope.
+pub fn sccp_domain_in_supported_launch_scope_v1(domain_id: u32) -> bool {
+    SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1.contains(&domain_id)
+}
+
 pub fn is_supported_codec(codec_id: u8) -> bool {
     matches!(
         codec_id,
@@ -8124,11 +8142,16 @@ fn sccp_lane_production_readiness_from_components(
         sccp_production_policy_v1().proof_submitter_policy,
         SccpProofSubmitterPolicyV1::Permissionless
     );
-    let production_ready = source_adapter_ready
+    let launch_scope_supported = sccp_domain_in_supported_launch_scope_v1(domain);
+    let production_ready = launch_scope_supported
+        && source_adapter_ready
         && destination_rollout_ready
         && routes_allowlisted
         && permissionless_submission;
     let mut blockers = Vec::new();
+    if !launch_scope_supported {
+        blockers.push(SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1.to_owned());
+    }
     if !source_adapter_ready {
         blockers.push(sccp_source_proof_blocker_for_domain(domain)?.to_owned());
         blockers.extend(source_adapter_engine.blockers.clone());
@@ -8232,7 +8255,7 @@ pub fn sccp_lane_production_readiness_with_deployment_materials_for_domain(
 }
 
 pub fn sccp_all_lanes_launch_ready_v1() -> bool {
-    SCCP_CORE_REMOTE_DOMAINS.into_iter().all(|domain| {
+    SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1.into_iter().all(|domain| {
         sccp_lane_production_readiness_for_domain(domain)
             .is_some_and(|readiness| readiness.production_ready)
     })
@@ -8326,7 +8349,7 @@ fn sccp_lane_production_ready_under_launch_policy_v1(
     lane_ready: bool,
     all_lanes_ready: bool,
 ) -> bool {
-    if !lane_ready {
+    if !lane_ready || !sccp_domain_in_supported_launch_scope_v1(domain) {
         return false;
     }
     match policy.launch_mode {
@@ -8346,13 +8369,18 @@ pub fn sccp_lane_production_ready_for_domain(domain: u32) -> bool {
 }
 
 pub fn sccp_lane_disabled_reason_for_domain(domain: u32) -> Option<&'static str> {
+    if !sccp_domain_in_supported_launch_scope_v1(domain) {
+        return Some(SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1);
+    }
     sccp_destination_rollout_for_domain(domain)
         .map(|rollout| sccp_lane_disabled_reason_for_plan(rollout.verifier_plan))
         .filter(|_| !sccp_lane_production_ready_for_domain(domain))
 }
 
 pub fn sccp_manifest_is_production_ready(manifest: &SccpProofManifestV1) -> bool {
-    manifest.production_ready && sccp_manifest_matches_domain_production_backend(manifest)
+    manifest.production_ready
+        && sccp_domain_in_supported_launch_scope_v1(manifest.counterparty_domain)
+        && sccp_manifest_matches_domain_production_backend(manifest)
 }
 
 fn sccp_manifest_matches_domain_production_backend(manifest: &SccpProofManifestV1) -> bool {

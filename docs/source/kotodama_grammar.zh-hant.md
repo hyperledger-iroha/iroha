@@ -274,7 +274,7 @@ register_trigger wake {
 內置實用程序
 - `info(string|int)`：通過 OUTPUT 發出結構化事件/消息。
 - `hash(blob) -> Blob*`：將 Norito 編碼的哈希值返回為 Blob。
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` 和 `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`：內聯 ISI 構建器；所有參數必須是編譯時文字（字符串文字或文字的指針構造函數）。 `nullifier32` 和 `inputs32` 必須恰好為 32 個字節（原始字符串或 `0x` 十六進制），並且 `amount` 必須為非負數。
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` 和 `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`：內聯 ISI 構建器；所有參數必須是編譯時文字（字符串文字或文字的指針構造函數）。 `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`：使用主機架構註冊表對 JSON 進行編碼（除了訂單/交易示例之外，DefaultRegistry 還支持 `QueryRequest` 和 `QueryResponse`）。
 - `decode_schema(Name*, Blob|bytes) -> Json*`：使用主機架構註冊表解碼 Norito 字節。

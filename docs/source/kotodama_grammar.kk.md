@@ -274,7 +274,7 @@ register_trigger wake {
 Утилита құрастырулары
 - `info(string|int)`: OUTPUT арқылы құрылымдық оқиғаны/хабарды шығарады.
 - `hash(blob) -> Blob*`: Blob ретінде Norito кодталған хэшті қайтарады.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` және `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: кірістірілген ISI құрастырушылары; барлық аргументтер компиляция уақытындағы литералдар болуы керек (жол литералдары немесе литералдардан көрсеткіш конструкторлары). `nullifier32` және `inputs32` дәл 32 байт (шикі жол немесе `0x` он алтылық) болуы керек және `amount` теріс емес болуы керек.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` және `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: кірістірілген ISI құрастырушылары; барлық аргументтер компиляция уақытындағы литералдар болуы керек (жол литералдары немесе литералдардан көрсеткіш конструкторлары). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: хост схема тізбесін пайдаланып JSON кодтайды (DefaultRegistry Тапсырыс/Сауда үлгілеріне қосымша `QueryRequest` және `QueryResponse` қолдау көрсетеді).
 - `decode_schema(Name*, Blob|bytes) -> Json*`: хост схемасы тізілімін пайдаланып Norito байт кодтарын шешеді.
