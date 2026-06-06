@@ -65,6 +65,8 @@ mod app_api;
 mod identifier_resolution;
 #[cfg(feature = "app_api")]
 mod offline_issuer;
+#[cfg(feature = "app_api")]
+mod offline_v2_issuer;
 mod operator_auth;
 mod operator_signatures;
 #[doc(hidden)]
@@ -262,7 +264,6 @@ use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair, SignatureOf,
     blake2::{Blake2b512, digest::Digest},
 };
-#[cfg(feature = "app_api")]
 use iroha_data_model::alias::{AliasRecord, AliasTarget};
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -320,11 +321,12 @@ use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
 use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode};
 use mv::storage::StorageReadOnly;
+#[cfg(feature = "app_api")]
+use norito::json::Map;
+use norito::json::Value;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 use norito::json::{self};
 use norito::json::{JsonDeserialize, JsonSerialize};
-#[cfg(feature = "app_api")]
-use norito::json::{Map, Value};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
 use sorafs_manifest::repair::{
@@ -414,6 +416,7 @@ pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_c
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
 pub use limits::RateLimiter as BenchRateLimiter;
+pub use routing::QueryOptions;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
 pub use routing::handle_get_proof_tags;
@@ -429,6 +432,7 @@ pub use routing::{
     handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
     handle_v1_contracts_activity_get as handle_v1_contracts_activity_get_for_bench,
 };
+#[cfg(feature = "app_api")]
 pub use routing::{
     ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractCallDto,
     ContractCallResponseDto, ContractCallSimulateDto, ContractCallSimulateResponseDto,
@@ -438,25 +442,28 @@ pub use routing::{
     KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
     MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
     PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
-    ProofListQuery, QueryOptions, RegisterPinManifestDto, RegisterPinManifestResponseDto,
-    SetContractAliasDto, SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto,
-    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
-    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
-    handle_get_contract_deploy_bundle_status, handle_get_proof, handle_get_vk, handle_list_proofs,
-    handle_list_vk, handle_post_contract_alias_set, handle_post_contract_call,
-    handle_post_contract_call_simulate, handle_post_contract_deploy,
+    ProofListQuery, RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
+    SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
+    VkListQuery, ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs,
+    handle_get_contract_code_bytes, handle_get_contract_deploy_bundle_status, handle_get_proof,
+    handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_alias_set,
+    handle_post_contract_call, handle_post_contract_call_simulate, handle_post_contract_deploy,
     handle_post_contract_deploy_bundle, handle_post_contract_view,
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
     handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
     handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
-    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
-    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
+    handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
 };
 #[cfg(feature = "telemetry")]
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
+};
+pub use routing::{
+    ZkRootsGetRequestDto, ZkRootsGetResponseDto, ZkVoteGetTallyRequestDto,
+    ZkVoteGetTallyResponseDto, handle_v1_zk_roots, handle_v1_zk_submit_proof, handle_v1_zk_verify,
+    handle_v1_zk_vote_tally,
 };
 pub use routing::{
     accept_transaction_for_ingress as accept_transaction_for_ingress_for_bench,
@@ -689,6 +696,23 @@ fn alias_error_response(status: StatusCode, message: &str) -> Result<AxResponse,
     alias_json_response(status, payload)
 }
 
+fn alias_target_kind(target: &AliasTarget) -> &'static str {
+    match target {
+        AliasTarget::Account(_) => "account",
+        AliasTarget::Asset(_) => "asset",
+        AliasTarget::Peer(_) => "peer",
+        AliasTarget::Custom(_) => "custom",
+    }
+}
+
+fn alias_non_account_target_response(target: &AliasTarget) -> Result<AxResponse, Error> {
+    let message = format!(
+        "alias resolves to `{}` target; account alias resolution only supports account targets",
+        alias_target_kind(target)
+    );
+    alias_error_response(StatusCode::CONFLICT, &message)
+}
+
 fn map_alias_error(err: AliasError) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         err.to_string(),
@@ -728,10 +752,7 @@ fn resolve_alias_via_service(
                         "alias_service",
                     )
                 }
-                _ => alias_error_response(
-                    StatusCode::NOT_IMPLEMENTED,
-                    "alias targets other than accounts are not supported yet",
-                ),
+                target => alias_non_account_target_response(target),
             }
         }
         Ok(None) => Ok(StatusCode::NOT_FOUND.into_response()),
@@ -891,6 +912,7 @@ fn resolve_alias_index_on_route(
         .transpose()
 }
 
+#[cfg(feature = "app_api")]
 fn resolve_contract_alias_on_chain(
     app: &SharedAppState,
     alias_input: &str,
@@ -1136,10 +1158,7 @@ fn resolve_alias_index_via_service(
                         "alias_service",
                     )
                 }
-                _ => alias_error_response(
-                    StatusCode::NOT_IMPLEMENTED,
-                    "alias targets other than accounts are not supported yet",
-                ),
+                target => alias_non_account_target_response(target),
             }
         }
         Ok(None) => Ok(StatusCode::NOT_FOUND.into_response()),
@@ -1610,6 +1629,8 @@ struct AppState {
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
     offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
+    #[cfg(feature = "app_api")]
+    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -2922,6 +2943,7 @@ async fn enforce_api_version(
     Ok(response)
 }
 
+#[cfg(feature = "app_api")]
 async fn enforce_soracloud_signed_mutation_request(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -2998,6 +3020,7 @@ async fn enforce_soracloud_signed_mutation_request(
         .await)
 }
 
+#[cfg(feature = "app_api")]
 fn soracloud_signed_mutation_body_limit(app: &AppState, path: &str) -> usize {
     if path.starts_with("/v1/soracloud/model/upload/") {
         app.soracloud_upload_max_body_bytes.max(1)
@@ -3006,6 +3029,7 @@ fn soracloud_signed_mutation_body_limit(app: &AppState, path: &str) -> usize {
     }
 }
 
+#[cfg(feature = "app_api")]
 fn soracloud_body_limit_response(
     body_limit: usize,
     path: &str,
@@ -3025,6 +3049,7 @@ fn soracloud_body_limit_response(
         .into_response()
 }
 
+#[cfg(feature = "app_api")]
 fn soracloud_signed_mutation_route_group(path: &str) -> &'static str {
     if path.starts_with("/v1/soracloud/model/upload/") {
         "upload"
@@ -3037,6 +3062,7 @@ fn soracloud_signed_mutation_route_group(path: &str) -> &'static str {
     }
 }
 
+#[cfg(feature = "app_api")]
 fn soracloud_signed_mutation_rate_key(
     headers: &HeaderMap,
     account: &AccountId,
@@ -3052,6 +3078,7 @@ fn soracloud_signed_mutation_rate_key(
     format!("soracloud:{route_group}:account:{account}:origin:{origin}")
 }
 
+#[cfg(feature = "app_api")]
 fn soracloud_rate_limit_response(route_group: &str) -> axum::response::Response {
     Response::builder()
         .status(StatusCode::TOO_MANY_REQUESTS)
@@ -3062,6 +3089,7 @@ fn soracloud_rate_limit_response(route_group: &str) -> axum::response::Response 
         .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response())
 }
 
+#[cfg(feature = "app_api")]
 fn soracloud_inflight_limit_response(route_group: &str) -> axum::response::Response {
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
@@ -3863,6 +3891,7 @@ use axum::{extract::Path as AxPath, response::Response as AxResponse};
 
 use crate::NoritoQuery as AxQuery;
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_contract_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3880,6 +3909,7 @@ async fn handler_gov_contract_get(
     crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_enact(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3898,6 +3928,7 @@ async fn handler_gov_enact(
     .await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_draft(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3929,6 +3960,7 @@ async fn handler_ministry_agenda_proposal_draft(
     }
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3946,6 +3978,7 @@ async fn handler_ministry_agenda_proposal_get(
     crate::gov::handle_ministry_agenda_proposal_get(app.state.clone(), proposal_id).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_council_current(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3956,6 +3989,7 @@ async fn handler_gov_council_current(
     crate::gov::handle_gov_council_current(app.state.clone()).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_citizen_count(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3966,6 +4000,7 @@ async fn handler_gov_citizen_count(
     crate::gov::handle_gov_citizen_count(app.state.clone()).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_citizen_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3984,6 +4019,7 @@ async fn handler_gov_citizen_status(
         .await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_proposal_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3995,6 +4031,7 @@ async fn handler_gov_proposal_get(
     crate::gov::handle_gov_get_proposal(app.state.clone(), id).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_locks_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4006,6 +4043,7 @@ async fn handler_gov_locks_get(
     crate::gov::handle_gov_get_locks(app.state.clone(), rid).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_referendum_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4018,6 +4056,7 @@ async fn handler_gov_referendum_get(
 }
 
 // Missing wrappers for governance endpoints that require AppState access/rate limiting
+#[cfg(feature = "app_api")]
 async fn handler_gov_propose_deploy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4042,6 +4081,7 @@ async fn handler_gov_propose_deploy(
     .await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_protected_set(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4061,6 +4101,7 @@ async fn handler_gov_protected_set(
     .await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_protected_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4071,6 +4112,7 @@ async fn handler_gov_protected_get(
     crate::gov::handle_gov_protected_get(app.state.clone()).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_tally_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4082,6 +4124,7 @@ async fn handler_gov_tally_get(
     crate::gov::handle_gov_get_tally(app.state.clone(), id).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_unlock_stats(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -5216,21 +5259,6 @@ pub async fn handle_v1_zk_verify_batch_with_limits(
     .await
 }
 
-/// Fallback `/v1/zk/verify-batch` handler when `zk-verify-batch` feature is disabled.
-///
-/// # Errors
-/// Never errors; always returns a `501 Not Implemented` response.
-#[cfg(all(feature = "app_api", not(feature = "zk-verify-batch")))]
-pub async fn handle_v1_zk_verify_batch(
-    _headers: axum::http::HeaderMap,
-    _body: axum::body::Bytes,
-) -> Result<impl IntoResponse, Error> {
-    Ok((
-        axum::http::StatusCode::NOT_IMPLEMENTED,
-        "zk-verify-batch feature disabled",
-    ))
-}
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_list(
@@ -6086,6 +6114,49 @@ async fn handler_offline_note_readiness(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_offline_v2_note_readiness(
+    State(_app): State<SharedAppState>,
+) -> Result<impl IntoResponse, Error> {
+    const OFFLINE_NOTE_V2_RECURSIVE_CIRCUIT_ID: &str = "offline-note-v2-recursive-v1";
+    let verifier_key_id = json_object([
+        json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
+        json_entry("name", OFFLINE_NOTE_V2_RECURSIVE_CIRCUIT_ID),
+    ]);
+    let schema_hash = hex::encode(
+        iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash(),
+    );
+    json_ok(json_object([
+        json_entry("offline_note_v2", true),
+        json_entry("offline_one_use_keys", true),
+        json_entry("offline_recursive_note_proof", true),
+        json_entry(
+            "offline_recursive_note_proof_backend",
+            iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_circuit_id",
+            OFFLINE_NOTE_V2_RECURSIVE_CIRCUIT_ID,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_public_inputs_schema_hash",
+            schema_hash,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_public_instance_columns",
+            iroha_core::zk::OFFLINE_NOTE_INSTANCE_COLUMNS as u64,
+        ),
+        json_entry(
+            "offline_recursive_note_proof_verifier_key_id",
+            verifier_key_id,
+        ),
+        json_entry("offline_fountain_qr_v1", true),
+        json_entry("offline_sync_optional", true),
+        json_entry("offline_telemetry", true),
+    ]))
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_offline_note_keys_refill(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -6096,6 +6167,26 @@ async fn handler_offline_note_keys_refill(
 ) -> Result<AxResponse, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/offline/keys/refill").await?;
     offline_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_v2_note_keys_refill(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/v2/keys/refill",
+    )
+    .await?;
+    offline_v2_issuer::handle_key_refill(app, &method, &uri, &headers, body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -6114,82 +6205,56 @@ async fn handler_offline_note_notes_issue(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_note_notes_redeem(
+async fn handler_offline_v2_note_notes_issue(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/notes/redeem").await?;
-    offline_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_note_audit(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/audit").await?;
-    offline_issuer::handle_audit(app, &method, &uri, &headers, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_policy_update(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/policy").await?;
-    offline_issuer::handle_policy_update(app, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_revocations_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/revocations").await?;
-    offline_issuer::handle_revocations_list(app).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_revocation_register(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/revocations").await?;
-    offline_issuer::handle_revocation_register(app, body).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_revocation_bundle(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     check_access(
         &app,
         &headers,
         Some(remote.ip()),
-        "v1/offline/revocations/bundle",
+        "v1/offline/v2/notes/issue",
     )
     .await?;
-    offline_issuer::handle_revocation_bundle(app).await
+    offline_v2_issuer::handle_notes_issue(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_v2_note_notes_redeem(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/offline/v2/notes/redeem",
+    )
+    .await?;
+    offline_v2_issuer::handle_notes_redeem(app, &method, &uri, &headers, body).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_v2_note_audit(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/offline/v2/audit").await?;
+    offline_v2_issuer::handle_audit(app, &method, &uri, &headers, body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -8921,6 +8986,7 @@ async fn handler_gov_parliament_ballot(
     .await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_gov_finalize(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -8939,6 +9005,7 @@ async fn handler_gov_finalize(
     .await
 }
 
+#[cfg(feature = "app_api")]
 #[allow(dead_code)]
 fn _assert_finalize_send_bounds() {
     fn assert_send<T: Send>() {}
@@ -8992,7 +9059,7 @@ async fn handler_gov_council_replace(
     .await
 }
 
-#[cfg(feature = "gov_vrf")]
+#[cfg(all(feature = "app_api", feature = "gov_vrf"))]
 async fn handler_gov_council_derive_vrf(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -9013,33 +9080,6 @@ async fn handler_gov_council_derive_vrf(
     }
     check_access(&app, &headers, Some(remote_ip), "v1/gov/council/derive-vrf").await?;
     crate::gov::handle_gov_council_derive_vrf(app.state.clone(), body).await
-}
-
-#[cfg(not(feature = "gov_vrf"))]
-async fn handler_gov_council_derive_vrf(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    _body: crate::utils::extractors::NoritoJson<crate::gov::CouncilDeriveVrfRequest>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/gov/council/derive-vrf",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/council/derive-vrf").await?;
-    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-            "not implemented".to_string(),
-        ),
-    )))
 }
 
 // -------------- Runtime (AppState-based) --------------
@@ -10094,6 +10134,7 @@ fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyI
     keys_dir.join(format!("{backend}__{name}.pk"))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_ivm_derive(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -10258,6 +10299,7 @@ async fn handler_zk_ivm_derive(
     ))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -10644,6 +10686,7 @@ async fn handler_zk_ivm_prove(
     ))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_get(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -10690,6 +10733,7 @@ async fn handler_zk_ivm_prove_get(
     ))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_delete(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -10720,6 +10764,7 @@ async fn handler_zk_ivm_prove_delete(
     ))
 }
 
+#[cfg(feature = "app_api")]
 fn zk_attachments_tenant(
     app: &SharedAppState,
     method: &axum::http::Method,
@@ -10739,6 +10784,7 @@ fn zk_attachments_tenant(
     }
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_attachments_create(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -10753,6 +10799,7 @@ async fn handler_zk_attachments_create(
     Ok(crate::zk_attachments::handle_post_attachment(tenant, headers, body).await)
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_attachments_list(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -10766,6 +10813,7 @@ async fn handler_zk_attachments_list(
     Ok(crate::zk_attachments::handle_list_attachments(tenant).await)
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_attachments_filtered(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -10780,6 +10828,7 @@ async fn handler_zk_attachments_filtered(
     Ok(crate::zk_attachments::handle_list_attachments_filtered(tenant, AxQuery(q)).await)
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_attachments_count(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -10801,6 +10850,7 @@ async fn handler_zk_attachments_count(
     Ok(crate::zk_attachments::handle_count_attachments(tenant, AxQuery(q)).await)
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_attachment_get(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -10822,6 +10872,7 @@ async fn handler_zk_attachment_get(
     Ok(crate::zk_attachments::handle_get_attachment(tenant, id).await)
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_zk_attachment_delete(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -13141,7 +13192,6 @@ fn torii_visible_account_read_routes(
         .collect()
 }
 
-#[cfg(feature = "app_api")]
 fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -13851,7 +13901,7 @@ fn fanout_verified_query_request(
 }
 
 fn unsupported_routed_query_response(message: impl Into<String>) -> Response {
-    torii_proxy_error_response(StatusCode::NOT_IMPLEMENTED, "query_unsupported", message)
+    torii_proxy_error_response(StatusCode::CONFLICT, "query_unsupported", message)
 }
 
 fn should_skip_iterable_routed_query_route_error(response: &Response) -> bool {
@@ -15051,14 +15101,12 @@ fn torii_proxy_query_scalar_value(raw: &str) -> Value {
     }
 }
 
-#[cfg(feature = "app_api")]
 fn torii_proxy_query_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         message.into(),
     ))
 }
 
-#[cfg(feature = "app_api")]
 fn encode_torii_proxy_query<T>(value: &T) -> Result<Option<String>, Error>
 where
     T: norito::json::JsonSerialize,
@@ -16374,7 +16422,7 @@ fn merged_dataspace_summary_response(
     Ok(response)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod torii_routed_read_tests {
     use super::*;
     #[cfg(feature = "app_api")]
@@ -16576,6 +16624,35 @@ mod torii_routed_read_tests {
         assert_eq!(
             start.params.fetch_size.fetch_size,
             std::num::NonZeroU64::new(crate::routing::app_query_limits().max_fetch_size)
+        );
+    }
+
+    #[test]
+    fn unsupported_routed_query_response_is_conflict_not_not_implemented() {
+        let response = unsupported_routed_query_response("unsupported routed query shape");
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("query_unsupported")
+        );
+    }
+
+    #[cfg(all(not(feature = "app_api"), any(feature = "p2p_ws", feature = "connect")))]
+    #[test]
+    fn app_api_required_torii_proxy_response_is_route_unavailable() {
+        let response = app_api_required_torii_proxy_response("Torii read proxying");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
         );
     }
 
@@ -21453,6 +21530,15 @@ async fn forward_incoming_torii_proxy_request_from_sender(
     forward_incoming_torii_proxy_request(app, sender_peer_id, routing_decision, request).await
 }
 
+#[cfg(all(not(feature = "app_api"), any(feature = "p2p_ws", feature = "connect")))]
+fn app_api_required_torii_proxy_response(action: &'static str) -> Response {
+    torii_proxy_error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "route_unavailable",
+        format!("{action} requires the `app_api` feature"),
+    )
+}
+
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_incoming_torii_proxy_request(
     app: &SharedAppState,
@@ -21804,23 +21890,17 @@ async fn execute_incoming_torii_proxy_request(
             }
         }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV1::Read(_) => torii_proxy_error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "route_unavailable",
-            "Torii read proxying requires the `app_api` feature",
-        ),
+        ToriiProxyRequestKindV1::Read(_) => {
+            app_api_required_torii_proxy_response("Torii read proxying")
+        }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV1::ReadFanout(_) => torii_proxy_error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "route_unavailable",
-            "Torii read fanout proxying requires the `app_api` feature",
-        ),
+        ToriiProxyRequestKindV1::ReadFanout(_) => {
+            app_api_required_torii_proxy_response("Torii read fanout proxying")
+        }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV1::HostedHttp(_) => torii_proxy_error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            "route_unavailable",
-            "Torii hosted HTTP proxying requires the `app_api` feature",
-        ),
+        ToriiProxyRequestKindV1::HostedHttp(_) => {
+            app_api_required_torii_proxy_response("Torii hosted HTTP proxying")
+        }
     }
 }
 
@@ -22688,7 +22768,7 @@ async fn proxy_soracloud_public_hosted_http_locally(
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response()))
 }
 
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 async fn execute_hosted_http_proxy_request_with_fallback(
     app: &SharedAppState,
     target: &ResolvedHostedHttpTarget,
@@ -23301,6 +23381,7 @@ async fn handler_soracloud_public_local_read(
     execute_soracloud_public_runtime_request(app, method, uri, headers, remote.ip(), body).await
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_soracloud_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -31728,6 +31809,7 @@ async fn handler_post_transactions_batch(
     Ok(transaction_batch_submission_response(accepted_count))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_proof_record_get(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
@@ -32695,39 +32777,50 @@ async fn handler_pipeline_transaction_status(
         return Err(pipeline_status_not_found_error());
     }
 
-    check_access_with_rate_limiter(
-        &app,
-        &headers,
-        Some(remote_ip),
-        "v1/pipeline/transactions/status",
-        &app.pipeline_status_rate_limiter,
-    )
-    .await?;
-
-    let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
-    if let Some(route) = queue::routing_plan_hint(&hash).map(|plan| plan.coordinator_route()) {
-        let hinted = execute_torii_single_route_read(
+    #[cfg(feature = "app_api")]
+    {
+        check_access_with_rate_limiter(
             &app,
-            route,
+            &headers,
+            Some(remote_ip),
+            "v1/pipeline/transactions/status",
+            &app.pipeline_status_rate_limiter,
+        )
+        .await?;
+
+        let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
+        if let Some(route) = queue::routing_plan_hint(&hash).map(|plan| plan.coordinator_route()) {
+            let hinted = execute_torii_single_route_read(
+                &app,
+                route,
+                ToriiReadEndpointV1::PipelineTransactionStatusGet,
+                Vec::new(),
+                query_string.clone(),
+                Vec::new(),
+            )
+            .await;
+            if !should_skip_singleton_routed_query_route_error(&hinted) {
+                return Ok(hinted);
+            }
+        }
+
+        Ok(execute_torii_fanout_singleton_read(
+            &app,
             ToriiReadEndpointV1::PipelineTransactionStatusGet,
             Vec::new(),
-            query_string.clone(),
+            query_string,
             Vec::new(),
         )
-        .await;
-        if !should_skip_singleton_routed_query_route_error(&hinted) {
-            return Ok(hinted);
-        }
+        .await)
     }
 
-    Ok(execute_torii_fanout_singleton_read(
-        &app,
-        ToriiReadEndpointV1::PipelineTransactionStatusGet,
-        Vec::new(),
-        query_string,
-        Vec::new(),
-    )
-    .await)
+    #[cfg(not(feature = "app_api"))]
+    {
+        let _ = headers;
+        let _ = remote_ip;
+        let _ = hash;
+        Err(pipeline_status_not_found_error())
+    }
 }
 
 async fn handler_trigger_completions(
@@ -33603,6 +33696,7 @@ async fn handler_connect_status(
     JsonBody(public_status).into_response()
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_alias_voprf_evaluate(
     NoritoJson(request): NoritoJson<routing::AliasVoprfEvaluateRequestDto>,
 ) -> Result<JsonBody<routing::AliasVoprfEvaluateResponseDto>, Error> {
@@ -33628,6 +33722,7 @@ async fn handler_alias_voprf_evaluate(
     Ok(JsonBody(payload))
 }
 
+#[cfg(feature = "app_api")]
 fn require_signed_alias_request(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
@@ -33645,6 +33740,7 @@ fn require_signed_alias_request(
     }
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_alias_resolve(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -33713,6 +33809,7 @@ async fn handler_alias_resolve(
     ))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_alias_resolve_index(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -33783,6 +33880,7 @@ async fn handler_alias_resolve_index(
     }))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_alias_lookup_by_account(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -33873,6 +33971,7 @@ async fn handler_alias_lookup_by_account(
     }))
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_asset_alias_resolve(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<routing::AssetAliasResolveRequestDto>,
@@ -33919,6 +34018,7 @@ async fn handler_asset_alias_resolve(
     )
 }
 
+#[cfg(feature = "app_api")]
 fn execute_contract_alias_resolve_local_read(
     app: &SharedAppState,
     request: &routing::ContractAliasResolveRequestDto,
@@ -33944,6 +34044,7 @@ fn execute_contract_alias_resolve_local_read(
     )
 }
 
+#[cfg(feature = "app_api")]
 async fn handler_contract_alias_resolve(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<routing::ContractAliasResolveRequestDto>,
@@ -35101,6 +35202,7 @@ async fn handler_sumeragi_vrf_reveal(
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
 // (re-exports consolidated above)
 mod da;
+#[cfg(feature = "app_api")]
 pub use self::da::compute_taikai_ingest_tags;
 mod stream;
 #[cfg(feature = "app_api")]
@@ -35326,6 +35428,8 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     offline_issuer: Option<Arc<offline_issuer::OfflineIssuerRuntime>>,
     #[cfg(feature = "app_api")]
+    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -35459,14 +35563,6 @@ impl Torii {
                     routing::SORANET_PRIVACY_SHARE_ENDPOINT,
                     axum::routing::post(handler_post_soranet_privacy_share),
                 )
-                .route(
-                    "/v1/assets/{definition_id}/holders",
-                    get(handler_asset_holders),
-                )
-                .route(
-                    "/v1/assets/{definition_id}/holders/query",
-                    post(handler_asset_holders_query),
-                )
                 // `/status` and `/metrics` are used by localnet/perf harnesses and typical
                 // monitoring setups; keep them outside of operator signature middleware.
                 .route(uri::STATUS, get(handler_status_root))
@@ -35475,6 +35571,16 @@ impl Torii {
                     get(handler_status_tail),
                 )
                 .route(uri::METRICS, get(handler_metrics));
+            #[cfg(feature = "app_api")]
+            let public_router = public_router
+                .route(
+                    "/v1/assets/{definition_id}/holders",
+                    get(handler_asset_holders),
+                )
+                .route(
+                    "/v1/assets/{definition_id}/holders/query",
+                    post(handler_asset_holders_query),
+                );
 
             router.merge(operator_router).merge(public_router)
         });
@@ -35484,18 +35590,11 @@ impl Torii {
     #[allow(clippy::unused_self)]
     fn add_telemetry_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
+        #[cfg(not(feature = "app_api"))]
+        builder.apply(|router| router);
+        #[cfg(feature = "app_api")]
         builder.apply(|router| {
             router
-                .route(uri::STATUS, get(routing::telemetry_not_implemented))
-                .route(
-                    &format!("{}/{{*rest}}", uri::STATUS),
-                    get(routing::telemetry_not_implemented),
-                )
-                .route(
-                    "/v1/debug/axt/cache",
-                    get(routing::telemetry_not_implemented),
-                )
-                .route("/v1/debug/witness", get(routing::telemetry_not_implemented))
                 .route(
                     "/v1/assets/{definition_id}/holders",
                     get(handler_asset_holders),
@@ -35504,7 +35603,6 @@ impl Torii {
                     "/v1/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
                 )
-                .route(uri::METRICS, get(routing::telemetry_not_implemented))
         });
     }
 
@@ -35798,6 +35896,13 @@ impl Torii {
         });
     }
 
+    #[cfg(not(feature = "app_api"))]
+    fn add_alias_routes(&self, builder: &mut RouterBuilder) {
+        let _ = self;
+        builder.apply(|router| router);
+    }
+
+    #[cfg(feature = "app_api")]
     fn add_alias_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         builder.apply(|router| {
@@ -35839,8 +35944,8 @@ impl Torii {
 
     #[cfg(not(feature = "schema"))]
     #[allow(clippy::unused_self)]
-    fn add_schema_routes(&self, builder: &mut RouterBuilder) {
-        builder.apply(|router| router.route(uri::SCHEMA, get(routing::schema_not_implemented)));
+    fn add_schema_routes(&self, _builder: &mut RouterBuilder) {
+        let _ = self;
     }
 
     #[allow(clippy::unused_self)]
@@ -35891,13 +35996,14 @@ impl Torii {
 
     #[cfg(not(feature = "profiling"))]
     #[allow(clippy::unused_self)]
-    fn add_profiling_routes(&self, builder: &mut RouterBuilder) {
-        builder.apply(|router| router.route(uri::PROFILE, get(routing::profiling_not_implemented)));
+    fn add_profiling_routes(&self, _builder: &mut RouterBuilder) {
+        let _ = self;
     }
 
     // ---------------- Additional route-group helpers (extracted) ----------------
 
     /// Governance VRF helpers (feature-gated)
+    #[cfg(feature = "gov_vrf")]
     fn add_gov_vrf_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         builder.apply(|router| {
@@ -35906,6 +36012,12 @@ impl Torii {
                 post(handler_gov_council_derive_vrf),
             )
         });
+    }
+
+    /// Governance VRF helpers are omitted when the feature is not compiled.
+    #[cfg(not(feature = "gov_vrf"))]
+    fn add_gov_vrf_routes(&self, _builder: &mut RouterBuilder) {
+        let _ = self;
     }
 
     /// Transactions (binary Norito) endpoint
@@ -35971,6 +36083,7 @@ impl Torii {
     /// Data-availability ingest endpoints.
     #[allow(clippy::unused_self)]
     fn add_da_routes(&self, builder: &mut RouterBuilder) {
+        #[cfg(feature = "app_api")]
         builder.apply(|router| {
             router
                 .route("/v1/da/ingest", post(da::handler_post_da_ingest))
@@ -35978,6 +36091,9 @@ impl Torii {
                     "/v1/da/manifests/{ticket}",
                     get(da::handler_get_da_manifest),
                 )
+        });
+        builder.apply(|router| {
+            router
                 .route(
                     "/v1/da/proof_policies",
                     get(da::commitments::handler_list_proof_policies),
@@ -36015,6 +36131,15 @@ impl Torii {
 
     /// Musubi Kotodama package-registry routes.
     #[allow(clippy::unused_self)]
+    #[cfg(not(feature = "app_api"))]
+    fn add_musubi_routes(&self, builder: &mut RouterBuilder) {
+        let _ = self;
+        builder.apply(|router| router);
+    }
+
+    /// Musubi Kotodama package-registry routes.
+    #[allow(clippy::unused_self)]
+    #[cfg(feature = "app_api")]
     fn add_musubi_routes(&self, builder: &mut RouterBuilder) {
         builder.apply(|router| {
             router
@@ -36056,6 +36181,15 @@ impl Torii {
 
     /// Contracts and VK registry routes
     #[allow(clippy::unused_self)]
+    #[cfg(not(feature = "app_api"))]
+    fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
+        let _ = self;
+        builder.apply(|router| router);
+    }
+
+    /// Contracts and VK registry routes
+    #[allow(clippy::unused_self)]
+    #[cfg(feature = "app_api")]
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
         builder.apply(|router| {
             // Group contracts + VK endpoints into a small sub-router for clarity and merge it.
@@ -36072,7 +36206,6 @@ impl Torii {
                 )
                 .layer(contracts_body_limit.clone());
 
-            #[cfg(feature = "app_api")]
             let group = group
                 .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
                 .route(
@@ -36124,10 +36257,6 @@ impl Torii {
                     get(handler_get_mint_request),
                 )
                 .layer(contracts_body_limit);
-            #[cfg(not(feature = "app_api"))]
-            let group = group;
-
-            #[cfg(feature = "app_api")]
             let group = group
                 .route("/v1/multisig/propose", post(handler_post_multisig_propose))
                 .route("/v1/multisig/approve", post(handler_post_multisig_approve))
@@ -36163,9 +36292,6 @@ impl Torii {
                 )
                 .route("/v1/zk/vk/register", post(handler_post_vk_register))
                 .route("/v1/zk/vk/update", post(handler_post_vk_update));
-            #[cfg(not(feature = "app_api"))]
-            let group = group;
-
             let group = group
                 .route(
                     "/v1/sorafs/capacity/declare",
@@ -36217,7 +36343,6 @@ impl Torii {
                     "/v1/sorafs/capacity/failure",
                     post(handler_post_sorafs_capacity_failure),
                 );
-            #[cfg(feature = "app_api")]
             let group = group
                 .route(
                     "/v1/sorafs/audit/repair/report",
@@ -36251,9 +36376,6 @@ impl Torii {
                     "/v1/sorafs/audit/repair/status/{manifest_hex}",
                     get(handler_get_sorafs_repair_status),
                 );
-            #[cfg(not(feature = "app_api"))]
-            let group = group;
-
             let group = group
                 .route(
                     "/v1/zk/vk/{backend}/{name}",
@@ -36360,12 +36482,13 @@ impl Torii {
     fn add_proof_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         builder.apply(|router| {
-            router
-                .route("/v1/proofs/{id}", get(handler_proof_record_get))
-                .route(
-                    iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
-                    get(handler_proof_retention_status),
-                )
+            #[cfg(feature = "app_api")]
+            let router = router.route("/v1/proofs/{id}", get(handler_proof_record_get));
+
+            router.route(
+                iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
+                get(handler_proof_retention_status),
+            )
         });
     }
 
@@ -36629,27 +36752,30 @@ impl Torii {
                     get(handler_offline_note_readiness),
                 )
                 .route(
+                    "/v1/offline/v2/readiness",
+                    get(handler_offline_v2_note_readiness),
+                )
+                .route(
                     "/v1/offline/keys/refill",
                     post(handler_offline_note_keys_refill),
+                )
+                .route(
+                    "/v1/offline/v2/keys/refill",
+                    post(handler_offline_v2_note_keys_refill),
                 )
                 .route(
                     "/v1/offline/notes/issue",
                     post(handler_offline_note_notes_issue),
                 )
                 .route(
-                    "/v1/offline/notes/redeem",
-                    post(handler_offline_note_notes_redeem),
-                )
-                .route("/v1/offline/audit", post(handler_offline_note_audit))
-                .route("/v1/offline/policy", post(handler_offline_policy_update))
-                .route(
-                    "/v1/offline/revocations",
-                    get(handler_offline_revocations_list).post(handler_offline_revocation_register),
+                    "/v1/offline/v2/notes/issue",
+                    post(handler_offline_v2_note_notes_issue),
                 )
                 .route(
-                    "/v1/offline/revocations/bundle",
-                    get(handler_offline_revocation_bundle),
-                );
+                    "/v1/offline/v2/notes/redeem",
+                    post(handler_offline_v2_note_notes_redeem),
+                )
+                .route("/v1/offline/v2/audit", post(handler_offline_v2_note_audit));
             #[cfg(feature = "push")]
             let router = router.route(
                 "/v1/notify/devices",
@@ -37356,75 +37482,66 @@ impl Torii {
     }
 
     fn add_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
+        #[cfg(feature = "app_api")]
         let zk_attachments_enabled = self.zk_attachments_enabled;
         builder.apply_with_state(|router, state| {
-            let operator_layer = axum::middleware::from_fn_with_state(
-                state,
-                operator_signatures::enforce_operator_access,
-            );
+            #[cfg(not(feature = "app_api"))]
+            let _ = &state;
+
+            #[cfg_attr(
+                not(any(feature = "app_api", feature = "zk-verify-batch")),
+                allow(unused_mut)
+            )]
             let mut zk_router = Router::new()
                 .route("/v1/zk/roots", post(handler_zk_roots))
                 .route("/v1/zk/verify", post(handler_zk_verify))
                 .route("/v1/zk/submit-proof", post(handler_zk_submit_proof))
-                .route("/v1/zk/ivm/derive", post(handler_zk_ivm_derive))
-                .route("/v1/zk/ivm/prove", post(handler_zk_ivm_prove))
-                .route(
-                    "/v1/zk/ivm/prove/{job_id}",
-                    get(handler_zk_ivm_prove_get).delete(handler_zk_ivm_prove_delete),
-                )
                 .route("/v1/zk/vote/tally", post(handler_zk_vote_tally));
+
+            #[cfg(feature = "app_api")]
+            {
+                zk_router = zk_router
+                    .route("/v1/zk/ivm/derive", post(handler_zk_ivm_derive))
+                    .route("/v1/zk/ivm/prove", post(handler_zk_ivm_prove))
+                    .route(
+                        "/v1/zk/ivm/prove/{job_id}",
+                        get(handler_zk_ivm_prove_get).delete(handler_zk_ivm_prove_delete),
+                    );
+            }
 
             #[cfg(feature = "zk-verify-batch")]
             {
                 zk_router = zk_router.route("/v1/zk/verify-batch", post(handler_zk_verify_batch));
             }
-            #[cfg(not(feature = "zk-verify-batch"))]
+
+            #[cfg(feature = "app_api")]
             {
-                zk_router = zk_router.route(
-                    "/v1/zk/verify-batch",
-                    post(|| async { StatusCode::NOT_IMPLEMENTED }),
-                );
-            }
+                if zk_attachments_enabled {
+                    let attachments_methods =
+                        post(handler_zk_attachments_create).get(handler_zk_attachments_filtered);
 
-            if zk_attachments_enabled {
-                let attachments_methods = {
-                    let route = post(handler_zk_attachments_create);
-                    #[cfg(feature = "app_api")]
-                    let route = route.get(handler_zk_attachments_filtered);
-                    #[cfg(not(feature = "app_api"))]
-                    let route = route.get(handler_zk_attachments_list);
-                    route
-                };
-
-                zk_router = zk_router
-                    .route("/v1/zk/attachments", attachments_methods)
-                    .route(
-                        "/v1/zk/attachments/{id}",
-                        get(handler_zk_attachment_get).delete(handler_zk_attachment_delete),
-                    );
-
-                #[cfg(feature = "app_api")]
-                {
-                    zk_router = zk_router.route(
-                        "/v1/zk/attachments/count",
-                        get(handler_zk_attachments_count),
-                    );
-                }
-            } else {
-                zk_router = zk_router
-                    .route(
-                        "/v1/zk/attachments",
-                        get(|| async { StatusCode::NOT_FOUND })
-                            .post(|| async { StatusCode::NOT_FOUND }),
-                    )
-                    .route(
-                        "/v1/zk/attachments/{id}",
-                        get(|| async { StatusCode::NOT_FOUND })
-                            .delete(|| async { StatusCode::NOT_FOUND }),
-                    );
-
-                #[cfg(feature = "app_api")]
-                {
+                    zk_router = zk_router
+                        .route("/v1/zk/attachments", attachments_methods)
+                        .route(
+                            "/v1/zk/attachments/{id}",
+                            get(handler_zk_attachment_get).delete(handler_zk_attachment_delete),
+                        )
+                        .route(
+                            "/v1/zk/attachments/count",
+                            get(handler_zk_attachments_count),
+                        );
+                } else {
+                    zk_router = zk_router
+                        .route(
+                            "/v1/zk/attachments",
+                            get(|| async { StatusCode::NOT_FOUND })
+                                .post(|| async { StatusCode::NOT_FOUND }),
+                        )
+                        .route(
+                            "/v1/zk/attachments/{id}",
+                            get(|| async { StatusCode::NOT_FOUND })
+                                .delete(|| async { StatusCode::NOT_FOUND }),
+                        );
                     zk_router = zk_router.route(
                         "/v1/zk/attachments/count",
                         get(|| async { StatusCode::NOT_FOUND }),
@@ -37432,6 +37549,7 @@ impl Torii {
                 }
             }
 
+            #[cfg_attr(not(feature = "app_api"), allow(unused_mut))]
             let mut router = router
                 // Runtime ABI/upgrade endpoints
                 .route(
@@ -37469,6 +37587,7 @@ impl Torii {
                     get(handler_node_query_projection_shard_catalog),
                 );
             }
+            #[cfg_attr(not(feature = "app_api"), allow(unused_mut))]
             let mut router = router
                 // ZK and attachments grouped sub-router
                 .merge(zk_router)
@@ -37497,90 +37616,100 @@ impl Torii {
                 );
             }
 
-            router = router
-                .route(
-                    iroha_torii_shared::uri::MINISTRY_AGENDA_PROPOSAL_DRAFT,
-                    post(handler_ministry_agenda_proposal_draft),
-                )
-                .route(
-                    iroha_torii_shared::uri::MINISTRY_AGENDA_PROPOSAL_GET,
-                    get(handler_ministry_agenda_proposal_get),
+            #[cfg(feature = "app_api")]
+            {
+                let operator_layer = axum::middleware::from_fn_with_state(
+                    state,
+                    operator_signatures::enforce_operator_access,
                 );
 
-            // Governance endpoints (convert to closures)
-            router = router
+                router = router
+                    .route(
+                        iroha_torii_shared::uri::MINISTRY_AGENDA_PROPOSAL_DRAFT,
+                        post(handler_ministry_agenda_proposal_draft),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::MINISTRY_AGENDA_PROPOSAL_GET,
+                        get(handler_ministry_agenda_proposal_get),
+                    );
+
                 // Governance endpoints (AppState handlers + one closure)
-                .route(
-                    iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY,
-                    post(handler_gov_propose_deploy),
-                )
-                // Read endpoints: proposal/referendum/locks/tally
-                .route(
-                    iroha_torii_shared::uri::GOV_PROPOSAL_GET,
-                    get(handler_gov_proposal_get),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_LOCKS_GET,
-                    get(handler_gov_locks_get),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_REFERENDUM_GET,
-                    get(handler_gov_referendum_get),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_TALLY_GET,
-                    get(handler_gov_tally_get),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_BALLOT_ZK,
-                    post(handler_gov_ballot_zk),
-                )
-                .route("/v1/gov/ballots/zk-v1", post(handler_gov_ballot_zk_v1))
-                .route(
-                    "/v1/gov/ballots/zk-v1/ballot-proof",
-                    post(handler_gov_ballot_zk_v1_ballot_proof),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_BALLOT_PLAIN,
-                    post(handler_gov_ballot_plain),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_PARLIAMENT_BALLOT,
-                    post(handler_gov_parliament_ballot),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_FINALIZE,
-                    post(handler_gov_finalize),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_PROTECTED_SET,
-                    post(handler_gov_protected_set).layer(operator_layer.clone()),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_PROTECTED_SET,
-                    get(handler_gov_protected_get),
-                )
-                .route("/v1/gov/stream", get(handler_gov_stream))
-                .route("/v1/gov/unlocks/stats", get(handler_gov_unlock_stats))
-                .route(
-                    iroha_torii_shared::uri::GOV_CONTRACT_GET,
-                    get(handler_gov_contract_get),
-                )
-                .route(iroha_torii_shared::uri::GOV_ENACT, post(handler_gov_enact))
-                .route(
-                    iroha_torii_shared::uri::GOV_COUNCIL_CURRENT,
-                    get(handler_gov_council_current),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_CITIZENS_COUNT,
-                    get(handler_gov_citizen_count),
-                )
-                .route(
-                    iroha_torii_shared::uri::GOV_CITIZEN_STATUS,
-                    get(handler_gov_citizen_status),
-                );
-            // Persist council (app API; feature gov_vrf)
-            {
+                router = router
+                    .route(
+                        iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY,
+                        post(handler_gov_propose_deploy),
+                    )
+                    // Read endpoints: proposal/referendum/locks/tally
+                    .route(
+                        iroha_torii_shared::uri::GOV_PROPOSAL_GET,
+                        get(handler_gov_proposal_get),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_LOCKS_GET,
+                        get(handler_gov_locks_get),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_REFERENDUM_GET,
+                        get(handler_gov_referendum_get),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_TALLY_GET,
+                        get(handler_gov_tally_get),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_BALLOT_ZK,
+                        post(handler_gov_ballot_zk),
+                    )
+                    .route("/v1/gov/ballots/zk-v1", post(handler_gov_ballot_zk_v1))
+                    .route(
+                        "/v1/gov/ballots/zk-v1/ballot-proof",
+                        post(handler_gov_ballot_zk_v1_ballot_proof),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_BALLOT_PLAIN,
+                        post(handler_gov_ballot_plain),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_PARLIAMENT_BALLOT,
+                        post(handler_gov_parliament_ballot),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_FINALIZE,
+                        post(handler_gov_finalize),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_PROTECTED_SET,
+                        post(handler_gov_protected_set).layer(operator_layer.clone()),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_PROTECTED_SET,
+                        get(handler_gov_protected_get),
+                    )
+                    .route("/v1/gov/stream", get(handler_gov_stream))
+                    .route("/v1/gov/unlocks/stats", get(handler_gov_unlock_stats))
+                    .route(
+                        iroha_torii_shared::uri::GOV_CONTRACT_GET,
+                        get(handler_gov_contract_get),
+                    )
+                    .route(iroha_torii_shared::uri::GOV_ENACT, post(handler_gov_enact))
+                    .route(
+                        iroha_torii_shared::uri::GOV_COUNCIL_CURRENT,
+                        get(handler_gov_council_current),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_CITIZENS_COUNT,
+                        get(handler_gov_citizen_count),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_CITIZEN_STATUS,
+                        get(handler_gov_citizen_status),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_COUNCIL_AUDIT,
+                        get(handler_gov_council_audit),
+                    );
+
+                // Persist council (app API; feature gov_vrf)
                 #[cfg(feature = "gov_vrf")]
                 {
                     router = router.route(
@@ -37592,14 +37721,7 @@ impl Torii {
                         post(handler_gov_council_replace),
                     );
                 }
-                #[cfg(not(feature = "gov_vrf"))]
-                {}
             }
-            // Audit seed/epoch
-            router = router.route(
-                iroha_torii_shared::uri::GOV_COUNCIL_AUDIT,
-                get(handler_gov_council_audit),
-            );
 
             router
         });
@@ -37700,7 +37822,9 @@ impl Torii {
         let telemetry = runtime_deps.telemetry.clone();
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         let soracloud_hf_config = runtime_deps.soracloud_hf_config.clone().unwrap_or_default();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
         let vpn_helper_ticket_secret = runtime_deps.vpn_helper_ticket_secret;
         let torii_proxy_bridge_signer = runtime_deps
@@ -37716,6 +37840,7 @@ impl Torii {
         crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::from(
             &config.app_api,
         ));
+        #[cfg(feature = "app_api")]
         crate::data_dir::set_base_dir(config.data_dir.clone());
         #[cfg(feature = "push")]
         let (push_bridge, push_rate_limiter) = {
@@ -38108,6 +38233,12 @@ impl Torii {
             .map(offline_issuer::OfflineIssuerRuntime::from_config)
             .map(Arc::new);
         #[cfg(feature = "app_api")]
+        let offline_v2_issuer = config
+            .offline_issuer
+            .clone()
+            .map(offline_v2_issuer::OfflineV2IssuerRuntime::from_config)
+            .map(Arc::new);
+        #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
             if cfg.programs.is_empty() {
                 iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
@@ -38287,6 +38418,8 @@ impl Torii {
             account_faucet,
             #[cfg(feature = "app_api")]
             offline_issuer,
+            #[cfg(feature = "app_api")]
+            offline_v2_issuer,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             vpn_helper_ticket_secret,
@@ -38732,6 +38865,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
+            offline_v2_issuer: self.offline_v2_issuer.clone(),
+            #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
             vpn_quotes: Arc::new(DashMap::new()),
@@ -38891,10 +39026,6 @@ impl Torii {
             ))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
-                enforce_soracloud_signed_mutation_request,
-            ))
-            .layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
                 inject_remote_addr_header,
             ))
             .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
@@ -38903,6 +39034,13 @@ impl Torii {
                 app_state.clone(),
                 record_http_metrics,
             ));
+        #[cfg(feature = "app_api")]
+        {
+            router = router.layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                enforce_soracloud_signed_mutation_request,
+            ));
+        }
         if let Some(cors_layer) = self.build_cors_layer() {
             router = router.layer(cors_layer);
         }
@@ -39076,12 +39214,15 @@ impl Torii {
             });
         }
 
-        if let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
-            crate::da::spawn_anchor_worker(
-                self.da_ingest.manifest_store_dir.clone(),
-                anchor_cfg,
-                shutdown_signal.clone(),
-            );
+        #[cfg(feature = "app_api")]
+        {
+            if let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
+                crate::da::spawn_anchor_worker(
+                    self.da_ingest.manifest_store_dir.clone(),
+                    anchor_cfg,
+                    shutdown_signal.clone(),
+                );
+            }
         }
 
         #[cfg(feature = "app_api")]
@@ -40886,7 +41027,7 @@ fn _assert_torii_types_are_send_sync() {
     assert_send_sync::<AppState>();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 pub(crate) mod tests_runtime_handlers {
     use std::{
         collections::HashSet,
@@ -42544,6 +42685,8 @@ pub(crate) mod tests_runtime_handlers {
             account_faucet: None,
             #[cfg(feature = "app_api")]
             offline_issuer: None,
+            #[cfg(feature = "app_api")]
+            offline_v2_issuer: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             vpn_helper_ticket_secret: None,
@@ -58999,7 +59142,7 @@ impl OnlinePeersProvider {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     // for `collect`
     use std::{
@@ -60379,6 +60522,61 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn alias_resolve_service_rejects_non_account_target_as_conflict() {
+        let service = AliasService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let alias_input = "customalias";
+        let alias = Name::from_str(&normalise_alias(alias_input)).expect("valid alias");
+        service
+            .storage()
+            .put(AliasRecord::new(
+                alias.clone(),
+                owner,
+                AliasTarget::Custom(vec![0x42]),
+                AliasIndex(7),
+            ))
+            .expect("insert custom alias target");
+
+        let response = resolve_alias_via_service(&service, alias_input)
+            .expect("non-account targets should return a response");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect response body");
+        let payload: routing::AliasErrorResponseDto =
+            norito::json::from_slice(&body).expect("decode alias error");
+        assert!(payload.error.contains("custom"));
+        assert!(payload.error.contains("account targets"));
+    }
+
+    #[tokio::test]
+    async fn alias_resolve_index_service_rejects_non_account_target_as_conflict() {
+        let service = AliasService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let alias = Name::from_str("assetalias").expect("valid alias");
+        service
+            .storage()
+            .put(AliasRecord::new(
+                alias,
+                owner,
+                AliasTarget::Custom(vec![0x24]),
+                AliasIndex(11),
+            ))
+            .expect("insert custom alias target");
+
+        let response = resolve_alias_index_via_service(&service, 11)
+            .expect("non-account targets should return a response");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect response body");
+        let payload: routing::AliasErrorResponseDto =
+            norito::json::from_slice(&body).expect("decode alias error");
+        assert!(payload.error.contains("custom"));
+        assert!(payload.error.contains("account targets"));
     }
 
     #[tokio::test]

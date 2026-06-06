@@ -2102,16 +2102,16 @@ mod tests {
         assert_eq!(resp.crypto.curves.registry_version, CURVE_REGISTRY_VERSION);
         assert!(resp.query.aggregate.v1);
         assert!(resp.query.aggregate.exact_results);
+        #[cfg(feature = "app_api")]
+        let supported_resources = crate::generic_query::aggregate_supported_resources()
+            .iter()
+            .map(|resource| (*resource).to_owned())
+            .collect::<Vec<_>>();
+        #[cfg(not(feature = "app_api"))]
+        let supported_resources = Vec::<String>::new();
         assert_eq!(
             resp.query.aggregate.supported_resources,
-            if cfg!(feature = "app_api") {
-                crate::generic_query::aggregate_supported_resources()
-                    .iter()
-                    .map(|resource| (*resource).to_owned())
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            }
+            supported_resources
         );
         assert!(resp.query.indexed_snapshot_marker);
         assert_eq!(
@@ -2160,17 +2160,16 @@ mod tests {
             resp.query.projection.default_partition_count,
             QUERY_PROJECTION_DEFAULT_PARTITION_COUNT
         );
-        if cfg!(feature = "app_api") {
-            assert_eq!(
-                resp.query.projection.export_supported_resources,
-                crate::generic_query::projection_export_supported_resources()
-                    .iter()
-                    .map(|resource| (*resource).to_owned())
-                    .collect::<Vec<_>>()
-            );
-        } else {
-            assert!(resp.query.projection.export_supported_resources.is_empty());
-        }
+        #[cfg(feature = "app_api")]
+        assert_eq!(
+            resp.query.projection.export_supported_resources,
+            crate::generic_query::projection_export_supported_resources()
+                .iter()
+                .map(|resource| (*resource).to_owned())
+                .collect::<Vec<_>>()
+        );
+        #[cfg(not(feature = "app_api"))]
+        assert!(resp.query.projection.export_supported_resources.is_empty());
         assert!(
             resp.query
                 .projection

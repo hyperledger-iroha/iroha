@@ -1988,6 +1988,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
         ),
         (10332, "iroha.gov.unlocks.stats", norito::json!({})),
         (10333, "iroha.gov.council.current", norito::json!({})),
+        #[cfg(feature = "gov_vrf")]
         (
             10334,
             "iroha.gov.council.persist",
@@ -1995,6 +1996,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
                 "body": {}
             }),
         ),
+        #[cfg(feature = "gov_vrf")]
         (
             10335,
             "iroha.gov.council.replace",
@@ -2003,6 +2005,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             }),
         ),
         (10336, "iroha.gov.council.audit", norito::json!({})),
+        #[cfg(feature = "gov_vrf")]
         (
             10337,
             "iroha.gov.council.derive_vrf",
@@ -2040,7 +2043,13 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
         .await;
 
         assert_eq!(status, StatusCode::OK);
-        let structured = structured_content(&call);
+        let structured = call
+            .get("result")
+            .and_then(|value| value.get("structuredContent"))
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| {
+                panic!("governance alias `{tool_name}` should return structured content: {call:?}")
+            });
         let http_status = structured.get("status").and_then(Value::as_u64);
         assert!(
             http_status.is_some(),
@@ -2666,23 +2675,45 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.gov.council.current"),
         "expected agent-friendly governance council snapshot MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.council.persist"),
-        "expected agent-friendly governance council persist MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.gov.council.replace"),
-        "expected agent-friendly governance council replace MCP tool"
-    );
+    #[cfg(feature = "gov_vrf")]
+    {
+        assert!(
+            names.iter().any(|name| name == "iroha.gov.council.persist"),
+            "expected agent-friendly governance council persist MCP tool"
+        );
+        assert!(
+            names.iter().any(|name| name == "iroha.gov.council.replace"),
+            "expected agent-friendly governance council replace MCP tool"
+        );
+    }
+    #[cfg(not(feature = "gov_vrf"))]
+    {
+        assert!(
+            !names.iter().any(|name| name == "iroha.gov.council.persist"),
+            "governance council persist MCP tool should be absent without gov_vrf"
+        );
+        assert!(
+            !names.iter().any(|name| name == "iroha.gov.council.replace"),
+            "governance council replace MCP tool should be absent without gov_vrf"
+        );
+    }
     assert!(
         names.iter().any(|name| name == "iroha.gov.council.audit"),
         "expected agent-friendly governance council audit MCP tool"
     );
+    #[cfg(feature = "gov_vrf")]
     assert!(
         names
             .iter()
             .any(|name| name == "iroha.gov.council.derive_vrf"),
         "expected agent-friendly governance council derive-vrf MCP tool"
+    );
+    #[cfg(not(feature = "gov_vrf"))]
+    assert!(
+        !names
+            .iter()
+            .any(|name| name == "iroha.gov.council.derive_vrf"),
+        "governance council derive-vrf MCP tool should be absent without gov_vrf"
     );
     assert!(
         names.iter().any(|name| name == "iroha.gov.enact"),

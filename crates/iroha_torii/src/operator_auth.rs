@@ -1842,7 +1842,7 @@ pub async fn handle_operator_login_verify(
     Ok(JsonBody(response))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::{collections::HashSet, sync::Arc};
 

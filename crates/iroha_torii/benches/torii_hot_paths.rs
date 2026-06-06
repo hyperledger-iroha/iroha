@@ -1,4 +1,5 @@
 //! Criterion benchmarks for Torii hot paths.
+#![cfg(feature = "app_api")]
 
 use std::{
     borrow::Cow,

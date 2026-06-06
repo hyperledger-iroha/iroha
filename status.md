@@ -2,6 +2,279 @@
 
 Last updated: 2026-06-06
 
+## 2026-06-06 Torii feature-minimal connect corridor restoration
+
+- Closed the no-`app_api` Torii compile leak by gating app-only route helpers,
+  heavy test modules, ZK IVM proof handlers, proof-record reads, hosted HTTP
+  proxy fallbacks, and the `attachment_sanitizer`/`torii_hot_paths` Cargo
+  targets behind their owning features.
+- Kept the core ZK convenience surface available without `app_api`: roots,
+  verify, submit-proof, and vote-tally DTOs and handlers are exported in the
+  feature-minimal build, while app-specific IVM proof routes stay `app_api`-
+  owned.
+- The feature-minimal pipeline transaction-status handler is now local-only
+  instead of compiling app-only fanout/proxy code. `/v1/proofs/{id}` remains an
+  app-api route; proof-retention status and the core ZK routes remain available
+  in the minimal corridor.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii --no-default-features --features connect`
+  - `cargo test -p iroha_torii --no-default-features --features connect --lib -- --nocapture`
+    (`606` tests passed)
+  - `cargo clippy -p iroha_torii --no-default-features --features connect --all-targets -- -D warnings`
+  - `cargo test -p iroha_torii --tests --features app_api -- --nocapture`
+    (completed successfully; library phase reported `2309` passed, `2`
+    ignored, and all standalone test binaries passed)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-06 Torii SCCP launch-scope gate alignment
+
+- Aligned Torii's configured SCCP all-lanes launch diagnostic with the shared
+  `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1` scope. The gate now checks only
+  ETH, BSC, Solana, TON, and TRON for current launch readiness instead of
+  requiring diagnostic-only Substrate/Polkadot-family rows to become
+  production-ready.
+- Split the Torii SCCP test fixture so supported launch lanes must pass with
+  complete configured material, while SORA2/Substrate configured material still
+  proves the explicit unsupported launch-scope blocker and finalized-runtime
+  evidence validation.
+- Folded the SCCP gate fix through the broader Torii `app_api` integration
+  corridor. The governance council current fixture now seeds the configured
+  stake asset before deriving fallback eligibility, the MCP governance dispatch
+  test respects `gov_vrf`-gated council mutation tools, ZK roots fixtures use
+  valid non-empty confidential encrypted payloads, and ZK attachment smoke
+  tests assert the current Norito `ErrorEnvelope` error contract.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii configured_ --lib --features app_api -- --nocapture`
+    (`28` tests passed)
+  - `cargo test -p iroha_torii --lib --features app_api -- --nocapture`
+    (`2309` tests passed, `2` ignored)
+  - `cargo test -p iroha_torii --test gov_read_endpoints --features app_api -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_torii --test mcp_endpoints --features app_api mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii --test zk_roots_handler_integration --features app_api -- --nocapture`
+    (`7` tests passed)
+  - `cargo test -p iroha_torii --test zk_subrouter_smoke --features app_api -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_torii --tests --features app_api -- --nocapture`
+    (completed successfully; library phase reported `2309` passed, `2`
+    ignored, and all standalone test binaries passed)
+
+## 2026-06-06 Torii placeholder wording sweep
+
+- Removed stale placeholder/stub wording from the governance deploy-proposal
+  response docs and ZK1 structural validator comment. Deploy proposal responses
+  now document `proposal_id` as the deterministic 32-byte BLAKE2b hex id and
+  the existing handler test asserts the 64-character hex shape.
+- Re-ran the Torii code-only placeholder/TODO scan. Remaining matches are
+  intentional test placeholder literals, fail-closed placeholder-material guards,
+  the OpenAPI fallback skeleton, manifest-derived contract source rendering, and
+  telemetry peer compatibility handling for remote `501` responses.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii propose_deploy_builds_instruction_skeleton --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Torii SoraFS proof-stream PDP rejection cleanup
+
+- Replaced the SoraFS proof-stream `proof_kind=pdp` `501 Not Implemented`
+  responses with `400 Bad Request` unsupported-proof-kind responses. The live
+  `/v1/sorafs/proof/stream` contract now explicitly accepts PoR and PoTR only;
+  PDP remains reserved for future SF-13 provider protocol work.
+- Updated the proof-stream DTO comments, OpenAPI path description, and SoraFS
+  proof-streaming documentation to make the current PoR/PoTR-only surface
+  explicit, then regenerated the portal OpenAPI bundle.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii proof_stream_rejects_pdp_as_bad_request --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - static OpenAPI absence check for disabled default paths
+  - `git diff --check`
+  - lockfile diff check
+
+## 2026-06-06 Torii routed proxy unsupported-response cleanup
+
+- Replaced the routed-query `query_unsupported` helper's `501 Not Implemented`
+  status with `409 Conflict`. These paths cover already-implemented Nexus
+  fanout logic receiving incompatible routed query shapes or coordinator-scope
+  mismatches, so they now surface as stable conflict responses rather than
+  placeholder implementation failures.
+- Replaced no-`app_api` inbound Torii proxy `Read`, `ReadFanout`, and
+  `HostedHttp` fallbacks with `503 route_unavailable` responses while
+  preserving the existing reject code and diagnostic text.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii unsupported_routed_query_response_is_conflict_not_not_implemented --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii non_account_target_as_conflict --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+- Blocked validation:
+  - `cargo test -p iroha_torii app_api_required_torii_proxy_response_is_route_unavailable --lib --no-default-features --features connect -- --nocapture` is blocked by pre-existing no-`app_api` Torii compile failures across app-gated imports/tests.
+
+## 2026-06-06 Torii alias target conflict cleanup
+
+- Replaced the remaining account-alias resolver `501 Not Implemented` branches
+  for stored non-account `AliasTarget` records with a documented `409 Conflict`
+  response. `/v1/aliases/resolve` and `/v1/aliases/resolve_index` remain
+  account-alias endpoints, but incompatible alias-service records now fail as
+  stable client-visible conflicts instead of advertising an unfinished handler.
+- Updated the generated OpenAPI response maps for alias resolution and
+  resolve-index conflict cases, then regenerated the portal OpenAPI bundle.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii non_account_target_as_conflict --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - static OpenAPI absence check for disabled default paths
+  - `git diff --check`
+  - lockfile diff check
+
+## 2026-06-06 Torii disabled feature route-surface cleanup
+
+- Removed default-build placeholder `501 Not Implemented` routing for
+  `/status`, `/metrics`, `/v1/debug/axt/cache`, `/v1/debug/witness`,
+  `/v1/schema`, `/debug/pprof/profile`, and `/v1/zk/verify-batch`. These routes
+  are now mounted only when their owning features (`telemetry`, `schema`,
+  `profiling`, and `zk-verify-batch`) are compiled, so the default production
+  route surface returns `404` instead of advertising unavailable handlers.
+- Gated the generated OpenAPI telemetry, schema, and profiling paths behind
+  their feature flags and regenerated the portal OpenAPI bundle. The default
+  static specs no longer list `/status`, `/metrics`, `/v1/debug/axt/cache`,
+  `/v1/schema`, or `/debug/pprof/profile`; `/v1/zk/verify-batch` remains absent
+  unless the batch verifier feature is compiled.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test router_feature_matrix --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Offline V2 fixture and SDK certificate-version alignment
+
+- Refreshed `fixtures/offline/interop_contract_v2.json` from the
+  `offline_v2_vectors` generator so the published Offline V2 redeem vector uses
+  the chain-admissible `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` directly instead
+  of a stale key-certificate version.
+- Removed Torii's test-only fixture normalization path. The redeem route now
+  consumes the committed fixture as-is for the positive case, while a separate
+  stale-version regression mutates the certificate version and recomputes the
+  recursive public-input hash before proving Torii rejects it.
+- Aligned the Swift, Kotlin/JVM, and Java Android Offline Note V2 SDK
+  certificate-version constants with the Rust chain constant so wallet-side
+  constructors accept the refreshed shared fixture.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
+  - `cargo test -p iroha_torii offline_v2_issuer --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `cargo clippy -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- -D warnings`
+- Blocked local SDK validation:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` failed because no Java runtime is installed.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.offline.OfflineNoteV2Test --console=plain` failed because no Java runtime is installed.
+  - `swift test --filter OfflineNoteV2Tests` failed because `dist/NoritoBridge.xcframework` is not materialized.
+
+## 2026-06-06 Torii governance VRF surface gating
+
+- Removed the default `/v1/gov/council/derive-vrf` fallback handler that only
+  returned `not implemented`. Default Torii builds no longer mount or advertise
+  council persist, replace, or derive-vrf mutation helpers unless the
+  `gov_vrf` feature is compiled.
+- Aligned the OpenAPI generator and MCP tool registry with the same feature
+  boundary. Default generated specs omit the VRF council mutation paths, while
+  `gov_vrf` test builds still assert the HTTP/tool surface is present.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii tool_registry_skips_ws_and_sse_routes --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api,gov_vrf -- --nocapture`
+  - `cargo test -p iroha_torii tool_registry_skips_ws_and_sse_routes --lib --features app_api,gov_vrf -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces --features app_api,gov_vrf -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api,gov_vrf -- -D warnings`
+
+## 2026-06-06 Torii Offline V2 redeem route wiring
+
+- Wired the Offline V2 issuer runtime into Torii app state and mounted the
+  versioned Offline V2 HTTP surface under `/v1/offline/v2/*`, including the
+  V2 readiness document, key refill, note issue, note redeem, and audit routes.
+- Implemented the Offline V2 note redemption handler. It accepts either
+  canonical Norito `OfflineNoteRedeem` payloads or structured JSON redemption
+  objects, binds the redemption to the authenticated account and asset, rejects
+  stale key-certificate versions, enforces nullifier/amount bounds, recomputes
+  the recursive public-input hash, and submits `RedeemOfflineNoteV2` through the
+  normal transaction path.
+- Removed stale legacy Offline policy/revocation HTTP route registrations and
+  the v1 redeem/audit stubs that only returned issuer-unavailable errors. The
+  readiness smokes now prove `/v1/offline/revocations*`,
+  `/v1/offline/notes/redeem`, and `/v1/offline/audit` stay absent while the
+  generated portal OpenAPI bundle advertises the versioned Offline V2 routes.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii redeem_route_ --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii offline_issuer --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Torii ZK prover report tag-filter hardening
+
+- Torii ZK prover report list/count/bulk-delete filters now reject malformed
+  `has_tag` values up front. The accepted shape matches indexed ZK1 TLV tags:
+  exactly four printable ASCII characters such as `PROF`.
+- Documented the report count and bulk-delete endpoints plus the fail-closed
+  `has_tag` contract in the ZK app API notes.
+- Repaired the Torii prover-report success fixture to use the public
+  `halo2/ipa:tiny-add-public` envelope and matching registry schema hash, so
+  the integration test exercises a verifier-valid report instead of a stale
+  private-circuit fixture shape.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii validate_zk1_tag_filter_rejects_malformed_tags --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_invalid_tag_filter_is_rejected --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_list_get_delete --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_ok_and_failed_filters_together_return_all_reports --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Torii API-token telemetry counter
+
+- Replaced Torii's API-token-gated endpoint telemetry no-op with a bounded
+  Prometheus counter for Sumeragi/SCCP/bridge API hits. The counter records the
+  endpoint and token state (`present`/`empty`) and never exports raw API-token
+  material.
+- Tightened the SCCP route-manifest alias resolver to satisfy the strict
+  feature-enabled Torii clippy corridor without changing the existing validation
+  behaviour.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_telemetry records_api_token_hits_without_exporting_token_material -- --nocapture`
+  - `cargo test -p iroha_core torii_pre_auth_metrics_track_usage --lib --features telemetry -- --nocapture`
+  - `cargo test -p iroha_config matching_proof_artifact_hash_aliases_are_allowed --lib -- --nocapture`
+  - `cargo test -p iroha_torii telemetry::tests::api_hits_increment_without_exporting_token_material --lib --features app_api,telemetry -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api,telemetry -- -D warnings`
+
 ## 2026-06-06 Torii DA pin-intent indexed-location verification
 
 - Replaced the remaining DA pin-intent "placeholder" wording in Torii handler

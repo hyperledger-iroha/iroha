@@ -153,6 +153,10 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
         "/v1/offline/cash/redeem",
         "/v1/offline/transfers",
         "/v1/offline/transfers/query",
+        "/v1/offline/notes/redeem",
+        "/v1/offline/audit",
+        "/v1/offline/revocations",
+        "/v1/offline/revocations/bundle",
     ] {
         let response = app
             .clone()
@@ -173,18 +177,4 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
             "offline app route should be absent from readiness-only router: {path}"
         );
     }
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/v1/offline/revocations/bundle")
-                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

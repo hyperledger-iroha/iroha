@@ -670,41 +670,11 @@ fn offline_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/offline/policy".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Synchronize Offline policy.",
-            "POST the current Offline revocation policy snapshot used by Torii to build signed revocation bundles.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    let mut revocation_operations = json_get_operation(
-        "Offline",
-        "List Offline revocations.",
-        "Returns the current Offline revocation policy snapshot held by Torii.",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    );
-    revocation_operations.extend(json_post_operation(
-        "Offline",
-        "Register an Offline revocation.",
-        "POST account, verdict, or asset-limit revocation material into the Torii Offline policy snapshot.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    ));
-    paths.insert(
-        "/v1/offline/revocations".to_owned(),
-        Value::Object(revocation_operations),
-    );
-    paths.insert(
-        "/v1/offline/revocations/bundle".to_owned(),
+        "/v1/offline/v2/readiness".to_owned(),
         Value::Object(json_get_operation(
             "Offline",
-            "Fetch signed Offline revocation bundle.",
-            "Returns issuer-signed Offline revocation state for wallet fail-closed send policy.",
+            "Report Offline V2 feature readiness.",
+            "Returns readiness signals for versioned Offline V2 notes, one-use keys, recursive proofs, and Fountain QR transport.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -721,14 +691,24 @@ fn offline_paths() -> Map {
             "POST an Offline note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/notes/redeem",
-            "Redeem an Offline note.",
-            "POST an Offline note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/v2/keys/refill",
+            "Refill Offline V2 issuer keys.",
+            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
-            "/v1/offline/audit",
-            "Submit an Offline audit request.",
-            "POST an Offline audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "/v1/offline/v2/notes/issue",
+            "Issue an Offline V2 note.",
+            "POST an Offline V2 note issuance request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        ),
+        (
+            "/v1/offline/v2/notes/redeem",
+            "Redeem an Offline V2 note.",
+            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+        ),
+        (
+            "/v1/offline/v2/audit",
+            "Submit an Offline V2 audit request.",
+            "POST an Offline V2 audit request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one of signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -1121,35 +1101,38 @@ fn path_param(name: &str, description: &str) -> Value {
 fn system_paths() -> Map {
     let mut paths = Map::new();
     paths.insert("/health".to_owned(), Value::Object(health_operation()));
-    paths.insert(
-        "/status".to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "Fetch node status snapshot.",
-            "Returns the node status payload.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/status/{tail}".to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "Fetch a status sub-path snapshot.",
-            "Returns a status sub-tree under the requested tail segment.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("tail", "Status sub-path selector.")],
-        )),
-    );
-    paths.insert(
-        "/metrics".to_owned(),
-        Value::Object(text_get_operation(
-            "System",
-            "Fetch Prometheus metrics.",
-            "Expose Prometheus metrics in text format.",
-            None,
-        )),
-    );
+    #[cfg(feature = "telemetry")]
+    {
+        paths.insert(
+            "/status".to_owned(),
+            Value::Object(json_get_operation(
+                "System",
+                "Fetch node status snapshot.",
+                "Returns the node status payload.",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+        paths.insert(
+            "/status/{tail}".to_owned(),
+            Value::Object(json_get_operation(
+                "System",
+                "Fetch a status sub-path snapshot.",
+                "Returns a status sub-tree under the requested tail segment.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param("tail", "Status sub-path selector.")],
+            )),
+        );
+        paths.insert(
+            "/metrics".to_owned(),
+            Value::Object(text_get_operation(
+                "System",
+                "Fetch Prometheus metrics.",
+                "Expose Prometheus metrics in text format.",
+                None,
+            )),
+        );
+    }
     paths.insert(
         uri::API_VERSION.to_owned(),
         Value::Object(text_get_operation(
@@ -1207,16 +1190,19 @@ fn system_paths() -> Map {
             methods
         }),
     );
-    paths.insert(
-        uri::SCHEMA.to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "Fetch the data model schema snapshot.",
-            "Return the schema payload used by the node build.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
+    #[cfg(feature = "schema")]
+    {
+        paths.insert(
+            uri::SCHEMA.to_owned(),
+            Value::Object(json_get_operation(
+                "System",
+                "Fetch the data model schema snapshot.",
+                "Return the schema payload used by the node build.",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+    }
     paths.insert(
         "/openapi".to_owned(),
         Value::Object(json_get_operation(
@@ -1237,30 +1223,35 @@ fn system_paths() -> Map {
             Vec::new(),
         )),
     );
-    paths.insert(
-        "/debug/pprof/profile".to_owned(),
-        Value::Object({
-            let mut operation = Map::new();
-            operation.insert(
-                "tags".into(),
-                Value::Array(vec![Value::String("System".to_owned())]),
-            );
-            operation.insert(
-                "summary".into(),
-                Value::String("Capture a CPU profile.".to_owned()),
-            );
-            operation.insert(
-                "description".into(),
-                Value::String("Return a profiling payload for the configured duration.".to_owned()),
-            );
-            let mut responses = Map::new();
-            responses.insert("200".to_owned(), binary_response("CPU profile payload."));
-            operation.insert("responses".into(), Value::Object(responses));
-            let mut methods = Map::new();
-            methods.insert("get".to_owned(), Value::Object(operation));
-            methods
-        }),
-    );
+    #[cfg(feature = "profiling")]
+    {
+        paths.insert(
+            uri::PROFILE.to_owned(),
+            Value::Object({
+                let mut operation = Map::new();
+                operation.insert(
+                    "tags".into(),
+                    Value::Array(vec![Value::String("System".to_owned())]),
+                );
+                operation.insert(
+                    "summary".into(),
+                    Value::String("Capture a CPU profile.".to_owned()),
+                );
+                operation.insert(
+                    "description".into(),
+                    Value::String(
+                        "Return a profiling payload for the configured duration.".to_owned(),
+                    ),
+                );
+                let mut responses = Map::new();
+                responses.insert("200".to_owned(), binary_response("CPU profile payload."));
+                operation.insert("responses".into(), Value::Object(responses));
+                let mut methods = Map::new();
+                methods.insert("get".to_owned(), Value::Object(operation));
+                methods
+            }),
+        );
+    }
     paths.insert(
         "/v1/policy".to_owned(),
         Value::Object(json_get_operation(
@@ -1323,16 +1314,19 @@ fn system_paths() -> Map {
             )],
         )),
     );
-    paths.insert(
-        "/v1/debug/axt/cache".to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "Inspect cached AXT proof state.",
-            "Return the cached AXT proof snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
+    #[cfg(feature = "telemetry")]
+    {
+        paths.insert(
+            "/v1/debug/axt/cache".to_owned(),
+            Value::Object(json_get_operation(
+                "System",
+                "Inspect cached AXT proof state.",
+                "Return the cached AXT proof snapshot.",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+    }
     paths.insert(
         "/v1/telemetry/peers-info".to_owned(),
         Value::Object(json_get_operation(
@@ -2768,28 +2762,31 @@ fn governance_paths() -> Map {
             vec![path_param("account_id", "Account id.")],
         )),
     );
-    paths.insert(
-        "/v1/gov/council/persist".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Persist a council roster.",
-            "Persist a governance council roster for an epoch.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/gov/council/replace".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Replace a council member.",
-            "Replace a council member using the next alternate.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
+    #[cfg(feature = "gov_vrf")]
+    {
+        paths.insert(
+            "/v1/gov/council/persist".to_owned(),
+            Value::Object(json_post_operation(
+                "Governance",
+                "Persist a council roster.",
+                "Persist a governance council roster for an epoch.",
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+        paths.insert(
+            "/v1/gov/council/replace".to_owned(),
+            Value::Object(json_post_operation(
+                "Governance",
+                "Replace a council member.",
+                "Replace a council member using the next alternate.",
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+    }
     paths.insert(
         "/v1/gov/council/audit".to_owned(),
         Value::Object(json_get_operation(
@@ -2800,6 +2797,7 @@ fn governance_paths() -> Map {
             Vec::new(),
         )),
     );
+    #[cfg(feature = "gov_vrf")]
     paths.insert(
         "/v1/gov/council/derive-vrf".to_owned(),
         Value::Object(json_post_operation(
@@ -4432,7 +4430,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Stream proofs.",
-            "Request a proof stream payload.",
+            "Request a PoR or PoTR proof stream payload. `proof_kind=pdp` is reserved for future SF-13 work and is rejected as an unsupported proof kind.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -6847,6 +6845,13 @@ fn alias_resolve_responses() -> Map {
         json_response("Alias not found.", error_schema_reference()),
     );
     responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Alias resolves to a non-account target, which this endpoint cannot return.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "403".to_owned(),
         json_response(
             "Alias lookup was denied by the routed dataspace and no allowed route resolved it.",
@@ -7044,7 +7049,7 @@ fn alias_resolve_index_responses() -> Map {
     responses.insert(
         "409".to_owned(),
         json_response(
-            "Multiple dataspaces returned conflicting alias-index bindings.",
+            "Multiple dataspaces returned conflicting alias-index bindings, or the matched alias index resolves to a non-account target.",
             error_schema_reference(),
         ),
     );
@@ -11917,6 +11922,14 @@ mod tests {
         assert!(paths.contains_key(uri::TRANSACTIONS_BATCH));
         assert!(paths.contains_key(uri::QUERY));
         assert!(paths.contains_key(uri::SUBSCRIPTION));
+        #[cfg(feature = "schema")]
+        assert!(paths.contains_key(uri::SCHEMA));
+        #[cfg(not(feature = "schema"))]
+        assert!(!paths.contains_key(uri::SCHEMA));
+        #[cfg(feature = "profiling")]
+        assert!(paths.contains_key(uri::PROFILE));
+        #[cfg(not(feature = "profiling"))]
+        assert!(!paths.contains_key(uri::PROFILE));
         assert!(!paths.contains_key("/transaction"));
         assert!(!paths.contains_key("/transaction/entrypoint"));
         assert!(!paths.contains_key("/transactions/batch"));
@@ -11969,6 +11982,18 @@ mod tests {
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
+        #[cfg(feature = "gov_vrf")]
+        {
+            assert!(paths.contains_key("/v1/gov/council/persist"));
+            assert!(paths.contains_key("/v1/gov/council/replace"));
+            assert!(paths.contains_key("/v1/gov/council/derive-vrf"));
+        }
+        #[cfg(not(feature = "gov_vrf"))]
+        {
+            assert!(!paths.contains_key("/v1/gov/council/persist"));
+            assert!(!paths.contains_key("/v1/gov/council/replace"));
+            assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
+        }
         assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
@@ -11998,11 +12023,16 @@ mod tests {
         assert!(paths.contains_key("/v1/notify/devices"));
         assert!(paths.contains_key("/v1/offline/keys/refill"));
         assert!(paths.contains_key("/v1/offline/notes/issue"));
-        assert!(paths.contains_key("/v1/offline/notes/redeem"));
-        assert!(paths.contains_key("/v1/offline/audit"));
-        assert!(paths.contains_key("/v1/offline/policy"));
-        assert!(paths.contains_key("/v1/offline/revocations"));
-        assert!(paths.contains_key("/v1/offline/revocations/bundle"));
+        assert!(paths.contains_key("/v1/offline/v2/readiness"));
+        assert!(paths.contains_key("/v1/offline/v2/keys/refill"));
+        assert!(paths.contains_key("/v1/offline/v2/notes/issue"));
+        assert!(paths.contains_key("/v1/offline/v2/notes/redeem"));
+        assert!(paths.contains_key("/v1/offline/v2/audit"));
+        assert!(!paths.contains_key("/v1/offline/notes/redeem"));
+        assert!(!paths.contains_key("/v1/offline/audit"));
+        assert!(!paths.contains_key("/v1/offline/policy"));
+        assert!(!paths.contains_key("/v1/offline/revocations"));
+        assert!(!paths.contains_key("/v1/offline/revocations/bundle"));
         let refill_post = paths
             .get("/v1/offline/keys/refill")
             .and_then(Value::as_object)
@@ -13077,7 +13107,7 @@ mod tests {
             PathCase {
                 label: "system",
                 builder: system_paths,
-                expected: "/status",
+                expected: "/health",
             },
             PathCase {
                 label: "operator_auth",

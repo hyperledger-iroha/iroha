@@ -14,7 +14,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{
-    Registrable, ValidationFail,
+    Registrable,
     account::{Account, AccountId},
     domain::{Domain, DomainId},
     peer::PeerId,
@@ -22,6 +22,7 @@ use iroha_data_model::{
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_torii::Torii;
+use iroha_torii_shared::ErrorEnvelope;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -45,6 +46,15 @@ fn request_with_headers(
         builder = builder.header(name, value);
     }
     builder.body(axum::body::Body::from(body.to_vec())).unwrap()
+}
+
+fn assert_query_validation_message(body: &[u8], expected_message: &str) {
+    let envelope: ErrorEnvelope = norito::decode_from_bytes(body).expect("error envelope payload");
+    assert_eq!(envelope.code(), "query_validation_failed");
+    assert!(
+        envelope.message().contains(expected_message),
+        "unexpected error envelope: {envelope:?}"
+    );
 }
 
 #[tokio::test]
@@ -534,12 +544,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         .unwrap();
     assert_eq!(replay_resp.status(), StatusCode::FORBIDDEN);
     let replay_body = replay_resp.into_body().collect().await.unwrap().to_bytes();
-    let replay_validation: ValidationFail =
-        norito::decode_from_bytes(&replay_body).expect("validation fail payload");
-    assert!(matches!(
-        replay_validation,
-        ValidationFail::NotPermitted(ref message) if message.contains("nonce already used")
-    ));
+    assert_query_validation_message(&replay_body, "nonce already used");
 
     let get_request = fixtures::app_signed_request(
         &account_id,
@@ -689,12 +694,6 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let validation: ValidationFail =
-            norito::decode_from_bytes(&body).expect("validation fail payload");
-        assert!(matches!(
-            validation,
-            ValidationFail::NotPermitted(ref message)
-                if message.contains("signed account headers are required")
-        ));
+        assert_query_validation_message(&body, "signed account headers are required");
     }
 }

@@ -256,19 +256,19 @@ use sorafs_manifest::{
 };
 use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
 
+use crate::sorafs::{
+    PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
+    SorafsQuotaEnforcer,
+};
 #[cfg(feature = "app_api")]
 use crate::{
     explorer::{
         ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
     },
     filter::FieldPath,
-    json_array, json_entry, json_object, json_value,
-    sorafs::{
-        PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
-        SorafsQuotaEnforcer,
-    },
     utils::JsonValueBody,
 };
+use crate::{json_array, json_entry, json_object, json_value};
 
 #[allow(dead_code)]
 fn _json_helper_sanity() {
@@ -3553,14 +3553,11 @@ impl MaybeTelemetry {
         }
     }
 }
-#[cfg(feature = "app_api")]
 use core::convert::Infallible;
 #[cfg(feature = "app_api")]
 use std::num::NonZeroU64;
 
-#[cfg(feature = "app_api")]
 use axum::response::sse::{Event as SseEvent, Sse};
-#[cfg(feature = "app_api")]
 use futures::stream;
 #[cfg(feature = "app_api")]
 use iroha_data_model::events::{
@@ -5100,7 +5097,6 @@ mod connect_session_tests {
 }
 
 // ------------------------ ZK convenience DTOs (examples) ------------------------
-#[cfg(feature = "app_api")]
 #[derive(
     Debug,
     Clone,
@@ -5119,7 +5115,6 @@ pub struct ZkRootsGetRequestDto {
     pub max: u32,
 }
 
-#[cfg(feature = "app_api")]
 #[derive(
     Debug,
     Clone,
@@ -5138,7 +5133,6 @@ pub struct ZkRootsGetResponseDto {
     pub height: u32,
 }
 
-#[cfg(feature = "app_api")]
 #[derive(
     Debug,
     Clone,
@@ -5153,7 +5147,6 @@ pub struct ZkVoteGetTallyRequestDto {
     pub election_id: String,
 }
 
-#[cfg(feature = "app_api")]
 #[derive(
     Debug,
     Clone,
@@ -5378,7 +5371,6 @@ pub fn signed_find_proof_by_id(
     Ok(req.sign(&key_pair))
 }
 
-#[cfg(feature = "app_api")]
 /// POST /v1/zk/verify — minimal demo decode endpoint that accepts either Norito
 /// (`application/x-norito`) or JSON and returns `{ "ok": true|false }`.
 ///
@@ -7087,7 +7079,6 @@ fn sccp_proof_manifest_snapshot(state: &CoreState) -> Result<SccpProofManifestSe
     })
 }
 
-#[cfg(feature = "app_api")]
 fn bridge_manifest_hash_for_seed(seed: &str) -> [u8; 32] {
     iroha_sccp::sccp_bridge_manifest_hash_for_seed(seed)
 }
@@ -7133,7 +7124,6 @@ fn bridge_proof_from_sccp_burn_bundle(
     })
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_counterparty_domain(primary: u32, secondary: u32) -> Result<u32> {
     if primary != iroha_sccp::SCCP_DOMAIN_SORA {
         return Ok(primary);
@@ -7154,7 +7144,6 @@ fn sccp_backend_suffix_for_domain(domain: u32) -> Result<&'static str> {
     })
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_message_backend_descriptor(payload: &SccpPayloadV1) -> Result<(String, [u8; 32], u32)> {
     let counterparty_domain = match payload {
         SccpPayloadV1::AssetRegister(payload) => {
@@ -7182,21 +7171,18 @@ fn sccp_message_backend_descriptor(payload: &SccpPayloadV1) -> Result<(String, [
     Ok((backend, manifest_hash, counterparty_domain))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_counterparty_for_burn_payload(payload: &BurnPayloadV1) -> Result<(u32, &'static str)> {
     let counterparty_domain = sccp_counterparty_domain(payload.dest_domain, payload.source_domain)?;
     let backend_suffix = sccp_backend_suffix_for_domain(counterparty_domain)?;
     Ok((counterparty_domain, backend_suffix))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_counterparty_for_message_payload(payload: &SccpPayloadV1) -> Result<(u32, &'static str)> {
     let (_, _, counterparty_domain) = sccp_message_backend_descriptor(payload)?;
     let backend_suffix = sccp_backend_suffix_for_domain(counterparty_domain)?;
     Ok((counterparty_domain, backend_suffix))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_counterparty_from_backend(backend: &str) -> Option<(u32, &'static str)> {
     let domain = iroha_sccp::sccp_counterparty_domain_from_backend(backend)?;
     Some((domain, iroha_sccp::sccp_chain_key_for_domain(domain)?))
@@ -7208,7 +7194,6 @@ struct SccpConfiguredSourceLaneV1 {
     deployment: iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_config_hex32(raw: &str, context: &str, field: &str) -> Result<[u8; 32]> {
     let trimmed = raw.trim();
     let bytes = hex::decode(trimmed.trim_start_matches("0x"))
@@ -7223,7 +7208,6 @@ fn sccp_config_hex32(raw: &str, context: &str, field: &str) -> Result<[u8; 32]> 
     Ok(out)
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_config_optional_hex32(raw: &str, context: &str, field: &str) -> Result<[u8; 32]> {
     if raw.trim().is_empty() {
         return Ok([0u8; 32]);
@@ -7231,7 +7215,6 @@ fn sccp_config_optional_hex32(raw: &str, context: &str, field: &str) -> Result<[
     sccp_config_hex32(raw, context, field)
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_config_nonzero_hex32(raw: &str, context: &str, field: &str) -> Result<[u8; 32]> {
     let value = sccp_config_hex32(raw, context, field)?;
     if value.iter().all(|byte| *byte == 0) {
@@ -7242,7 +7225,6 @@ fn sccp_config_nonzero_hex32(raw: &str, context: &str, field: &str) -> Result<[u
     Ok(value)
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_config_optional_address20(raw: &str, context: &str, field: &str) -> Result<Vec<u8>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -7258,7 +7240,6 @@ fn sccp_config_optional_address20(raw: &str, context: &str, field: &str) -> Resu
     Ok(bytes)
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_source_verifier_material_for_domain(
     zk_config: &iroha_config::parameters::actual::Zk,
     source_domain: u32,
@@ -7364,7 +7345,6 @@ fn sccp_configured_source_verifier_material_for_domain(
     Ok(Some(material))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_source_adapter_audit_fields_are_lane_local(
     configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
 ) -> Result<()> {
@@ -7411,7 +7391,6 @@ fn sccp_configured_source_adapter_audit_fields_are_lane_local(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_solana_source_adapter_audit_matches(
     configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
     material: &iroha_sccp::SccpSourceVerifierMaterialV1,
@@ -7496,7 +7475,6 @@ fn sccp_configured_solana_source_adapter_audit_matches(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_ton_source_adapter_audit_matches(
     configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
     material: &iroha_sccp::SccpSourceVerifierMaterialV1,
@@ -7583,7 +7561,6 @@ fn sccp_configured_ton_source_adapter_audit_matches(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_tron_source_adapter_gate_matches(
     configured: &iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment,
     material: &iroha_sccp::SccpSourceVerifierMaterialV1,
@@ -7613,7 +7590,6 @@ fn sccp_configured_tron_source_adapter_gate_matches(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_source_adapter_deployment_for_domain(
     zk_config: &iroha_config::parameters::actual::Zk,
     source_domain: u32,
@@ -7765,7 +7741,6 @@ fn sccp_configured_source_adapter_deployment_for_domain(
     Ok(Some(deployment))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_destination_rollout_for_domain(
     zk_config: &iroha_config::parameters::actual::Zk,
     domain: u32,
@@ -7852,7 +7827,6 @@ fn sccp_configured_destination_rollout_for_domain(
     Ok(Some(rollout))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_destination_rollout_for_bundle(
     state: &CoreState,
     bundle: &NexusSccpMessageProofV1,
@@ -7865,7 +7839,6 @@ fn sccp_configured_destination_rollout_for_bundle(
     sccp_configured_destination_rollout_for_domain(&zk_config, counterparty_domain)
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_destination_binding_matches_rollout(
     destination_binding: &iroha_sccp::SccpDestinationBindingV1,
     destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
@@ -7884,7 +7857,6 @@ fn sccp_destination_binding_matches_rollout(
     destination_binding.key == expected_key && destination_binding.binding_hash == expected_hash
 }
 
-#[cfg(feature = "app_api")]
 fn validate_sccp_destination_binding_matches_configured_rollout(
     destination_binding: Option<&iroha_sccp::SccpDestinationBindingV1>,
     destination_rollout: Option<&iroha_sccp::SccpDestinationRolloutV1>,
@@ -7907,7 +7879,6 @@ fn validate_sccp_destination_binding_matches_configured_rollout(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn validate_sccp_destination_binding_matches_configured_launch_policy(
     zk_config: &iroha_config::parameters::actual::Zk,
     destination_binding: Option<&iroha_sccp::SccpDestinationBindingV1>,
@@ -7923,12 +7894,10 @@ fn validate_sccp_destination_binding_matches_configured_launch_policy(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_allow_unready_transparent_proofs(state: &CoreState) -> bool {
     state.zk_snapshot().sccp_allow_unready_transparent_proofs
 }
 
-#[cfg(feature = "app_api")]
 fn validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
     state: &CoreState,
     bundle: &NexusSccpMessageProofV1,
@@ -7948,7 +7917,6 @@ fn validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
     )
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_route_allowlist_for_domain(
     zk_config: &iroha_config::parameters::actual::Zk,
     domain: u32,
@@ -8055,7 +8023,6 @@ fn sccp_configured_route_allowlist_for_domain(
     Ok(Some(allowlist))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_source_lane_for_domain(
     zk_config: &iroha_config::parameters::actual::Zk,
     domain: u32,
@@ -8124,7 +8091,6 @@ fn sccp_configured_source_lane_for_domain(
     }))
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_config_route_allowlist_nonzero_h256(raw: &str, field: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(raw.trim_start_matches("0x")).map_err(|_| {
         sccp_bad_request(format!(
@@ -8141,7 +8107,6 @@ fn sccp_config_route_allowlist_nonzero_h256(raw: &str, field: &str) -> Result<[u
     Ok(out)
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_all_lanes_launch_ready(
     zk_config: &iroha_config::parameters::actual::Zk,
 ) -> Result<()> {
@@ -8149,7 +8114,7 @@ fn sccp_configured_all_lanes_launch_ready(
     let mut route_canary_hashes = BTreeMap::<[u8; 32], u32>::new();
     let mut route_canaries = Vec::<(u32, [u8; 32])>::new();
 
-    for domain in iroha_sccp::SCCP_CORE_REMOTE_DOMAINS {
+    for domain in iroha_sccp::SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1 {
         let lane = sccp_configured_source_lane_for_domain(zk_config, domain)?.ok_or_else(|| {
             sccp_bad_request(format!(
                 "SCCP all-lanes launch policy requires configured production material for domain {domain}"
@@ -8203,7 +8168,6 @@ fn sccp_configured_all_lanes_launch_ready(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_launch_ready_for_domain(
     zk_config: &iroha_config::parameters::actual::Zk,
     domain: u32,
@@ -8272,7 +8236,6 @@ fn sccp_configured_launch_ready_for_domain(
     Ok(())
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_source_lane_for_bundle(
     state: &CoreState,
     bundle: &NexusSccpMessageProofV1,
@@ -8286,7 +8249,6 @@ fn sccp_configured_source_lane_for_bundle(
     Ok(lane)
 }
 
-#[cfg(feature = "app_api")]
 fn sccp_configured_source_lane_for_bundle_with_policy(
     state: &CoreState,
     bundle: &NexusSccpMessageProofV1,
@@ -8386,7 +8348,6 @@ fn sccp_message_proof_build_error_message(
     message
 }
 
-#[cfg(feature = "app_api")]
 fn require_sccp_sora_message_nexus_finality_for_production(
     bundle: &NexusSccpMessageProofV1,
     allow_unready: bool,
@@ -9677,14 +9638,16 @@ mod sccp_message_backend_tests {
         }
     }
 
-    fn test_configured_sccp_all_lanes_zk_config() -> iroha_config::parameters::actual::Zk {
+    fn test_configured_sccp_zk_config_for_domains<const N: usize>(
+        domains: [u32; N],
+    ) -> iroha_config::parameters::actual::Zk {
         let mut zk = iroha_core::state::default_zk_config();
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
         zk.sccp_destination_rollouts.clear();
         zk.sccp_route_allowlists.clear();
 
-        for (idx, domain) in iroha_sccp::SCCP_CORE_REMOTE_DOMAINS.into_iter().enumerate() {
+        for (idx, domain) in domains.into_iter().enumerate() {
             let seed = 0x20 + (idx as u8) * 0x10;
             let material = test_sccp_source_verifier_material_for_domain(domain, seed);
             let deployment =
@@ -9701,11 +9664,25 @@ mod sccp_message_backend_tests {
                     &allowlist,
                 )
                 .expect("SCCP lane readiness from deployment material");
-            assert!(
-                readiness.production_ready,
-                "domain {domain} should be production-ready with complete configured material: {:?}",
-                readiness.blockers,
-            );
+            if iroha_sccp::SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1.contains(&domain) {
+                assert!(
+                    readiness.production_ready,
+                    "domain {domain} should be production-ready with complete configured material: {:?}",
+                    readiness.blockers,
+                );
+            } else {
+                assert!(
+                    !readiness.production_ready,
+                    "unsupported launch-scope domain {domain} must remain disabled"
+                );
+                assert!(
+                    readiness.blockers.iter().any(|blocker| {
+                        blocker == iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1
+                    }),
+                    "unsupported domain {domain} should carry the launch-scope blocker: {:?}",
+                    readiness.blockers,
+                );
+            }
 
             zk.sccp_source_verifier_materials
                 .push(test_actual_sccp_source_verifier_material(&material));
@@ -9719,6 +9696,12 @@ mod sccp_message_backend_tests {
         }
 
         zk
+    }
+
+    fn test_configured_sccp_all_lanes_zk_config() -> iroha_config::parameters::actual::Zk {
+        test_configured_sccp_zk_config_for_domains(
+            iroha_sccp::SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1,
+        )
     }
 
     fn sample_evm_groth16_platform_payload_for_job(
@@ -11212,17 +11195,6 @@ mod sccp_message_backend_tests {
             tron_allowlist.tron_route_canary_proof_source_domain,
             tron_route.tron_route_canary_proof_source_domain
         );
-        let substrate_rollout = zk
-            .sccp_destination_rollouts
-            .iter()
-            .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
-            .expect("configured SORA2 rollout");
-        assert!(substrate_rollout.substrate_finalized_head.is_some());
-        assert_eq!(
-            substrate_rollout.substrate_runtime_spec_name.as_deref(),
-            Some("sora2")
-        );
-
         sccp_configured_all_lanes_launch_ready(&zk)
             .expect("complete configured SCCP material should satisfy all-lanes launch");
     }
@@ -11281,8 +11253,32 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn configured_all_lanes_launch_rejects_substrate_without_finalized_runtime_fields() {
-        let mut zk = test_configured_sccp_all_lanes_zk_config();
+    fn configured_substrate_lane_remains_out_of_launch_scope_with_complete_runtime_fields() {
+        let zk = test_configured_sccp_zk_config_for_domains([iroha_sccp::SCCP_DOMAIN_SORA2]);
+        let substrate_rollout = zk
+            .sccp_destination_rollouts
+            .iter()
+            .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
+            .expect("configured SORA2 rollout");
+        assert!(substrate_rollout.substrate_finalized_head.is_some());
+        assert_eq!(
+            substrate_rollout.substrate_runtime_spec_name.as_deref(),
+            Some("sora2")
+        );
+        assert!(substrate_rollout.substrate_runtime_code_base64.is_some());
+
+        let err = match sccp_configured_source_lane_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_SORA2) {
+            Ok(_) => panic!("Substrate-family lanes must remain outside the launch scope"),
+            Err(err) => err,
+        };
+        assert!(conversion_message(&err).is_some_and(|message| {
+            message.contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
+        }));
+    }
+
+    #[test]
+    fn configured_substrate_lane_rejects_missing_finalized_runtime_fields_before_scope_blocker() {
+        let mut zk = test_configured_sccp_zk_config_for_domains([iroha_sccp::SCCP_DOMAIN_SORA2]);
         let substrate_rollout = zk
             .sccp_destination_rollouts
             .iter_mut()
@@ -11291,8 +11287,10 @@ mod sccp_message_backend_tests {
         substrate_rollout.substrate_finalized_head = None;
         substrate_rollout.substrate_runtime_code_base64 = None;
 
-        let err = sccp_configured_all_lanes_launch_ready(&zk)
-            .expect_err("Substrate route canary must preserve finalized runtime evidence");
+        let err = match sccp_configured_source_lane_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_SORA2) {
+            Ok(_) => panic!("Substrate route canary must preserve finalized runtime evidence"),
+            Err(err) => err,
+        };
         assert!(conversion_message(&err).is_some_and(|message| {
             message.contains("SCCP destination rollout for domain 8 is not production-ready")
         }));
@@ -11502,17 +11500,17 @@ mod sccp_message_backend_tests {
             .expect("SOL route allowlist")
             .route_canary_evidence_hash
             .clone();
-        let substrate_route = zk
+        let tron_route = zk
             .sccp_route_allowlists
             .iter_mut()
-            .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA)
-            .expect("SORA Kusama route allowlist");
-        substrate_route.route_canary_evidence_hash = replayed_canary_hash;
+            .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_TRON)
+            .expect("TRON route allowlist");
+        tron_route.route_canary_evidence_hash = replayed_canary_hash;
 
         let err = sccp_configured_all_lanes_launch_ready(&zk)
             .expect_err("cross-lane route canary replay must not satisfy launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP lane for domain 6 is not production-ready")
+            message.contains("SCCP lane for domain 5 is not production-ready")
                 && message.contains("route canary evidence is not bound")
         }));
     }
@@ -14178,7 +14176,6 @@ pub(crate) fn build_pipeline_preflight_response(
     }
 }
 
-#[cfg(feature = "app_api")]
 /// POST /v1/zk/submit-proof — minimal demo endpoint that accepts either Norito
 /// (`application/x-norito`) or JSON and returns `{ "ok": true|false, "id": "<hex>" }`.
 ///
@@ -14408,13 +14405,11 @@ pub(crate) async fn handle_v1_zk_verify_batch_with_limits(
     render_zk_verify_batch_response(ok, statuses_json)
 }
 
-#[cfg(feature = "app_api")]
 /// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
 /// Returns recent shielded roots for the requested asset, bounded by the configured
 /// `zk.root_history_cap`. If the asset has no shielded state, returns an empty set.
-#[cfg(feature = "app_api")]
 pub(crate) fn resolve_asset_definition_selector(
     world: &impl WorldReadOnly,
     asset_literal: &str,
@@ -14527,7 +14522,6 @@ pub async fn handle_v1_zk_roots(
     Ok(crate::utils::respond_with_format(resp, format))
 }
 
-#[cfg(feature = "app_api")]
 /// POST /v1/zk/vote/tally — convenience endpoint returning election tally as JSON.
 ///
 /// Example wrapper for the Norito TLV read APIs. Omitted or wildcard `Accept`
@@ -19978,7 +19972,6 @@ fn current_time_millis() -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(feature = "app_api")]
 pub(crate) fn asset_alias_observation_time_ms(state: &CoreState) -> u64 {
     state
         .latest_block_header_fast()
@@ -34199,6 +34192,7 @@ fn provider_id_from_hex(value: &str) -> Result<ProviderId, Error> {
     parse_hex_array::<32>(value, "provider_id_hex").map(ProviderId::new)
 }
 
+#[cfg(feature = "app_api")]
 fn metadata_from_entries(entries: Option<Vec<MetadataEntryDto>>) -> Result<Metadata, Error> {
     let mut metadata = Metadata::default();
     let Some(entries) = entries else {
@@ -34780,6 +34774,7 @@ mod repair_worker_tests {
     }
 }
 
+#[cfg(feature = "app_api")]
 fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
     let storage_class = match dto.storage_class {
         PinPolicyStorageClassDto::Hot => ManifestStorageClass::Hot,
@@ -35104,7 +35099,7 @@ mod serialization {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod deploy_tests {
     use base64::Engine as _;
 
@@ -35216,7 +35211,7 @@ mod deploy_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod soradns_tests {
     use std::{str::FromStr, sync::Arc};
 
@@ -35363,7 +35358,7 @@ mod soradns_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod sorafs_pin_tests {
     use iroha_data_model::prelude as dm;
 
@@ -35645,7 +35640,7 @@ mod sorafs_pin_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod sorafs_capacity_tests {
     use base64::Engine as _;
     use iroha_data_model::{
@@ -40434,7 +40429,6 @@ pub fn parse_account_path_segment(
         })
 }
 
-#[cfg(feature = "app_api")]
 fn resolve_parsed_account_against_world(
     state: &CoreState,
     parsed: &AccountId,
@@ -40454,7 +40448,6 @@ fn resolve_parsed_account_against_world(
     Some(first)
 }
 
-#[cfg(feature = "app_api")]
 pub(crate) fn parse_account_literal_with_state(
     state: &CoreState,
     literal: &str,
@@ -40698,7 +40691,6 @@ fn canonicalize_query_account_literal(
         .transpose()
 }
 
-#[cfg(feature = "app_api")]
 pub fn parse_account_literal(
     literal: &str,
     telemetry: &MaybeTelemetry,
@@ -40716,7 +40708,6 @@ pub fn parse_account_literal(
     }
 }
 
-#[cfg(feature = "app_api")]
 fn record_account_literal_accept(
     telemetry: &MaybeTelemetry,
     context: &'static str,
@@ -40727,7 +40718,6 @@ fn record_account_literal_accept(
     });
 }
 
-#[cfg(feature = "app_api")]
 fn record_account_literal_reject(
     telemetry: &MaybeTelemetry,
     context: &'static str,
@@ -40745,7 +40735,6 @@ fn record_account_literal_reject(
     });
 }
 
-#[cfg(feature = "app_api")]
 fn local8_domain_label(literal: &str) -> Option<String> {
     use iroha_data_model::domain::DomainId;
 
@@ -40755,7 +40744,6 @@ fn local8_domain_label(literal: &str) -> Option<String> {
     Some(parsed.to_string())
 }
 
-#[cfg(feature = "app_api")]
 fn literal_is_local8(literal: &str) -> bool {
     let trimmed = literal.trim_start();
     let address_part = trimmed
@@ -57854,7 +57842,7 @@ mod sse_stream_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod cursor_mode_tests {
     use std::sync::Arc;
 
@@ -69860,6 +69848,7 @@ async fn explorer_network_metrics_snapshot(
     })
 }
 
+#[cfg(feature = "app_api")]
 fn latest_block_created_at(kura: &Kura, height: u64) -> Option<String> {
     let nonzero_height = nonzero_height(height)?;
     let block = kura.get_block(nonzero_height)?;
@@ -69868,6 +69857,7 @@ fn latest_block_created_at(kura: &Kura, height: u64) -> Option<String> {
     ))
 }
 
+#[cfg(feature = "app_api")]
 fn average_block_time_ms(kura: &Kura, latest: u64, window: usize) -> Option<u64> {
     if latest <= 1 || window == 0 {
         return None;
@@ -77414,7 +77404,7 @@ mod subscription_api_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod adapter_filter_tests {
     use super::*;
     #[cfg(feature = "app_api")]
@@ -80816,36 +80806,6 @@ pub fn handle_api_versions(
     })
 }
 
-/// Placeholder for telemetry when the feature is disabled.
-#[cfg(not(feature = "telemetry"))]
-pub async fn telemetry_not_implemented() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "This endpoint is not available on this version of \"irohad\", \
-          as it was compiled without the \"telemetry\" feature flag",
-    )
-}
-
-/// Placeholder for schema endpoint when the feature is disabled.
-#[cfg(not(feature = "schema"))]
-pub async fn schema_not_implemented() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "This endpoint is not available on this version of \"irohad\", \
-          as it was compiled without the \"schema-endpoint\" feature flag",
-    )
-}
-
-/// Placeholder for profiling endpoint when the feature is disabled.
-#[cfg(not(feature = "profiling"))]
-pub async fn profiling_not_implemented() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        "This endpoint is not available on this version of \"irohad\", \
-          as it was compiled without the \"profiling-endpoint\" feature flag",
-    )
-}
-
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
 /// Handle POST `/v1/soranet/privacy/event`, forwarding relay observations into the secure aggregator.
@@ -81679,12 +81639,14 @@ mod tests {
         assert!(super::committed_block_height(&created_batch).is_none());
     }
 
+    #[cfg(feature = "app_api")]
     #[test]
     fn average_block_time_handles_empty_chain() {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
         assert!(super::average_block_time_ms(&kura, 0, 10).is_none());
     }
 
+    #[cfg(feature = "app_api")]
     #[test]
     fn latest_block_created_at_missing_when_height_zero() {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();

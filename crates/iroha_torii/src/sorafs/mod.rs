@@ -2,6 +2,7 @@
 
 pub mod admission;
 pub mod alias_cache;
+#[cfg(feature = "app_api")]
 pub mod api;
 pub mod blinded;
 pub mod concurrency;
@@ -13,12 +14,14 @@ pub mod limits;
 pub mod pin;
 pub mod por;
 pub mod quota;
+#[cfg(feature = "app_api")]
 pub mod registry;
 pub mod repair;
 pub mod site;
 pub mod token;
 
 pub use admission::{AdmissionCheckError, AdmissionRegistry, AdmissionRegistryError};
+#[cfg(feature = "app_api")]
 pub(crate) use alias_cache::evaluate_cache_decision;
 pub use alias_cache::{
     AliasCacheEnforcement, AliasCachePolicy, AliasCachePolicyExt, AliasCachePolicyHttpExt,
@@ -47,6 +50,7 @@ pub use por::{
 };
 pub use por::{PorCoordinator, PorCoordinatorError, PorStatusExportV1, PorStatusFilter};
 pub(crate) use quota::{StreamTokenQuotaExceeded, StreamTokenQuotaTracker};
+#[cfg(feature = "app_api")]
 pub(crate) use registry::{
     CapacitySnapshot, RegistryDeclaration, RegistryError, RegistryFeeLedgerEntry, collect_snapshot,
 };

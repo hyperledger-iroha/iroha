@@ -14,8 +14,12 @@ use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    isi::{InstructionBox, IssueOfflineNoteV2},
-    offline::{OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteIssue, OfflineNoteKeyCertificate},
+    isi::{InstructionBox, IssueOfflineNoteV2, RedeemOfflineNoteV2},
+    offline::{
+        OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteIssue, OfflineNoteKeyCertificate,
+        OfflineNoteRecursiveProof, OfflineNoteRedeem,
+    },
+    proof::{ProofBox, VerifyingKeyId},
     transaction::TransactionBuilder,
 };
 use iroha_primitives::numeric::Numeric;
@@ -335,7 +339,7 @@ pub(crate) async fn handle_notes_redeem(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<AxResponse, Error> {
-    let _issuer = require_issuer(&app)?;
+    let issuer = require_issuer(&app)?;
     let parsed = parse_and_authorize(
         app.as_ref(),
         method,
@@ -344,16 +348,77 @@ pub(crate) async fn handle_notes_redeem(
         body.as_ref(),
         ENDPOINT_NOTES_REDEEM,
     )?;
-    if parsed.value.get("redemption").is_none() {
+    let redemption = parse_redemption(&parsed)?;
+    if redemption.amount > issuer.max_tx_value.clone() {
         return Err(validation(
-            "OFFLINE_REDEMPTION_PROOF_REQUIRED",
-            "Offline Notes V2 redemption requires a recursive proof payload.",
+            "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
+            "Offline note amount exceeds issuer policy.",
         ));
     }
-    Err(validation(
-        "OFFLINE_REDEMPTION_TORII_ISSUER_UNAVAILABLE",
-        "Offline Notes V2 redemption proof submission is not implemented by this Torii issuer.",
-    ))
+    let public_inputs_hash = redemption.public_inputs_hash().map_err(|source| {
+        validation_owned(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            format!("failed to encode Offline Notes V2 redemption public inputs: {source}"),
+        )
+    })?;
+    if redemption.recursive_proof.public_inputs_hash != public_inputs_hash {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_PROOF_BINDING",
+            "Offline Notes V2 redemption proof is not bound to redemption public inputs.",
+        ));
+    }
+    let source_note_commitment = redemption.source_note_commitment.to_string();
+    let input_nullifiers = redemption
+        .input_nullifiers
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let amount = redemption.amount.to_string();
+
+    let instruction = RedeemOfflineNoteV2::new(redemption);
+    let tx = TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
+        .with_instructions([InstructionBox::from(instruction)])
+        .sign(issuer.key_pair.private_key());
+    let tx_hash = tx.hash().to_string();
+    routing::handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        app.telemetry.clone(),
+        PATH_NOTES_REDEEM,
+    )
+    .await?;
+
+    let now_ms = now_ms();
+    let settlement = build_redeem_settlement(
+        &issuer,
+        &parsed,
+        &amount,
+        &source_note_commitment,
+        &input_nullifiers,
+        &public_inputs_hash.to_string(),
+        &tx_hash,
+        now_ms,
+    )?;
+
+    json_ok(json_object(vec![
+        ("operation_id", string_value(parsed.operation_id)),
+        ("settlement", settlement),
+        ("chain_tx_hash", string_value(tx_hash)),
+        (
+            "source_note_commitment",
+            string_value(source_note_commitment),
+        ),
+        (
+            "input_nullifiers",
+            Value::Array(input_nullifiers.into_iter().map(string_value).collect()),
+        ),
+        (
+            "public_inputs_hash",
+            string_value(public_inputs_hash.to_string()),
+        ),
+    ]))
 }
 
 pub(crate) async fn handle_audit(
@@ -1079,6 +1144,293 @@ fn build_chain_certificate(
     Ok(certificate)
 }
 
+fn parse_redemption(request: &ParsedOfflineRequest) -> Result<OfflineNoteRedeem, Error> {
+    let value = request.value.get("redemption").ok_or_else(|| {
+        validation(
+            "OFFLINE_REDEMPTION_PROOF_REQUIRED",
+            "Offline Notes V2 redemption requires a recursive proof payload.",
+        )
+    })?;
+    let redemption = if let Some(encoded) = optional_string(value, "norito_base64") {
+        let bytes = decode_canonical_base64(
+            encoded,
+            "redemption.norito_base64",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+        )?;
+        norito::decode_from_bytes::<OfflineNoteRedeem>(&bytes).map_err(|err| {
+            validation_owned(
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                format!("Offline Notes V2 redemption.norito_base64 is not canonical Norito: {err}"),
+            )
+        })?
+    } else {
+        parse_redemption_object(value, request)?
+    };
+    validate_redemption_matches_request(&redemption, request)?;
+    Ok(redemption)
+}
+
+fn parse_redemption_object(
+    value: &Value,
+    request: &ParsedOfflineRequest,
+) -> Result<OfflineNoteRedeem, Error> {
+    value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    let source_note_commitment = parse_hash_field(value, "source_note_commitment")?;
+    let input_nullifiers = required_string_array(value, "input_nullifiers")?
+        .into_iter()
+        .map(|raw| parse_hash_literal(raw, "input_nullifiers"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let certificate = value
+        .get("sender_key_certificate")
+        .or_else(|| value.get("key_certificate"))
+        .ok_or_else(|| {
+            validation(
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "Offline Notes V2 redemption.sender_key_certificate is required.",
+            )
+        })?;
+    let sender_key_certificate = parse_key_certificate(certificate)?;
+    let amount = parse_positive_amount(required_string(value, "amount")?, "redemption.amount")?;
+    let recursive_proof =
+        parse_recursive_proof(value.get("recursive_proof").ok_or_else(|| {
+            validation(
+                "OFFLINE_V2_REDEMPTION_INVALID",
+                "Offline Notes V2 redemption.recursive_proof is required.",
+            )
+        })?)?;
+    Ok(OfflineNoteRedeem {
+        source_note_commitment,
+        input_nullifiers,
+        sender_key_certificate,
+        recipient: request.account_id.clone(),
+        asset: AssetId::new(
+            request.asset_definition_id.clone(),
+            request.account_id.clone(),
+        ),
+        amount,
+        recursive_proof,
+    })
+}
+
+fn validate_redemption_matches_request(
+    redemption: &OfflineNoteRedeem,
+    request: &ParsedOfflineRequest,
+) -> Result<(), Error> {
+    validate_redemption_certificate(&redemption.sender_key_certificate)?;
+    if redemption.recipient != request.account_id {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_ACCOUNT_MISMATCH",
+            "Offline Notes V2 redemption recipient does not match the authenticated account.",
+        ));
+    }
+    if redemption.asset.account() != &request.account_id
+        || redemption.asset.definition() != &request.asset_definition_id
+    {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_ASSET_MISMATCH",
+            "Offline Notes V2 redemption asset does not match the request account and asset definition.",
+        ));
+    }
+    if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 redemption requires 1 to 4 input nullifiers.",
+        ));
+    }
+    if redemption.amount <= Numeric::zero() {
+        return Err(validation(
+            "OFFLINE_V2_INVALID_AMOUNT",
+            "Offline Notes V2 redemption amount must be greater than zero.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_redemption_certificate(certificate: &OfflineNoteKeyCertificate) -> Result<(), Error> {
+    if certificate.version != OFFLINE_NOTE_KEY_CERTIFICATE_VERSION {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate model version is not chain-admissible.",
+        ));
+    }
+    if !certificate.one_use {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate must be one-use.",
+        ));
+    }
+    if certificate
+        .assertion_usage_count_limit
+        .is_some_and(|limit| limit != 1)
+    {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate hardware usage limit must be one when present.",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_key_certificate(value: &Value) -> Result<OfflineNoteKeyCertificate, Error> {
+    value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    let version = required_u64(value, "version")?;
+    let version = u16::try_from(version).map_err(|_| {
+        validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate version exceeds u16.",
+        )
+    })?;
+    if version != 2 && version != OFFLINE_NOTE_KEY_CERTIFICATE_VERSION {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate version is unsupported.",
+        ));
+    }
+    let account_literal = required_string(value, "account_id")?;
+    let parsed_account = AccountId::parse_encoded(account_literal).map_err(|err| {
+        validation_owned(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            format!("Offline Notes V2 key certificate account_id is invalid: {err}"),
+        )
+    })?;
+    let account_id = parsed_account.account_id().clone();
+    let assertion_usage_count_limit = match value.get("assertion_usage_count_limit") {
+        None | Some(Value::Null) => None,
+        Some(raw) => {
+            let value = raw.as_u64().ok_or_else(|| {
+                validation(
+                    "OFFLINE_V2_REDEMPTION_INVALID",
+                    "Offline Notes V2 assertion_usage_count_limit must be null or an unsigned integer.",
+                )
+            })?;
+            Some(u32::try_from(value).map_err(|_| {
+                validation(
+                    "OFFLINE_V2_REDEMPTION_INVALID",
+                    "Offline Notes V2 assertion_usage_count_limit exceeds u32.",
+                )
+            })?)
+        }
+    };
+    let issuer_signature = decode_signature_base64(
+        required_string(value, "issuer_signature_base64")?,
+        "OFFLINE_V2_REDEMPTION_INVALID",
+        "Offline Notes V2 issuer_signature_base64 is invalid.",
+    )?;
+    let certificate = OfflineNoteKeyCertificate {
+        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
+        platform: required_string(value, "platform")?.to_string(),
+        key_id: required_string(value, "key_id")?.to_string(),
+        device_id: required_string(value, "device_id")?.to_string(),
+        account_id,
+        public_key: decode_canonical_base64(
+            required_string(value, "public_key")?,
+            "public_key",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+        )?,
+        assertion_scheme: required_string(value, "assertion_scheme")?.to_string(),
+        assertion_key_algorithm: required_string(value, "assertion_key_algorithm")?.to_string(),
+        assertion_public_key: decode_canonical_base64(
+            required_string(value, "assertion_public_key")?,
+            "assertion_public_key",
+            "OFFLINE_V2_REDEMPTION_INVALID",
+        )?,
+        assertion_usage_count_limit,
+        one_use: required_bool(value, "one_use")?,
+        issuer_signature,
+    };
+    if certificate.public_key.len() != 32 {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate public_key must encode 32 bytes.",
+        ));
+    }
+    if certificate.assertion_public_key.is_empty() {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 key certificate assertion_public_key must not be empty.",
+        ));
+    }
+    Ok(certificate)
+}
+
+fn parse_recursive_proof(value: &Value) -> Result<OfflineNoteRecursiveProof, Error> {
+    value_object_ref(value, "OFFLINE_V2_REDEMPTION_INVALID")?;
+    let backend = optional_string(value, "backend").unwrap_or("halo2/ipa");
+    let verifier_key_id = VerifyingKeyId::new(
+        backend,
+        required_string(value, "verifier_key_id")
+            .or_else(|_| required_string(value, "verifier_key_name"))?,
+    );
+    let public_inputs_hash = parse_hash_field(value, "public_inputs_hash_hex")
+        .or_else(|_| parse_hash_field(value, "public_inputs_hash"))?;
+    let proof_bytes = decode_canonical_base64(
+        required_string(value, "proof_bytes_base64")?,
+        "proof_bytes_base64",
+        "OFFLINE_V2_REDEMPTION_INVALID",
+    )?;
+    if proof_bytes.is_empty() {
+        return Err(validation(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            "Offline Notes V2 recursive proof bytes must not be empty.",
+        ));
+    }
+    Ok(OfflineNoteRecursiveProof {
+        verifier_key_id,
+        public_inputs_hash,
+        proof: ProofBox::new(backend.to_string(), proof_bytes),
+    })
+}
+
+fn parse_hash_field(value: &Value, field: &'static str) -> Result<Hash, Error> {
+    parse_hash_literal(required_string(value, field)?, field)
+}
+
+fn parse_hash_literal(raw: &str, field: &'static str) -> Result<Hash, Error> {
+    Hash::from_str(raw).map_err(|err| {
+        validation_owned(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            format!("Offline Notes V2 {field} must be a 32-byte hash hex string: {err}"),
+        )
+    })
+}
+
+fn required_string_array<'a>(value: &'a Value, field: &'static str) -> Result<Vec<&'a str>, Error> {
+    let items = value.get(field).and_then(Value::as_array).ok_or_else(|| {
+        validation_owned(
+            "OFFLINE_V2_REDEMPTION_INVALID",
+            format!("Offline Notes V2 field `{field}` must be a string array."),
+        )
+    })?;
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .ok_or_else(|| {
+                    validation_owned(
+                        "OFFLINE_V2_REDEMPTION_INVALID",
+                        format!(
+                            "Offline Notes V2 field `{field}` must contain only non-empty strings."
+                        ),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn decode_signature_base64(
+    raw: &str,
+    code: &'static str,
+    message: &'static str,
+) -> Result<Signature, Error> {
+    let bytes = decode_canonical_base64(raw, "signature_base64", code)?;
+    if bytes.len() != 64 {
+        return Err(validation(code, message));
+    }
+    Ok(Signature::from_bytes(&bytes))
+}
+
 fn build_settlement(
     issuer: &OfflineV2IssuerRuntime,
     request: &ParsedOfflineRequest,
@@ -1108,6 +1460,51 @@ fn build_settlement(
         ("issued_at_ms", number_value(now_ms)),
     ]);
     let signature = issuer.sign_json_base64(&unsigned, "offline_v2_settlement")?;
+    let mut map = value_object(unsigned)?;
+    map.insert(
+        "issuer_signature_base64".to_string(),
+        string_value(signature),
+    );
+    Ok(Value::Object(map))
+}
+
+fn build_redeem_settlement(
+    issuer: &OfflineV2IssuerRuntime,
+    request: &ParsedOfflineRequest,
+    amount: &str,
+    source_note_commitment: &str,
+    input_nullifiers: &[String],
+    public_inputs_hash: &str,
+    chain_tx_hash: &str,
+    now_ms: u64,
+) -> Result<Value, Error> {
+    let unsigned = json_object(vec![
+        ("operation_id", string_value(&request.operation_id)),
+        ("kind", string_value("redeem")),
+        ("account_id", string_value(&request.account_literal)),
+        ("device_id", string_value(&request.device_id)),
+        (
+            "asset_definition_id",
+            string_value(&request.asset_definition_literal),
+        ),
+        (
+            "amount",
+            string_value(parse_amount(amount, "amount")?.to_string()),
+        ),
+        (
+            "source_note_commitment",
+            string_value(source_note_commitment),
+        ),
+        (
+            "input_nullifiers",
+            Value::Array(input_nullifiers.iter().cloned().map(string_value).collect()),
+        ),
+        ("public_inputs_hash", string_value(public_inputs_hash)),
+        ("chain_tx_hash", string_value(chain_tx_hash)),
+        ("block_height", number_value(0)),
+        ("issued_at_ms", number_value(now_ms)),
+    ]);
+    let signature = issuer.sign_json_base64(&unsigned, "offline_v2_redeem_settlement")?;
     let mut map = value_object(unsigned)?;
     map.insert(
         "issuer_signature_base64".to_string(),
@@ -1643,12 +2040,262 @@ mod tests {
         map.insert(field.to_string(), field_value);
     }
 
+    fn offline_v2_fixture() -> Value {
+        json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/offline/interop_contract_v2.json"
+        )))
+        .expect("offline v2 fixture parses")
+    }
+
+    fn fixture_redeem_request() -> ParsedOfflineRequest {
+        let fixture = offline_v2_fixture();
+        let token = fixture.get("payment_token").expect("payment token");
+        let recipient_certificate = token
+            .get("recipient_key_certificate")
+            .expect("recipient certificate");
+        let account_literal = required_string(token, "recipient_account_id")
+            .expect("recipient account")
+            .to_string();
+        let account_id = AccountId::parse_encoded(&account_literal)
+            .expect("fixture account id")
+            .account_id()
+            .clone();
+        let asset_definition_literal = required_string(token, "asset_definition_id")
+            .expect("asset definition")
+            .to_string();
+        let asset_definition_id =
+            AssetDefinitionId::from_str(&asset_definition_literal).expect("fixture asset id");
+        let device_id = required_string(recipient_certificate, "device_id")
+            .expect("device id")
+            .to_string();
+        let offline_public_key = required_string(recipient_certificate, "public_key")
+            .expect("public key")
+            .to_string();
+        let device_binding = json_object(vec![
+            ("device_id", string_value(&device_id)),
+            ("offline_public_key", string_value(&offline_public_key)),
+        ]);
+        let value = json_object(vec![
+            ("account_id", string_value(&account_literal)),
+            ("operation_id", string_value("fixture-redeem")),
+            ("device_id", string_value(&device_id)),
+            ("offline_public_key", string_value(&offline_public_key)),
+            (
+                "asset_definition_id",
+                string_value(&asset_definition_literal),
+            ),
+            ("device_binding", device_binding.clone()),
+        ]);
+        ParsedOfflineRequest {
+            value,
+            account_id,
+            account_literal,
+            operation_id: "fixture-redeem".to_string(),
+            device_id,
+            offline_public_key,
+            asset_definition_id,
+            asset_definition_literal,
+            device_binding,
+        }
+    }
+
+    fn fixture_redeem_model() -> OfflineNoteRedeem {
+        let fixture = offline_v2_fixture();
+        let encoded = required_string(
+            fixture
+                .get("chain_vectors")
+                .and_then(|value| value.get("redeem"))
+                .expect("redeem chain vector"),
+            "norito_base64",
+        )
+        .expect("redeem norito");
+        let bytes = BASE64_STANDARD
+            .decode(encoded)
+            .expect("decode redeem vector");
+        norito::decode_from_bytes(&bytes).expect("decode redeem model")
+    }
+
+    fn chain_admissible_fixture_redeem_model() -> OfflineNoteRedeem {
+        let model = fixture_redeem_model();
+        assert_eq!(
+            model.sender_key_certificate.version,
+            OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
+        );
+        model
+    }
+
+    fn certificate_json(certificate: &OfflineNoteKeyCertificate) -> Value {
+        json_object(vec![
+            ("version", number_value(u64::from(certificate.version))),
+            ("platform", string_value(&certificate.platform)),
+            ("key_id", string_value(&certificate.key_id)),
+            ("device_id", string_value(&certificate.device_id)),
+            (
+                "account_id",
+                string_value(certificate.account_id.to_string()),
+            ),
+            (
+                "public_key",
+                string_value(BASE64_STANDARD.encode(&certificate.public_key)),
+            ),
+            (
+                "assertion_scheme",
+                string_value(&certificate.assertion_scheme),
+            ),
+            (
+                "assertion_key_algorithm",
+                string_value(&certificate.assertion_key_algorithm),
+            ),
+            (
+                "assertion_public_key",
+                string_value(BASE64_STANDARD.encode(&certificate.assertion_public_key)),
+            ),
+            (
+                "assertion_usage_count_limit",
+                certificate
+                    .assertion_usage_count_limit
+                    .map(|value| number_value(u64::from(value)))
+                    .unwrap_or(Value::Null),
+            ),
+            ("one_use", Value::Bool(certificate.one_use)),
+            (
+                "issuer_signature_base64",
+                string_value(BASE64_STANDARD.encode(certificate.issuer_signature.payload())),
+            ),
+        ])
+    }
+
+    fn recursive_proof_json(proof: &OfflineNoteRecursiveProof) -> Value {
+        json_object(vec![
+            ("backend", string_value(&proof.proof.backend)),
+            ("verifier_key_id", string_value(&proof.verifier_key_id.name)),
+            (
+                "public_inputs_hash_hex",
+                string_value(proof.public_inputs_hash.to_string()),
+            ),
+            (
+                "proof_bytes_base64",
+                string_value(BASE64_STANDARD.encode(&proof.proof.bytes)),
+            ),
+        ])
+    }
+
+    fn redemption_json(redemption: &OfflineNoteRedeem) -> Value {
+        json_object(vec![
+            (
+                "source_note_commitment",
+                string_value(redemption.source_note_commitment.to_string()),
+            ),
+            (
+                "input_nullifiers",
+                Value::Array(
+                    redemption
+                        .input_nullifiers
+                        .iter()
+                        .map(ToString::to_string)
+                        .map(string_value)
+                        .collect(),
+                ),
+            ),
+            (
+                "sender_key_certificate",
+                certificate_json(&redemption.sender_key_certificate),
+            ),
+            ("amount", string_value(redemption.amount.to_string())),
+            (
+                "recursive_proof",
+                recursive_proof_json(&redemption.recursive_proof),
+            ),
+        ])
+    }
+
     fn validation_code(result: Result<impl Sized, Error>) -> &'static str {
         match result {
             Err(Error::AppQueryValidation { code, .. }) => code,
             Err(error) => panic!("expected validation error, got {error:?}"),
             Ok(_) => panic!("expected validation error"),
         }
+    }
+
+    #[test]
+    fn redeem_route_accepts_chain_admissible_norito_redemption() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
+        insert_field(
+            &mut request.value,
+            "redemption",
+            json_object(vec![("norito_base64", string_value(&encoded))]),
+        );
+
+        let redemption = parse_redemption(&request).expect("redemption parses");
+
+        assert_eq!(redemption.recipient, request.account_id);
+        assert_eq!(redemption.asset.account(), &request.account_id);
+        assert_eq!(redemption.asset.definition(), &request.asset_definition_id);
+        assert_eq!(redemption.input_nullifiers.len(), 1);
+        assert_eq!(
+            redemption.recursive_proof.public_inputs_hash,
+            redemption
+                .public_inputs_hash()
+                .expect("redemption public inputs hash")
+        );
+    }
+
+    #[test]
+    fn redeem_route_rejects_stale_fixture_certificate_version() {
+        let mut request = fixture_redeem_request();
+        let mut model = fixture_redeem_model();
+        model.sender_key_certificate.version = OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
+            .checked_add(1)
+            .expect("stale certificate version");
+        model.recursive_proof.public_inputs_hash =
+            model.public_inputs_hash().expect("public inputs hash");
+        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
+        insert_field(
+            &mut request.value,
+            "redemption",
+            json_object(vec![("norito_base64", string_value(&encoded))]),
+        );
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn redeem_route_accepts_structured_redemption_json() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        insert_field(&mut request.value, "redemption", redemption_json(&model));
+
+        let parsed = parse_redemption(&request).expect("structured redemption parses");
+
+        assert_eq!(parsed, model);
+    }
+
+    #[test]
+    fn redeem_route_rejects_redemption_for_different_authenticated_account() {
+        let mut request = fixture_redeem_request();
+        request.account_id = AccountId::new(
+            KeyPair::from_seed(vec![0x44; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let model = chain_admissible_fixture_redeem_model();
+        let encoded = BASE64_STANDARD.encode(norito::to_bytes(&model).expect("encode redemption"));
+        insert_field(
+            &mut request.value,
+            "redemption",
+            json_object(vec![("norito_base64", string_value(&encoded))]),
+        );
+
+        assert_eq!(
+            validation_code(parse_redemption(&request)),
+            "OFFLINE_V2_REDEMPTION_ACCOUNT_MISMATCH"
+        );
     }
 
     #[test]
