@@ -47,6 +47,29 @@ Cases == {
   "local_returns"
 }
 
+DecisionCases == Cases
+
+AdvertisementCases == {
+  "changed_topology",
+  "changed_with_trusted_network",
+  "unchanged_with_strays",
+  "first_seen_local",
+  "local_returns"
+}
+
+LocalRemovalCases == {
+  "first_seen_local",
+  "absent_before_seen",
+  "removed_after_seen",
+  "empty_after_seen",
+  "local_returns"
+}
+
+IdleSkipCases == {
+  "no_peers_empty_unseen",
+  "unchanged_clean"
+}
+
 Current(c) ==
   CASE c = "no_peers_empty_unseen" -> {}
     [] c = "unchanged_clean" -> {1, 2}
@@ -296,6 +319,39 @@ ActualOutput ==
 
 Safety ==
   ActualOutput = SpecOutput
+
+P2pRefreshDecisionExact ==
+  \A c \in DecisionCases:
+    /\ ActualDecision(c) = SpecDecision(c)
+    /\ ActualLastAfter(c) = SpecLastAfter(c)
+    /\ ActualStrayCount(c) = SpecStrayCount(c)
+
+P2pRefreshAdvertisementExact ==
+  \A c \in AdvertisementCases:
+    /\ ActualGossiperSent(c) = SpecGossiperSent(c)
+    /\ ActualGossiperTopology(c) = SpecGossiperTopology(c)
+    /\ ActualNetworkSent(c) = SpecNetworkSent(c)
+    /\ ActualNetworkTopology(c) = SpecNetworkTopology(c)
+
+P2pRefreshLocalRemovalExact ==
+  \A c \in LocalRemovalCases:
+    /\ ActualRemoved(c) = SpecRemoved(c)
+    /\ ActualSeenAfter(c) = SpecSeenAfter(c)
+    /\ ActualQueueCleared(c) = (SpecDecision(c) = LocalRemoved)
+    /\ ActualGossiperSent(c) = SpecGossiperSent(c)
+    /\ ActualGossiperTopology(c) = SpecGossiperTopology(c)
+    /\ ActualNetworkSent(c) = SpecNetworkSent(c)
+
+P2pRefreshIdleSkipExact ==
+  \A c \in IdleSkipCases:
+    ActualCase(c) = SpecCase(c)
+
+P2pTopologyRefreshExactness ==
+  /\ Safety
+  /\ P2pRefreshDecisionExact
+  /\ P2pRefreshAdvertisementExact
+  /\ P2pRefreshLocalRemovalExact
+  /\ P2pRefreshIdleSkipExact
 
 BugNoPeersAdvertises ==
   ActualCase("no_peers_empty_unseen") = SpecCase("no_peers_empty_unseen")

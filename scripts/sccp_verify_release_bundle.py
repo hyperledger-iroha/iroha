@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shlex
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -2867,8 +2868,10 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
     (
         "pytests/scripts/sccp_retired_network_surface_test.py",
         (
+            "def test_retired_network_surface_scan_roots_exist_and_are_nonempty",
             "def test_retired_network_patterns_catch_adversarial_examples",
             "def test_retired_network_surface_scan_covers_expected_files",
+            "def test_retired_network_surface_scan_covers_pipeline_translations",
             "def test_active_tree_excludes_retired_network_surface_tokens",
             "BANNED_PATTERNS",
             '_literal("sub", "strate")',
@@ -2876,6 +2879,9 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             '_literal("ku", "sama")',
             '_literal(_RUNTIME, " ", _SC, _ALE)',
             'Path("docs/source/engineering_backlog.md")',
+            'Path("docs/source")',
+            'new_pipeline*.md',
+            'Path("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp")',
             'Path("crates/iroha_sccp/src/lib.rs")',
             'Path("javascript/iroha_js/test/sccpPackageExports.test.js")',
             'Path("python/iroha_torii_client/tests/sccp_test.py")',
@@ -4656,7 +4662,9 @@ def _phase_transcript_errors(
             f"readiness report phase {phase} evidence artifact is missing the phase marker"
         )
     elif (
-        CORRIDOR_COMPLETION_SENTINEL not in phase_block
+        not _phase_block_has_output_fragment(
+            phase_block, CORRIDOR_COMPLETION_SENTINEL
+        )
         and not _transcript_has_full_corridor_completion(transcript)
     ):
         errors.append(
@@ -4671,7 +4679,7 @@ def _phase_transcript_errors(
         )
     elif phase_block is not None:
         for fragment in required_fragments:
-            if not _phase_block_has_command_fragment(phase_block, fragment):
+            if not _phase_block_has_command_fragment(phase, phase_block, fragment):
                 errors.append(
                     "readiness report phase "
                     f"{phase} evidence artifact is missing expected "
@@ -5482,6 +5490,7 @@ def _transcript_has_full_corridor_completion(transcript: str) -> bool:
         index
         for index, line in enumerate(lines)
         if CORRIDOR_COMPLETION_SENTINEL in line
+        and not line.lstrip().startswith("+ ")
     ]
     return bool(completion_positions) and max(completion_positions) > max(
         marker_positions
@@ -5496,8 +5505,196 @@ def _phase_command_lines(phase_block: str) -> list[str]:
     ]
 
 
-def _phase_block_has_command_fragment(phase_block: str, fragment: str) -> bool:
-    return any(fragment in command for command in _phase_command_lines(phase_block))
+def _phase_command_tokens(command: str) -> list[str]:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        return [
+            normalized
+            for token in shlex.split(command)
+            if (normalized := token.strip("()"))
+        ]
+    except ValueError:
+        return []
+
+
+def _command_token_basename(token: str) -> str:
+    return PurePosixPath(token).name
+
+
+def _command_token_is_env_assignment(token: str) -> bool:
+    name, separator, _ = token.partition("=")
+    return bool(separator and name and name.replace("_", "").isalnum())
+
+
+def _phase_effective_command_tokens(command: str) -> list[str]:
+    tokens = _phase_command_tokens(command)
+    if "&&" in tokens:
+        tokens = tokens[tokens.index("&&") + 1 :]
+    if tokens[:1] == ["env"]:
+        tokens = tokens[1:]
+    while tokens and _command_token_is_env_assignment(tokens[0]):
+        tokens = tokens[1:]
+    return tokens
+
+
+def _effective_command_starts_with(command: str, sequence: tuple[str, ...]) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    return tuple(tokens[: len(sequence)]) == sequence
+
+
+def _rust_sccp_command_has_fragment(command: str, _fragment: str) -> bool:
+    return _effective_command_starts_with(
+        command,
+        ("cargo", "test", "-p", "iroha_sccp", "--", "--nocapture"),
+    )
+
+
+def _evidence_pytest_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or not _command_token_basename(tokens[0]).startswith("python"):
+        return False
+    module_index = next(
+        (
+            index
+            for index in range(len(tokens) - 1)
+            if tokens[index] == "-m" and tokens[index + 1] == "pytest"
+        ),
+        None,
+    )
+    if module_index is None or "-q" not in tokens[module_index + 2 :]:
+        return False
+    if fragment.startswith("pytests/"):
+        return fragment in tokens
+    if fragment.startswith("python/"):
+        return fragment in tokens
+    if fragment.startswith("-m pytest"):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in command
+
+
+def _js_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "node" or "--test" not in tokens:
+        return False
+    if fragment.startswith("--test "):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in tokens
+
+
+def _swift_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    if not _effective_command_starts_with(command, ("swift", "test")):
+        return False
+    tokens = _phase_effective_command_tokens(command)
+    if fragment.startswith("swift test "):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in tokens
+
+
+def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment == "java -version":
+        return tuple(tokens[:2]) == ("java", "-version")
+    if not tokens or _command_token_basename(tokens[0]) != "gradlew":
+        return False
+    return (
+        ":core-jvm:test" in tokens
+        and "--tests" in tokens
+        and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+    )
+
+
+def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment == "java -version":
+        return tuple(tokens[:2]) == ("java", "-version")
+    if not tokens or _command_token_basename(tokens[0]) != "gradlew" or ":core:test" not in tokens:
+        return False
+    all_tokens = _phase_command_tokens(command)
+    if fragment.startswith("ANDROID_HARNESS_MAINS="):
+        return any(token.startswith(fragment) for token in all_tokens)
+    if fragment == "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests":
+        return any(
+            token.startswith("ANDROID_HARNESS_MAINS=") and fragment in token
+            for token in all_tokens
+        )
+    return all(part in tokens for part in shlex.split(fragment))
+
+
+def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    if fragment.startswith("FullyQualifiedName"):
+        normalized_fragment = fragment.replace("\\|", "|")
+        return "--filter" in tokens and any(
+            token.replace("\\|", "|") == normalized_fragment for token in tokens
+        )
+    if fragment.startswith("dotnet test "):
+        return all(part in tokens for part in shlex.split(fragment)[1:])
+    return all(part in tokens for part in shlex.split(fragment))
+
+
+def _contract_smoke_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment.startswith("--check "):
+        return (
+            bool(tokens)
+            and _command_token_basename(tokens[0]) == "node"
+            and all(part in tokens for part in shlex.split(fragment))
+        )
+    return _effective_command_starts_with(command, ("bash", "scripts/sccp_evm_contract_smoke.sh"))
+
+
+def _core_admission_command_has_fragment(command: str, _fragment: str) -> bool:
+    return _effective_command_starts_with(
+        command,
+        ("cargo", "test", "-p", "iroha_core", "--test", "bridge_proofs", "--", "--nocapture"),
+    )
+
+
+def _phase_command_matches_required_fragment(
+    phase: str,
+    command: str,
+    fragment: str,
+) -> bool:
+    if command == f"+ {fragment}":
+        return True
+    if fragment not in command:
+        return False
+    if phase == "evidence-scripts":
+        return _evidence_pytest_command_has_fragment(command, fragment)
+    if phase == "rust-sccp":
+        return _rust_sccp_command_has_fragment(command, fragment)
+    if phase == "js-sdk":
+        return _js_sdk_command_has_fragment(command, fragment)
+    if phase == "python-sdk":
+        return _evidence_pytest_command_has_fragment(command, fragment)
+    if phase == "swift-sdk":
+        return _swift_sdk_command_has_fragment(command, fragment)
+    if phase == "kotlin-sdk":
+        return _kotlin_sdk_command_has_fragment(command, fragment)
+    if phase == "java-android":
+        return _java_android_command_has_fragment(command, fragment)
+    if phase == "dotnet-sdk":
+        return _dotnet_sdk_command_has_fragment(command, fragment)
+    if phase == "contract-smoke":
+        return _contract_smoke_command_has_fragment(command, fragment)
+    if phase == "core-admission":
+        return _core_admission_command_has_fragment(command, fragment)
+    return True
+
+
+def _phase_block_has_command_fragment(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+) -> bool:
+    return any(
+        _phase_command_matches_required_fragment(phase, command, fragment)
+        for command in _phase_command_lines(phase_block)
+    )
 
 
 def _phase_block_has_output_fragment(phase_block: str, fragment: str) -> bool:

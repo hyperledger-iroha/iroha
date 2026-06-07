@@ -283,6 +283,29 @@ SafetyFast ==
   /\ \A c \in FilterCases: ActualFilter(c) = SpecFilter(c)
   /\ \A c \in AuditCases: ActualAudit(c) = SpecAudit(c)
 
+TopologyRolePartitionExact ==
+  \A c \in RoleCases:
+    ActualRole(c) = SpecRole(c)
+
+TopologyRoleSliceExact ==
+  \A c \in GroupCases:
+    ActualGroup(c) = SpecGroup(c)
+
+TopologySignatureFilterExact ==
+  \A c \in FilterCases:
+    ActualFilter(c) = SpecFilter(c)
+
+TopologyAuditRoleRotationExact ==
+  \A c \in AuditCases:
+    ActualAudit(c) = SpecAudit(c)
+
+TopologyRoleFilterExactness ==
+  /\ SafetyFast
+  /\ TopologyRolePartitionExact
+  /\ TopologyRoleSliceExact
+  /\ TopologySignatureFilterExact
+  /\ TopologyAuditRoleRotationExact
+
 Safety ==
   checked = 1 => SafetyFast
 

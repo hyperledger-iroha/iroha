@@ -28,7 +28,8 @@ use crate::{
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
-        SoracloudFheFullBootstrapMaterialProofV1, SoracloudFheInputAdmissionProofV1,
+        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheFullBootstrapMaterialProofV1,
+        SoracloudFheInputAdmissionProofV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -387,6 +388,9 @@ pub struct RunSoracloudFheJob {
     /// Optional full-bootstrap evaluator/proof artifacts for full-bootstrap jobs.
     #[norito(default)]
     pub full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    /// Verifier-backed proof for each full-bootstrap output ciphertext slot.
+    #[norito(default)]
+    pub full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     /// Governance transaction hash attached to the job.
     pub governance_tx_hash: Hash,
     /// Provenance attestation over the job payload.
@@ -1584,6 +1588,7 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
     full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
 });

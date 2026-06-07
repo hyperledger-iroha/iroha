@@ -81,6 +81,13 @@ RecoveryValidCases == {
   RecoveryAfterRejectedSlot
 }
 
+ExpiryCases == {
+  NoOwnerNoExpiry,
+  OwnerBelowCapNoExpiry,
+  QuorumBelowCapNoExpiry,
+  BothAtCapExpires
+}
+
 Cases ==
   HardCapCases
   \cup SlotValidCases
@@ -366,6 +373,60 @@ SafetyFast ==
   /\ HardCapStable
   /\ OwnerSourceStable
   /\ ExpiryStable
+
+VoteBackedHardCapExact ==
+  \A c \in HardCapCases:
+    /\ ActualResendWindow(c) = SpecResendWindow(c)
+    /\ ActualHardCapBase(c) = SpecHardCapBase(c)
+    /\ ActualHardCap(c) = SpecHardCap(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+VoteBackedSlotOwnerAcceptedExact ==
+  \A c \in SlotValidCases:
+    /\ ActualSlotOwnerValid(c) = SpecSlotOwnerValid(c)
+    /\ ActualSlotOwnerValid(c) = TRUE
+    /\ ActualOwnerPresent(c) = TRUE
+    /\ ActualOwnerAge(c) = SpecOwnerAge(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+VoteBackedSlotOwnerRejectedExact ==
+  \A c \in SlotRejectedCases:
+    /\ ActualSlotOwnerValid(c) = FALSE
+    /\ ActualSlotOwnerValid(c) = SpecSlotOwnerValid(c)
+    /\ ActualOwnerPresent(c) = SpecOwnerPresent(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+VoteBackedRecoveryOwnerExact ==
+  \A c \in RecoveryValidCases \cup {
+      RecoveryOwnerWrongCauseRejected,
+      RecoveryOwnerWrongViewRejected
+    }:
+    /\ ActualRecoveryOwnerValid(c) = SpecRecoveryOwnerValid(c)
+    /\ ActualOwnerPresent(c) = SpecOwnerPresent(c)
+    /\ ActualOwnerAge(c) = SpecOwnerAge(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+VoteBackedProgressAgeExact ==
+  /\ ActualOwnerAge(SlotOwnerUsesLatestProgress) =
+       SpecOwnerAge(SlotOwnerUsesLatestProgress)
+  /\ ActualOwnerAge(RecoveryOwnerUsesLatestProgress) =
+       SpecOwnerAge(RecoveryOwnerUsesLatestProgress)
+  /\ ActualOwnerAge(RecoveryAfterRejectedSlot) =
+       SpecOwnerAge(RecoveryAfterRejectedSlot)
+
+VoteBackedExpiryThresholdExact ==
+  \A c \in ExpiryCases:
+    /\ ActualExpired(c) = SpecExpired(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+VoteBackedReassemblyStallExactness ==
+  /\ SafetyFast
+  /\ VoteBackedHardCapExact
+  /\ VoteBackedSlotOwnerAcceptedExact
+  /\ VoteBackedSlotOwnerRejectedExact
+  /\ VoteBackedRecoveryOwnerExact
+  /\ VoteBackedProgressAgeExact
+  /\ VoteBackedExpiryThresholdExact
 
 Safety ==
   SafetyFast

@@ -83,6 +83,8 @@ const BFV_FULL_BOOTSTRAP_MATERIAL_PROOF_STATEMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_material_proof_statement.v1";
 const BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.full_bootstrap_execution_proof_statement.v1";
+const BFV_FULL_BOOTSTRAP_SAMPLE_EXTRACTION_SWITCH_KEY_DOMAIN: &[u8] =
+    b"iroha.crypto.fhe.bfv.full_bootstrap_sample_extraction_switch_key.v1";
 const BFV_RNS_MODULUS_CHAIN_DIGEST_DOMAIN: &[u8] =
     b"iroha.crypto.fhe.bfv.rns_modulus_chain_digest.v1";
 const BFV_RNS_KEY_SWITCH_DECOMPOSITION_CHAIN_DIGEST_DOMAIN: &[u8] =
@@ -1611,6 +1613,32 @@ pub struct BfvFullBootstrapSampleExtractionV1 {
     pub output_ciphertext_component_count: u16,
 }
 
+/// Key-switch entries for one raw sample secret coefficient.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1 {
+    /// Secret coefficient index this entry switches into coefficient zero.
+    pub secret_coefficient_index: u16,
+    /// Decomposition entries encrypting `base^d * s_i * X^0` under the RLWE secret.
+    pub entries: Vec<BfvRelinearizationKeyEntry>,
+}
+
+/// Per-coefficient switch key for raw full-bootstrap sample extraction.
+///
+/// This is the first executable key material for the final LWE-to-RLWE
+/// full-bootstrap boundary. Each coefficient entry encrypts one scalar secret
+/// coefficient as a coefficient-zero polynomial, so evaluators can switch a raw
+/// extracted LWE sample into a two-component RLWE ciphertext under the existing
+/// BFV secret without learning the secret key.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapSampleExtractionSwitchKeyV1 {
+    /// Metadata describing the raw sample this switch key accepts.
+    pub sample_extraction: BfvFullBootstrapSampleExtractionV1,
+    /// Per-secret-coefficient switch entries ordered by coefficient index.
+    pub coefficient_entries: Vec<BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1>,
+}
+
 /// Raw LWE-style sample extracted from one BFV/RLWE ciphertext coefficient.
 ///
 /// This is an executable full-bootstrap building block, not the final
@@ -1632,9 +1660,10 @@ pub struct BfvFullBootstrapRawExtractedSampleV1 {
 ///
 /// This is the current executable boundary for governed full-bootstrap
 /// artifacts. It proves the concrete coefficient-to-slot, blind-rotation,
-/// sample-extraction, and coefficient-zero diagnostic repack bytes can drive
-/// deterministic BFV/RNS execution. It is not the final bootstrapped BFV
-/// ciphertext.
+/// sample-extraction, coefficient-zero diagnostic repack, and
+/// slot-to-coefficient bytes can drive deterministic BFV/RNS execution. When
+/// the sample-extraction artifact carries switch-key material, the trace also
+/// includes the governed final sample switch and slot-to-coefficient output.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct BfvFullBootstrapExecutionPrefixTraceV1 {
@@ -1646,12 +1675,19 @@ pub struct BfvFullBootstrapExecutionPrefixTraceV1 {
     pub raw_extracted_sample: BfvFullBootstrapRawExtractedSampleV1,
     /// Diagnostic ciphertext whose coefficient zero decrypts to the raw sample.
     pub coefficient_zero_repack_output: BfvCiphertext,
+    /// Diagnostic slot-to-coefficient output from the coefficient-zero repack.
+    pub diagnostic_slot_to_coefficient_output: BfvCiphertext,
+    /// Ciphertext emitted by the governed raw-sample switch key.
+    pub sample_switch_output: BfvCiphertext,
+    /// Final ciphertext emitted by the governed slot-to-coefficient transform.
+    pub slot_to_coefficient_output: BfvCiphertext,
 }
 
 /// Public per-stage bounds for the executable full-bootstrap prefix trace.
 ///
 /// `coefficient_zero_repack` only bounds coefficient zero of the diagnostic
-/// repack ciphertext. It is not a whole-ciphertext bootstrap-output bound.
+/// repack ciphertext. `slot_to_coefficient` is the whole-ciphertext bound for
+/// the governed artifact-aware full-bootstrap output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
     /// Bound after the governed coefficient-to-slot transform.
@@ -1662,6 +1698,10 @@ pub struct BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
     pub raw_extracted_sample: u128,
     /// Coefficient-zero-only bound for the diagnostic repack ciphertext.
     pub coefficient_zero_repack: u128,
+    /// Bound after the governed raw-sample switch key.
+    pub sample_switch: u128,
+    /// Whole-ciphertext bound after the governed slot-to-coefficient transform.
+    pub slot_to_coefficient: u128,
 }
 
 /// Bootstrapping accumulator/test-vector material for the full-bootstrap circuit.
@@ -5164,16 +5204,516 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
         bytes,
         expected_digest,
     )?;
-    let sample_extraction = norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionV1>(
-        &artifact.payload,
-    )
-    .map_err(|err| {
+    match norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionV1>(&artifact.payload) {
+        Ok(sample_extraction) => {
+            validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+            Ok(sample_extraction)
+        }
+        Err(sample_err) => {
+            let switch_key =
+                norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionSwitchKeyV1>(
+                    &artifact.payload,
+                )
+                .map_err(|switch_err| {
+                    BfvError::InvalidParameters(format!(
+                        "{label} payload must be a Norito-encoded BFV full-bootstrap sample extraction or sample-extraction switch key: sample extraction: {sample_err}; switch key: {switch_err}"
+                    ))
+                })?;
+            validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
+            Ok(switch_key.sample_extraction)
+        }
+    }
+}
+
+/// Encode typed full-bootstrap sample-extraction switch-key material.
+///
+/// The returned bytes are a governed full-bootstrap artifact envelope whose
+/// inner payload is [`BfvFullBootstrapSampleExtractionSwitchKeyV1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when switch-key validation or canonical encoding fails.
+pub fn encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    switch_key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+) -> Result<Vec<u8>, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, switch_key)?;
+    let payload = norito::to_bytes(switch_key).map_err(|err| {
         BfvError::InvalidParameters(format!(
-            "{label} payload must be a Norito-encoded BFV full-bootstrap sample extraction: {err}"
+            "BFV full-bootstrap sample-extraction switch key encoding failed: {err}"
         ))
     })?;
+    encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+        params,
+        max_bootstrap_depth,
+        BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
+        &payload,
+    )
+}
+
+/// Decode and validate governed full-bootstrap sample-extraction switch-key material.
+///
+/// # Errors
+/// Returns [`BfvError`] when the artifact envelope does not match the governed
+/// material or the typed switch-key payload is malformed.
+pub fn decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapSampleExtractionSwitchKeyV1, BfvError> {
+    let role = BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey;
+    let label = full_bootstrap_artifact_label_for_role(role);
+    let expected_digest = full_bootstrap_material_digest_for_role(material, role);
+    let artifact = decode_full_bootstrap_artifact_payload(
+        params,
+        material,
+        label,
+        role,
+        bytes,
+        expected_digest,
+    )?;
+    let switch_key =
+        norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionSwitchKeyV1>(
+            &artifact.payload,
+        )
+        .map_err(|err| {
+            BfvError::InvalidParameters(format!(
+                "{label} payload must be a Norito-encoded BFV full-bootstrap sample-extraction switch key: {err}"
+            ))
+        })?;
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, &switch_key)?;
+    Ok(switch_key)
+}
+
+/// Validate raw-sample switch key material for full-bootstrap sample extraction.
+///
+/// # Errors
+/// Returns [`BfvError`] when the sample-extraction metadata is malformed, the
+/// per-coefficient entries are missing or out of order, or any key-switch entry
+/// has an invalid BFV shape.
+pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(
+    params: &BfvParameters,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, key.sample_extraction)?;
+    let degree = params.degree();
+    if key.coefficient_entries.len() != degree {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap sample-extraction switch key expected {degree} coefficient entries, found {}",
+            key.coefficient_entries.len()
+        )));
+    }
+    for (index, coefficient_entry) in key.coefficient_entries.iter().enumerate() {
+        let expected_index = u16::try_from(index).map_err(|_| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap sample-extraction switch key index exceeds u16 metadata"
+                    .to_owned(),
+            )
+        })?;
+        if coefficient_entry.secret_coefficient_index != expected_index {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap sample-extraction switch key coefficient entry[{index}] has secret_coefficient_index {}, expected {expected_index}",
+                coefficient_entry.secret_coefficient_index
+            )));
+        }
+        validate_key_switch_entries(
+            params,
+            &coefficient_entry.entries,
+            &format!(
+                "BFV full-bootstrap sample-extraction switch key coefficient[{index}] entries"
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// Derive deterministic exact raw-sample switch key material.
+///
+/// Each coefficient entry encrypts one scalar secret coefficient as a
+/// coefficient-zero polynomial under the same RLWE secret, using the existing
+/// exact key-switch residual model.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, secret key, sample metadata, or seed
+/// validation fails.
+pub fn bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
+    seed: &[u8],
+) -> Result<BfvFullBootstrapSampleExtractionSwitchKeyV1, BfvError> {
+    validate_deterministic_seed("BFV full-bootstrap sample-extraction switch key seed", seed)?;
     validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
-    Ok(sample_extraction)
+    validate_secret_key(params, secret_key)?;
+    let mut coefficient_entries = Vec::with_capacity(params.degree());
+    for coefficient_index in 0..params.degree() {
+        let mut rng = full_bootstrap_sample_extraction_switch_key_rng(seed, coefficient_index)?;
+        let target_secret = full_bootstrap_sample_extraction_switch_target_secret(
+            params,
+            secret_key,
+            coefficient_index,
+        )?;
+        coefficient_entries.push(BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1 {
+            secret_coefficient_index: u16::try_from(coefficient_index).map_err(|_| {
+                BfvError::InvalidParameters(
+                    "BFV full-bootstrap sample-extraction switch key index exceeds u16 metadata"
+                        .to_owned(),
+                )
+            })?,
+            entries: key_switch_entries_from_rng(params, &secret_key.s, &target_secret, &mut rng)?,
+        });
+    }
+    let key = BfvFullBootstrapSampleExtractionSwitchKeyV1 {
+        sample_extraction,
+        coefficient_entries,
+    };
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_secret_consistency_v1(
+        params, secret_key, &key,
+    )?;
+    Ok(key)
+}
+
+/// Derive deterministic bounded-noise raw-sample switch key material.
+///
+/// This is the rounded BFV counterpart to
+/// [`bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow or when
+/// parameters, secret key, sample metadata, or seed validation fails.
+pub fn bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
+    seed: &[u8],
+) -> Result<BfvFullBootstrapSampleExtractionSwitchKeyV1, BfvError> {
+    validate_deterministic_seed(
+        "bounded-noise BFV full-bootstrap sample-extraction switch key seed",
+        seed,
+    )?;
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+    validate_secret_key(params, secret_key)?;
+    let mut coefficient_entries = Vec::with_capacity(params.degree());
+    for coefficient_index in 0..params.degree() {
+        let mut rng = full_bootstrap_sample_extraction_switch_key_rng(seed, coefficient_index)?;
+        let target_secret = full_bootstrap_sample_extraction_switch_target_secret(
+            params,
+            secret_key,
+            coefficient_index,
+        )?;
+        coefficient_entries.push(BfvFullBootstrapSampleExtractionSwitchKeyCoefficientV1 {
+            secret_coefficient_index: u16::try_from(coefficient_index).map_err(|_| {
+                BfvError::InvalidParameters(
+                    "BFV full-bootstrap sample-extraction switch key index exceeds u16 metadata"
+                        .to_owned(),
+                )
+            })?,
+            entries: key_switch_entries_bounded_noise_from_rng(
+                params,
+                &secret_key.s,
+                &target_secret,
+                &mut rng,
+            )?,
+        });
+    }
+    let key = BfvFullBootstrapSampleExtractionSwitchKeyV1 {
+        sample_extraction,
+        coefficient_entries,
+    };
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_secret_consistency_v1(
+        params, secret_key, &key,
+    )?;
+    Ok(key)
+}
+
+/// Verify exact raw-sample switch key material against a secret key.
+///
+/// This is an owner-side diagnostic proving each coefficient entry decrypts to
+/// the expected `s_i * X^0` target under the exact residual model.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key shape is malformed, the secret key is
+/// invalid, or any coefficient entry does not match the secret key.
+pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_secret_consistency_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
+    validate_secret_key(params, secret_key)?;
+    for (index, coefficient_entry) in key.coefficient_entries.iter().enumerate() {
+        let target_secret =
+            full_bootstrap_sample_extraction_switch_target_secret(params, secret_key, index)?;
+        validate_key_switch_entry_residuals(
+            params,
+            &secret_key.s,
+            &target_secret,
+            &coefficient_entry.entries,
+            &format!("BFV full-bootstrap sample-extraction switch key coefficient[{index}]"),
+        )?;
+    }
+    Ok(())
+}
+
+/// Verify bounded-noise raw-sample switch key material against a secret key.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the key shape
+/// is malformed, the secret key is invalid, or any coefficient entry does not
+/// match the secret key.
+pub fn validate_bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_secret_consistency_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+) -> Result<(), BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
+    validate_secret_key(params, secret_key)?;
+    for (index, coefficient_entry) in key.coefficient_entries.iter().enumerate() {
+        let target_secret =
+            full_bootstrap_sample_extraction_switch_target_secret(params, secret_key, index)?;
+        validate_bounded_noise_key_switch_entry_residuals(
+            params,
+            &secret_key.s,
+            &target_secret,
+            &coefficient_entry.entries,
+            &format!(
+                "bounded-noise BFV full-bootstrap sample-extraction switch key coefficient[{index}]"
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// Switch a raw extracted sample into a coefficient-zero RLWE ciphertext.
+///
+/// Unlike
+/// [`repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1`],
+/// this consumes key-switch material so nonzero coefficients contain only the
+/// key-switch residual/noise contribution rather than deterministic linear
+/// artifacts of the raw sample coefficients.
+///
+/// # Errors
+/// Returns [`BfvError`] when the switch key or raw sample is malformed, the raw
+/// sample does not match the key metadata, or registered RNS key switching
+/// fails.
+pub fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
+    params: &BfvParameters,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
+    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
+    let (mut c0, mut c1) =
+        full_bootstrap_sample_extraction_switch_initial_ciphertext(params, sample);
+    for (coefficient_entry, &sample_coefficient) in key
+        .coefficient_entries
+        .iter()
+        .zip(&sample.secret_coefficients)
+    {
+        let switching_component =
+            full_bootstrap_sample_extraction_switch_component(params, sample_coefficient);
+        let switched = key_switch_rns_exact(
+            params,
+            &rns_chain,
+            &coefficient_entry.entries,
+            &c0,
+            &c1,
+            &switching_component,
+        )?;
+        c0 = switched.c0;
+        c1 = switched.c1;
+    }
+    let ciphertext = BfvCiphertext { c0, c1 };
+    validate_ciphertext(params, &ciphertext)?;
+    Ok(ciphertext)
+}
+
+/// Switch a bounded-noise raw extracted sample into a coefficient-zero RLWE ciphertext.
+///
+/// This is the rounded BFV counterpart to
+/// [`apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the switch key
+/// or raw sample is malformed, the raw sample does not match the key metadata,
+/// or registered target-limb RNS key switching fails.
+pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+    params: &BfvParameters,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    let decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
+    let (mut c0, mut c1) =
+        full_bootstrap_sample_extraction_switch_initial_ciphertext(params, sample);
+    for (coefficient_entry, &sample_coefficient) in key
+        .coefficient_entries
+        .iter()
+        .zip(&sample.secret_coefficients)
+    {
+        let switching_component =
+            full_bootstrap_sample_extraction_switch_component(params, sample_coefficient);
+        let switched = key_switch_rns_exact_with_basis_extension(
+            params,
+            &decomposition_chain,
+            &evaluator_chain,
+            &coefficient_entry.entries,
+            &c0,
+            &c1,
+            &switching_component,
+        )?;
+        c0 = switched.c0;
+        c1 = switched.c1;
+    }
+    let ciphertext = BfvCiphertext { c0, c1 };
+    validate_ciphertext(params, &ciphertext)?;
+    Ok(ciphertext)
+}
+
+/// Return the exact residual bound after raw-sample switch-key repacking.
+///
+/// The bound adds one key-switch residual contribution per secret coefficient
+/// to the raw sample residual bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key shape is malformed, the raw sample bound
+/// exceeds centered capacity, or the propagated output bound exceeds centered
+/// capacity.
+pub fn bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_v1(
+    params: &BfvParameters,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+    raw_sample_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        raw_sample_bound,
+        "BFV full-bootstrap sample-extraction switch input residual bound",
+    )?;
+    let switch_bound = bfv_key_switch_extra_residual_multiple_bound(params)?;
+    let output_bound = u128::from(params.polynomial_degree)
+        .checked_mul(switch_bound)
+        .and_then(|bound| bound.checked_add(raw_sample_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap sample-extraction switch output residual bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        output_bound,
+        "BFV full-bootstrap sample-extraction switch output residual bound",
+    )?;
+    Ok(output_bound)
+}
+
+/// Return the bounded-noise bound after raw-sample switch-key repacking.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the key shape
+/// is malformed, the raw sample bound exceeds decoding capacity, or the
+/// propagated output bound exceeds decoding capacity.
+pub fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
+    params: &BfvParameters,
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+    raw_sample_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        raw_sample_noise_bound,
+        "BFV full-bootstrap bounded-noise sample-extraction switch input bound",
+    )?;
+    let switch_bound = bfv_key_switch_extra_residual_multiple_bound(params)?;
+    let output_bound = u128::from(params.polynomial_degree)
+        .checked_mul(switch_bound)
+        .and_then(|bound| bound.checked_add(raw_sample_noise_bound))
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap bounded-noise sample-extraction switch output bound exceeds deterministic limits"
+                    .to_owned(),
+            )
+        })?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        output_bound,
+        "BFV full-bootstrap bounded-noise sample-extraction switch output bound",
+    )?;
+    Ok(output_bound)
+}
+
+fn full_bootstrap_sample_extraction_switch_key_rng(
+    seed: &[u8],
+    coefficient_index: usize,
+) -> Result<ChaCha20Rng, BfvError> {
+    let index = u64::try_from(coefficient_index).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap sample-extraction switch key index exceeds u64".to_owned(),
+        )
+    })?;
+    let material: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[seed, &index.to_le_bytes()]).into();
+    Ok(derive_rng(
+        BFV_FULL_BOOTSTRAP_SAMPLE_EXTRACTION_SWITCH_KEY_DOMAIN,
+        &material,
+    ))
+}
+
+fn full_bootstrap_sample_extraction_switch_target_secret(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    coefficient_index: usize,
+) -> Result<Polynomial, BfvError> {
+    validate_secret_key(params, secret_key)?;
+    let coefficient = secret_key.s.get(coefficient_index).ok_or_else(|| {
+        BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap sample-extraction switch target coefficient index {coefficient_index} is outside secret key"
+        ))
+    })?;
+    let mut target_secret = zero_poly(params);
+    target_secret[0] = *coefficient;
+    Ok(target_secret)
+}
+
+fn validate_bfv_full_bootstrap_sample_switch_key_matches_sample(
+    key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<(), BfvError> {
+    if key.sample_extraction.extracted_coefficient_index != sample.source_coefficient_index {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap sample-extraction switch key coefficient index {} does not match raw sample source_coefficient_index {}",
+            key.sample_extraction.extracted_coefficient_index, sample.source_coefficient_index
+        )));
+    }
+    Ok(())
+}
+
+fn full_bootstrap_sample_extraction_switch_initial_ciphertext(
+    params: &BfvParameters,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> (Polynomial, Polynomial) {
+    let mut c0 = zero_poly(params);
+    c0[0] = sample.constant_term;
+    (c0, zero_poly(params))
+}
+
+fn full_bootstrap_sample_extraction_switch_component(
+    params: &BfvParameters,
+    coefficient: u64,
+) -> Polynomial {
+    let mut component = zero_poly(params);
+    component[0] = coefficient;
+    component
 }
 
 /// Extract one raw LWE-style sample from a BFV ciphertext.
@@ -7132,8 +7672,9 @@ fn decode_full_bootstrap_execution_prefix_artifacts_v1(
 ) -> Result<
     (
         BfvFullBootstrapLinearTransformV1,
+        BfvFullBootstrapLinearTransformV1,
         BfvFullBootstrapBlindRotationKeyV1,
-        BfvFullBootstrapSampleExtractionV1,
+        BfvFullBootstrapSampleExtractionSwitchKeyV1,
     ),
     BfvError,
 > {
@@ -7143,17 +7684,28 @@ fn decode_full_bootstrap_execution_prefix_artifacts_v1(
         BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
         &artifacts.coefficient_to_slot_key,
     )?;
+    let slot_to_coefficient = decode_bfv_full_bootstrap_linear_transform_artifact_v1(
+        params,
+        material,
+        BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
+        &artifacts.slot_to_coefficient_key,
+    )?;
     let blind_rotation = decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
         params,
         material,
         &artifacts.blind_rotation_key,
     )?;
-    let sample_extraction = decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+    let sample_switch_key = decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
         params,
         material,
         &artifacts.sample_extraction_key,
     )?;
-    Ok((coefficient_to_slot, blind_rotation, sample_extraction))
+    Ok((
+        coefficient_to_slot,
+        slot_to_coefficient,
+        blind_rotation,
+        sample_switch_key,
+    ))
 }
 
 /// Execute the governed exact-RNS full-bootstrap prefix through raw sample extraction.
@@ -7161,9 +7713,8 @@ fn decode_full_bootstrap_execution_prefix_artifacts_v1(
 /// This validates the same concrete artifacts as
 /// [`validate_bfv_full_bootstrap_execution_artifacts_preflight_v1`] and then
 /// consumes the coefficient-to-slot, blind-rotation, and sample-extraction
-/// payloads before embedding the raw sample in a coefficient-zero diagnostic
-/// ciphertext. The returned trace deliberately stops before the future
-/// governed sample key-switch and slot-to-coefficient repacking stage.
+/// payloads, switching the raw sample through governed key-switch material, and
+/// feeding the result through the governed slot-to-coefficient transform.
 ///
 /// # Errors
 /// Returns [`BfvError`] when full-bootstrap key/material preflight fails,
@@ -7183,7 +7734,7 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
         artifacts,
     )?;
     let material = full_bootstrap_material_from_key(bootstrap_key)?;
-    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+    let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
     let coefficient_to_slot_output =
         apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
@@ -7201,20 +7752,41 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
     let raw_extracted_sample = apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
         params,
         &blind_rotation_output,
-        sample_extraction,
+        sample_switch_key.sample_extraction,
     )?;
     let coefficient_zero_repack_output =
         repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
             params,
             &raw_extracted_sample,
         )?;
-    // TODO: Feed this raw sample into the governed sample-extraction key switch
-    // and slot-to-coefficient repacking stage once that key material lands.
+    let diagnostic_slot_to_coefficient_output =
+        apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
+            params,
+            galois_keys,
+            &coefficient_zero_repack_output,
+            &slot_to_coefficient,
+        )?;
+    let sample_switch_output =
+        apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
+            params,
+            &sample_switch_key,
+            &raw_extracted_sample,
+        )?;
+    let slot_to_coefficient_output =
+        apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
+            params,
+            galois_keys,
+            &sample_switch_output,
+            &slot_to_coefficient,
+        )?;
     Ok(BfvFullBootstrapExecutionPrefixTraceV1 {
         coefficient_to_slot_output,
         blind_rotation_output,
         raw_extracted_sample,
         coefficient_zero_repack_output,
+        diagnostic_slot_to_coefficient_output,
+        sample_switch_output,
+        slot_to_coefficient_output,
     })
 }
 
@@ -7223,7 +7795,8 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
 /// This is the rounded BFV counterpart to
 /// [`apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1`].
 /// It validates bounded-noise capacity and the governed artifacts before
-/// executing the prefix stages.
+/// executing the prefix stages, governed sample switch, and final
+/// slot-to-coefficient transform.
 ///
 /// # Errors
 /// Returns [`BfvError`] when bounded-noise capacity is too narrow,
@@ -7245,7 +7818,7 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_
         artifacts,
     )?;
     let material = full_bootstrap_material_from_key(bootstrap_key)?;
-    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+    let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
     let coefficient_to_slot_output =
         apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
@@ -7264,29 +7837,50 @@ pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_
     let raw_extracted_sample = apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
         params,
         &blind_rotation_output,
-        sample_extraction,
+        sample_switch_key.sample_extraction,
     )?;
     let coefficient_zero_repack_output =
         repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
             params,
             &raw_extracted_sample,
         )?;
-    // TODO: Feed this raw sample into the governed bounded-noise sample switch
-    // and slot-to-coefficient repacking stage once that key material lands.
+    let diagnostic_slot_to_coefficient_output =
+        apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
+            params,
+            galois_keys,
+            &coefficient_zero_repack_output,
+            &slot_to_coefficient,
+        )?;
+    let sample_switch_output =
+        apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+            params,
+            &sample_switch_key,
+            &raw_extracted_sample,
+        )?;
+    let slot_to_coefficient_output =
+        apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
+            params,
+            galois_keys,
+            &sample_switch_output,
+            &slot_to_coefficient,
+        )?;
     Ok(BfvFullBootstrapExecutionPrefixTraceV1 {
         coefficient_to_slot_output,
         blind_rotation_output,
         raw_extracted_sample,
         coefficient_zero_repack_output,
+        diagnostic_slot_to_coefficient_output,
+        sample_switch_output,
+        slot_to_coefficient_output,
     })
 }
 
 /// Return exact residual bounds for the executable full-bootstrap prefix trace.
 ///
 /// The helper validates the governed full-bootstrap key and artifact bundle,
-/// then composes the coefficient-to-slot, blind-rotation, and raw
-/// sample-extraction and coefficient-zero diagnostic-repack bound rules used
-/// by the executable prefix trace.
+/// then composes coefficient-to-slot, blind-rotation, raw sample extraction,
+/// diagnostic coefficient-zero repack, sample switch, and slot-to-coefficient
+/// bound rules used by the executable trace.
 ///
 /// # Errors
 /// Returns [`BfvError`] when full-bootstrap key/material preflight fails,
@@ -7308,7 +7902,7 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds
         input_bound,
         "BFV full-bootstrap execution prefix input residual bound",
     )?;
-    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+    let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
     let coefficient_to_slot =
         bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
@@ -7326,7 +7920,7 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds
     let raw_extracted_sample =
         bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_bound_v1(
             params,
-            sample_extraction,
+            sample_switch_key.sample_extraction,
             blind_rotation,
         )?;
     let coefficient_zero_repack =
@@ -7334,11 +7928,26 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds
             params,
             raw_extracted_sample,
         )?;
+    let sample_switch =
+        bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_v1(
+            params,
+            &sample_switch_key,
+            raw_extracted_sample,
+        )?;
+    let slot_to_coefficient =
+        bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
+            params,
+            galois_keys,
+            &slot_to_coefficient,
+            sample_switch,
+        )?;
     Ok(BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
         coefficient_to_slot,
         blind_rotation,
         raw_extracted_sample,
         coefficient_zero_repack,
+        sample_switch,
+        slot_to_coefficient,
     })
 }
 
@@ -7369,7 +7978,7 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
         input_noise_bound,
         "BFV full-bootstrap bounded-noise execution prefix input bound",
     )?;
-    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+    let (coefficient_to_slot, slot_to_coefficient, blind_rotation, sample_switch_key) =
         decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
     let coefficient_to_slot = bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
         params,
@@ -7386,7 +7995,7 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
     let raw_extracted_sample =
         bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
             params,
-            sample_extraction,
+            sample_switch_key.sample_extraction,
             blind_rotation,
         )?;
     let coefficient_zero_repack =
@@ -7394,11 +8003,25 @@ pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
             params,
             raw_extracted_sample,
         )?;
+    let sample_switch =
+        bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
+            params,
+            &sample_switch_key,
+            raw_extracted_sample,
+        )?;
+    let slot_to_coefficient = bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
+        params,
+        galois_keys,
+        &slot_to_coefficient,
+        sample_switch,
+    )?;
     Ok(BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
         coefficient_to_slot,
         blind_rotation,
         raw_extracted_sample,
         coefficient_zero_repack,
+        sample_switch,
+        slot_to_coefficient,
     })
 }
 
@@ -7416,25 +8039,24 @@ fn validate_bfv_full_bootstrap_key_execution_preflight_v1(
     validate_bootstrap_key_entries(params, bootstrap_key)
 }
 
-fn full_bootstrap_final_stage_unavailable() -> BfvError {
+fn full_bootstrap_artifacts_required_error() -> BfvError {
     BfvError::InvalidParameters(
-        "full BFV bootstrap final sample key-switch/repacking is not implemented".to_owned(),
+        "full BFV bootstrap execution requires governed full-bootstrap circuit artifacts"
+            .to_owned(),
     )
 }
 
 /// Execute one full BFV bootstrap with concrete governed artifacts.
 ///
 /// This artifact-aware entry point executes the deterministic
-/// coefficient-to-slot, blind-rotation, and raw sample-extraction prefix before
-/// stopping at the missing final sample key-switch/repacking stage. It lets
-/// callers validate the executable governed prefix and required Galois keys
-/// without accidentally routing through the refresh-only bridge.
+/// coefficient-to-slot, blind-rotation, raw sample-extraction, sample switch,
+/// and slot-to-coefficient stages. It lets callers execute the governed
+/// artifact path without accidentally routing through the refresh-only bridge.
 ///
 /// # Errors
 /// Returns [`BfvError`] when full-bootstrap key/material/artifact preflight
-/// fails, required Galois keys are missing or malformed, any executable prefix
-/// stage fails, or until the final sample key-switch/repacking stage is
-/// implemented.
+/// fails, required Galois keys are missing or malformed, or any executable
+/// stage fails.
 pub fn full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -7442,49 +8064,44 @@ pub fn full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
-    apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+    let trace = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
         params,
         bootstrap_key,
         artifacts,
         galois_keys,
         ciphertext,
     )?;
-    // TODO: Finish the governed sample key-switch/repacking stage and feed its
-    // output through the slot-to-coefficient transform.
-    Err(full_bootstrap_final_stage_unavailable())
+    Ok(trace.slot_to_coefficient_output)
 }
 
 /// Execute one full BFV bootstrap over the registered exact RNS profile.
 ///
-/// The executable evaluator is still unavailable, but this entry point now
-/// performs the same public preflight the evaluator will require instead of
-/// falling through the encrypted-zero refresh bridge.
+/// Direct registered execution cannot reconstruct governed circuit artifacts
+/// from material digests alone, so this entry point validates public preflight
+/// and then requires callers to use the artifact-aware full-bootstrap API.
 ///
 /// # Errors
-/// Returns [`BfvError`] when full-bootstrap preflight fails, or until the
-/// executable evaluator is implemented.
+/// Returns [`BfvError`] when full-bootstrap preflight fails or when concrete
+/// governed artifacts were not supplied.
 pub fn full_bootstrap_ciphertext_registered_rns_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
     validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
-    Err(BfvError::InvalidParameters(
-        "full BFV bootstrap execution is not implemented".to_owned(),
-    ))
+    Err(full_bootstrap_artifacts_required_error())
 }
 
 /// Return the exact residual-multiple bound for artifact-aware full bootstrap.
 ///
-/// The known executable prefix bound is propagated through the governed
-/// coefficient-to-slot, blind-rotation, and raw sample-extraction stages before
-/// the helper stops at the missing final sample key-switch/repacking bound.
+/// The executable bound is propagated through the governed coefficient-to-slot,
+/// blind-rotation, raw sample-extraction, sample switch, and
+/// slot-to-coefficient stages.
 ///
 /// # Errors
 /// Returns [`BfvError`] when full-bootstrap key/material/artifact preflight or
 /// input residual metadata fails, required Galois keys are missing or malformed,
-/// any executable prefix bound fails, or until the final full-bootstrap bound
-/// model is implemented.
+/// or any executable bound stage fails.
 pub fn bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -7492,28 +8109,25 @@ pub fn bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
     galois_keys: &[BfvGaloisKey],
     input_bound: u128,
 ) -> Result<u128, BfvError> {
-    bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+    let bounds = bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
         params,
         bootstrap_key,
         artifacts,
         galois_keys,
         input_bound,
     )?;
-    // TODO: Add final sample key-switch/repacking and slot-to-coefficient bound
-    // propagation once the final output stage is implemented.
-    Err(full_bootstrap_final_stage_unavailable())
+    Ok(bounds.slot_to_coefficient)
 }
 
 /// Return the exact residual-multiple bound for one full BFV bootstrap.
 ///
-/// The bound analysis for executable full bootstrapping is still unavailable,
-/// but this helper validates the governed full-bootstrap key material and input
-/// residual metadata before returning the current unavailable-evaluator error.
+/// Direct registered bound analysis cannot reconstruct governed circuit
+/// artifacts from material digests alone, so this helper validates the public
+/// metadata and then requires callers to use the artifact-aware bound API.
 ///
 /// # Errors
-/// Returns [`BfvError`] when full-bootstrap key/material preflight or input
-/// residual metadata fails, or until the full-bootstrap evaluator and bound
-/// model are implemented.
+/// Returns [`BfvError`] when full-bootstrap key/material preflight, input
+/// residual metadata, or artifact availability fails.
 pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -7525,9 +8139,7 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
         input_bound,
         "BFV full-bootstrap input residual bound",
     )?;
-    Err(BfvError::InvalidParameters(
-        "full BFV bootstrap execution is not implemented".to_owned(),
-    ))
+    Err(full_bootstrap_artifacts_required_error())
 }
 
 /// Execute one bounded-noise full BFV bootstrap with concrete governed artifacts.
@@ -7535,14 +8147,13 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
 /// This is the rounded BFV counterpart to
 /// [`full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1`]. It
 /// executes the deterministic bounded-noise prefix through registered target
-/// RNS basis extension, then stops at the missing final sample
-/// key-switch/repacking stage.
+/// RNS basis extension, then executes the governed sample switch and
+/// slot-to-coefficient stages.
 ///
 /// # Errors
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow,
 /// full-bootstrap key/material/artifact preflight fails, required Galois keys
-/// are missing or malformed, any executable prefix stage fails, or until the
-/// final sample key-switch/repacking stage is implemented.
+/// are missing or malformed, or any executable stage fails.
 pub fn full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -7550,27 +8161,27 @@ pub fn full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_bas
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
-    apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+    let trace =
+        apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
         params,
         bootstrap_key,
         artifacts,
         galois_keys,
         ciphertext,
     )?;
-    // TODO: Finish the governed bounded-noise sample key-switch/repacking stage
-    // and feed its output through the slot-to-coefficient transform.
-    Err(full_bootstrap_final_stage_unavailable())
+    Ok(trace.slot_to_coefficient_output)
 }
 
 /// Execute one bounded-noise full BFV bootstrap over the registered RNS profile.
 ///
-/// The bounded-noise full evaluator is still unavailable, but this entry point
-/// validates bounded-noise capacity plus the full-bootstrap public material
-/// boundary before returning the current unavailable-evaluator error.
+/// Direct registered execution cannot reconstruct governed circuit artifacts
+/// from material digests alone, so this entry point validates bounded-noise
+/// capacity and public full-bootstrap metadata before requiring callers to use
+/// the artifact-aware full-bootstrap API.
 ///
 /// # Errors
-/// Returns [`BfvError`] when bounded-noise/full-bootstrap preflight fails, or
-/// until the executable evaluator is implemented.
+/// Returns [`BfvError`] when bounded-noise/full-bootstrap preflight fails or
+/// when concrete governed artifacts were not supplied.
 pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -7578,22 +8189,20 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
 ) -> Result<BfvCiphertext, BfvError> {
     validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
-    Err(BfvError::InvalidParameters(
-        "full BFV bootstrap execution is not implemented".to_owned(),
-    ))
+    Err(full_bootstrap_artifacts_required_error())
 }
 
 /// Return the bounded-noise bound for artifact-aware full bootstrap.
 ///
-/// The known executable prefix bound is propagated through the governed
-/// coefficient-to-slot, blind-rotation, and raw sample-extraction stages before
-/// the helper stops at the missing final sample key-switch/repacking bound.
+/// The executable bound is propagated through the governed coefficient-to-slot,
+/// blind-rotation, raw sample-extraction, sample switch, and
+/// slot-to-coefficient stages.
 ///
 /// # Errors
 /// Returns [`BfvError`] when rounded BFV capacity is too narrow,
 /// full-bootstrap key/material/artifact preflight or input noise metadata fails,
 /// required Galois keys are missing or malformed, any executable prefix bound
-/// fails, or until the final full-bootstrap bound model is implemented.
+/// fails, or any final output bound exceeds rounded decoding capacity.
 pub fn bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -7601,29 +8210,26 @@ pub fn bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
     galois_keys: &[BfvGaloisKey],
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
-    bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+    let bounds = bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
         params,
         bootstrap_key,
         artifacts,
         galois_keys,
         input_noise_bound,
     )?;
-    // TODO: Add final bounded-noise sample key-switch/repacking and
-    // slot-to-coefficient bound propagation once the output stage is implemented.
-    Err(full_bootstrap_final_stage_unavailable())
+    Ok(bounds.slot_to_coefficient)
 }
 
 /// Return the bounded-noise output bound for one full BFV bootstrap.
 ///
-/// The bounded-noise bound model for executable full bootstrapping is still
-/// unavailable, but this helper validates bounded-noise capacity, governed
-/// full-bootstrap key material, and input noise metadata before returning the
-/// current unavailable-evaluator error.
+/// Direct registered bound analysis cannot reconstruct governed circuit
+/// artifacts from material digests alone, so this helper validates
+/// bounded-noise capacity, governed full-bootstrap key material, and input
+/// noise metadata before requiring callers to use the artifact-aware bound API.
 ///
 /// # Errors
-/// Returns [`BfvError`] when bounded-noise/full-bootstrap preflight or input
-/// noise metadata fails, or until the full-bootstrap evaluator and bound model
-/// are implemented.
+/// Returns [`BfvError`] when bounded-noise/full-bootstrap preflight, input
+/// noise metadata, or artifact availability fails.
 pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -7636,9 +8242,7 @@ pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
         input_noise_bound,
         "BFV full-bootstrap input bounded-noise bound",
     )?;
-    Err(BfvError::InvalidParameters(
-        "full BFV bootstrap execution is not implemented".to_owned(),
-    ))
+    Err(full_bootstrap_artifacts_required_error())
 }
 
 /// Derive a deterministic public slot-rotation key from a BFV public key.
@@ -11392,9 +11996,7 @@ fn validate_bootstrap_key_refresh_mode(bootstrap_key: &BfvBootstrapKey) -> Resul
                         .to_owned(),
                 ));
             }
-            Err(BfvError::InvalidParameters(
-                "full BFV bootstrap execution is not implemented".to_owned(),
-            ))
+            Err(full_bootstrap_artifacts_required_error())
         }
     }
 }
@@ -13936,6 +14538,13 @@ mod tests {
         params: &BfvParameters,
     ) -> BfvFullBootstrapCircuitMaterialV1 {
         let artifacts = sample_full_bootstrap_circuit_artifacts(params);
+        sample_full_bootstrap_circuit_material_for_artifacts(params, &artifacts)
+    }
+
+    fn sample_full_bootstrap_circuit_material_for_artifacts(
+        params: &BfvParameters,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    ) -> BfvFullBootstrapCircuitMaterialV1 {
         BfvFullBootstrapCircuitMaterialV1 {
             circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
             parameter_digest: registered_bfv_parameter_digest(params)
@@ -14028,10 +14637,37 @@ mod tests {
         }
     }
 
-    fn sample_full_bootstrap_sample_extraction_artifact_payload(params: &BfvParameters) -> Vec<u8> {
+    fn sample_full_bootstrap_sample_extraction_switch_key_artifact_payload(
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> Vec<u8> {
         let sample_extraction = sample_full_bootstrap_sample_extraction(params);
-        encode_bfv_full_bootstrap_sample_extraction_artifact_v1(params, 1, sample_extraction)
-            .expect("encode sample full-bootstrap sample-extraction artifact")
+        let switch_key = bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+            params,
+            secret_key,
+            sample_extraction,
+            b"bfv-full-bootstrap-sample-switch-artifact",
+        )
+        .expect("build sample full-bootstrap sample-extraction switch key");
+        encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(params, 1, &switch_key)
+            .expect("encode sample full-bootstrap sample-extraction switch key artifact")
+    }
+
+    fn sample_full_bootstrap_bounded_noise_sample_extraction_switch_key_artifact_payload(
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> Vec<u8> {
+        let sample_extraction = sample_full_bootstrap_sample_extraction(params);
+        let switch_key =
+            bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v1(
+                params,
+                secret_key,
+                sample_extraction,
+                b"bfv-full-bootstrap-bounded-sample-switch-artifact",
+            )
+            .expect("build sample bounded full-bootstrap sample-extraction switch key");
+        encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(params, 1, &switch_key)
+            .expect("encode sample bounded full-bootstrap sample-extraction switch key artifact")
     }
 
     fn sample_full_bootstrap_blind_rotation_artifact_payload(
@@ -14065,6 +14701,16 @@ mod tests {
     fn sample_full_bootstrap_circuit_artifacts(
         params: &BfvParameters,
     ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+        let (secret_key, _public_key, _relinearization_key) =
+            keygen_from_seed(params, b"bfv-full-bootstrap-sample-artifact-keygen")
+                .expect("sample full-bootstrap artifact keygen");
+        sample_full_bootstrap_circuit_artifacts_for_secret(params, &secret_key)
+    }
+
+    fn sample_full_bootstrap_circuit_artifacts_for_secret(
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
         let accumulator = sample_full_bootstrap_accumulator_artifact_payload(params);
         let accumulator_digest = Hash::new(&accumulator);
         let proof_public_input_schema =
@@ -14083,7 +14729,10 @@ mod tests {
                 params,
                 accumulator_digest,
             ),
-            sample_extraction_key: sample_full_bootstrap_sample_extraction_artifact_payload(params),
+            sample_extraction_key:
+                sample_full_bootstrap_sample_extraction_switch_key_artifact_payload(
+                    params, secret_key,
+                ),
             accumulator,
             proof_public_input_schema,
             prover_key: sample_full_bootstrap_proof_key_artifact_payload(
@@ -14099,6 +14748,18 @@ mod tests {
                 b"bfv-full-bootstrap-verifier-key",
             ),
         }
+    }
+
+    fn sample_full_bootstrap_bounded_noise_circuit_artifacts_for_secret(
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+    ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+        let mut artifacts = sample_full_bootstrap_circuit_artifacts_for_secret(params, secret_key);
+        artifacts.sample_extraction_key =
+            sample_full_bootstrap_bounded_noise_sample_extraction_switch_key_artifact_payload(
+                params, secret_key,
+            );
+        artifacts
     }
 
     #[test]
@@ -18705,6 +19366,40 @@ mod tests {
             decode_bfv_full_bootstrap_sample_extraction_artifact_v1(&params, &material, &artifact)
                 .expect("decode governed sample-extraction artifact");
         assert_eq!(decoded, sample_extraction);
+        let (secret_key, _public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-sample-switch-artifact-keygen")
+                .expect("sample switch artifact keygen");
+        let switch_key = bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+            &params,
+            &secret_key,
+            sample_extraction,
+            b"bfv-full-bootstrap-sample-switch-artifact-roundtrip",
+        )
+        .expect("sample switch key artifact material");
+        let switch_artifact = encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+            &params,
+            1,
+            &switch_key,
+        )
+        .expect("encode governed sample-extraction switch-key artifact");
+        let switch_material = BfvFullBootstrapCircuitMaterialV1 {
+            sample_extraction_key_digest: Hash::new(&switch_artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        let decoded_switch = decode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(
+            &params,
+            &switch_material,
+            &switch_artifact,
+        )
+        .expect("decode governed sample-extraction switch-key artifact");
+        assert_eq!(decoded_switch, switch_key);
+        let decoded_switch_metadata = decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+            &params,
+            &switch_material,
+            &switch_artifact,
+        )
+        .expect("decode switch-key artifact through sample-extraction metadata view");
+        assert_eq!(decoded_switch_metadata, sample_extraction);
 
         let opaque_payload = sample_full_bootstrap_artifact_payload(
             &params,
@@ -18887,6 +19582,48 @@ mod tests {
             "coefficient-zero repack residual {} must fit propagated bound {repacked_bound}",
             sample_profile.max_abs_residual_multiple,
         );
+        let switch_key = bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+            &params,
+            &secret_key,
+            sample_extraction,
+            b"bfv-full-bootstrap-sample-switch-key",
+        )
+        .expect("sample-extraction switch key");
+        validate_bfv_full_bootstrap_sample_extraction_switch_key_secret_consistency_v1(
+            &params,
+            &secret_key,
+            &switch_key,
+        )
+        .expect("sample switch key matches secret");
+        let switched =
+            apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
+                &params,
+                &switch_key,
+                &sample,
+            )
+            .expect("switch raw sample into RLWE ciphertext");
+        let switched_bound =
+            bfv_full_bootstrap_sample_extraction_switch_key_output_residual_multiple_bound_v1(
+                &params,
+                &switch_key,
+                sample_bound,
+            )
+            .expect("sample switch residual bound");
+        let switched_profile = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &switched,
+            switched_bound,
+            "full-bootstrap sample-extraction switch output",
+        )
+        .expect("sample switch output fits propagated residual bound");
+        assert_eq!(switched_profile.plaintext[0], sample_profile.plaintext[0]);
+        assert!(
+            switched_profile.plaintext[1..]
+                .iter()
+                .all(|&coefficient| coefficient == 0),
+            "sample switch should only carry plaintext at coefficient zero"
+        );
 
         let (bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(
             &params,
@@ -18969,6 +19706,52 @@ mod tests {
             "bounded coefficient-zero repack noise {} must fit propagated bound {bounded_repacked_bound}",
             bounded_sample_profile.max_abs_noise,
         );
+        let bounded_switch_key =
+            bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v1(
+                &params,
+                &bounded_secret_key,
+                sample_extraction,
+                b"bfv-full-bootstrap-bounded-sample-switch-key",
+            )
+            .expect("bounded sample-extraction switch key");
+        validate_bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_secret_consistency_v1(
+            &params,
+            &bounded_secret_key,
+            &bounded_switch_key,
+        )
+        .expect("bounded sample switch key matches secret");
+        let bounded_switched =
+            apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_switch_key,
+                &bounded_sample,
+            )
+            .expect("switch bounded raw sample into RLWE ciphertext");
+        let bounded_switched_bound =
+            bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_switch_key,
+                sample_noise_bound,
+            )
+            .expect("bounded sample switch noise bound");
+        let bounded_switched_profile = validate_ciphertext_bounded_noise(
+            &params,
+            &bounded_secret_key,
+            &bounded_switched,
+            bounded_switched_bound,
+            "bounded full-bootstrap sample-extraction switch output",
+        )
+        .expect("bounded sample switch output fits propagated noise bound");
+        assert_eq!(
+            bounded_switched_profile.plaintext[0],
+            bounded_sample_profile.plaintext[0]
+        );
+        assert!(
+            bounded_switched_profile.plaintext[1..]
+                .iter()
+                .all(|&coefficient| coefficient == 0),
+            "bounded sample switch should only carry plaintext at coefficient zero"
+        );
 
         let wrong_index = BfvFullBootstrapRawExtractedSampleV1 {
             source_coefficient_index: params.polynomial_degree,
@@ -18981,7 +19764,7 @@ mod tests {
         );
         let wrong_coefficients = BfvFullBootstrapRawExtractedSampleV1 {
             secret_coefficients: Vec::new(),
-            ..sample
+            ..sample.clone()
         };
         assert_error_contains(
             validate_bfv_full_bootstrap_raw_extracted_sample_v1(&params, &wrong_coefficients),
@@ -18996,22 +19779,45 @@ mod tests {
             "secret_coefficients",
             "coefficient-zero repack must reject malformed raw samples",
         );
+        let mismatched_sample = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: coefficient_index.saturating_sub(1),
+            secret_coefficients: vec![0; params.degree()],
+            ..sample.clone()
+        };
+        assert_error_contains(
+            apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_rns_exact_v1(
+                &params,
+                &switch_key,
+                &mismatched_sample,
+            ),
+            "does not match raw sample",
+            "sample switch key must reject raw samples from a different extraction coefficient",
+        );
+        let mut wrong_entry_index = switch_key;
+        wrong_entry_index.coefficient_entries[0].secret_coefficient_index = 1;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(
+                &params,
+                &wrong_entry_index,
+            ),
+            "secret_coefficient_index",
+            "sample switch key entries must be ordered by secret coefficient",
+        );
     }
 
     #[test]
     fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
         let params = ram_lfe_bfv_parameters_v1();
-        let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
-        let material = sample_full_bootstrap_circuit_material(&params);
+        let (secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-prefix-keygen").expect("keygen");
+        let artifacts = sample_full_bootstrap_circuit_artifacts_for_secret(&params, &secret_key);
+        let material = sample_full_bootstrap_circuit_material_for_artifacts(&params, &artifacts);
         let blind_rotation = decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
             &params,
             &material,
             &artifacts.blind_rotation_key,
         )
         .expect("decode blind-rotation artifact");
-
-        let (secret_key, public_key, _relinearization_key) =
-            keygen_from_seed(&params, b"bfv-full-bootstrap-prefix-keygen").expect("keygen");
         let mut bootstrap_key = bootstrap_key_from_seed(
             &params,
             &public_key,
@@ -19153,28 +19959,58 @@ mod tests {
             sample_profile.max_abs_residual_multiple,
             prefix_bounds.coefficient_zero_repack,
         );
-        assert_error_contains(
-            full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
-                &params,
-                &bootstrap_key,
-                &artifacts,
-                &galois_keys,
-                &ciphertext,
-            ),
-            "final sample key-switch/repacking is not implemented",
-            "artifact-aware exact full bootstrap must reach the final unavailable stage after prefix execution",
+        assert_eq!(
+            trace.diagnostic_slot_to_coefficient_output, trace.coefficient_zero_repack_output,
+            "identity slot-to-coefficient artifact must preserve the diagnostic repack output",
         );
-        assert_error_contains(
-            bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
-                &params,
-                &bootstrap_key,
-                &artifacts,
-                &galois_keys,
-                input_bound,
-            ),
-            "final sample key-switch/repacking is not implemented",
-            "artifact-aware exact full-bootstrap bounds must reach the final unavailable stage after prefix bounds",
+        let sample_switch_profile = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &trace.sample_switch_output,
+            prefix_bounds.sample_switch,
+            "full-bootstrap prefix sample switch output",
+        )
+        .expect("prefix sample switch output fits propagated bound");
+        assert_eq!(
+            sample_switch_profile.plaintext[0],
+            sample_profile.plaintext[0]
         );
+        assert!(
+            sample_switch_profile.plaintext[1..]
+                .iter()
+                .all(|&coefficient| coefficient == 0),
+            "prefix sample switch should only carry plaintext at coefficient zero"
+        );
+        assert_eq!(
+            trace.slot_to_coefficient_output, trace.sample_switch_output,
+            "identity slot-to-coefficient artifact must preserve the governed sample switch output",
+        );
+        validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &trace.slot_to_coefficient_output,
+            prefix_bounds.slot_to_coefficient,
+            "full-bootstrap slot-to-coefficient output",
+        )
+        .expect("final slot-to-coefficient output fits propagated bound");
+        let final_output = full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+            &params,
+            &bootstrap_key,
+            &artifacts,
+            &galois_keys,
+            &ciphertext,
+        )
+        .expect("artifact-aware exact full bootstrap output");
+        assert_eq!(final_output, trace.slot_to_coefficient_output);
+        let final_bound = bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+            &params,
+            &bootstrap_key,
+            &artifacts,
+            &galois_keys,
+            input_bound,
+        )
+        .expect("artifact-aware exact full-bootstrap bound");
+        assert_eq!(final_bound, prefix_bounds.slot_to_coefficient);
         let missing_power = blind_rotation.steps[0].automorphism_power;
         assert_error_contains(
             apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
@@ -19207,12 +20043,18 @@ mod tests {
                 &ciphertext,
             ),
             &format!("automorphism power {missing_power}"),
-            "artifact-aware exact full bootstrap must reject missing Galois keys before the final unavailable stage",
+            "artifact-aware exact full bootstrap must reject missing Galois keys before final output",
         );
 
         let (bounded_secret_key, bounded_public_key) =
             keygen_bounded_noise_from_seed(&params, b"bfv-full-bootstrap-bounded-prefix-keygen")
                 .expect("bounded keygen");
+        let bounded_artifacts = sample_full_bootstrap_bounded_noise_circuit_artifacts_for_secret(
+            &params,
+            &bounded_secret_key,
+        );
+        let bounded_material =
+            sample_full_bootstrap_circuit_material_for_artifacts(&params, &bounded_artifacts);
         let mut bounded_bootstrap_key =
             bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
                 &params,
@@ -19223,7 +20065,7 @@ mod tests {
             )
             .expect("bounded bootstrap refresh key");
         bounded_bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
-        bounded_bootstrap_key.full_bootstrap_material = Some(material);
+        bounded_bootstrap_key.full_bootstrap_material = Some(bounded_material);
         let bounded_ciphertext = encrypt_bounded_noise_from_seed(
             &params,
             &bounded_public_key,
@@ -19248,7 +20090,7 @@ mod tests {
             apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
                 &params,
                 &bounded_bootstrap_key,
-                &artifacts,
+                &bounded_artifacts,
                 &bounded_galois_keys,
                 &bounded_ciphertext,
             )
@@ -19260,7 +20102,7 @@ mod tests {
             bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
                 &params,
                 &bounded_bootstrap_key,
-                &artifacts,
+                &bounded_artifacts,
                 &bounded_galois_keys,
                 input_noise_bound,
             )
@@ -19336,33 +20178,71 @@ mod tests {
             bounded_sample_profile.max_abs_noise,
             bounded_prefix_bounds.coefficient_zero_repack,
         );
-        assert_error_contains(
+        assert_eq!(
+            bounded_trace.diagnostic_slot_to_coefficient_output,
+            bounded_trace.coefficient_zero_repack_output,
+            "bounded identity slot-to-coefficient artifact must preserve the diagnostic repack output",
+        );
+        let bounded_sample_switch_profile = validate_ciphertext_bounded_noise(
+            &params,
+            &bounded_secret_key,
+            &bounded_trace.sample_switch_output,
+            bounded_prefix_bounds.sample_switch,
+            "bounded full-bootstrap prefix sample switch output",
+        )
+        .expect("bounded prefix sample switch output fits propagated bound");
+        assert_eq!(
+            bounded_sample_switch_profile.plaintext[0],
+            bounded_sample_profile.plaintext[0]
+        );
+        assert!(
+            bounded_sample_switch_profile.plaintext[1..]
+                .iter()
+                .all(|&coefficient| coefficient == 0),
+            "bounded prefix sample switch should only carry plaintext at coefficient zero"
+        );
+        assert_eq!(
+            bounded_trace.slot_to_coefficient_output, bounded_trace.sample_switch_output,
+            "bounded identity slot-to-coefficient artifact must preserve the governed sample switch output",
+        );
+        validate_ciphertext_bounded_noise(
+            &params,
+            &bounded_secret_key,
+            &bounded_trace.slot_to_coefficient_output,
+            bounded_prefix_bounds.slot_to_coefficient,
+            "bounded full-bootstrap slot-to-coefficient output",
+        )
+        .expect("bounded final slot-to-coefficient output fits propagated bound");
+        let bounded_final_output =
             full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
                 &params,
                 &bounded_bootstrap_key,
-                &artifacts,
+                &bounded_artifacts,
                 &bounded_galois_keys,
                 &bounded_ciphertext,
-            ),
-            "final sample key-switch/repacking is not implemented",
-            "artifact-aware bounded full bootstrap must reach the final unavailable stage after prefix execution",
+            )
+            .expect("artifact-aware bounded full bootstrap output");
+        assert_eq!(
+            bounded_final_output,
+            bounded_trace.slot_to_coefficient_output
         );
-        assert_error_contains(
-            bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
-                &params,
-                &bounded_bootstrap_key,
-                &artifacts,
-                &bounded_galois_keys,
-                input_noise_bound,
-            ),
-            "final sample key-switch/repacking is not implemented",
-            "artifact-aware bounded full-bootstrap bounds must reach the final unavailable stage after prefix bounds",
+        let bounded_final_bound = bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
+            &params,
+            &bounded_bootstrap_key,
+            &bounded_artifacts,
+            &bounded_galois_keys,
+            input_noise_bound,
+        )
+        .expect("artifact-aware bounded full-bootstrap bound");
+        assert_eq!(
+            bounded_final_bound,
+            bounded_prefix_bounds.slot_to_coefficient
         );
         assert_error_contains(
             apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
                 &params,
                 &bounded_bootstrap_key,
-                &artifacts,
+                &bounded_artifacts,
                 &bounded_galois_keys[1..],
                 &bounded_ciphertext,
             ),
@@ -19373,7 +20253,7 @@ mod tests {
             bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
                 &params,
                 &bounded_bootstrap_key,
-                &artifacts,
+                &bounded_artifacts,
                 &bounded_galois_keys[1..],
                 input_noise_bound,
             ),
@@ -19384,12 +20264,12 @@ mod tests {
             full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
                 &params,
                 &bounded_bootstrap_key,
-                &artifacts,
+                &bounded_artifacts,
                 &bounded_galois_keys[1..],
                 &bounded_ciphertext,
             ),
             &format!("automorphism power {missing_power}"),
-            "artifact-aware bounded full bootstrap must reject missing Galois keys before the final unavailable stage",
+            "artifact-aware bounded full bootstrap must reject missing Galois keys before final output",
         );
     }
 
@@ -22120,18 +23000,18 @@ mod tests {
             .expect("valid full-bootstrap material must pass execution preflight");
         assert_error_contains(
             full_bootstrap_ciphertext_registered_rns_exact_v1(&params, &bootstrap_key, &ciphertext),
-            "full BFV bootstrap execution is not implemented",
-            "full-bootstrap execution entry point must remain unavailable after preflight",
+            "requires governed full-bootstrap circuit artifacts",
+            "direct full-bootstrap execution entry point must require artifacts after preflight",
         );
         assert_error_contains(
             bfv_full_bootstrap_output_residual_multiple_bound_v1(&params, &bootstrap_key, 1),
-            "full BFV bootstrap execution is not implemented",
-            "full-bootstrap residual-bound entry point must remain unavailable after preflight",
+            "requires governed full-bootstrap circuit artifacts",
+            "direct full-bootstrap residual-bound entry point must require artifacts after preflight",
         );
         assert_error_contains(
             bfv_full_bootstrap_bounded_noise_output_bound_v1(&params, &bootstrap_key, 1),
-            "full BFV bootstrap execution is not implemented",
-            "full-bootstrap bounded-noise bound entry point must remain unavailable after preflight",
+            "requires governed full-bootstrap circuit artifacts",
+            "direct full-bootstrap bounded-noise bound entry point must require artifacts after preflight",
         );
         let refresh_only_key = BfvBootstrapKey {
             mode: BfvBootstrapKeyMode::RefreshOnlyV1,
@@ -22169,12 +23049,12 @@ mod tests {
                 &ciphertext,
             ),
             "parameter digest",
-            "full-bootstrap execution entry must reject drifted material before unavailable evaluator",
+            "full-bootstrap execution entry must reject drifted material before requiring artifacts",
         );
         assert_error_contains(
             bfv_full_bootstrap_output_residual_multiple_bound_v1(&params, &drifted_material_key, 1),
             "parameter digest",
-            "full-bootstrap residual-bound entry must reject drifted material before unavailable evaluator",
+            "full-bootstrap residual-bound entry must reject drifted material before requiring artifacts",
         );
         let malformed_ciphertext = BfvCiphertext {
             c0: Vec::new(),
@@ -22209,12 +23089,12 @@ mod tests {
         );
         assert_error_contains(
             bootstrap_ciphertext_rounds(&params, &bootstrap_key, &ciphertext, 1),
-            "full BFV bootstrap execution is not implemented",
+            "requires governed full-bootstrap circuit artifacts",
             "full-bootstrap material must not route through the refresh bridge",
         );
         assert_error_contains(
             bootstrap_key_zero_refresh_proof_statement_digest(&params, &public_key, &bootstrap_key),
-            "full BFV bootstrap execution is not implemented",
+            "requires governed full-bootstrap circuit artifacts",
             "full-bootstrap keys must not use the zero-refresh proof statement",
         );
     }
@@ -22257,7 +23137,7 @@ mod tests {
             .expect("full-bootstrap material validates for bundle admission");
         assert_error_contains(
             validate_bootstrap_key_shape_metadata(&decoded_full),
-            "full BFV bootstrap execution is not implemented",
+            "requires governed full-bootstrap circuit artifacts",
             "full-bootstrap refresh execution must remain fail-closed",
         );
 

@@ -196,6 +196,41 @@ ReacquireSafety ==
   /\ ReacquireRejectsSidecarSameHash
   /\ ReacquireRejectsAuthoritativePayload
 
+SidecarRetargetRejectsNonExactInputs ==
+  /\ GenericReasonRejected
+  /\ GateRejectsQuarantined
+  /\ GateRejectsStallWithoutOverride
+  /\ GateRejectsNoProgressChange
+  /\ UnconfirmedSidecarRejected
+  /\ TrackedNonFrontierRejected
+  /\ TrackedUnconfirmedRejected
+  /\ TrackedNoGateRejected
+  /\ UntrackedNonFrontierRejected
+  /\ UntrackedUnconfirmedRejected
+  /\ UntrackedNoGateRejected
+  /\ ReacquireRejectsLocalEvidenceWithoutCommitQc
+  /\ ReacquireRejectsMissingExpectedHash
+  /\ ReacquireRejectsSidecarSameHash
+  /\ ReacquireRejectsAuthoritativePayload
+
+SidecarRetargetHasExactPositiveEvidence ==
+  /\ OverrideVoteRosterAccepted
+  /\ OverrideDeferredVoteRosterAccepted
+  /\ OverrideIdleReacquireAccepted
+  /\ OverrideCommitPipelineAccepted
+  /\ GateAllowsCertifiedSidecar
+  /\ GateAllowsProgressChanged
+  /\ ConfirmLocalPayloadAccepted
+  /\ ConfirmCommitQcAccepted
+  /\ ConfirmOverrideAccepted
+  /\ TrackedConfirmedRetargetAccepted
+  /\ UntrackedConfirmedSeedAccepted
+  /\ ReacquireCommitCertifiedWithLocalEvidenceAccepted
+
+FrontierSidecarRetargetExactness ==
+  /\ SidecarRetargetRejectsNonExactInputs
+  /\ SidecarRetargetHasExactPositiveEvidence
+
 SafetyFast ==
   /\ OverrideReasonSafety
   /\ RetargetGateSafety
@@ -203,6 +238,7 @@ SafetyFast ==
   /\ TrackedRetargetSafety
   /\ UntrackedSeedSafety
   /\ ReacquireSafety
+  /\ FrontierSidecarRetargetExactness
 
 OverrideReasonAnchors ==
   /\ OverrideReasonSafety

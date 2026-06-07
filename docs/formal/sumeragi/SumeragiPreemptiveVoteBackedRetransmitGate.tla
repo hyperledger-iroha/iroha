@@ -74,6 +74,57 @@ Cases == {
   AtQuorumOutput
 }
 
+CandidateRejectCases == {
+  NoWindow,
+  MissingVotes,
+  HasQc,
+  ValidationInflight,
+  MissingLocalData,
+  RecoveryBlocked,
+  ProgressBeforeWindow,
+  ProgressAtTimeout,
+  NotDue
+}
+
+CandidateAcceptCases == {
+  NoPending,
+  NoTargets,
+  VoteRosterVotes,
+  CommitFallbackBlockSync,
+  NoOutput,
+  VotesOnly,
+  BlockSyncOnly,
+  BlockOnly,
+  MultiOutput,
+  AtQuorumOutput
+}
+
+TargetSelectionCases == {
+  VoteRosterVotes,
+  CommitFallbackBlockSync,
+  NoTargets
+}
+
+ActionOutputCases == {
+  NoOutput,
+  VotesOnly,
+  BlockSyncOnly,
+  BlockOnly,
+  MultiOutput,
+  AtQuorumOutput
+}
+
+PendingRetentionCases == {
+  NoPending,
+  NoTargets,
+  MultiOutput
+}
+
+NearFlagCases == {
+  VoteRosterVotes,
+  AtQuorumOutput
+}
+
 Bugs == {
   "none",
   "no_window_allows",
@@ -233,6 +284,57 @@ PendingStable ==
 NearFlagStable ==
   \A c \in Cases: ActualNearFlagOk(c) = SpecNearFlagOk(c)
 
+PreemptiveCandidateRejectExact ==
+  \A c \in CandidateRejectCases:
+    /\ ~SpecCandidate(c)
+    /\ ActualCandidate(c) = FALSE
+    /\ ActualSelectedSource(c) = NoSource
+    /\ ActualRebroadcast(c) = FALSE
+    /\ ActualAction(c) = FALSE
+    /\ ActualPendingAfter(c) = SpecPendingAfter(c)
+
+PreemptiveCandidateAcceptExact ==
+  \A c \in CandidateAcceptCases:
+    /\ SpecCandidate(c)
+    /\ ActualCandidate(c) = TRUE
+    /\ ActualSelectedSource(c) = SpecSelectedSource(c)
+    /\ ActualRebroadcast(c) = SpecRebroadcast(c)
+
+PreemptiveMissingPendingExact ==
+  /\ SpecCandidate(NoPending)
+  /\ ~PendingBefore(NoPending)
+  /\ ActualSelectedSource(NoPending) = NoSource
+  /\ ActualRebroadcast(NoPending) = FALSE
+  /\ ActualAction(NoPending) = FALSE
+  /\ ActualPendingAfter(NoPending) = FALSE
+
+PreemptiveTargetSelectionExact ==
+  /\ \A c \in TargetSelectionCases:
+       /\ ActualSelectedSource(c) = SpecSelectedSource(c)
+       /\ ActualRebroadcast(c) = SpecRebroadcast(c)
+       /\ ActualAction(c) = SpecAction(c)
+  /\ ActualSelectedSource(VoteRosterVotes) = VoteRoster
+  /\ ActualSelectedSource(CommitFallbackBlockSync) = CommitTopology
+  /\ ActualSelectedSource(NoTargets) = NoSource
+
+PreemptiveActionOutputExact ==
+  \A c \in ActionOutputCases:
+    /\ ActualAnyDownstreamOutput(c) = AnyDownstreamOutput(c)
+    /\ ActualAction(c) = SpecAction(c)
+    /\ ActualPendingAfter(c) = SpecPendingAfter(c)
+
+PreemptivePendingRetentionExact ==
+  \A c \in PendingRetentionCases:
+    /\ ActualPendingAfter(c) = SpecPendingAfter(c)
+    /\ (ActualAction(c) => ActualPendingAfter(c))
+
+PreemptiveNearQuorumFlagExact ==
+  /\ \A c \in NearFlagCases:
+       /\ ActualRebroadcast(c)
+       /\ ActualNearFlagOk(c) = SpecNearFlagOk(c)
+  /\ NearQuorumFlag(VoteRosterVotes) = TRUE
+  /\ NearQuorumFlag(AtQuorumOutput) = FALSE
+
 SafetyFast ==
   /\ CandidateStable
   /\ SelectionStable
@@ -240,5 +342,15 @@ SafetyFast ==
   /\ ActionStable
   /\ PendingStable
   /\ NearFlagStable
+
+PreemptiveVoteBackedRetransmitExactness ==
+  /\ SafetyFast
+  /\ PreemptiveCandidateRejectExact
+  /\ PreemptiveCandidateAcceptExact
+  /\ PreemptiveMissingPendingExact
+  /\ PreemptiveTargetSelectionExact
+  /\ PreemptiveActionOutputExact
+  /\ PreemptivePendingRetentionExact
+  /\ PreemptiveNearQuorumFlagExact
 
 ====

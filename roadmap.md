@@ -22,9 +22,9 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.
-  Retired runtime-network families are not supported for now. Reintroducing
-  them requires a new design pass, fresh fixtures, and explicit governance
-  approval rather than reviving diagnostic code paths.
+  Retired runtime-network families outside that launch scope are not supported.
+  Reintroducing any such family requires a new design pass, fresh fixtures, and
+  explicit governance approval rather than reviving diagnostic code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
@@ -2814,15 +2814,39 @@ and completed history lives in [`status.md`](./status.md).
   activity-source exactness,
   frontier reassembly activity semantics, frontier reassembly aggregate
   activity-source exactness,
-  frontier quorum-owner cleanup preservation semantics,
-  contiguous-frontier sidecar retarget semantics,
-  contiguous-frontier sidecar expected-hash semantics,
-  contiguous-frontier payload-hint selection semantics,
-  contiguous-frontier parent-QC hint retarget semantics,
-  vote-verification worker config derivation,
-  QC aggregate-verification worker config derivation,
-  voting-roster support counting, plus collector
-  retry/gossip plans.
+  frontier quorum-owner cleanup preservation semantics, frontier quorum-owner
+  aggregate cleanup exactness,
+  contiguous-frontier sidecar retarget semantics, contiguous-frontier sidecar
+  retarget aggregate exactness,
+  contiguous-frontier sidecar expected-hash semantics, contiguous-frontier
+  sidecar expected-hash aggregate exactness,
+  contiguous-frontier payload-hint selection semantics, contiguous-frontier
+  payload-hint aggregate exactness,
+  contiguous-frontier parent-QC hint retarget semantics, contiguous-frontier
+  parent-QC hint retarget aggregate exactness,
+  vote-verification worker config derivation, vote-verification worker config
+  aggregate exactness,
+  QC aggregate-verification worker config derivation, QC aggregate-verification
+  worker config aggregate exactness,
+  voting-roster support counting, voting-roster support-count aggregate
+  exactness, collector retry/gossip plans, collector retry/gossip plan
+  aggregate exactness, collector fanout/selection semantics, plus collector
+  fanout/selection aggregate exactness,
+  topology ordered-roster mutation semantics, topology ordered-roster aggregate
+  exactness, PRF leader/shuffle topology semantics, PRF leader/shuffle
+  aggregate exactness, topology fanout/redundant-send semantics,
+  topology fanout/redundant-send aggregate exactness, topology role-filter
+  semantics, topology role-filter aggregate exactness, active topology-selection
+  semantics, active topology-selection aggregate exactness, trusted-peer P2P
+  topology semantics, trusted-peer P2P topology aggregate exactness, P2P
+  topology refresh semantics, P2P topology refresh aggregate exactness, quorum
+  retransmit target semantics, quorum retransmit target aggregate exactness,
+  retransmit backpressure aggregate exactness, paced retransmit target
+  aggregate exactness, quorum reschedule backoff aggregate exactness,
+  RBC availability reschedule aggregate exactness, vote-backed reassembly stall
+  aggregate exactness, completed quorum view-advance aggregate exactness,
+  quorum rebroadcast dispatch aggregate exactness, isolated vote-backed handoff
+  aggregate exactness, preemptive vote-backed retransmit aggregate exactness.
 - Sumeragi prepare-quorum phase-gating validation is closed for the current
   formal slice: the dedicated 2026-06-03 Apalache fast run reached `NoError`
   up to computation length `10` with `CommitPhasesNeverBypassPrepareQuorum`
@@ -6404,7 +6428,7 @@ operator-provided rollout bundles.
   evaluated.
   derive `storage_proof_hash` from the source event digest, finalized block
   number, finality set id, authority set hash, events root, source-event leaf
-  index, canonical `frame_system::Events` storage key, and inclusion branch
+  index, canonical runtime events storage key, and inclusion branch
   instead of accepting a placeholder storage proof hash. They also verify an
   embedded finality authority certificate by deriving the ordered Ed25519
   authority-set trust-anchor hash, recomputing the finalized precommit-message
@@ -6535,6 +6559,13 @@ chain rules. Shared source-state proof admission now rejects opaque nonzero
 bytes and requires canonical STARK OpenVerify/FastPQ capsules before lane-local
 verification work, and the Solana/TON source-state transcript hash helpers now
 reuse the same canonical-envelope gate before audit-statement binding.
+Strict SCCP production package builders now require non-SORA source bundles to
+pass the production source-proof gate before destination submissions can be
+constructed, leaving structural source-proof fixtures behind explicit
+diagnostic `allow_unready` paths. Rust EVM/TRON Groth16 proof-request builders
+now reject non-canonical bundle bytes, bundle/public-input mismatches, and
+omitted source-proof witness bytes for non-SORA source bundles before local UI
+proving or wrapped proof-result submission.
 Transparent OpenVerify summary helpers now apply the same production-shaped
 wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
 envelopes cannot be normalized into release/readiness summaries. The
@@ -7774,10 +7805,11 @@ or ABI behavior.
 	  public-input schema/prover-key/verifier-key digests. The material validator
 	  rejects zero commitments, duplicate artifact/proof commitments, and artifact
 	  or proof commitments that reuse registered profile digests, keeping each
-	  governed digest role partitioned at admission. Bundle admission
-	  and digesting bind that material, while refresh/proof/execution paths still
-	  fail closed because the full BFV bootstrap evaluator is not implemented, so
-	  the current refresh bridge cannot be mislabeled as full bootstrapping. Direct
+	  governed digest role partitioned at admission. Bundle admission and
+	  digesting bind that material, while refresh/proof paths and direct
+	  no-artifact registered execution fail closed with an explicit governed
+	  artifact requirement, so the current refresh bridge cannot be mislabeled as
+	  full bootstrapping. Direct
 	  key-authorized refresh execution, bootstrap output-bound helpers, and
 	  Soracloud exact/bounded bootstrap execution now use the same mode-aware
 	  request preflight, so reserved full-bootstrap keys are rejected before
@@ -7825,8 +7857,8 @@ or ABI behavior.
 				  commitments. Each artifact byte field is now a Norito role/profile envelope
 				  that declares the canonical circuit id, registered parameter/RNS/decomposition
 				  digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
-				  and empty-payload artifact attachments fail before the unavailable evaluator
-					  boundary. Coefficient-to-slot and slot-to-coefficient artifacts now carry
+				  and empty-payload artifact attachments fail before artifact-aware output
+					  execution. Coefficient-to-slot and slot-to-coefficient artifacts now carry
 					  typed diagonal packed-slot linear transforms, and crypto exposes exact and
 					  bounded deterministic evaluators for those transforms through the registered
 							  RNS paths. The blind-rotation artifact now carries canonical packed-slot
@@ -7841,15 +7873,21 @@ or ABI behavior.
 							  secret polynomial basis, with exact and bounded raw-sample bound propagation.
 							  Crypto now composes the governed coefficient-to-slot, blind-rotation, and
 							  raw sample-extraction artifacts into an exact/bounded execution-prefix trace
-							  with propagated bounds, coefficient-zero diagnostic repack output, and
-							  missing-key fail-closed checks. Artifact-aware
+							  with propagated bounds, coefficient-zero diagnostic repack output,
+							  slot-to-coefficient diagnostic execution, and missing-key fail-closed checks.
+							  Artifact-aware
 							  exact/bounded final-output entry points now execute that prefix or its bound
-							  propagation before stopping at the final-stage unavailable error, so missing
-							  Galois keys and malformed executable artifacts fail before the unfinished
-							  stage. Crypto also exposes an explicit coefficient-zero raw-sample repack
-							  diagnostic bridge with exact and bounded coefficient-zero bounds; final
-							  governed sample key-switch/repacking into the full BFV output ciphertext
-							  shape remains part of the unfinished full-bootstrap evaluator. The
+							  propagation through governed sample-switch and slot-to-coefficient output,
+							  so missing Galois keys and malformed executable artifacts fail before
+							  output. Crypto also exposes an explicit coefficient-zero raw-sample repack
+							  diagnostic bridge with exact and bounded coefficient-zero bounds, plus
+							  deterministic exact and bounded raw-sample switch-key material,
+							  secret-consistency checks, switch execution, public bound propagation,
+							  governed artifact carriage, and artifact-aware full-bootstrap output/bound
+							  helpers that run through slot-to-coefficient. Direct no-artifact registered
+							  entrypoints now validate preflight, then fail with an explicit
+							  governed-artifact requirement; the real proof verifier/prover backend
+							  remains unfinished. The
 							  accumulator artifact now
 							  carries typed packed-slot test-vector material and rejects opaque,
 							  wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
@@ -7861,15 +7899,17 @@ or ABI behavior.
 							  full-bootstrap execution proof statement
 							  digest that validates and binds the public key, governed bootstrap
 							  key/material, concrete artifact bundle, input/output ciphertexts, exact or
-							  bounded proof mode, and input/output bound metadata for the future verifier.
-							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts,
-							  provenance signs them, and Core routes exact/bounded full-mode jobs through
-							  artifact-aware crypto prefix execution and prefix-bound propagation before
-							  the current final-stage unavailable error.
+							  bounded proof mode, and input/output bound metadata for the verifier.
+							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts plus
+							  an ordered execution-proof vector; provenance signs both, and Core routes
+							  exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
+							  and bound propagation through sample-switch and slot-to-coefficient output
+							  before requiring one governed execution proof per output slot.
+							  The legacy no-artifact Core execution helpers are test-only, so production
+							  full-mode jobs must pass through the governed artifact-aware path.
 						  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-						  Remaining work is the final governed sample key-switch/repacking stage that
-						  turns the executable prefix trace into the full BFV output ciphertext, plus the
-						  real prover/verifier artifacts and implementation.
+						  Remaining work is the real full-bootstrap proof-producing backend and
+						  end-to-end positive proof fixture for the already wired verifier gate.
 	  Soracloud transcript digesting now preflights the advertised BFV public-key
 	  shape before evaluation-key bundle validation, so malformed transcript key
 	  material is reported at the public-key boundary instead of being masked by

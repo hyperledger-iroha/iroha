@@ -49,6 +49,31 @@ Cases == {
   "wrapper_alt_height"
 }
 
+LeaderSelectionCases == {
+  "leader_empty",
+  "leader_single",
+  "leader_len4_view0",
+  "leader_len4_view3",
+  "leader_len4_view5"
+}
+
+LeaderCycleCases == {
+  "leader_len4_periodic",
+  "leader_len4_cycle_distinct"
+}
+
+ShuffleCases == {
+  "shuffle_empty",
+  "shuffle_single",
+  "shuffle_len4"
+}
+
+WrapperCases == {
+  "wrapper_canonical_dedup",
+  "wrapper_single_dedup",
+  "wrapper_alt_height"
+}
+
 Bugs == {
   "none",
   "leader_empty_returns_one",
@@ -212,5 +237,28 @@ Next == checked' = 1 - checked
 TypeInvariant == checked \in 0..1 /\ Bug \in Bugs
 
 SafetyFast == \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+PrfLeaderSelectionExact ==
+  \A c \in LeaderSelectionCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrfLeaderCycleExact ==
+  \A c \in LeaderCycleCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrfShufflePermutationExact ==
+  \A c \in ShuffleCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrfWrapperCanonicalShuffleExact ==
+  \A c \in WrapperCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrfLeaderShuffleExactness ==
+  /\ SafetyFast
+  /\ PrfLeaderSelectionExact
+  /\ PrfLeaderCycleExact
+  /\ PrfShufflePermutationExact
+  /\ PrfWrapperCanonicalShuffleExact
 
 ====
