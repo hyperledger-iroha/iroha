@@ -6,6 +6,8 @@ reimplement recursive proof internals.
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from typing import Literal, Union
 
 from ._native import load_crypto_extension
@@ -24,6 +26,7 @@ KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6
 KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7
 KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
 KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1"
+KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa"
 KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 = (
     "kagemusha-recursive-aggregation-v1"
 )
@@ -85,6 +88,7 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
@@ -104,9 +108,15 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
     "KagemushaOfflineSpendMode",
+    "KagemushaRecursiveSpendLineageKeyArtifacts",
     "can_redeem_kagemusha_recursive_spend_witnessless",
     "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
     "is_kagemusha_recursive_spend_lineage_append_output_circuit_id",
+    "is_supported_kagemusha_recursive_spend_lineage_key_artifact_opening_len",
+    "kagemusha_recursive_spend_lineage_key_artifacts_for_init",
+    "kagemusha_recursive_spend_lineage_key_artifacts_for_append",
+    "kagemusha_recursive_spend_lineage_key_artifacts",
+    "validate_kagemusha_recursive_spend_lineage_key_artifacts",
     "requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init",
     "requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output",
     "requires_kagemusha_recursive_spend_lineage_witness_for_redeem",
@@ -163,6 +173,10 @@ _KAGEMUSHA_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06
 _KAGEMUSHA_NORITO_MAGIC = b"NRT0"
 _KAGEMUSHA_CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
 _KAGEMUSHA_CRC64_REFLECTED_POLY = 0xC96C_5795_D787_0F42
+_KAGEMUSHA_ZK1_MAGIC = b"ZK1\x00"
+_KAGEMUSHA_ZK1_TLV_CID1 = b"CID1"
+_KAGEMUSHA_ZK1_TLV_IPAK = b"IPAK"
+_KAGEMUSHA_ZK1_TLV_H2VK = b"H2VK"
 
 
 def _build_kagemusha_crc64_table() -> tuple[int, ...]:
@@ -202,7 +216,7 @@ def _kagemusha_crc64(payload: bytes) -> int:
     return (crc ^ _KAGEMUSHA_CRC64_MASK) & _KAGEMUSHA_CRC64_MASK
 
 
-def _assert_kagemusha_norito_archive(data: bytes, name: str) -> None:
+def _assert_kagemusha_norito_archive(data: bytes, name: str) -> bytes:
     def fail() -> None:
         raise ValueError(f"{name} must be a valid Norito archive")
 
@@ -244,6 +258,107 @@ def _assert_kagemusha_norito_archive(data: bytes, name: str) -> None:
     payload = data[padding_end:]
     if _kagemusha_crc64(payload) != int.from_bytes(data[31:39], "little"):
         fail()
+    return payload
+
+
+def _validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding(
+    proof_circuit_id: str,
+    lineage_verifier_key_backend: str,
+    lineage_verifier_key: bytes,
+    lineage_proving_key_archive: bytes,
+) -> None:
+    verifier_circuit_id = _kagemusha_lineage_verifier_key_envelope_circuit_id(
+        lineage_verifier_key
+    )
+    if verifier_circuit_id != proof_circuit_id:
+        raise ValueError("lineage_verifier_key")
+    archive_payload = _kagemusha_lineage_proving_key_archive_payload(
+        lineage_proving_key_archive
+    )
+    circuit_id_bytes = proof_circuit_id.encode("utf-8")
+    verifier_key_commitment = _kagemusha_verifying_key_commitment(
+        lineage_verifier_key_backend,
+        lineage_verifier_key,
+    )
+    if (
+        archive_payload.find(circuit_id_bytes) < 0
+        or archive_payload.find(verifier_key_commitment) < 0
+    ):
+        raise ValueError("lineage_proving_key_archive")
+
+
+def _kagemusha_lineage_verifier_key_envelope_circuit_id(
+    lineage_verifier_key: bytes,
+) -> str:
+    if not lineage_verifier_key.startswith(_KAGEMUSHA_ZK1_MAGIC):
+        raise ValueError("lineage_verifier_key")
+    offset = len(_KAGEMUSHA_ZK1_MAGIC)
+    circuit_id: str | None = None
+    saw_ipa_k = False
+    saw_h2_vk = False
+    while offset < len(lineage_verifier_key):
+        if offset + 8 > len(lineage_verifier_key):
+            raise ValueError("lineage_verifier_key")
+        tag = lineage_verifier_key[offset : offset + 4]
+        payload_length = int.from_bytes(
+            lineage_verifier_key[offset + 4 : offset + 8],
+            "little",
+        )
+        payload_start = offset + 8
+        payload_end = payload_start + payload_length
+        if payload_end > len(lineage_verifier_key):
+            raise ValueError("lineage_verifier_key")
+        payload = lineage_verifier_key[payload_start:payload_end]
+        if tag == _KAGEMUSHA_ZK1_TLV_CID1:
+            if (
+                circuit_id is not None
+                or not payload
+                or any(byte < 0x20 or byte > 0x7E for byte in payload)
+            ):
+                raise ValueError("lineage_verifier_key")
+            circuit_id = payload.decode("utf-8").strip()
+            if not circuit_id:
+                raise ValueError("lineage_verifier_key")
+        elif tag == _KAGEMUSHA_ZK1_TLV_IPAK:
+            if saw_ipa_k or len(payload) != 4:
+                raise ValueError("lineage_verifier_key")
+            saw_ipa_k = True
+        elif tag == _KAGEMUSHA_ZK1_TLV_H2VK:
+            if saw_h2_vk or not payload:
+                raise ValueError("lineage_verifier_key")
+            saw_h2_vk = True
+        else:
+            raise ValueError("lineage_verifier_key")
+        offset = payload_end
+    if circuit_id is None or not saw_ipa_k or not saw_h2_vk:
+        raise ValueError("lineage_verifier_key")
+    return circuit_id
+
+
+def _kagemusha_lineage_proving_key_archive_payload(
+    lineage_proving_key_archive: bytes,
+) -> bytes:
+    try:
+        return _assert_kagemusha_norito_archive(
+            lineage_proving_key_archive,
+            "lineage_proving_key_archive",
+        )
+    except ValueError as exc:
+        raise ValueError("lineage_proving_key_archive") from exc
+
+
+def _kagemusha_verifying_key_commitment(
+    lineage_verifier_key_backend: str,
+    lineage_verifier_key: bytes,
+) -> bytes:
+    backend = lineage_verifier_key_backend.encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(b"iroha:zk:v1:vk")
+    digest.update(len(backend).to_bytes(8, "big"))
+    digest.update(backend)
+    digest.update(len(lineage_verifier_key).to_bytes(8, "big"))
+    digest.update(lineage_verifier_key)
+    return digest.digest()
 
 
 def _native_method(name: str):
@@ -270,7 +385,10 @@ def _is_native_method_available(name: str) -> bool:
 
 
 def _is_expected_kagemusha_probe_rejection(error: BaseException) -> bool:
-    return "Kagemusha" in str(error)
+    message = str(error)
+    return "Kagemusha" in message and any(
+        marker in message.lower() for marker in ("archive", "norito", "probe")
+    )
 
 
 def _probe_native_archive_method(module: object, name: str, *archives: bytes) -> bool:
@@ -529,6 +647,157 @@ def is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     )
+
+
+@dataclass(frozen=True)
+class KagemushaRecursiveSpendLineageKeyArtifacts:
+    """Portable Reserved-lineage verifier/proving key artifact package."""
+
+    proof_circuit_id: str
+    verifier_opening_len: int
+    lineage_verifier_key_backend: str
+    lineage_verifier_key: bytes
+    lineage_proving_key_archive: bytes
+
+    @property
+    def is_init_artifact(self) -> bool:
+        return (
+            self.proof_circuit_id
+            == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+        )
+
+    @property
+    def is_append_artifact(self) -> bool:
+        return (
+            self.proof_circuit_id
+            == KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+        )
+
+
+def is_supported_kagemusha_recursive_spend_lineage_key_artifact_opening_len(
+    verifier_opening_len: int,
+) -> bool:
+    """Return whether a packaged Reserved-lineage key opening length is supported."""
+
+    return (
+        type(verifier_opening_len) is int
+        and verifier_opening_len in (2, 4, 8, 16, 32, 64, 128)
+    )
+
+
+def kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+    verifier_opening_len: int,
+    lineage_verifier_key_backend: str,
+    lineage_verifier_key: BytesLike,
+    lineage_proving_key_archive: BytesLike,
+) -> KagemushaRecursiveSpendLineageKeyArtifacts:
+    """Build a validated Reserved-lineage one-hop key artifact package."""
+
+    return kagemusha_recursive_spend_lineage_key_artifacts(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        verifier_opening_len,
+        lineage_verifier_key_backend,
+        lineage_verifier_key,
+        lineage_proving_key_archive,
+    )
+
+
+def kagemusha_recursive_spend_lineage_key_artifacts_for_append(
+    verifier_opening_len: int,
+    lineage_verifier_key_backend: str,
+    lineage_verifier_key: BytesLike,
+    lineage_proving_key_archive: BytesLike,
+) -> KagemushaRecursiveSpendLineageKeyArtifacts:
+    """Build a validated Reserved-lineage append key artifact package."""
+
+    return kagemusha_recursive_spend_lineage_key_artifacts(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        verifier_opening_len,
+        lineage_verifier_key_backend,
+        lineage_verifier_key,
+        lineage_proving_key_archive,
+    )
+
+
+def kagemusha_recursive_spend_lineage_key_artifacts(
+    proof_circuit_id: str,
+    verifier_opening_len: int,
+    lineage_verifier_key_backend: str,
+    lineage_verifier_key: BytesLike,
+    lineage_proving_key_archive: BytesLike,
+) -> KagemushaRecursiveSpendLineageKeyArtifacts:
+    """Build a validated Reserved-lineage key artifact package."""
+
+    return validate_kagemusha_recursive_spend_lineage_key_artifacts(
+        KagemushaRecursiveSpendLineageKeyArtifacts(
+            proof_circuit_id=proof_circuit_id,
+            verifier_opening_len=verifier_opening_len,
+            lineage_verifier_key_backend=lineage_verifier_key_backend,
+            lineage_verifier_key=_lineage_key_artifact_bytes(
+                lineage_verifier_key,
+                "lineage_verifier_key",
+            ),
+            lineage_proving_key_archive=_lineage_key_artifact_bytes(
+                lineage_proving_key_archive,
+                "lineage_proving_key_archive",
+            ),
+        )
+    )
+
+
+def validate_kagemusha_recursive_spend_lineage_key_artifacts(
+    artifacts: object,
+) -> KagemushaRecursiveSpendLineageKeyArtifacts:
+    """Validate and return a defensive Reserved-lineage key artifact package."""
+
+    if not isinstance(artifacts, KagemushaRecursiveSpendLineageKeyArtifacts):
+        raise ValueError("lineage_key_artifacts")
+    if artifacts.proof_circuit_id not in (
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    ):
+        raise ValueError("proof_circuit_id")
+    if not is_supported_kagemusha_recursive_spend_lineage_key_artifact_opening_len(
+        artifacts.verifier_opening_len,
+    ):
+        raise ValueError("verifier_opening_len")
+    lineage_verifier_key = _lineage_key_artifact_bytes(
+        artifacts.lineage_verifier_key,
+        "lineage_verifier_key",
+    )
+    lineage_proving_key_archive = _lineage_key_artifact_bytes(
+        artifacts.lineage_proving_key_archive,
+        "lineage_proving_key_archive",
+    )
+    if (
+        artifacts.lineage_verifier_key_backend
+        != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND
+        or not lineage_verifier_key
+    ):
+        raise ValueError("lineage_verifier_key")
+    if not lineage_proving_key_archive:
+        raise ValueError("lineage_proving_key_archive")
+    _validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding(
+        artifacts.proof_circuit_id,
+        artifacts.lineage_verifier_key_backend,
+        lineage_verifier_key,
+        lineage_proving_key_archive,
+    )
+    return KagemushaRecursiveSpendLineageKeyArtifacts(
+        proof_circuit_id=artifacts.proof_circuit_id,
+        verifier_opening_len=artifacts.verifier_opening_len,
+        lineage_verifier_key_backend=artifacts.lineage_verifier_key_backend,
+        lineage_verifier_key=lineage_verifier_key,
+        lineage_proving_key_archive=lineage_proving_key_archive,
+    )
+
+
+def _lineage_key_artifact_bytes(value: object, name: str) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    raise ValueError(name)
 
 
 def requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init() -> bool:

@@ -43,6 +43,9 @@ from typing import Any
 
 
 EVIDENCE_VERSION = 1
+CANARY_SUMMARY_VERSION = 1
+RECEIPT_SUMMARY_VERSION = 1
+TRUST_SUMMARY_VERSION = 1
 REQUIRE_VERIFIED = "require-verified"
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
@@ -106,6 +109,7 @@ EXPECTED_STAGE_FLAGS = {
     },
     "verify": {
         "--allow-failed",
+        "--allow-default-profile",
         "--allow-insecure-http",
         "--allow-legacy-colr007",
         "--receipt",
@@ -118,6 +122,7 @@ STAGE_SINGLETON_FLAGS = {
     "notary": set(EXPECTED_STAGE_FLAGS["notary"]) - {"--endpoint"},
     "verify": {
         "--allow-failed",
+        "--allow-default-profile",
         "--allow-insecure-http",
         "--allow-legacy-colr007",
         "--require-source-files",
@@ -137,6 +142,7 @@ STAGE_BOOLEAN_FLAGS = {
     },
     "verify": {
         "--allow-failed",
+        "--allow-default-profile",
         "--allow-insecure-http",
         "--allow-legacy-colr007",
         "--require-source-files",
@@ -200,6 +206,7 @@ LOCAL_DIAGNOSTIC_STAGE_FLAGS = {
 }
 COMMAND_URL_FLAGS = {"--endpoint", "--torii-base-url"}
 CANARY_SUMMARY_KEYS = {
+    "version",
     "provider",
     "environment",
     "config_path",
@@ -230,11 +237,13 @@ CANARY_STAGE_KEYS = {
 }
 CANARY_PLANNED_STAGE_KEYS = {"name", "command", "receipt_dir", "dry_run"}
 RECEIPT_SUMMARY_KEYS = {
+    "version",
     "verified_receipts",
     "receipt_kind",
     "allow_failed",
     "allow_insecure_http",
     "allow_legacy_colr007",
+    "allow_default_profile",
     "require_source_files",
     "receipts",
     SUMMARY_DIGEST_FIELD,
@@ -255,6 +264,7 @@ RECEIPT_ENTRY_KEYS = {
 NOTARY_RECEIPT_METADATA_KEYS = {"anchor_sha256", "index_sha256", "record_count"}
 RAIL_RECEIPT_METADATA_KEYS = {"message_type", "payload_sha256", "profile"}
 TRUST_SUMMARY_KEYS = {
+    "version",
     "verified_at",
     "verified_bundles",
     "allow_record_only",
@@ -311,7 +321,21 @@ TRUST_DER_SUMMARY_KEYS = {"label", "sha256", "byte_len"}
 SECRET_KEY_FRAGMENTS = (
     "authorization",
     "private_key",
+    "private-key",
+    "password",
+    "passphrase",
+    "api_key",
+    "api-key",
+    "access_key",
+    "access-key",
+    "session_key",
+    "session-key",
+    "client_secret",
+    "client-secret",
+    "cookie",
+    "set-cookie",
     "x-iroha-signature",
+    "x_iroha_signature",
 )
 SECRET_KEY_EXACT = {
     "bearer",
@@ -322,9 +346,68 @@ SECRET_KEY_EXACT = {
 SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
-    re.compile(r"\b(?:token|secret|private[_-]?key)\s*[:=]\s*\S+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
 ]
+SECRET_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![a-z0-9])"
+    r"(?:authorization|bearer|token|secret|private[_-]?key|password|passphrase|"
+    r"api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|"
+    r"set-cookie|x[_-]iroha[_-]signature)"
+    r"(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _secret_scan_values(raw: str) -> tuple[str, ...]:
+    values = [raw]
+    decoded = raw
+    for _ in range(4):
+        if "%" not in decoded:
+            break
+        next_decoded = urllib.parse.unquote(decoded)
+        if next_decoded == decoded:
+            break
+        values.append(next_decoded)
+        decoded = next_decoded
+    return tuple(values)
+
+
+def _contains_secret_material(value: str) -> bool:
+    return any(
+        pattern.search(candidate)
+        for candidate in _secret_scan_values(value)
+        for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _contains_secret_identifier_material(value: str) -> bool:
+    strong_markers = (
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    paired_markers = ("authorization", "bearer", "token", "cookie")
+    return any(
+        any(marker in lowered for marker in strong_markers)
+        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
+        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+    )
 
 
 class EvidenceError(RuntimeError):
@@ -347,8 +430,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
-    if max_bytes is not None and max_bytes <= 0:
-        raise EvidenceError("max file bytes must be positive")
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+    ):
+        raise EvidenceError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
@@ -404,6 +489,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise EvidenceError(f"{label} must use forward slashes")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
+        raise EvidenceError(f"{label} must not contain secret-looking material")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise EvidenceError(f"{label} must not contain leading-dash path segments")
@@ -426,6 +513,8 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must use forward slashes")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
+        raise EvidenceError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -434,6 +523,73 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must not contain leading-dash path segments")
     if any(part in {".", ".."} for part in checked_parts):
         raise EvidenceError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg in value_flags:
+            index += 2
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in value_flags):
+            index += 1
+            continue
+        if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
+            raise EvidenceError("CLI argument must not contain secret-looking material")
+        index += 1
+
+
+def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        flag, separator, _value = arg.partition("=")
+        if separator and flag in flags:
+            raise EvidenceError(f"{flag} does not take a value")
+        if (
+            arg in flags
+            and index + 1 < len(raw_args)
+            and not raw_args[index + 1].startswith("--")
+        ):
+            raise EvidenceError(f"{arg} does not take a value")
+        index += 1
+
+
+def _preflight_required_cli_values(
+    argv: list[str] | None,
+    flags: set[str],
+    value_name: str,
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise EvidenceError(f"{flag} requires a {value_name} value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise EvidenceError(f"{flag} requires a {value_name} value")
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise EvidenceError(f"{flag} requires a {value_name} value")
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
@@ -446,14 +602,68 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
         matched = False
         for flag in flags:
             if arg == flag:
-                if index + 1 < len(raw_args):
-                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                if index + 1 >= len(raw_args):
+                    raise EvidenceError(f"{flag} requires a path value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise EvidenceError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
                 index += 2
                 matched = True
                 break
             prefix = f"{flag}="
             if arg.startswith(prefix):
-                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise EvidenceError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
+    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{flag} must be a numeric value")
+    try:
+        int(raw, 10) if integer else float(raw)
+    except ValueError as error:
+        raise EvidenceError(f"{flag} must be a numeric value") from error
+
+
+def _preflight_numeric_cli_values(
+    argv: list[str] | None,
+    *,
+    integer_flags: set[str],
+    number_flags: set[str],
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    flags = integer_flags | number_flags
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise EvidenceError(f"{flag} requires a numeric value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise EvidenceError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise EvidenceError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
                 index += 1
                 matched = True
                 break
@@ -589,7 +799,11 @@ def _run_command_bounded(
     output_limit_bytes: int,
     timeout_secs: float,
 ) -> tuple[int, str, bool, str, bool, bool]:
-    if output_limit_bytes <= 0:
+    if (
+        isinstance(output_limit_bytes, bool)
+        or not isinstance(output_limit_bytes, int)
+        or output_limit_bytes <= 0
+    ):
         raise EvidenceError("output limit bytes must be positive")
     timeout_secs = _required_positive_finite_cli_number(
         timeout_secs,
@@ -648,7 +862,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise EvidenceError(f"duplicate key {key!r} in JSON object")
+            raise EvidenceError("duplicate key in JSON object")
         result[key] = value
     return result
 
@@ -679,7 +893,21 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
+        if any(_is_secret_looking_key(key) for key in unknown):
+            raise EvidenceError(f"{label} contains unknown keys")
         raise EvidenceError(f"{label} contains unknown keys: {', '.join(unknown)}")
+
+
+def _is_secret_looking_key(value: Any) -> bool:
+    return any(
+        SECRET_IDENTIFIER_PATTERN.search(candidate)
+        for candidate in _secret_scan_values(str(value))
+    )
+
+
+def _reject_secret_looking_identifier(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_key(value):
+        raise EvidenceError(f"{label} must not contain secret-looking material")
 
 
 def _require_list(value: Any, label: str) -> list[Any]:
@@ -710,11 +938,13 @@ def _required_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(value, key, label)
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise EvidenceError(f"{label}.{key} must be a canonical lowercase profile id")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
 
 
 def _required_rail(value: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(value, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if raw not in KNOWN_RAILS:
         raise EvidenceError(
             f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
@@ -726,6 +956,18 @@ def _required_message_type(value: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(value, key, label)
     if MESSAGE_TYPE_RE.fullmatch(raw) is None:
         raise EvidenceError(f"{label}.{key} must be lowercase ISO family id")
+    return raw
+
+
+def _required_receipt_kind(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(value, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _required_stage_name(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(value, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
 
 
@@ -745,6 +987,7 @@ def _verify_receipt_entry_metadata(
     *,
     receipt_kind: str,
     allow_legacy_colr007: bool,
+    allow_default_profile: bool,
 ) -> None:
     if receipt_kind == "iso-audit-notary":
         _reject_forbidden_receipt_metadata(
@@ -775,7 +1018,11 @@ def _verify_receipt_entry_metadata(
                 f"{entry_label}.message_type uses legacy rail message type {message_type!r}"
             )
         _required_sha256(receipt_entry, "payload_sha256", entry_label)
-        _required_rail(receipt_entry, "profile", entry_label)
+        if receipt_entry.get("profile") is None:
+            if not allow_default_profile:
+                raise EvidenceError(f"{entry_label}.profile must be a non-empty string")
+        else:
+            _required_profile_id(receipt_entry, "profile", entry_label)
     else:  # pragma: no cover - supported kinds are checked before this helper.
         raise EvidenceError(f"{entry_label}.receipt_kind is unsupported: {receipt_kind!r}")
 
@@ -799,6 +1046,7 @@ def _required_cli_string(value: str | None, label: str) -> str:
         raise EvidenceError(f"{label} must not contain control characters")
     if value != value.strip():
         raise EvidenceError(f"{label} must not have surrounding whitespace")
+    _reject_secret_looking_identifier(value, label)
     return value
 
 
@@ -824,9 +1072,7 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     for offset, path in enumerate(paths):
         key = str(path)
         if key in seen:
-            raise EvidenceError(
-                f"{label}[{offset}] duplicates {label}[{seen[key]}]: {key}"
-            )
+            raise EvidenceError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
 
 
@@ -837,7 +1083,7 @@ def _reject_duplicate_summary_digests(summaries: list[dict[str, Any]], label: st
         if digest in seen:
             raise EvidenceError(
                 f"{label}[{offset}].{SUMMARY_DIGEST_FIELD} duplicates "
-                f"{label}[{seen[digest]}].{SUMMARY_DIGEST_FIELD}: {digest}"
+                f"{label}[{seen[digest]}].{SUMMARY_DIGEST_FIELD}"
             )
         seen[digest] = offset
 
@@ -882,6 +1128,8 @@ def _is_lower_sha256(value: Any) -> bool:
 
 def _required_sha256(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
+    if isinstance(raw, str):
+        _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if not _is_lower_sha256(raw):
         raise EvidenceError(f"{label}.{key} must be a lowercase SHA-256 digest")
     return raw
@@ -892,11 +1140,13 @@ def _required_sha256_list(value: dict[str, Any], key: str, label: str) -> list[s
     result: list[str] = []
     seen: dict[str, int] = {}
     for offset, item in enumerate(items):
+        if isinstance(item, str):
+            _reject_secret_looking_identifier(item, f"{label}.{key}[{offset}]")
         if not _is_lower_sha256(item):
             raise EvidenceError(f"{label}.{key}[{offset}] must be a canonical SHA-256")
         if item in seen:
             raise EvidenceError(
-                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]: {item}"
+                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]"
             )
         seen[item] = offset
         result.append(item)
@@ -939,11 +1189,12 @@ def _required_oid_list(value: dict[str, Any], key: str, label: str) -> list[str]
     result: list[str] = []
     seen: dict[str, int] = {}
     for offset, item in enumerate(items):
+        _reject_secret_looking_identifier(item, f"{label}.{key}[{offset}]")
         if not _valid_oid(item):
             raise EvidenceError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
         if item in seen:
             raise EvidenceError(
-                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]: {item}"
+                f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]"
             )
         seen[item] = offset
         result.append(item)
@@ -1050,6 +1301,7 @@ def _required_der_summary_entries(
                 raise EvidenceError(f"{entry_label}.label must not contain control characters")
             if len(raw_label) > 128:
                 raise EvidenceError(f"{entry_label}.label must be no longer than 128 characters")
+            _reject_secret_looking_identifier(raw_label, f"{entry_label}.label")
             if raw_label in seen_labels:
                 raise EvidenceError(
                     f"{entry_label}.label duplicates {label}.{key}[{seen_labels[raw_label]}].label"
@@ -1059,9 +1311,7 @@ def _required_der_summary_entries(
         if not _is_lower_sha256(digest):
             raise EvidenceError(f"{entry_label}.sha256 must be a canonical SHA-256")
         if digest in result:
-            raise EvidenceError(
-                f"{entry_label}.sha256 duplicates DER SHA-256 {digest}"
-            )
+            raise EvidenceError(f"{entry_label}.sha256 duplicates DER SHA-256")
         byte_len = _required_nonnegative_int(entry, "byte_len", entry_label)
         if byte_len == 0 or byte_len > MAX_TRUST_DER_BYTES:
             raise EvidenceError(
@@ -1173,6 +1423,8 @@ def _reject_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must not start with a dash")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
+        raise EvidenceError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -1208,6 +1460,16 @@ def _verify_receipt_verifier_summary(
     digest = _require_summary_digest(receipt_obj, label)
     _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
     _check_no_secret_material(receipt_obj, label)
+    version = receipt_obj.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != RECEIPT_SUMMARY_VERSION
+    ):
+        raise EvidenceError(
+            f"{label}.version must be receipt verifier summary version "
+            f"{RECEIPT_SUMMARY_VERSION}"
+        )
     verified_receipts = receipt_obj.get("verified_receipts")
     if (
         isinstance(verified_receipts, bool)
@@ -1224,6 +1486,9 @@ def _verify_receipt_verifier_summary(
     allow_legacy_colr007 = _required_bool(receipt_obj, "allow_legacy_colr007", label)
     if allow_legacy_colr007 and not args.allow_legacy_colr007:
         raise EvidenceError(f"{label} allowed legacy colr.007 receipts")
+    allow_default_profile = _required_bool(receipt_obj, "allow_default_profile", label)
+    if allow_default_profile and not args.allow_default_profile:
+        raise EvidenceError(f"{label} allowed default rail profile fallback")
     require_source_files = _required_bool(
         receipt_obj,
         "require_source_files",
@@ -1250,10 +1515,11 @@ def _verify_receipt_verifier_summary(
             raise EvidenceError(
                 f"{label}.receipt_kind[{offset}] must not have surrounding whitespace"
             )
+        _reject_secret_looking_identifier(item, f"{label}.receipt_kind[{offset}]")
         if item in seen_receipt_kinds:
             raise EvidenceError(
                 f"{label}.receipt_kind[{offset}] duplicates "
-                f"{label}.receipt_kind[{seen_receipt_kinds[item]}]: {item}"
+                f"{label}.receipt_kind[{seen_receipt_kinds[item]}]"
             )
         seen_receipt_kinds[item] = offset
     receipt_kind_set = set(receipt_kind)
@@ -1283,10 +1549,10 @@ def _verify_receipt_verifier_summary(
         if receipt_path in seen_receipt_paths:
             raise EvidenceError(
                 f"{entry_label}.path duplicates "
-                f"{label}.receipts[{seen_receipt_paths[receipt_path]}].path: {receipt_path}"
+                f"{label}.receipts[{seen_receipt_paths[receipt_path]}].path"
             )
         seen_receipt_paths[receipt_path] = offset
-        entry_kind = _required_string(receipt_entry, "receipt_kind", entry_label)
+        entry_kind = _required_receipt_kind(receipt_entry, "receipt_kind", entry_label)
         if entry_kind not in REQUIRED_RECEIPT_KINDS:
             raise EvidenceError(f"{entry_label}.receipt_kind is unsupported: {entry_kind!r}")
         receipt_sha256 = receipt_entry.get("receipt_sha256")
@@ -1295,8 +1561,7 @@ def _verify_receipt_verifier_summary(
         if receipt_sha256 in seen_receipt_digests:
             raise EvidenceError(
                 f"{entry_label}.receipt_sha256 duplicates "
-                f"{label}.receipts[{seen_receipt_digests[receipt_sha256]}].receipt_sha256: "
-                f"{receipt_sha256}"
+                f"{label}.receipts[{seen_receipt_digests[receipt_sha256]}].receipt_sha256"
             )
         seen_receipt_digests[receipt_sha256] = offset
         ok = receipt_entry.get("ok")
@@ -1319,6 +1584,7 @@ def _verify_receipt_verifier_summary(
             entry_label,
             receipt_kind=entry_kind,
             allow_legacy_colr007=args.allow_legacy_colr007,
+            allow_default_profile=allow_default_profile,
         )
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
@@ -1326,11 +1592,13 @@ def _verify_receipt_verifier_summary(
         raise EvidenceError(f"{label}.receipt_kind does not match receipts[].receipt_kind")
 
     return {
+        "version": version,
         "verified_receipts": verified_receipts,
         "receipt_kind": sorted(receipt_kind_set),
         "allow_failed": allow_failed,
         "allow_insecure_http": allow_insecure_http,
         "allow_legacy_colr007": allow_legacy_colr007,
+        "allow_default_profile": allow_default_profile,
         "require_source_files": require_source_files,
         "receipts": receipt_entries,
         "summary_sha256": digest,
@@ -1338,19 +1606,15 @@ def _verify_receipt_verifier_summary(
 
 
 def _reject_secret_string(value: str, label: str) -> None:
-    for pattern in SECRET_VALUE_PATTERNS:
-        if pattern.search(value):
-            raise EvidenceError(f"{label} contains secret-looking material")
+    if _contains_secret_material(value):
+        raise EvidenceError(f"{label} contains secret-looking material")
 
 
 def _check_no_secret_material(value: Any, label: str = "$") -> None:
     if isinstance(value, dict):
         for key, child in value.items():
-            lowered = str(key).lower()
-            if lowered in SECRET_KEY_EXACT or any(
-                fragment in lowered for fragment in SECRET_KEY_FRAGMENTS
-            ):
-                raise EvidenceError(f"{label}.{key} is a forbidden secret-looking field")
+            if _is_secret_looking_key(key):
+                raise EvidenceError(f"{label} contains forbidden secret-looking field")
             _check_no_secret_material(child, f"{label}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
@@ -1382,6 +1646,8 @@ def _command_separate_value_offsets(
         if item in flags:
             if offset + 1 >= len(command):
                 raise EvidenceError(f"{label}.command has {item} without a value")
+            if command[offset + 1].startswith("--"):
+                raise EvidenceError(f"{label}.command has {item} without a value")
             offsets.add(offset + 1)
     return offsets
 
@@ -1397,9 +1663,14 @@ def _command_flag_values(
         if item == flag:
             if offset + 1 >= len(command):
                 raise EvidenceError(f"{label}.command has {flag} without a value")
+            if command[offset + 1].startswith("--"):
+                raise EvidenceError(f"{label}.command has {flag} without a value")
             values.append((offset + 1, command[offset + 1]))
         elif item.startswith(prefix):
-            values.append((offset, item[len(prefix):]))
+            value = item[len(prefix):]
+            if not value or value.startswith("--"):
+                raise EvidenceError(f"{label}.command has {flag} without a value")
+            values.append((offset, value))
     return values
 
 
@@ -1461,6 +1732,8 @@ def _check_command_urls(
         if item in COMMAND_URL_FLAGS:
             if offset + 1 >= len(command):
                 raise EvidenceError(f"{label}.command has {item} without a value")
+            if command[offset + 1].startswith("--"):
+                raise EvidenceError(f"{label}.command has {item} without a value")
             _check_clean_http_url(
                 command[offset + 1],
                 f"{label}.command[{offset + 1}]",
@@ -1471,8 +1744,11 @@ def _check_command_urls(
         for flag in COMMAND_URL_FLAGS:
             prefix = flag + "="
             if item.startswith(prefix):
+                value = item[len(prefix):]
+                if not value or value.startswith("--"):
+                    raise EvidenceError(f"{label}.command has {flag} without a value")
                 _check_clean_http_url(
-                    item[len(prefix):],
+                    value,
                     f"{label}.command[{offset}]",
                     allow_insecure_http=allow_insecure_http,
                     reject_local_hosts=True,
@@ -1493,12 +1769,18 @@ def _check_redacted_bearer_files(command: list[str], label: str) -> None:
         if item == "--bearer-token-file":
             if offset + 1 >= len(command):
                 raise EvidenceError(f"{label} has --bearer-token-file without a value")
+            if command[offset + 1].startswith("--"):
+                raise EvidenceError(f"{label} has --bearer-token-file without a value")
             if command[offset + 1] != "<runtime-token-file>":
                 raise EvidenceError(f"{label} contains an unredacted bearer-token file path")
             continue
         prefix = "--bearer-token-file="
-        if item.startswith(prefix) and item[len(prefix) :] != "<runtime-token-file>":
-            raise EvidenceError(f"{label} contains an unredacted bearer-token file path")
+        if item.startswith(prefix):
+            value = item[len(prefix) :]
+            if not value or value.startswith("--"):
+                raise EvidenceError(f"{label} has --bearer-token-file without a value")
+            if value != "<runtime-token-file>":
+                raise EvidenceError(f"{label} contains an unredacted bearer-token file path")
 
 
 def _check_command_policy(
@@ -1595,6 +1877,16 @@ def _check_stage_command_flags(stage_name: str, command: list[str], label: str) 
             raise EvidenceError(
                 f"{label}.command[{offset}] boolean flag {flag} must not use =value"
             )
+        if (
+            flag in boolean_flags
+            and item == flag
+            and offset + 1 < len(command)
+            and offset + 1 not in value_offsets
+            and not command[offset + 1].startswith("--")
+        ):
+            raise EvidenceError(
+                f"{label}.command[{offset}] boolean flag {flag} must not use a value"
+            )
     for flag in sorted(STAGE_SINGLETON_FLAGS.get(stage_name, set())):
         if _command_flag_count(command, flag) > 1:
             raise EvidenceError(f"{label}.command must contain at most one {flag}")
@@ -1656,7 +1948,7 @@ def _stage_summary(
     canary_finished_at: dt.datetime,
 ) -> dict[str, Any]:
     _reject_unknown_keys(stage, CANARY_STAGE_KEYS, label)
-    name = _required_string(stage, "name", label)
+    name = _required_stage_name(stage, "name", label)
     started_at_raw, started_at = _required_timestamp(stage, "started_at", label)
     finished_at_raw, finished_at = _required_timestamp(stage, "finished_at", label)
     if finished_at < started_at:
@@ -1732,7 +2024,7 @@ def _planned_stage_summary(
     args: argparse.Namespace,
 ) -> str:
     _reject_unknown_keys(stage, CANARY_PLANNED_STAGE_KEYS, label)
-    name = _required_string(stage, "name", label)
+    name = _required_stage_name(stage, "name", label)
     dry_run = _required_bool(stage, "dry_run", label)
     if dry_run and not args.allow_dry_run:
         raise EvidenceError(f"{label} planned a dry-run stage")
@@ -1771,9 +2063,18 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
     digest = _require_summary_digest(summary, str(path))
     _reject_unknown_keys(summary, CANARY_SUMMARY_KEYS, str(path))
     _check_no_secret_material(summary)
+    version = summary.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != CANARY_SUMMARY_VERSION
+    ):
+        raise EvidenceError(f"{path}.version must be {CANARY_SUMMARY_VERSION}")
 
     provider = _required_string(summary, "provider", str(path))
     environment = _required_string(summary, "environment", str(path))
+    _reject_secret_looking_identifier(provider, f"{path}.provider")
+    _reject_secret_looking_identifier(environment, f"{path}.environment")
     config_path = _validate_config_path(
         _required_string(summary, "config_path", str(path)),
         f"{path}.config_path",
@@ -1883,6 +2184,7 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
     )
 
     return {
+        "version": version,
         "path": str(path),
         "config_path": config_path,
         "provider": provider,
@@ -1923,7 +2225,7 @@ def _check_clean_http_url(
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname
     except ValueError as error:
-        raise EvidenceError(f"{label} is not a valid URL: {error}") from error
+        raise EvidenceError(f"{label} is not a valid URL") from error
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and allow_insecure_http
     ):
@@ -1933,7 +2235,7 @@ def _check_clean_http_url(
     try:
         port = parsed.port
     except ValueError as error:
-        raise EvidenceError(f"{label} has invalid port: {error}") from error
+        raise EvidenceError(f"{label} has invalid port") from error
     port_text = _raw_url_port_text(parsed)
     if port_text == "":
         raise EvidenceError(f"{label} must not include an empty port")
@@ -1957,6 +2259,7 @@ def _check_clean_http_url(
         raise EvidenceError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise EvidenceError(f"{label} host must not end with a dot")
+    _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
         raise EvidenceError(f"{label} must not contain params, query, or fragment")
@@ -2094,6 +2397,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise EvidenceError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise EvidenceError(f"{label} path must not contain dot segments")
+    if _contains_secret_material(path) or _contains_secret_identifier_material(path):
+        raise EvidenceError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise EvidenceError(f"{label} path must not contain encoded dot or separator characters")
@@ -2222,16 +2527,20 @@ def _check_trust_bundle(
     profile_id = _required_profile_id(bundle, "profile_id", label)
     rail = _required_rail(bundle, "rail", label)
     environment = _required_string(bundle, "environment", label)
+    _reject_secret_looking_identifier(environment, f"{label}.environment")
     if args.environment is not None and environment != args.environment:
         raise EvidenceError(
             f"{label}.environment is {environment!r}, expected {args.environment!r}"
         )
     policy = _required_string(bundle, "embedded_signature_policy", label)
+    _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
     if policy != REQUIRE_VERIFIED and not args.allow_record_only_trust:
         raise EvidenceError(f"{label}.embedded_signature_policy is {policy!r}")
 
     source_summary: dict[str, str] | None = None
     bundle_sha256 = bundle.get("bundle_sha256")
+    if isinstance(bundle_sha256, str):
+        _reject_secret_looking_identifier(bundle_sha256, f"{label}.bundle_sha256")
     if not _is_lower_sha256(bundle_sha256):
         raise EvidenceError(f"{label}.bundle_sha256 must be a canonical SHA-256")
     source = bundle.get("source")
@@ -2243,6 +2552,8 @@ def _check_trust_bundle(
         _reject_unknown_keys(source_obj, TRUST_SOURCE_KEYS, f"{label}.source")
         authority = _required_string(source_obj, "authority", f"{label}.source")
         version = _required_string(source_obj, "version", f"{label}.source")
+        _reject_secret_looking_identifier(authority, f"{label}.source.authority")
+        _reject_secret_looking_identifier(version, f"{label}.source.version")
         url = source_obj.get("url")
         if not isinstance(url, str) or not url.strip():
             raise EvidenceError(f"{label}.source.url must be recorded")
@@ -2348,6 +2659,10 @@ def _check_trust_bundle(
         profile_overrides,
         "embedded_signature_policy",
         f"{label}.profile_overrides",
+    )
+    _reject_secret_looking_identifier(
+        override_policy,
+        f"{label}.profile_overrides.embedded_signature_policy",
     )
     if override_policy != policy:
         raise EvidenceError(
@@ -2525,6 +2840,13 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
     digest = _require_summary_digest(summary, str(path))
     _reject_unknown_keys(summary, TRUST_SUMMARY_KEYS, str(path))
     _check_no_secret_material(summary)
+    version = summary.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != TRUST_SUMMARY_VERSION
+    ):
+        raise EvidenceError(f"{path}.version must be {TRUST_SUMMARY_VERSION}")
     verified_at_raw, verified_at = _required_timestamp(summary, "verified_at", str(path))
     _reject_stale_timestamp(
         verified_at,
@@ -2626,18 +2948,18 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         if profile_id in seen_profile_ids:
             raise EvidenceError(
                 f"{path}.bundles[{offset}].profile_id duplicates "
-                f"{path}.bundles[{seen_profile_ids[profile_id]}].profile_id: {profile_id}"
+                f"{path}.bundles[{seen_profile_ids[profile_id]}].profile_id"
             )
         seen_profile_ids[profile_id] = offset
         bundle_sha256 = bundle["bundle_sha256"]
         if bundle_sha256 in seen_bundle_digests:
             raise EvidenceError(
                 f"{path}.bundles[{offset}].bundle_sha256 duplicates "
-                f"{path}.bundles[{seen_bundle_digests[bundle_sha256]}].bundle_sha256: "
-                f"{bundle_sha256}"
+                f"{path}.bundles[{seen_bundle_digests[bundle_sha256]}].bundle_sha256"
             )
         seen_bundle_digests[bundle_sha256] = offset
     return {
+        "version": version,
         "path": str(path),
         "verified_at": verified_at_raw,
         "verified_bundles": verified_bundles,
@@ -2666,6 +2988,8 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         command.append("--allow-insecure-http")
     if args.allow_legacy_colr007:
         command.append("--allow-legacy-colr007")
+    if args.allow_default_profile:
+        command.append("--allow-default-profile")
     if not args.allow_receipt_source_missing:
         command.append("--require-source-files")
     (
@@ -2749,6 +3073,15 @@ def _verify_direct_receipts_cover_canaries(
                     f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
                     f"receipt_kind {direct_kind!r}, not {receipt['receipt_kind']!r}"
                 )
+            direct_path_name = Path(direct_receipt["path"]).name
+            canary_path_name = Path(receipt["path"]).name
+            if direct_path_name != canary_path_name:
+                raise EvidenceError(
+                    "direct receipt archive verification binds "
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
+                    f"receipt filename {direct_path_name!r}, not {canary_path_name!r}"
+                )
             direct_metadata = _receipt_entry_content_metadata(direct_receipt)
             canary_metadata = _receipt_entry_content_metadata(receipt)
             if direct_metadata != canary_metadata:
@@ -2785,7 +3118,7 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
                     f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                     f"[{receipt_offset}].path duplicates "
                     f"canary_summaries[{first_canary}].receipt_summary.receipts"
-                    f"[{first_receipt}].path: {receipt_path}"
+                    f"[{first_receipt}].path"
                 )
             seen_paths[receipt_path] = (canary_offset, receipt_offset)
             receipt_sha256 = receipt["receipt_sha256"]
@@ -2795,7 +3128,7 @@ def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
                     f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                     f"[{receipt_offset}].receipt_sha256 duplicates "
                     f"canary_summaries[{first_canary}].receipt_summary.receipts"
-                    f"[{first_receipt}].receipt_sha256: {receipt_sha256}"
+                    f"[{first_receipt}].receipt_sha256"
                 )
             seen_digests[receipt_sha256] = (canary_offset, receipt_offset)
 
@@ -2813,7 +3146,7 @@ def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
                 raise EvidenceError(
                     f"trust_summaries[{trust_offset}].profiles[{profile_offset}].profile_id "
                     f"duplicates trust_summaries[{first_trust}].profiles"
-                    f"[{first_profile}].profile_id: {profile_id}"
+                    f"[{first_profile}].profile_id"
                 )
             seen_profile_ids[profile_id] = (trust_offset, profile_offset)
             bundle_sha256 = profile["bundle_sha256"]
@@ -2822,9 +3155,61 @@ def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
                 raise EvidenceError(
                     f"trust_summaries[{trust_offset}].profiles[{profile_offset}].bundle_sha256 "
                     f"duplicates trust_summaries[{first_trust}].profiles"
-                    f"[{first_profile}].bundle_sha256: {bundle_sha256}"
+                    f"[{first_profile}].bundle_sha256"
                 )
             seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
+
+
+def _reject_canary_rail_receipts_without_trust(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    args: argparse.Namespace,
+) -> None:
+    """Reject canary rail receipts that lack matching trust material."""
+
+    trusted_profiles_by_environment = {
+        (profile["profile_id"], profile["environment"])
+        for trust in trusts
+        for profile in trust["profiles"]
+    }
+    trusted_builtin_profiles_by_rail_environment = {
+        (profile["profile_id"], profile["rail"], profile["environment"])
+        for trust in trusts
+        for profile in trust["profiles"]
+    }
+    for canary_offset, canary in enumerate(canaries):
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        canary_environment = canary["environment"]
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+            if receipt["receipt_kind"] != "iso-rail-gateway":
+                continue
+            if (
+                args.allow_legacy_colr007
+                and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
+            ):
+                continue
+            profile_id = receipt["profile"]
+            if profile_id is None and args.allow_default_profile:
+                continue
+            if profile_id in KNOWN_RAILS:
+                covered = (
+                    profile_id,
+                    profile_id,
+                    canary_environment,
+                ) in trusted_builtin_profiles_by_rail_environment
+            else:
+                covered = (
+                    profile_id,
+                    canary_environment,
+                ) in trusted_profiles_by_environment
+            if not covered:
+                raise EvidenceError(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}].profile {profile_id!r} has no matching "
+                    f"trust profile coverage for environment {canary_environment!r}"
+                )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -2869,6 +3254,7 @@ def run(args: argparse.Namespace) -> int:
         )
     if receipt_summary is not None:
         _verify_direct_receipts_cover_canaries(canaries, receipt_summary)
+    _reject_canary_rail_receipts_without_trust(canaries, trusts, args)
 
     output: dict[str, Any] = {
         "version": EVIDENCE_VERSION,
@@ -3043,6 +3429,52 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
+        _preflight_raw_cli_secrets(
+            argv,
+            {
+                "--canary-summary",
+                "--max-canary-age-days",
+                "--max-trust-age-days",
+                "--max-trust-source-age-days",
+                "--receipt",
+                "--receipt-dir",
+                "--receipt-verifier-timeout-secs",
+                "--summary-out",
+                "--trust-summary",
+            },
+        )
+        _preflight_boolean_cli_flags(
+            argv,
+            {
+                "--allow-canary-stage-receipts-only",
+                "--allow-default-profile",
+                "--allow-dry-run",
+                "--allow-failed-receipts",
+                "--allow-insecure-http",
+                "--allow-legacy-colr007",
+                "--allow-missing-trust-source",
+                "--allow-partial-canary",
+                "--allow-plan-only",
+                "--allow-profile-json-not-emitted",
+                "--allow-receipt-source-missing",
+                "--allow-record-only-trust",
+                "--allow-synthetic-trust",
+            },
+        )
+        _preflight_required_cli_values(
+            argv,
+            {"--environment", "--provider"},
+            "context",
+        )
+        _preflight_numeric_cli_values(
+            argv,
+            integer_flags={
+                "--max-canary-age-days",
+                "--max-trust-age-days",
+                "--max-trust-source-age-days",
+            },
+            number_flags={"--receipt-verifier-timeout-secs"},
+        )
         _preflight_output_cli_paths(
             argv,
             {

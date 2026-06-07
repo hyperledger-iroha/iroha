@@ -642,6 +642,9 @@ export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:eth:native-evm-groth
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-testnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1: Readonly<{
   javascript: "pure-typescript";
   swift: "native-swift";
@@ -4890,6 +4893,132 @@ export function runBscTestnetNativeProverSelfTest(
     self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
   } & Record<string, unknown>,
 ): Promise<BscTestnetNativeEvmProverSelfTestSdkResult>;
+
+export type BscMainnetNativeEvmProverBundleInput =
+  EthereumMainnetNativeEvmProverBundleInput & Record<string, unknown>;
+export type BscMainnetNativeEvmProverBundle =
+  EthereumMainnetNativeEvmProverBundle & {
+    readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+    readonly chain: "bsc-mainnet";
+  };
+export type BscMainnetNativeEvmProverParityFixtureInput =
+  EthereumMainnetNativeEvmProverParityFixtureInput & Record<string, unknown>;
+export type BscMainnetNativeEvmProverParityFixture =
+  EthereumMainnetNativeEvmProverParityFixture & {
+    readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+    readonly chain: "bsc-mainnet";
+  };
+export type BscMainnetNativeEvmProverSelfTestFixtureInput =
+  EthereumMainnetNativeEvmProverSelfTestFixtureInput & Record<string, unknown>;
+export type BscMainnetNativeEvmProverSelfTestFixture =
+  EthereumMainnetNativeEvmProverSelfTestFixture & {
+    readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+    readonly chain: "bsc-mainnet";
+  };
+export interface BscMainnetNativeEvmProverArtifacts
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifacts,
+    "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
+  > {
+  readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
+  readonly crossSdkFixtureParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
+  readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
+}
+export type BscMainnetNativeEvmProverArtifactsInput =
+  EthereumMainnetNativeEvmProverArtifactsInput & Record<string, unknown>;
+export type BscMainnetNativeEvmProverArtifactBundleInput =
+  EthereumMainnetNativeEvmProverArtifactBundleInput & Record<string, unknown>;
+export type BscMainnetNativeProverSelfTestContext =
+  EthereumMainnetNativeProverSelfTestContext & {
+    readonly nativeProverArtifacts: Readonly<BscMainnetNativeEvmProverArtifacts>;
+    readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
+  };
+export type BscMainnetNativeProverSelfTestFn = (
+  context: Readonly<BscMainnetNativeProverSelfTestContext>,
+  options?: Record<string, unknown>,
+) =>
+  | EthereumMainnetNativeEvmProverSelfTestSdkResultInput
+  | Promise<EthereumMainnetNativeEvmProverSelfTestSdkResultInput>;
+export type BscMainnetNativeProverSelfTestRunInput =
+  EthereumMainnetNativeProverSelfTestRunInput & Record<string, unknown>;
+
+export function validateBscMainnetNativeEvmProverBundle(
+  manifest: BscMainnetNativeEvmProverBundleInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscMainnetNativeEvmProverBundle;
+
+export function parseBscMainnetNativeEvmProverBundleManifest(
+  json: string,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscMainnetNativeEvmProverBundle;
+
+export function validateBscMainnetNativeEvmProverParityFixture(
+  fixture: BscMainnetNativeEvmProverParityFixtureInput,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverParityFixture;
+
+export function parseBscMainnetNativeEvmProverParityFixture(
+  json: string,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverParityFixture;
+
+export function validateBscMainnetNativeEvmProverSelfTestFixture(
+  fixture: BscMainnetNativeEvmProverSelfTestFixtureInput,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverSelfTestFixture;
+
+export function parseBscMainnetNativeEvmProverSelfTestFixture(
+  json: string,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverSelfTestFixture;
+
+export function verifyBscMainnetNativeEvmProverArtifacts(
+  input: BscMainnetNativeEvmProverArtifactsInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscMainnetNativeEvmProverArtifacts;
+
+export function verifyBscMainnetNativeEvmProverArtifactsFromBundle(
+  input: BscMainnetNativeEvmProverArtifactBundleInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): Promise<BscMainnetNativeEvmProverArtifacts>;
+
+export function runBscMainnetNativeProverSelfTest(
+  input: BscMainnetNativeProverSelfTestRunInput,
+  options?: {
+    nativeProverSelfTest?: BscMainnetNativeProverSelfTestFn;
+    native_prover_self_test?: BscMainnetNativeProverSelfTestFn;
+    selfTestNativeProver?: BscMainnetNativeProverSelfTestFn;
+    self_test_native_prover?: BscMainnetNativeProverSelfTestFn;
+  } & Record<string, unknown>,
+): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;
 
 export interface EvmSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
@@ -17223,6 +17352,7 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-onehop-v1";
@@ -17245,6 +17375,29 @@ export type KagemushaOfflineSpendMode =
   | "recursive_compact_v1"
   | "recursive_spend_v1"
   | "checked_prefold_v1";
+export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
+  | 2
+  | 4
+  | 8
+  | 16
+  | 32
+  | 64
+  | 128;
+export type KagemushaRecursiveSpendLineageKeyArtifactBytesLike =
+  | Buffer
+  | ArrayBuffer
+  | ArrayBufferView;
+export interface KagemushaRecursiveSpendLineageKeyArtifacts {
+  readonly proofCircuitId:
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+  readonly verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;
+  readonly lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND;
+  readonly lineageVerifierKey: Buffer;
+  readonly lineageProvingKeyArchive: Buffer;
+  readonly isInitArtifact: boolean;
+  readonly isAppendArtifact: boolean;
+}
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable?: boolean,
   recursiveCompactAvailable?: boolean,
@@ -17263,6 +17416,33 @@ export function isKagemushaRecursiveSpendLineageProofCircuitId(
 export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
   outputProofCircuitId?: string | null,
 ): boolean;
+export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+  verifierOpeningLen: unknown,
+): verifierOpeningLen is KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;
+export function kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
+  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
+export function kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
+  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
+export function kagemushaRecursiveSpendLineageKeyArtifacts(
+  proofCircuitId:
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
+  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
+export function validateKagemushaRecursiveSpendLineageKeyArtifacts(
+  artifacts: KagemushaRecursiveSpendLineageKeyArtifacts,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(): boolean;
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
   outputProofCircuitId?: string | null,
@@ -17310,6 +17490,7 @@ export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
 export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean;
+export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(): boolean;
 export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(
   recordBundleArchive: BinaryLike,
 ): Buffer;

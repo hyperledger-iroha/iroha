@@ -4084,6 +4084,14 @@ where
     Ok(Py::from(PyBytes::new(py, &bytes)))
 }
 
+fn is_kagemusha_recursive_compact_unavailable_error(err: &str) -> bool {
+    matches!(
+        err,
+        iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE
+            | iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
+    )
+}
+
 #[pyfunction]
 #[pyo3(name = "kagemusha_prove_verified_compact_payment_token_with_records")]
 fn kagemusha_prove_verified_compact_payment_token_with_records_py(
@@ -4166,15 +4174,29 @@ fn kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pal
             "pallas_open_envelopes_archive must not be empty",
         ));
     }
-    let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-        decode_kagemusha_recursive_archive(
+    let token =
+        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
+            &record_bundle,
             pallas_open_envelopes_archive,
-            "Kagemusha recursive compact Pallas open-envelope archive",
-        )?;
-    let _ = (py, record_bundle, pallas_open_envelopes);
-    Err(PyRuntimeError::new_err(
-        iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
-    ))
+            None,
+        )
+        .map_err(|err| {
+            if err.starts_with(
+                "failed to decode Kagemusha recursive compact Pallas open-envelope archive",
+            ) || err.starts_with(
+                "invalid Kagemusha recursive compact Pallas open-envelope archive",
+            ) || err.starts_with(
+                "invalid Kagemusha recursive compact record-backed Pallas preflight",
+            ) {
+                return PyValueError::new_err(err.replacen("failed to decode", "invalid", 1));
+            }
+            PyRuntimeError::new_err(err)
+        })?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &token,
+        "failed to encode Kagemusha recursive compact payment token",
+    )
 }
 
 #[pyfunction]
@@ -4190,11 +4212,7 @@ fn kagemusha_verify_recursive_compact_payment_token_py(
     let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
         .map_err(PyRuntimeError::new_err)?;
     match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
-        Err(err)
-            if err.contains(
-                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
-            ) =>
-        {
+        Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {
             return Ok(false);
         }
         Err(err) => return Err(PyValueError::new_err(err)),
@@ -8584,6 +8602,264 @@ mod tests {
         }
     }
 
+    fn pallas_open_envelopes_archive_for_record_bundle_python(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+        label: &str,
+    ) -> Vec<u8> {
+        let hop_count = record_bundle.bundle.steps.len();
+        let envelopes = record_bundle
+            .bundle
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(hop_index, step)| {
+                let metadata =
+                    iroha_core::zk::kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+                        &record_bundle.bundle.chain_id,
+                        &record_bundle.bundle.asset,
+                        hop_index,
+                        step,
+                    )
+                    .expect("Pallas open-envelope hop metadata");
+                let envelope_label = if hop_count == 1 {
+                    label.to_owned()
+                } else {
+                    format!("{label}-{hop_index}")
+                };
+                sample_pallas_open_envelope_with_metadata(4, &envelope_label, metadata)
+            })
+            .collect::<Vec<_>>();
+        norito::to_bytes(&envelopes).expect("encode Python Pallas envelope archive")
+    }
+
+    fn sample_one_hop_recursive_compact_record_bundle_for_python()
+    -> KagemushaVerifiedFoldRecordBundle {
+        static FIXTURE: OnceLock<KagemushaVerifiedFoldRecordBundle> = OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                let chain_id: ChainId = "kagemusha-recursive-compact-python-real"
+                    .parse()
+                    .expect("chain id");
+                let asset = AssetDefinitionId::new(
+                    DomainId::try_new("offline", "universal").expect("domain id"),
+                    "kgmpycompactreal"
+                        .parse()
+                        .expect("asset definition name"),
+                );
+                let record = iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+                    iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                    3,
+                )
+                .expect("confidential transfer v2 verifier record");
+                let verifier_key = record.key.clone().expect("inline transfer verifier key");
+                let spend_key = [0x11_u8; Hash::LENGTH];
+                let input_rho = [0x21_u8; Hash::LENGTH];
+                let input_diversifier =
+                    iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(
+                        b"kagemusha-python-compact-input",
+                    );
+                let input_owner_tag =
+                    iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &spend_key,
+                        input_diversifier,
+                    )
+                    .expect("input owner tag");
+                let input_commitment =
+                    iroha_core::zk::confidential_v2::derive_confidential_note_v2(
+                        &asset.to_string(),
+                        7,
+                        input_rho,
+                        input_owner_tag,
+                    )
+                    .expect("input commitment");
+                let tree_commitments = vec![input_commitment];
+                let root_before =
+                    iroha_core::zk::confidential_v2::compute_confidential_root_v2(
+                        &tree_commitments,
+                    )
+                    .expect("root before");
+                let output_owner_tag =
+                    iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &[0x41_u8; Hash::LENGTH],
+                        iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(
+                            b"kagemusha-python-compact-output",
+                        ),
+                    )
+                    .expect("output owner tag");
+                let proof =
+                    iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
+                        &chain_id,
+                        &asset.to_string(),
+                        &spend_key,
+                        &tree_commitments,
+                        &[iroha_core::zk::confidential_v2::ConfidentialTransferInputV2 {
+                            amount: 7,
+                            rho: input_rho,
+                            diversifier: input_diversifier,
+                            leaf_index: 0,
+                        }],
+                        &[iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2 {
+                            amount: 7,
+                            rho: [0x31_u8; Hash::LENGTH],
+                            owner_tag: output_owner_tag,
+                        }],
+                        root_before,
+                        &record.circuit_id,
+                        &verifier_key,
+                    )
+                    .expect("confidential transfer v2 proof");
+                let mut next_tree = tree_commitments;
+                next_tree.extend(proof.output_commitments.iter().copied());
+                let root_after =
+                    iroha_core::zk::confidential_v2::compute_confidential_root_v2(&next_tree)
+                        .expect("root after");
+                let mut attachment = ProofAttachment::new_ref(
+                    ZK_BACKEND_HALO2_IPA.into(),
+                    proof.proof,
+                    VerifyingKeyId::new(
+                        ZK_BACKEND_HALO2_IPA,
+                        "kagemusha-python-compact-confidential-transfer-v2",
+                    ),
+                );
+                attachment.vk_commitment = Some(iroha_core::zk::hash_vk(&verifier_key));
+                let step = KagemushaVerifiedFoldStep {
+                    root_before,
+                    input_nullifiers: proof.nullifiers,
+                    output_commitments: proof.output_commitments,
+                    root_after,
+                    attachment,
+                    verifier_key,
+                };
+                let id = step.attachment.vk_ref.clone();
+                KagemushaVerifiedFoldRecordBundle {
+                    bundle: KagemushaVerifiedFoldBundle {
+                        chain_id,
+                        asset,
+                        steps: vec![step],
+                    },
+                    verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id, record }],
+                }
+            })
+            .clone()
+    }
+
+    fn sample_two_hop_recursive_compact_record_bundle_for_python()
+    -> (KagemushaVerifiedFoldRecordBundle, Vec<u8>) {
+        static FIXTURE: OnceLock<(KagemushaVerifiedFoldRecordBundle, Vec<u8>)> = OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                let mut record_bundle = sample_one_hop_recursive_compact_record_bundle_for_python();
+                let chain_id = record_bundle.bundle.chain_id.clone();
+                let asset = record_bundle.bundle.asset.clone();
+                let record = record_bundle
+                    .verifier_records
+                    .first()
+                    .expect("one-hop Python compact fixture has verifier record")
+                    .record
+                    .clone();
+                let verifier_key = record_bundle.bundle.steps[0].verifier_key.clone();
+                let input_diversifier =
+                    iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(
+                        b"kagemusha-python-compact-input",
+                    );
+                let input_owner_tag =
+                    iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &[0x11_u8; Hash::LENGTH],
+                        input_diversifier,
+                    )
+                    .expect("input owner tag");
+                let input_commitment =
+                    iroha_core::zk::confidential_v2::derive_confidential_note_v2(
+                        &asset.to_string(),
+                        7,
+                        [0x21_u8; Hash::LENGTH],
+                        input_owner_tag,
+                    )
+                    .expect("input commitment");
+                let mut tree_commitments = vec![input_commitment];
+                assert_eq!(
+                    iroha_core::zk::confidential_v2::compute_confidential_root_v2(
+                        &tree_commitments,
+                    )
+                    .expect("first root"),
+                    record_bundle.bundle.steps[0].root_before
+                );
+                tree_commitments.extend(
+                    record_bundle.bundle.steps[0]
+                        .output_commitments
+                        .iter()
+                        .copied(),
+                );
+                let second_input_diversifier =
+                    iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(
+                        b"kagemusha-python-compact-output",
+                    );
+                let second_root_before =
+                    iroha_core::zk::confidential_v2::compute_confidential_root_v2(
+                        &tree_commitments,
+                    )
+                    .expect("second root before");
+                let second_owner_tag =
+                    iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &[0x51_u8; Hash::LENGTH],
+                        iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(
+                            b"kagemusha-python-compact-second-output",
+                        ),
+                    )
+                    .expect("second owner tag");
+                let second_proof =
+                    iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
+                        &chain_id,
+                        &asset.to_string(),
+                        &[0x41_u8; Hash::LENGTH],
+                        &tree_commitments,
+                        &[iroha_core::zk::confidential_v2::ConfidentialTransferInputV2 {
+                            amount: 7,
+                            rho: [0x31_u8; Hash::LENGTH],
+                            diversifier: second_input_diversifier,
+                            leaf_index: 1,
+                        }],
+                        &[iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2 {
+                            amount: 7,
+                            rho: [0x61_u8; Hash::LENGTH],
+                            owner_tag: second_owner_tag,
+                        }],
+                        second_root_before,
+                        &record.circuit_id,
+                        &verifier_key,
+                    )
+                    .expect("second confidential transfer v2 proof");
+                let mut final_tree = tree_commitments;
+                final_tree.extend(second_proof.output_commitments.iter().copied());
+                let second_root_after =
+                    iroha_core::zk::confidential_v2::compute_confidential_root_v2(&final_tree)
+                        .expect("second root after");
+                let mut attachment = ProofAttachment::new_ref(
+                    ZK_BACKEND_HALO2_IPA.into(),
+                    second_proof.proof,
+                    VerifyingKeyId::new(
+                        ZK_BACKEND_HALO2_IPA,
+                        "kagemusha-python-compact-confidential-transfer-v2",
+                    ),
+                );
+                attachment.vk_commitment = Some(iroha_core::zk::hash_vk(&verifier_key));
+                record_bundle.bundle.steps.push(KagemushaVerifiedFoldStep {
+                    root_before: second_root_before,
+                    input_nullifiers: second_proof.nullifiers,
+                    output_commitments: second_proof.output_commitments,
+                    root_after: second_root_after,
+                    attachment,
+                    verifier_key,
+                });
+                let archive = pallas_open_envelopes_archive_for_record_bundle_python(
+                    &record_bundle,
+                    "python-recursive-compact-multi-hop-open",
+                );
+                (record_bundle, archive)
+            })
+            .clone()
+    }
+
     fn sample_verifying_semantic_recursive_spend_bundle() -> KagemushaRecursiveSpendBundleV1 {
         sample_verifying_semantic_recursive_spend_lineage_fixture().0
     }
@@ -8763,7 +9039,10 @@ mod tests {
         norito::to_bytes(&record_bundle).expect("encode empty Kagemusha record bundle")
     }
 
-    fn malformed_recursive_compact_token_archive_for_python() -> Vec<u8> {
+    fn recursive_compact_token_archive_for_python(
+        verifier_key_name: String,
+        bind_public_inputs_hash: bool,
+    ) -> Vec<u8> {
         let public_inputs = iroha_data_model::offline::KagemushaFoldedPublicInputs {
             domain: iroha_data_model::offline::KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN.to_owned(),
             aggregation_mode:
@@ -8783,18 +9062,169 @@ mod tests {
             fold_digest: Hash::new(b"python-recursive-compact-fold"),
             aggregation_transcript_digest: [0x33; 32],
         };
+        let public_inputs_hash = if bind_public_inputs_hash {
+            public_inputs
+                .public_inputs_hash()
+                .expect("Python recursive compact public-input hash")
+        } else {
+            Hash::new(b"forged-python-recursive-compact-hash")
+        };
         let token = iroha_data_model::offline::KagemushaCompactPaymentToken {
             public_inputs,
             folded_proof: iroha_data_model::offline::KagemushaFoldedProof {
                 verifier_key_id: VerifyingKeyId::new(
                     iroha_core::zk::ZK_BACKEND_HALO2_IPA,
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+                    verifier_key_name,
                 ),
-                public_inputs_hash: Hash::new(b"forged-python-recursive-compact-hash"),
+                public_inputs_hash,
                 proof: ProofBox::new(iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xC7]),
             },
         };
         norito::to_bytes(&token).expect("encode malformed recursive compact token")
+    }
+
+    fn malformed_recursive_compact_token_archive_for_python() -> Vec<u8> {
+        recursive_compact_token_archive_for_python(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1.to_owned(),
+            false,
+        )
+    }
+
+    fn sentinel_spoofed_recursive_compact_token_archive_for_python() -> Vec<u8> {
+        recursive_compact_token_archive_for_python(
+            format!(
+                "forged::{}",
+                iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE
+            ),
+            true,
+        )
+    }
+
+    fn recursive_compact_multi_row_token_archive_for_python(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+    ) -> Vec<u8> {
+        recursive_compact_shape_token_archive_for_python(record_bundle, true, None)
+    }
+
+    fn recursive_compact_forged_vk_hash_token_archive_for_python(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+    ) -> Vec<u8> {
+        recursive_compact_shape_token_archive_for_python(
+            record_bundle,
+            false,
+            Some(fixed_bytes(b"python-recursive-compact-forged-vk-hash")),
+        )
+    }
+
+    fn recursive_compact_shape_token_archive_for_python(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+        multi_row_instances: bool,
+        envelope_vk_hash: Option<[u8; Hash::LENGTH]>,
+    ) -> Vec<u8> {
+        let verified_steps = record_bundle
+            .bundle
+            .steps
+            .iter()
+            .map(|step| iroha_data_model::offline::KagemushaFoldStep {
+                root_before: step.root_before,
+                input_nullifiers: step.input_nullifiers.clone(),
+                output_commitments: step.output_commitments.clone(),
+                root_after: step.root_after,
+                proof_hash: iroha_core::zk::kagemusha_fold_step_proof_hash(&step.attachment.proof)
+                    .expect("Python Kagemusha hop proof hash"),
+                proof_public_inputs_digest:
+                    iroha_core::zk::kagemusha_fold_step_public_inputs_digest(&step.attachment.proof)
+                        .expect("Python Kagemusha hop public-input digest"),
+                verifier_key_id: step.attachment.vk_ref.clone(),
+                verifier_key_commitment: step
+                    .attachment
+                    .vk_commitment
+                    .expect("Python sample hop has verifier-key commitment"),
+                verifier_key_poseidon_digest:
+                    iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                        step.verifier_key.backend.as_str(),
+                        &step.verifier_key.bytes,
+                    )
+                    .expect("Python Kagemusha verifier key poseidon digest"),
+            })
+            .collect::<Vec<_>>();
+        let evidence =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                &record_bundle.bundle.chain_id,
+                &record_bundle.bundle.asset,
+                &verified_steps,
+                4,
+                fixed_bytes(b"python-recursive-compact-shape-verifier-params"),
+                iroha_core::zk::kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                    .expect("Python recursive compact fixed-window schedule digest"),
+                iroha_core::zk::kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                    .expect("Python recursive compact shared-table manifest digest"),
+                fixed_bytes(b"python-recursive-compact-shape-table-base"),
+                fixed_bytes(b"python-recursive-compact-shape-witness-batch"),
+            )
+            .expect("Python recursive compact shape evidence");
+        let public_inputs =
+            iroha_data_model::offline::kagemusha_folded_public_inputs_from_aggregation_statement(
+                &evidence.aggregation_statement,
+            )
+            .expect("Python recursive compact folded public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("Python recursive compact public-input hash");
+        let mut recursive_public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
+                &evidence,
+            )
+            .expect("Python recursive compact proof public inputs");
+        recursive_public_inputs.recursive_verifier_scalar_projection_digest =
+            fixed_bytes(b"python-recursive-compact-shape-scalar-projection");
+
+        let compact_vk = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
+            .expect("Python recursive compact vk");
+        let mut proof_bytes = b"ZK1\0".to_vec();
+        append_zk1_tlv(&mut proof_bytes, *b"PROF", &[0xC7; 64]);
+        let mut instance_columns =
+            iroha_core::zk::kagemusha_recursive_aggregation_proof_public_input_instance_values(
+                &recursive_public_inputs,
+            )
+            .expect("Python recursive compact public instance values")
+            .public_instance_columns();
+        if multi_row_instances {
+            for (index, column) in instance_columns.iter_mut().enumerate() {
+                let mut row = [0_u8; Hash::LENGTH];
+                row[..8].copy_from_slice(
+                    &(u64::try_from(index).expect("Python test index fits u64") + 1).to_le_bytes(),
+                );
+                column.push(row);
+            }
+        }
+        append_zk1_raw_instance_columns(&mut proof_bytes, instance_columns);
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
+                .to_owned(),
+            vk_hash: envelope_vk_hash.unwrap_or_else(|| iroha_core::zk::hash_vk(&compact_vk)),
+            public_inputs:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+                    .to_vec(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        let token = iroha_data_model::offline::KagemushaCompactPaymentToken {
+            public_inputs,
+            folded_proof: iroha_data_model::offline::KagemushaFoldedProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+                ),
+                public_inputs_hash,
+                proof: iroha_data_model::proof::ProofBox::new(
+                    ZK_BACKEND_HALO2_IPA.to_owned(),
+                    norito::to_bytes(&envelope).expect("encode Python multi-row compact envelope"),
+                ),
+            },
+        };
+        norito::to_bytes(&token).expect("encode Python multi-row recursive compact token")
     }
 
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
@@ -9250,6 +9680,102 @@ mod tests {
                 "unexpected recursive compact malformed-Pallas error: {err}"
             );
 
+            let detached_pallas_archive =
+                norito::to_bytes(&vec![sample_pallas_open_envelope_with_metadata(
+                    4,
+                    "python-recursive-compact-detached-pallas",
+                    iroha_zkp_halo2::PolyOpenTranscriptMetadata {
+                        vk_commitment: Some(fixed_bytes(b"python-recursive-compact-detached-vk")),
+                        public_inputs_schema_hash: Some(fixed_bytes(
+                            b"python-recursive-compact-detached-schema",
+                        )),
+                        domain_tag: Some(fixed_bytes(b"python-recursive-compact-detached-domain")),
+                    },
+                )])
+                .expect("encode detached recursive compact Pallas archive");
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &record_archive,
+                &detached_pallas_archive,
+            )
+            .expect_err("recursive compact prover must reject detached valid Pallas archive")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight"),
+                "unexpected recursive compact detached-Pallas error: {err}"
+            );
+
+            let one_hop_record_bundle = sample_one_hop_recursive_compact_record_bundle_for_python();
+            let one_hop_record_archive = norito::to_bytes(&one_hop_record_bundle)
+                .expect("encode Python one-hop compact record bundle");
+            let one_hop_pallas_archive = pallas_open_envelopes_archive_for_record_bundle_python(
+                &one_hop_record_bundle,
+                "python-recursive-compact-one-hop-open",
+            );
+            let mut extra_pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+                norito::decode_from_bytes(&one_hop_pallas_archive)
+                    .expect("decode Python one-hop Pallas archive");
+            extra_pallas_open_envelopes.push(
+                extra_pallas_open_envelopes
+                    .first()
+                    .expect("one-hop Pallas archive contains one envelope")
+                    .clone(),
+            );
+            let extra_pallas_archive = norito::to_bytes(&extra_pallas_open_envelopes)
+                .expect("encode Python extra Pallas archive");
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &one_hop_record_archive,
+                &extra_pallas_archive,
+            )
+            .expect_err("recursive compact prover must reject extra valid Pallas opening archive")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+                    && err.contains("witness"),
+                "unexpected recursive compact extra-Pallas error: {err}"
+            );
+
+            let (multi_hop_record_bundle, multi_hop_pallas_archive) =
+                sample_two_hop_recursive_compact_record_bundle_for_python();
+            let multi_hop_record_archive = norito::to_bytes(&multi_hop_record_bundle)
+                .expect("encode Python multi-hop compact record bundle");
+            let mut missing_pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+                norito::decode_from_bytes(&multi_hop_pallas_archive)
+                    .expect("decode Python multi-hop Pallas archive");
+            missing_pallas_open_envelopes.pop();
+            let missing_pallas_archive = norito::to_bytes(&missing_pallas_open_envelopes)
+                .expect("encode Python missing Pallas archive");
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &multi_hop_record_archive,
+                &missing_pallas_archive,
+            )
+            .expect_err("recursive compact prover must reject missing valid Pallas opening archive")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+                    && err.contains("witness"),
+                "unexpected recursive compact missing-Pallas error: {err}"
+            );
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &multi_hop_record_archive,
+                &multi_hop_pallas_archive,
+            )
+            .expect_err("valid multi-hop recursive compact archive must remain unavailable")
+            .to_string();
+            assert!(
+                err.contains(
+                    iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
+                ),
+                "unexpected recursive compact multi-hop error: {err}"
+            );
+
             let err = kagemusha_verify_recursive_compact_payment_token_py(&[1])
                 .expect_err("recursive compact verifier must reject malformed payment token")
                 .to_string();
@@ -9265,6 +9791,39 @@ mod tests {
             assert!(
                 err.contains("public-input hash mismatch"),
                 "unexpected recursive compact malformed-binding error: {err}"
+            );
+
+            let one_hop_record_bundle = sample_one_hop_recursive_compact_record_bundle_for_python();
+            let forged_vk_hash_token =
+                recursive_compact_forged_vk_hash_token_archive_for_python(&one_hop_record_bundle);
+            let err = kagemusha_verify_recursive_compact_payment_token_py(&forged_vk_hash_token)
+                .expect_err("recursive compact token with forged verifier-key hash must reject")
+                .to_string();
+            assert!(
+                err.contains("envelope verifier-key hash mismatch"),
+                "unexpected recursive compact forged verifier-key hash error: {err}"
+            );
+
+            let multi_row_token =
+                recursive_compact_multi_row_token_archive_for_python(&one_hop_record_bundle);
+            let err = kagemusha_verify_recursive_compact_payment_token_py(&multi_row_token)
+                .expect_err(
+                    "Python recursive compact verifier must reject multi-row public instances",
+                )
+                .to_string();
+            assert!(
+                err.contains("exactly one row"),
+                "unexpected Python recursive compact multi-row error: {err}"
+            );
+
+            let sentinel_spoofed_token =
+                sentinel_spoofed_recursive_compact_token_archive_for_python();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(&sentinel_spoofed_token)
+                .expect_err("sentinel-spoofed recursive compact token must reject")
+                .to_string();
+            assert!(
+                err.contains("circuit id `forged::"),
+                "unexpected recursive compact sentinel-spoofed error: {err}"
             );
         });
     }

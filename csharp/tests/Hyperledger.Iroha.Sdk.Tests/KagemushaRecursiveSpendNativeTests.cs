@@ -1,7 +1,10 @@
 using System.Collections.Generic;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Hyperledger.Iroha.Offline;
 
@@ -172,6 +175,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             "kagemusha-recursive-spend-lineage-append-v1",
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1);
+        Assert.Equal("halo2/ipa", KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend);
         Assert.Equal(64u, KagemushaRecursiveSpendNative.CompactTokenMaxHops);
         Assert.Equal(64u, KagemushaRecursiveSpendNative.RecursiveSpendLineageWitnesslessMaxHopsV1);
         Assert.True(KagemushaRecursiveSpendNative.RecursiveSpendLineageTransitionCircuitWiredV1);
@@ -247,6 +251,211 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.True(KagemushaRecursiveSpendNative.IsLineageAppendOutputCircuitId(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForInit());
+        foreach (var openingLen in new[] { 2, 4, 8, 16, 32, 64, 128 })
+        {
+            Assert.True(
+                KagemushaRecursiveSpendNative.IsSupportedLineageKeyArtifactOpeningLen(openingLen));
+        }
+        foreach (var openingLen in new[] { 0, 1, 3, 65, 129, -2 })
+        {
+            Assert.False(
+                KagemushaRecursiveSpendNative.IsSupportedLineageKeyArtifactOpeningLen(openingLen));
+        }
+        var initVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            0xa1);
+        var initProvingKeyArchive = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            initVerifierKey,
+            0xa2);
+        var appendVerifierKey = KagemushaLineageVerifierKey(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            0xa3);
+        var appendProvingKeyArchive = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            appendVerifierKey,
+            0xa4);
+        var verifierKey = (byte[])initVerifierKey.Clone();
+        var provingKey = (byte[])initProvingKeyArchive.Clone();
+        var initArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+            128,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            verifierKey,
+            provingKey);
+        Array.Fill(verifierKey, (byte)0);
+        Array.Fill(provingKey, (byte)0);
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            initArtifacts.ProofCircuitId);
+        Assert.Equal(128, initArtifacts.VerifierOpeningLen);
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            initArtifacts.LineageVerifierKeyBackend);
+        Assert.Equal(initVerifierKey, initArtifacts.LineageVerifierKey());
+        Assert.Equal(initProvingKeyArchive, initArtifacts.LineageProvingKeyArchive());
+        Assert.True(initArtifacts.IsInitArtifact);
+        Assert.False(initArtifacts.IsAppendArtifact);
+        var returnedVerifierKey = initArtifacts.LineageVerifierKey();
+        returnedVerifierKey[0] = 9;
+        Assert.Equal(initVerifierKey, initArtifacts.LineageVerifierKey());
+        var returnedProvingKeyArchive = initArtifacts.LineageProvingKeyArchive();
+        returnedProvingKeyArchive[0] = 9;
+        Assert.Equal(initProvingKeyArchive, initArtifacts.LineageProvingKeyArchive());
+        var appendArtifacts = KagemushaRecursiveSpendNative.LineageKeyArtifactsForAppend(
+            64,
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+            appendVerifierKey,
+            appendProvingKeyArchive);
+        Assert.Equal(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+            appendArtifacts.ProofCircuitId);
+        Assert.False(appendArtifacts.IsInitArtifact);
+        Assert.True(appendArtifacts.IsAppendArtifact);
+        Assert.Equal(
+            2,
+            KagemushaRecursiveSpendNative.LineageKeyArtifacts(
+                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
+                2,
+                KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                appendVerifierKey,
+                appendProvingKeyArchive).VerifierOpeningLen);
+        Assert.Equal(
+            initArtifacts.ProofCircuitId,
+            KagemushaRecursiveSpendNative.ValidateLineageKeyArtifacts(initArtifacts).ProofCircuitId);
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    appendVerifierKey,
+                    appendProvingKeyArchive)).Message);
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    initVerifierKey,
+                    appendProvingKeyArchive)).Message);
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    Encoding.ASCII.GetBytes("not-zk1"),
+                    initProvingKeyArchive)).Message);
+        var duplicateCidVerifierKey = initVerifierKey
+            .Concat(KagemushaZk1Tlv(
+                "CID1",
+                Encoding.UTF8.GetBytes(
+                    KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1)))
+            .ToArray();
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    duplicateCidVerifierKey,
+                    initProvingKeyArchive)).Message);
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    initVerifierKey,
+                    Encoding.ASCII.GetBytes("not-norito"))).Message);
+        var missingCircuitArchive = KagemushaNoritoFrameFromPayload(
+            0x9a,
+            Encoding.ASCII.GetBytes("package")
+                .Concat(KagemushaVerifierKeyCommitment(initVerifierKey))
+                .Concat(Enumerable.Repeat((byte)0xa5, 64))
+                .ToArray());
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    initVerifierKey,
+                    missingCircuitArchive)).Message);
+        var wrongCommitmentArchive = KagemushaLineageProvingKeyArchive(
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageOneHopProofCircuitIdV1,
+            appendVerifierKey,
+            0xa6);
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    initVerifierKey,
+                    wrongCommitmentArchive)).Message);
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    initVerifierKey,
+                    KagemushaNoritoFrame(0x9a))).Message);
+        Assert.Contains(
+            "lineage_key_artifacts",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.ValidateLineageKeyArtifacts(null)).Message);
+        Assert.Contains(
+            "proof_circuit_id",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifacts(
+                    KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1,
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    new byte[] { 1 },
+                    new byte[] { 2 })).Message);
+        Assert.Contains(
+            "proof_circuit_id",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifacts(
+                    "unknown-kagemusha-recursive-spend-circuit",
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    new byte[] { 1 },
+                    new byte[] { 2 })).Message);
+        Assert.Contains(
+            "verifier_opening_len",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    3,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    new byte[] { 1 },
+                    new byte[] { 2 })).Message);
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    "halo2/kzg",
+                    new byte[] { 1 },
+                    new byte[] { 2 })).Message);
+        Assert.Contains(
+            "lineage_verifier_key",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    Array.Empty<byte>(),
+                    new byte[] { 2 })).Message);
+        Assert.Contains(
+            "lineage_proving_key_archive",
+            Assert.Throws<ArgumentException>(
+                () => KagemushaRecursiveSpendNative.LineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend,
+                    new byte[] { 1 },
+                    Array.Empty<byte>())).Message);
         Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
             KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1));
         Assert.True(KagemushaRecursiveSpendNative.RequiresLineageKeyArtifactsForAppendOutput(
@@ -443,6 +652,123 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.RequiresPreviousProofOpenEnvelopesForAppend("", 1u));
 
         _ = KagemushaRecursiveSpendNative.PreferredMode();
+    }
+
+    [Fact]
+    public void RecursiveCompactVerifierOutputRejectsInvalidNativeBoolean()
+    {
+        const string symbol = "connect_norito_kagemusha_verify_recursive_compact_payment_token";
+
+        Assert.False(KagemushaRecursiveSpendNative.NormalizeRecursiveCompactVerifierOutput(
+            symbol,
+            0,
+            0));
+        Assert.True(KagemushaRecursiveSpendNative.NormalizeRecursiveCompactVerifierOutput(
+            symbol,
+            0,
+            1));
+
+        var invalidBoolean = Assert.Throws<InvalidOperationException>(() =>
+            KagemushaRecursiveSpendNative.NormalizeRecursiveCompactVerifierOutput(symbol, 0, 2));
+        Assert.Contains("invalid boolean output 2", invalidBoolean.Message);
+
+        var bridgeError = Assert.Throws<InvalidOperationException>(() =>
+            KagemushaRecursiveSpendNative.NormalizeRecursiveCompactVerifierOutput(symbol, -311, 0));
+        Assert.Contains("bridge error code -311", bridgeError.Message);
+
+        var unavailable = Assert.Throws<InvalidOperationException>(() =>
+            KagemushaRecursiveSpendNative.NormalizeRecursiveCompactVerifierOutput(
+                symbol,
+                KagemushaRecursiveSpendNative.RecursiveCompactUnavailableBridgeErrorCode,
+                0));
+        Assert.Contains("recursive compact proof composition", unavailable.Message);
+        Assert.Contains("-312", unavailable.Message);
+    }
+
+    [Fact]
+    public void RecursiveSpendArchiveWrappersDefensivelyCopyNoritoBytes()
+    {
+        static void AssertDefensiveCopies(Func<byte[], KagemushaNativeArchive> factory)
+        {
+            var expected = KagemushaNoritoFrameWithPayload(0x4b);
+            var source = KagemushaNoritoFrameWithPayload(0x4b);
+            var archive = factory(source);
+            source[0] = 0x7f;
+
+            var firstRead = archive.NoritoBytes;
+            Assert.Equal(expected, firstRead);
+            firstRead[1] = 0x7f;
+            Assert.Equal(expected, archive.NoritoBytes);
+        }
+
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveSpendArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveSpendTransitionProfileArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveSpendLineageAppendBoundaryArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveSpendLineageWitnessArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveSpendVerifyArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveSpendRedeemInstructionArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaCompactPaymentTokenArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveAggregationProofBundleArchive(bytes));
+        AssertDefensiveCopies(bytes => new KagemushaRecursiveCompactPaymentTokenArchive(bytes));
+    }
+
+    [Fact]
+    public void RecursiveSpendArchiveWrappersRejectUnsafeNoritoBytes()
+    {
+        static void AssertRejectsUnsafeInputs(
+            Func<byte[], KagemushaNativeArchive> factory,
+            byte[] oversizedArchive)
+        {
+            var nullError = Assert.Throws<ArgumentNullException>(() => factory(null!));
+            Assert.Equal("noritoBytes", nullError.ParamName);
+
+            var emptyError = Assert.Throws<ArgumentException>(() => factory(Array.Empty<byte>()));
+            Assert.Contains("must not be empty", emptyError.Message);
+            Assert.Equal("noritoBytes", emptyError.ParamName);
+
+            var oversizedError = Assert.Throws<ArgumentException>(() => factory(oversizedArchive));
+            Assert.Contains("must not exceed", oversizedError.Message);
+            Assert.Equal("noritoBytes", oversizedError.ParamName);
+
+            var invalidError = Assert.Throws<ArgumentException>(() => factory(new byte[] { 0x01 }));
+            Assert.Contains("valid Norito V1 archive", invalidError.Message);
+            Assert.Equal("noritoBytes", invalidError.ParamName);
+
+            var emptyPayloadError =
+                Assert.Throws<ArgumentException>(() => factory(KagemushaNoritoFrame(0x4b)));
+            Assert.Contains("non-empty Norito payload", emptyPayloadError.Message);
+            Assert.Equal("noritoBytes", emptyPayloadError.ParamName);
+        }
+
+        var oversizedArchive = new byte[KagemushaRecursiveSpendNative.NativeArchiveMaxBytes + 1];
+
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveSpendArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveSpendTransitionProfileArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveSpendLineageAppendBoundaryArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveSpendLineageWitnessArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveSpendVerifyArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveSpendRedeemInstructionArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaCompactPaymentTokenArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveAggregationProofBundleArchive(bytes),
+            oversizedArchive);
+        AssertRejectsUnsafeInputs(
+            bytes => new KagemushaRecursiveCompactPaymentTokenArchive(bytes),
+            oversizedArchive);
     }
 
     [Fact]
@@ -848,6 +1174,20 @@ public sealed class KagemushaRecursiveSpendNativeTests
     }
 
     [Fact]
+    public void RecursiveSpendNativeReadBridgeOutputReportsRecursiveCompactUnavailable()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            KagemushaRecursiveSpendNative.ReadBridgeOutput(
+                "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
+                KagemushaRecursiveSpendNative.RecursiveCompactUnavailableBridgeErrorCode,
+                IntPtr.Zero,
+                UIntPtr.Zero));
+
+        Assert.Contains("recursive compact proof composition", error.Message);
+        Assert.Contains("-312", error.Message);
+    }
+
+    [Fact]
     public void RecursiveSpendNativeReadBridgeOutputRejectsNullSuccessPointer()
     {
         var error = Assert.Throws<InvalidOperationException>(() =>
@@ -1063,6 +1403,97 @@ public sealed class KagemushaRecursiveSpendNativeTests
         frame[43] = 0x5a;
         frame[44] = 0x11;
         return frame;
+    }
+
+    private static readonly ulong[] KagemushaTestCrc64Table = BuildKagemushaTestCrc64Table();
+
+    private static ulong[] BuildKagemushaTestCrc64Table()
+    {
+        const ulong reflectedPoly = 0xC96C_5795_D787_0F42UL;
+        var table = new ulong[256];
+        for (var index = 0; index < table.Length; index++)
+        {
+            var crc = (ulong)index;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1) != 0 ? (crc >> 1) ^ reflectedPoly : crc >> 1;
+            }
+            table[index] = crc;
+        }
+        return table;
+    }
+
+    private static ulong KagemushaTestCrc64(byte[] payload)
+    {
+        var crc = ulong.MaxValue;
+        foreach (var value in payload)
+        {
+            var index = (byte)(crc ^ value);
+            crc = KagemushaTestCrc64Table[index] ^ (crc >> 8);
+        }
+        return crc ^ ulong.MaxValue;
+    }
+
+    private static byte[] KagemushaNoritoFrameFromPayload(byte schemaByte, byte[] payload)
+    {
+        var frame = new byte[40 + payload.Length];
+        KagemushaNoritoFrame(schemaByte).CopyTo(frame, 0);
+        payload.CopyTo(frame, 40);
+        BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(23, 8), (ulong)payload.Length);
+        BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(31, 8), KagemushaTestCrc64(payload));
+        return frame;
+    }
+
+    private static byte[] KagemushaZk1Tlv(string tag, byte[] payload)
+    {
+        var tagBytes = Encoding.ASCII.GetBytes(tag);
+        var encoded = new byte[8 + payload.Length];
+        tagBytes.CopyTo(encoded, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(encoded.AsSpan(4, 4), (uint)payload.Length);
+        payload.CopyTo(encoded, 8);
+        return encoded;
+    }
+
+    private static byte[] KagemushaLineageVerifierKey(string circuitId, byte seed)
+    {
+        return new byte[] { 0x5a, 0x4b, 0x31, 0x00 }
+            .Concat(KagemushaZk1Tlv("IPAK", new byte[] { 8, 0, 0, 0 }))
+            .Concat(KagemushaZk1Tlv("CID1", Encoding.UTF8.GetBytes(circuitId)))
+            .Concat(KagemushaZk1Tlv("H2VK", Enumerable.Repeat(seed, 32).ToArray()))
+            .ToArray();
+    }
+
+    private static byte[] KagemushaVerifierKeyCommitment(byte[] verifierKey)
+    {
+        var backend = Encoding.UTF8.GetBytes(
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofBackend);
+        var domain = Encoding.ASCII.GetBytes("iroha:zk:v1:vk");
+        var preimage = new byte[domain.Length + 8 + backend.Length + 8 + verifierKey.Length];
+        var offset = 0;
+        domain.AsSpan().CopyTo(preimage.AsSpan(offset));
+        offset += domain.Length;
+        BinaryPrimitives.WriteUInt64BigEndian(preimage.AsSpan(offset, 8), (ulong)backend.Length);
+        offset += 8;
+        backend.AsSpan().CopyTo(preimage.AsSpan(offset));
+        offset += backend.Length;
+        BinaryPrimitives.WriteUInt64BigEndian(preimage.AsSpan(offset, 8), (ulong)verifierKey.Length);
+        offset += 8;
+        verifierKey.AsSpan().CopyTo(preimage.AsSpan(offset));
+        return SHA256.HashData(preimage);
+    }
+
+    private static byte[] KagemushaLineageProvingKeyArchive(
+        string circuitId,
+        byte[] verifierKey,
+        byte seed)
+    {
+        return KagemushaNoritoFrameFromPayload(
+            0x9a,
+            new byte[] { 1, 0 }
+                .Concat(Encoding.UTF8.GetBytes(circuitId))
+                .Concat(KagemushaVerifierKeyCommitment(verifierKey))
+                .Concat(Enumerable.Repeat(seed, 64))
+                .ToArray());
     }
 
     private static byte[] ReadBridgeOutputWithBytes(byte[] bytes)

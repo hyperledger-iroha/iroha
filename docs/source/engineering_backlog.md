@@ -15,6 +15,135 @@ track detailed unfinished engineering work.
   as remaining release blockers or advertised as production network support
   unless governance explicitly re-opens that scope.
 
+Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
+trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
+versions in evidence and production-readiness gates. Schema-critical integer
+metadata such as versions, receipt status codes, and notary record counts reject
+JSON boolean aliases before evidence can be archived, and bounded child-process
+output byte caps reject boolean aliases before verifier subprocesses run.
+Regular-file and rail payload byte caps now also reject boolean or non-integer
+aliases before filesystem metadata is inspected.
+Archived child-command evidence rejects value-taking flags whose separate or
+equals-form values are empty or another flag token, keeping canary command
+evidence unambiguous before production archiving.
+Direct ISO CLI path preflights now also treat missing, empty, following
+`--flag`, or `--path-flag=--flag` path values as missing before any file or
+network work.
+Live rail-gateway `--torii-base-url` and audit-notary `--endpoint` flags now
+also reject missing, empty, or flag-looking URL values before argparse parsing.
+Direct ISO numeric CLI preflights now reject malformed, empty, flag-looking, or
+secret-looking numeric values before argparse can echo operator-provided input.
+All ISO operator entry points now also reject secret-looking raw CLI tokens
+before argparse can echo unknown arguments; the scanner covers bearer tokens,
+private keys, passwords/passphrases, API/access/session keys, client secrets,
+cookies, and Iroha signatures.
+Secret scanning now also checks repeated percent-decoded forms, so encoded or
+double-encoded secret-looking key/value material is rejected in CLI paths,
+unknown JSON keys, recursive JSON values, compact summary paths, and remote
+response previews/errors without echoing the decoded material.
+ISO URL path validators now also reject secret-looking key/value material in
+literal, percent-encoded, or double-encoded path segments before live network
+delivery, archived evidence ingestion, or readiness rollup.
+Local path, raw CLI, summary-path, artifact-path, and URL-path validators now
+also reject narrow identifier-style secret path material such as
+`token-*-secret` and strong key markers without treating ordinary token-file
+operator paths as secret-bearing by name alone.
+ISO URL port parser failures now report only label-level invalid-port
+diagnostics instead of including parser exception text that may contain the raw
+operator-provided port string.
+ISO URL host validators now reject secret-looking hostname labels, and non-port
+URL parser failures use label-only diagnostics before malformed URL text can be
+echoed by parser exceptions.
+XSD profile-catalog validation now recursively rejects secret-looking strings
+and identifier-style values before rail, signature-policy, reference-dataset,
+address-mode, profile-id, or version diagnostics can echo catalog-provided
+values.
+XSD manifest schema and fixture `payload_root` values now reject secret-looking
+material before namespace/root mismatch diagnostics can echo manifest-provided
+payload names.
+Checked-in XSD `targetNamespace` attributes now also reject secret-looking
+material before schema namespace mismatch diagnostics can echo schema-provided
+attribute values.
+XSD and XML payload identifiers, schema-root attribute names, and unsupported
+foreign child namespaces now use label-only secret-looking diagnostics instead
+of echoing schema-provided names or namespace URIs.
+XML fixture contents are scanned before optional `xmllint` validation, and
+secret-looking validator output is redacted before it can be reflected in
+XSD preflight diagnostics.
+Secret-looking field-name markers now also normalize hyphenated
+`private-key` and underscore-form `x_iroha_signature` spellings across ISO
+validators, and receipt JSON secret-field checks recurse through nested objects
+and arrays before receipt semantics are evaluated.
+All ISO JSON duplicate-key hooks now report only that a duplicate key exists,
+without echoing the repeated key name.
+Secret-looking unknown JSON field names are also rejected with label-only
+unknown-key diagnostics while ordinary unknown-field typos still list the
+field names for operator ergonomics.
+Direct ISO boolean CLI flags reject attached `--flag=value` spellings and
+separate non-option values before argparse can echo the value or reinterpret
+the option.
+Evidence and production-readiness context flags reject missing, empty,
+flag-looking, or secret-looking provider/environment values before argparse,
+summary loading, or mismatch diagnostics can reflect them.
+Canary runbook provider/environment labels now reject secret-looking
+identifier-style strings before plan-only output or executed summaries can
+preserve them.
+Trust-bundle `--max-source-age-days` now rejects missing, empty, flag-looking,
+malformed, or secret-looking freshness budgets before argparse or bundle reads.
+Trust-bundle profile IDs, rails, environments, embedded signature policies,
+source authority/version strings, DER labels, and recursively scanned field
+names reject secret-looking identifiers before trust summaries or profile
+overrides can persist them.
+Trust-bundle SHA-256 pins, declared DER digests, and certificate policy OIDs
+also reject secret-looking marker strings before canonical SHA/OID diagnostics.
+Archived evidence and readiness rollups apply the same no-echo identifier check
+to compact canary provider/environment fields, evidence policy context, trust
+profile IDs/rails/environments, trust embedded-signature policies,
+profile-override policies, trust source authority/version strings, and archived
+trust DER labels before release summaries can preserve those values.
+Archived evidence and readiness SHA-256 fields, including trust bundle digests,
+profile-override pins, and receipt payload/anchor/index digests, reject the same
+markers before digest-shape diagnostics or blockers can preserve them.
+Rail sidecar `profile` and `rail_message_id` identifiers, plus archived rail
+receipt `profile` and `rail_message_id` values, now reject secret-looking
+identifier-style strings before network delivery, receipt emission, receipt
+verification, or receipt-summary rollup.
+Rail sidecar `message_type` and `payload_sha256` values, and archived rail
+receipt `message_type` values, also apply no-echo secret-looking checks before
+unsupported-type, digest-mismatch, or receipt-summary diagnostics can preserve
+operator-provided marker strings.
+Receipt verifier, evidence, and readiness `receipt_kind` values reject
+secret-looking identifier-style markers before unsupported-kind diagnostics or
+blockers can preserve forged archive values.
+Archived canary stage names in evidence and readiness rollups also reject
+secret-looking identifier-style markers before unsupported-stage, ordering, or
+stage-window diagnostics can preserve forged values.
+The live rail-gateway, audit-notary, canary, and XSD fixture tools also reject
+secret-looking key/value material in local output paths before those paths can
+be persisted into receipts or archived summaries.
+The receipt verifier scans raw receipt strings for secret-looking material
+before version or receipt-kind dispatch, so malformed receipt kinds cannot echo
+runtime tokens in unsupported-kind diagnostics.
+Recursive trust-bundle, receipt, evidence, and readiness secret-material
+scanners now report label-only forbidden-field failures, and receipt value
+secret checks no longer echo the receipt field name that carried the rejected
+material; those recursive scanners use the same expanded secret marker set for
+secret-looking field names and values.
+Rail and notary adapters also redact failed remote response previews and
+receipt errors when upstreams return token, password, private-key, or cookie
+material, and the receipt verifier rejects archived previews/errors containing
+the same marker set.
+Live rail sidecars now run the same recursive secret-material scan on known
+fields before unsupported message type, profile, payload digest, or
+rail-message-id validation can echo operator-provided values.
+Duplicate record, list, digest, OID, archived receipt-reuse, and trust-material
+diagnostics now report field/index labels without echoing the rejected duplicate
+value.
+Rail-gateway and audit-notary bearer-token file failures now also report the
+credential input label instead of echoing runtime token file paths.
+Remaining production work still depends on operator-supplied live rail evidence,
+redistributable schemas, and official trust/revocation bundles.
+
 ## FHE/RAM-LFE first-release follow-ups
 
 - Replace the current deterministic plaintext-modulus-multiple BFV-shaped
@@ -2502,8 +2631,10 @@ track detailed unfinished engineering work.
 		  complete child-process stdout/stderr previews for every executed canary
 		  stage, rejects timed-out stages,
 		  and timeout-bounded direct receipt archive verification covering canary
-		  receipt digests, receipt kinds, successful status metadata, and
-		  kind-specific compact receipt metadata by default,
+		  receipt digests, receipt filenames, receipt kinds, successful status
+		  metadata, kind-specific compact receipt metadata, and explicit rejection
+		  of rail default-profile fallback unless the local override is recorded by
+		  the receipt verifier,
 	  requires exact expected `--provider` and `--environment` CLI context and
 	  records that context in the digest-bound evidence policy for readiness
 	  rechecking, requires explicit freshness budgets for canary, trust-summary,
@@ -2523,9 +2654,12 @@ track detailed unfinished engineering work.
 	  rejects stale digest-correct archive inputs, rejects repeated or copied
   canary/trust summaries by path and `summary_sha256`,
   requires canary summaries to prove they were generated with
-  `--require-explicit-policy`, rejects duplicate archived trust profile IDs and
-  bundle digests across trust summaries, rejects non-canonical archived trust profile IDs or unknown
-  rail IDs, rejects forged trust profile overrides whose id/rail/policy,
+  `--require-explicit-policy`, rejects duplicate compact receipt paths/digests,
+  duplicate archived trust profile IDs, and bundle digests across summaries with
+  label-only diagnostics, rejects non-canonical archived trust profile IDs or unknown
+  rail IDs, requires each canary rail receipt profile to have matching compact
+  trust material for the same profile ID and environment, with same-rail binding
+  for built-in rail-named profiles, rejects forged trust profile overrides whose id/rail/policy,
   pin/OID/CRL/OCSP counts, canonical OIDs, DER summary digests, DER byte
   lengths, bounded canonical base64 DER SEQUENCE blobs, or trusted/revoked pin
   overlap no longer match the trust-bundle verifier output,
@@ -2571,11 +2705,11 @@ track detailed unfinished engineering work.
   local-only child command flags in either `--flag` or `--flag=value` form, including the notary adapter's
   `--allow-missing-record-sources` diagnostic override, unsupported child
   command flags outside the expected rail/notary/receipt-verifier CLI surfaces,
-  duplicate singleton child command flags, boolean child command flags spelled
-  with `=value`, non-positive or non-finite numeric child command flag values,
-  non-canonical child command path values, control-bearing or whitespace-padded
-  child command entries, missing required child command inputs, whitespace-padded
-  strings or paths, non-canonical canary
+  duplicate singleton child command flags, boolean child command flags using
+  attached or separate values, non-positive or non-finite numeric child command
+  flag values, non-canonical child command path values, control-bearing or
+  whitespace-padded child command entries, missing required child command
+  inputs, whitespace-padded strings or paths, non-canonical canary
   rail/notary `receipt_dir` values,
 	  rail/notary `receipt_dir` values that do not match the child command's single
 	  `--receipt-dir`, verify-stage commands that omit generated rail/notary
@@ -2601,11 +2735,15 @@ track detailed unfinished engineering work.
   their checked-in XSDs, so the `--require-fixture-for-schema` strict flag
   passes; the schema-backed strict flag still rejects the current
   official-package gaps until the remaining securities/collateral/legacy-return
-	  XSDs are checked in. Optional manifest/profile fields are optional only when
-	  omitted; present `null` reviewed reasons, trust/revocation material lists,
-	  booleans, numeric caps, business-service arrays, or amount minor-unit arrays
-	  fail before a digest-bound XSD summary can be emitted. Required and optional
-	  manifest/profile-catalog strings now reject ASCII control characters before
+  XSDs are checked in. `--require-profile-schema-backed-versions` now uses
+  the default `DEFAULT_PROFILES_JSON` catalog when no `--profile-catalog`
+  override is supplied, so the release gate fails directly on the current
+  profile-advertised schema gaps.
+  Optional manifest/profile fields are optional only when
+  omitted; present `null` reviewed reasons, trust/revocation material lists,
+  booleans, numeric caps, business-service arrays, or amount minor-unit arrays
+  fail before a digest-bound XSD summary can be emitted. Required and optional
+  manifest/profile-catalog strings now reject ASCII control characters before
 	  summary emission, including reviewed gap reasons. Readiness also rejects
 	  archived reviewed gap reasons that are present but empty or non-string
 	  instead of treating them as absent, blocks schema-backed archived fixtures
@@ -2706,9 +2844,15 @@ track detailed unfinished engineering work.
   evidence summary and receipts, include the accepted evidence in
   `scripts/iso_production_readiness.py`, and document rail-specific file-drop,
   retry, and acknowledgement handling.
-- Add official MDR/XSD fixture coverage beyond the current live-profile
-  `pacs.008`/`pacs.009` and checked-in lifecycle fixture corridors, make
-  the strict `scripts/iso_xsd_fixture_verify.py` schema-backed release flag
+- Add redistributable official MDR/XSD fixture coverage for the remaining
+  profile-advertised gaps beyond the current schema-backed payment and
+  cancellation corridor. `pacs.004.001.09` is now checked in and validated;
+  remaining blockers include `pacs.002.001.12`, `pacs.008.001.10`, and
+  `pacs.009.001.10` (available public candidates inspected so far carry
+  restricted redistribution terms and are now recorded as blocked sources in
+  the fixture manifest) plus the securities and collateral lifecycle packages.
+  Make the strict
+  `scripts/iso_xsd_fixture_verify.py` schema-backed release flag
   (`--require-schema-backed-fixtures`) pass,
   make the aggregate `scripts/iso_production_readiness.py` gate pass without
   diagnostic overrides, and keep broadening Torii tests for

@@ -54,6 +54,104 @@ def oversized_json_bytes(limit):
 
 
 class IsoOperatorReceiptVerifyTest(unittest.TestCase):
+    def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
+        cases = (
+            ("password_receipt_unknown_secret", "receipt_unknown_secret"),
+            ("%70assword_receipt_unknown_leak", "receipt_unknown_leak"),
+            ("private-key_receipt_unknown_leak", "receipt_unknown_leak"),
+        )
+        for unknown_key, hidden in cases:
+            with self.subTest(unknown_key=unknown_key):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._reject_unknown_keys(
+                        {unknown_key: "redacted"}, set(), "receipt"
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("contains unknown keys", message)
+                self.assertNotIn("password", message)
+                self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_cli_path_flags_reject_flag_like_values(self):
+        cases = (
+            ["--receipt-dir"],
+            ["--receipt-dir", ""],
+            ["--receipt-dir", "--allow-insecure-http"],
+            ["--receipt-dir="],
+            ["--receipt-dir=--allow-insecure-http"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(
+                    VERIFIER.ReceiptError,
+                    "--receipt-dir requires a path value",
+                ):
+                    VERIFIER._preflight_cli_paths(argv, {"--receipt-dir"})
+
+    def test_cli_paths_reject_encoded_secret_material_without_echo(self):
+        cases = (
+            ("token=receipt-path-leak.receipt.json", "token=receipt-path-leak"),
+            ("token%3Dreceipt-path-leak.receipt.json", "token=receipt-path-leak"),
+            ("%70assword%253Dreceipt-path-leak.receipt.json", "password=receipt-path-leak"),
+            ("token-receipt-path-secret.receipt.json", "token-receipt-path-secret"),
+        )
+        for raw_path, decoded_secret in cases:
+            with self.subTest(raw_path=raw_path):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._preflight_cli_paths(
+                        ["--receipt-dir", raw_path], {"--receipt-dir"}
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(raw_path, message)
+                self.assertNotIn(decoded_secret, message)
+                self.assertNotIn("receipt-path-leak", message)
+
+    def test_boolean_cli_flags_reject_values_without_echo(self):
+        cases = (
+            (["--allow-failed=true"], "--allow-failed", "--allow-failed=true"),
+            (["--require-source-files", "true"], "--require-source-files", "true"),
+        )
+        for argv, flag, rejected in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"{flag} does not take a value", stderr)
+                self.assertNotIn(rejected, stderr)
+
+    def test_raw_cli_secret_like_values_rejected_without_echo(self):
+        cases = (
+            ["--private-key=receipt-secret"],
+            ["token=receipt-secret"],
+            ["password=receipt-secret"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("secret-looking", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("password=", stderr)
+                self.assertNotIn("receipt-secret", stderr)
+
+    def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "receipt.json"
+            path.write_text("{}\n", encoding="utf-8")
+
+            for limit in (True, "64"):
+                with self.subTest(limit=limit):
+                    with self.assertRaisesRegex(
+                        VERIFIER.ReceiptError,
+                        "max file bytes must be a positive integer",
+                    ):
+                        VERIFIER._read_regular_file(path, max_bytes=limit)
+
     def test_verifies_successful_notary_and_rail_receipts_with_source_files(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -108,6 +206,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
+            self.assertEqual(summary["version"], VERIFIER.RECEIPT_SUMMARY_VERSION)
             self.assertEqual(summary["verified_receipts"], 2)
             self.assertEqual(
                 summary["receipt_kind"],
@@ -116,6 +215,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertFalse(summary["allow_failed"])
             self.assertTrue(summary["allow_insecure_http"])
             self.assertFalse(summary["allow_legacy_colr007"])
+            self.assertFalse(summary["allow_default_profile"])
             self.assertTrue(summary["require_source_files"])
             self.assertEqual(len(summary["receipts"]), 2)
             for receipt in summary["receipts"]:
@@ -159,6 +259,22 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("duplicates receipt[0]", stderr)
 
+            secret_receipt = receipt.with_name("token=receipt-duplicate-secret.receipt.json")
+            secret_receipt.write_bytes(receipt.read_bytes())
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(secret_receipt),
+                    "--receipt",
+                    str(secret_receipt),
+                    "--allow-insecure-http",
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("secret-looking material", stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("receipt-duplicate-secret", stderr)
+
             copied = receipt.with_name("copied.receipt.json")
             copied.write_bytes(receipt.read_bytes())
             rc, _stdout, stderr = run_verify(
@@ -172,6 +288,22 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
             self.assertEqual(rc, 2)
             self.assertIn("receipt_sha256 duplicates", stderr)
+
+            secret_copied = receipt.with_name("token=receipt-digest-secret.receipt.json")
+            secret_copied.write_bytes(receipt.read_bytes())
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--receipt",
+                    str(secret_copied),
+                    "--allow-insecure-http",
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("secret-looking material", stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("receipt-digest-secret", stderr)
 
     def test_symlinked_receipt_file_ancestor_is_rejected_before_read(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -325,10 +457,41 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
 
+    def test_secret_looking_receipt_paths_are_rejected_before_summary_output(self):
+        cases = (
+            (
+                "--receipt",
+                "token=receipt-summary-secret.receipt.json",
+                "receipt-summary-secret",
+            ),
+            (
+                "--receipt-dir",
+                "token=receipt-dir-secret",
+                "receipt-dir-secret",
+            ),
+        )
+        for flag, raw_path, secret in cases:
+            with self.subTest(flag=flag):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    path = Path(raw_root) / raw_path
+
+                    rc, stdout, stderr = run_verify(
+                        [flag, str(path), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn(secret, stderr)
+
     def test_duplicate_receipt_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             receipt = Path(raw_root) / "receipt.json"
-            receipt.write_text('{"version":1,"version":1}\n', encoding="utf-8")
+            receipt.write_text(
+                '{"version":1,"token=receipt-duplicate-key-secret":1,"token=receipt-duplicate-key-secret":2}\n',
+                encoding="utf-8",
+            )
 
             rc, _stdout, stderr = run_verify(
                 ["--receipt", str(receipt), "--allow-insecure-http"]
@@ -336,6 +499,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
+            self.assertNotIn("receipt-duplicate-key-secret", stderr)
 
     def test_non_finite_receipt_json_numbers_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -348,6 +512,18 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("non-finite numeric constant NaN", stderr)
+
+    def test_boolean_receipt_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            receipt = Path(raw_root) / "receipt.json"
+            receipt.write_text('{"version":true}\n', encoding="utf-8")
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("unsupported receipt version", stderr)
 
     def test_receipt_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -630,6 +806,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "ok does not match status_code",
             ),
             (
+                "boolean_status_code",
+                lambda body: body.update({"ok": True, "status_code": True}),
+                "status_code must be null or an HTTP status integer",
+            ),
+            (
                 "success_error",
                 lambda body: body.update({"error": "HTTP 202"}),
                 "successful receipt must not record error",
@@ -683,9 +864,44 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "response_body_preview contains secret-looking material",
             ),
             (
+                "private_key_hyphen_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "private-key=abc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
+                "password_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "upstream password=abc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
+                "encoded_password_preview",
+                lambda body: body.update(
+                    {"response_body_preview": "upstream %70assword%253Dabc"}
+                ),
+                "response_body_preview contains secret-looking material",
+            ),
+            (
                 "secret_error",
                 lambda body: body.update(
                     {"error": "upstream token=abc"}
+                ),
+                "error contains secret-looking material",
+            ),
+            (
+                "encoded_secret_error",
+                lambda body: body.update(
+                    {"error": "upstream %74oken%253Dabc"}
+                ),
+                "error contains secret-looking material",
+            ),
+            (
+                "cookie_error",
+                lambda body: body.update(
+                    {"error": "Set-Cookie: session=abc"}
                 ),
                 "error contains secret-looking material",
             ),
@@ -1522,6 +1738,61 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 ),
             )
 
+        def boolean_receipt_record_count(receipt, _latest, _digest_anchor, _index_file):
+            rewrite_receipt(receipt, lambda body: body.update({"record_count": True}))
+
+        def boolean_anchor_record_count(receipt, latest, digest_anchor, _index_file):
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["record_count"] = True
+            anchor = audit_test.with_digest(
+                anchor,
+                audit_test.ADAPTER.ANCHOR_DIGEST_FIELD,
+            )
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            digest_anchor.write_text(anchor_text, encoding="utf-8")
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ]
+                    }
+                ),
+            )
+
+        def boolean_embedded_index_record_count(receipt, latest, digest_anchor, index_file):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["record_count"] = True
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["audit_index"] = index
+            anchor["index_sha256"] = index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]
+            anchor = audit_test.with_digest(anchor, audit_test.ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            new_digest_anchor = digest_anchor.with_name(
+                f"{index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]}.notary.json"
+            )
+            new_digest_anchor.write_text(anchor_text, encoding="utf-8")
+            if new_digest_anchor != digest_anchor:
+                digest_anchor.unlink()
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ],
+                        "index_sha256": index[
+                            audit_test.ADAPTER.INDEX_DIGEST_FIELD
+                        ],
+                    }
+                ),
+            )
+
         def record_source_path(latest):
             store_dir = latest.parent.parent / "store"
             return next((store_dir / audit_test.ADAPTER.RECORDS_DIR).glob("*.json"))
@@ -1758,6 +2029,21 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "unknown_anchor_field",
                 unknown_anchor_field,
                 "contains unknown keys: operator_note",
+            ),
+            (
+                "boolean_receipt_record_count",
+                boolean_receipt_record_count,
+                "record_count must be a non-negative integer",
+            ),
+            (
+                "boolean_anchor_record_count",
+                boolean_anchor_record_count,
+                "record_count must be a non-negative integer",
+            ),
+            (
+                "boolean_embedded_index_record_count",
+                boolean_embedded_index_record_count,
+                "record_count must be a non-negative integer",
             ),
             (
                 "unknown_exported_index_field",
@@ -2016,6 +2302,8 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
+                    if name == "duplicate_embedded_record":
+                        self.assertNotIn("msg-1", stderr)
 
     def test_missing_notary_anchor_path_must_keep_digest_addressed_shape(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2117,7 +2405,146 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertTrue(summary["allow_legacy_colr007"])
             self.assertEqual(summary["receipts"][0]["message_type"], "colr.007")
 
+    def test_default_profile_rail_receipts_require_explicit_local_override(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox, profile=None)
+            sidecar_path = inbox / "rail-status.xml.json"
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            sidecar.pop("profile")
+            sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                            "--allow-default-profile",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("omitted rail profile", stderr)
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                    "--allow-default-profile",
+                    "--require-source-files",
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertTrue(summary["allow_default_profile"])
+            self.assertIsNone(summary["receipts"][0]["profile"])
+
     def test_secret_material_in_receipt_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+            )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update({"password_receipt_field_secret": "redacted"}),
+            )
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("forbidden secret-looking field", stderr)
+            self.assertNotIn("password", stderr)
+            self.assertNotIn("receipt_field_secret", stderr)
+            self.assertNotIn("receipt-field-secret", stderr)
+
+    def test_nested_secret_material_in_receipt_is_rejected_without_echo(self):
+        cases = (
+            (
+                {"metadata": {"private-key_receipt_nested_leak": "redacted"}},
+                "receipt_nested_leak",
+            ),
+            (
+                {"metadata": [{"x_iroha_signature_receipt_nested_leak": "redacted"}]},
+                "receipt_nested_leak",
+            ),
+            (
+                {"metadata": {"note": "%70assword%253Dreceipt-nested-leak"}},
+                "receipt-nested-leak",
+            ),
+        )
+        for body, secret in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._check_no_secret_material(body, Path("receipt.json"))
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking", message)
+                self.assertNotIn("private-key", message)
+                self.assertNotIn("x_iroha_signature", message)
+                self.assertNotIn("%70assword%253Dreceipt-nested-leak", message)
+                self.assertNotIn("password=receipt-nested-leak", message)
+                self.assertNotIn(secret, message)
+
+    def test_secret_material_in_allowed_receipt_values_is_rejected_without_echo(self):
+        cases = [
+            (
+                "receipt_kind",
+                "token=receipt-value-secret",
+            ),
+            (
+                "message_type",
+                "token=receipt-value-secret",
+            ),
+            (
+                "profile",
+                "private_key=receipt-value-secret",
+            ),
+            (
+                "profile",
+                "password=receipt-value-secret",
+            ),
+            (
+                "profile",
+                "token%3Dreceipt-value-secret",
+            ),
+            (
+                "profile",
+                "%70assword%253Dreceipt-value-secret",
+            ),
+            (
+                "rail_message_id",
+                "Authorization: Bearer receipt-value-secret",
+            ),
+            (
+                "message_type",
+                "X-Iroha-Signature: receipt-value-secret",
+            ),
+        ]
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
             rail_test.write_message(inbox)
@@ -2135,13 +2562,117 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     0,
                 )
             receipt = next((inbox / "receipts").glob("*.receipt.json"))
-            rewrite_receipt(receipt, lambda body: body.update({"authorization": "Bearer secret"}))
+            original = receipt.read_bytes()
 
-            rc, _stdout, _stderr = run_verify(
-                ["--receipt", str(receipt), "--allow-insecure-http"]
-            )
+            for field, value in cases:
+                with self.subTest(field=field):
+                    receipt.write_bytes(original)
+                    rewrite_receipt(
+                        receipt,
+                        lambda body, field=field, value=value: body.update(
+                            {field: value}
+                        ),
+                    )
 
-            self.assertEqual(rc, 2)
+                    rc, _stdout, stderr = run_verify(
+                        ["--receipt", str(receipt), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn(field, stderr)
+                    self.assertNotIn("password=", stderr)
+                    self.assertNotIn(value, stderr)
+                    self.assertNotIn("receipt-value-secret", stderr)
+
+    def test_secret_looking_receipt_identifiers_are_rejected_without_echo(self):
+        cases = (
+            ("receipt_kind", "token-receipt-kind-secret", "receipt-kind-secret"),
+            ("message_type", "token-receipt-message-type-secret", "receipt-message-type-secret"),
+            ("profile", "token-receipt-profile-secret", "receipt-profile-secret"),
+            ("rail_message_id", "session-key-receipt-message-secret", "receipt-message-secret"),
+        )
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original = receipt.read_bytes()
+
+            for field, value, hidden in cases:
+                with self.subTest(field=field):
+                    receipt.write_bytes(original)
+                    rewrite_receipt(
+                        receipt,
+                        lambda body, field=field, value=value: body.update(
+                            {field: value}
+                        ),
+                    )
+
+                    rc, _stdout, stderr = run_verify(
+                        ["--receipt", str(receipt), "--allow-insecure-http"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{field} must not contain secret-looking material", stderr)
+                    self.assertNotIn(value, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_endpoint_urls_reject_secret_path_without_echo(self):
+        cases = (
+            "https://torii.example.invalid/base/token=receipt-url-secret",
+            "https://torii.example.invalid/base/token-receipt-url-secret",
+            "https://torii.example.invalid/base/token%3Dreceipt-url-secret",
+            "https://torii.example.invalid/base/token%253Dreceipt-url-secret",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._require_https(
+                        url,
+                        allow_insecure_http=False,
+                        label="receipt",
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(url, message)
+                self.assertNotIn("token=", message)
+                self.assertNotIn("receipt-url-secret", message)
+
+    def test_endpoint_urls_reject_secret_host_and_parser_errors_without_echo(self):
+        cases = (
+            (
+                "https://token-receipt-host-secret.torii.example.invalid/base",
+                "secret-looking material",
+            ),
+            ("https://[token-receipt-host-secret/base", "is not valid"),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._require_https(
+                        url,
+                        allow_insecure_http=False,
+                        label="receipt",
+                    )
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(url, message)
+                self.assertNotIn("token-receipt-host-secret", message)
 
     def test_smuggled_receipt_endpoint_urls_are_rejected(self):
         cases = [
@@ -2355,7 +2886,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     rc, _stdout, stderr = run_verify(["--receipt", str(receipt)])
 
                     self.assertEqual(rc, 2)
-                    self.assertIn("params, query, or fragment", stderr)
+                    self.assertIn("secret-looking material", stderr)
                     self.assertNotIn(secret_url, stderr)
                     self.assertNotIn("token=", stderr)
                     self.assertNotIn(secret, stderr)

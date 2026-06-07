@@ -30,6 +30,7 @@
     "skip_on_stage_failure": true,
     "allow_failed": false,
     "allow_insecure_http": false,
+    "allow_default_profile": false,
     "require_source_files": true
   }
 }

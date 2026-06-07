@@ -51,6 +51,7 @@ public final class OfflineNoteTest {
     instanceValuesMatchRustVectors();
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
     kagemushaRecordBackedNativeProverValidatesInput();
+    kagemushaCompactNativeInputCopiesBeforeDispatch();
     kagemushaRecursiveAggregationNativeProverValidatesInput();
     kagemushaRecursiveSpendNativeProverValidatesInput();
     kagemushaNativeProversRejectMissingAndEmptyNativeOutputs();
@@ -691,10 +692,16 @@ public final class OfflineNoteTest {
   }
 
   private static void kagemushaRecordBackedNativeProverValidatesInput() {
+    final byte[] oversizedArchive =
+        new byte[KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1];
     assertIllegalArgumentContains(
         () -> KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
             new byte[0]),
         "recordBundleArchive must not be empty");
+    assertIllegalArgumentContains(
+        () -> KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
+            oversizedArchive),
+        "recordBundleArchive must not exceed");
     assertIllegalArgumentContains(
         () ->
             KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(
@@ -707,8 +714,24 @@ public final class OfflineNoteTest {
         "recordBundleArchive must contain a non-empty Norito payload");
   }
 
+  private static void kagemushaCompactNativeInputCopiesBeforeDispatch() {
+    final byte[] archive = kagemushaNoritoFrameWithPayload(0x4c);
+    final byte[] expected = Arrays.copyOf(archive, archive.length);
+    final byte[] ownedArchive =
+        KagemushaCompactPaymentTokenProver.ownedNativeInput(archive, "recordBundleArchive");
+
+    archive[6] = (byte) 0x7F;
+
+    assertTrue(ownedArchive != archive, "Kagemusha compact native input must be copied");
+    assertTrue(
+        Arrays.equals(expected, ownedArchive),
+        "Kagemusha compact native input copy must preserve original bytes");
+  }
+
   private static void kagemushaRecursiveAggregationNativeProverValidatesInput() {
     final byte[] validArchive = kagemushaNoritoFrameWithPayload(0x4b);
+    final byte[] oversizedArchive =
+        new byte[KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1];
     assertIllegalArgumentContains(
         () ->
             KagemushaRecursiveAggregationProofBundleProver
@@ -721,6 +744,18 @@ public final class OfflineNoteTest {
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
                     validArchive, new byte[0]),
         "pallasOpenEnvelopesArchive must not be empty");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    oversizedArchive, validArchive),
+        "recordBundleArchive must not exceed");
+    assertIllegalArgumentContains(
+        () ->
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive, oversizedArchive),
+        "pallasOpenEnvelopesArchive must not exceed");
     assertIllegalArgumentContains(
         () ->
             KagemushaRecursiveAggregationProofBundleProver

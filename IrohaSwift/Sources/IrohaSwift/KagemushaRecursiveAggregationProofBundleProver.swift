@@ -3,6 +3,8 @@ import Foundation
 public enum KagemushaRecursiveAggregationProofBundleProverError: Error, Equatable, LocalizedError {
     case emptyRecordBundleArchive
     case emptyPallasOpenEnvelopesArchive
+    case oversizedRecordBundleArchive
+    case oversizedPallasOpenEnvelopesArchive
     case invalidRecordBundleArchive
     case emptyRecordBundlePayload
     case invalidPallasOpenEnvelopesArchive
@@ -19,6 +21,10 @@ public enum KagemushaRecursiveAggregationProofBundleProverError: Error, Equatabl
             return "Kagemusha verified fold record bundle archive must not be empty."
         case .emptyPallasOpenEnvelopesArchive:
             return "Kagemusha Pallas open-envelope archive must not be empty."
+        case .oversizedRecordBundleArchive:
+            return "Kagemusha verified fold record bundle archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+        case .oversizedPallasOpenEnvelopesArchive:
+            return "Kagemusha Pallas open-envelope archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .invalidRecordBundleArchive:
             return "Kagemusha verified fold record bundle archive must be a valid Norito archive."
         case .emptyRecordBundlePayload:
@@ -81,11 +87,13 @@ public enum KagemushaRecursiveAggregationProofBundleProver {
         }
         try requireValidInputArchive(
             recordBundleArchive,
+            oversizedError: .oversizedRecordBundleArchive,
             invalidError: .invalidRecordBundleArchive,
             emptyPayloadError: .emptyRecordBundlePayload
         )
         try requireValidInputArchive(
             pallasOpenEnvelopesArchive,
+            oversizedError: .oversizedPallasOpenEnvelopesArchive,
             invalidError: .invalidPallasOpenEnvelopesArchive,
             emptyPayloadError: .emptyPallasOpenEnvelopesPayload
         )
@@ -112,11 +120,14 @@ public enum KagemushaRecursiveAggregationProofBundleProver {
 
     private static func requireValidInputArchive(
         _ archive: Data,
+        oversizedError: KagemushaRecursiveAggregationProofBundleProverError,
         invalidError: KagemushaRecursiveAggregationProofBundleProverError,
         emptyPayloadError: KagemushaRecursiveAggregationProofBundleProverError
     ) throws {
-        guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes,
-              let frame = noritoDecodeFrame(archive),
+        guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes else {
+            throw oversizedError
+        }
+        guard let frame = noritoDecodeFrame(archive),
               frame.paddingLength <= maxNoritoHeaderPaddingBytes else {
             throw invalidError
         }

@@ -503,6 +503,7 @@ enum NativeBridgeError: Error, Equatable {
     case offlineNoteProve
     case kagemushaProve
     case kagemushaRecursiveCompactUnavailable
+    case invalidKagemushaVerifierOutput
     case unsupportedAlgorithm
     case metadataTarget
     case metadataKey
@@ -579,6 +580,23 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private func throwOnStatus(_ status: Int32) throws {
         if let error = NativeBridgeError.fromStatus(status) {
             throw error
+        }
+    }
+
+    static func normalizeKagemushaRecursiveCompactVerifierOutput(
+        status: Int32,
+        valid: UInt8
+    ) throws -> Bool {
+        if let error = NativeBridgeError.fromStatus(status) {
+            throw error
+        }
+        switch valid {
+        case 0:
+            return false
+        case 1:
+            return true
+        default:
+            throw NativeBridgeError.invalidKagemushaVerifierOutput
         }
     }
 
@@ -1927,6 +1945,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaCompactPaymentTokenNativeProbeOk = false
     private var kagemushaRecursiveAggregationNativeProbeOk = false
     private var kagemushaRecursiveCompactPaymentTokenNativeProbeOk = false
+    private var kagemushaRecursiveCompactPaymentTokenVerifierNativeProbeOk = false
     private var kagemushaRecursiveSpendNativeProbeOk = false
     private var encodeIssueOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
     private var encodeRedeemOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
@@ -3236,13 +3255,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             probeKagemushaRecursiveAggregationFunction(
                 kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn
             )
+        kagemushaRecursiveCompactPaymentTokenVerifierNativeProbeOk =
+            probeKagemushaRecursiveCompactPaymentTokenVerifierFunction(
+                kagemushaVerifyRecursiveCompactPaymentTokenFn
+            )
         kagemushaRecursiveCompactPaymentTokenNativeProbeOk =
             probeKagemushaRecursiveCompactPaymentTokenFunction(
                 kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopesFn
             )
-            && probeKagemushaRecursiveCompactPaymentTokenVerifierFunction(
-                kagemushaVerifyRecursiveCompactPaymentTokenFn
-            )
+            && kagemushaRecursiveCompactPaymentTokenVerifierNativeProbeOk
 
         var recursiveSpendOk = true
         recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendInitFn) && recursiveSpendOk
@@ -3550,6 +3571,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && kagemushaVerifyRecursiveCompactPaymentTokenFn != nil
             && freeFn != nil
             && kagemushaRecursiveCompactPaymentTokenNativeProbeOk
+        #else
+        return false
+        #endif
+    }
+
+    public var isKagemushaRecursiveCompactPaymentTokenVerifierAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return kagemushaVerifyRecursiveCompactPaymentTokenFn != nil
+            && kagemushaRecursiveCompactPaymentTokenVerifierNativeProbeOk
         #else
         return false
         #endif
@@ -6507,10 +6538,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 &valid
             )
         }
-        if let error = NativeBridgeError.fromStatus(status) {
-            throw error
-        }
-        return valid != 0
+        return try Self.normalizeKagemushaRecursiveCompactVerifierOutput(
+            status: status,
+            valid: valid
+        )
         #else
         return nil
         #endif

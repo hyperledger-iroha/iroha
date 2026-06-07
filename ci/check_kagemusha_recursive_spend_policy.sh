@@ -72,6 +72,8 @@ SHARED_FIXTURE_COVERAGE = {
         '"block_height"',
         '"KagemushaRecursiveSpendRedeemRequestV1"',
         '"RedeemKagemushaRecursive"',
+        '"sha256_hex": "c5402b3ea6aeb35ce12607344304b858273f8589e2b3887708a86cb19665ce68"',
+        '"sha256_hex": "334c343b2c943e7f1de7c0f7a7753c023e3275ba86a877f55dd08dc2f65bb59b"',
         '"sha256_hex": "f5a4a6a25fd9bfd8a121893ddb0c977753c16d8b9dfd835477d2965957c7c03e"',
         '"sha256_hex": "88f293dccb455b6fbcd85d7c06426ce45f02a42fc330e68afda490d504903c03"',
     ),
@@ -186,6 +188,19 @@ ADVERSARIAL_COVERAGE = {
         "KagemushaRecursiveSpendLineageKeyArtifactsV1",
         "is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len",
         "validate_kagemusha_recursive_spend_lineage_key_artifact_pair",
+        "KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1",
+        "KagemushaLineageProvingKeyArchiveV1",
+        "kagemusha_lineage_vk_envelope_circuit_id",
+        "validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding",
+        "append_zk1_tlv",
+        "kagemusha_lineage_key_artifact_packages_reject_profile_splices",
+        "duplicate_cid_vk",
+        "wrong_commitment_pk",
+        "bad_version_pk",
+        "empty_payload_pk",
+        '"CID1"',
+        '"IPAK"',
+        '"H2VK"',
         "new_for_init",
         "new_for_append",
         "new_with_lineage_key_artifacts",
@@ -258,16 +273,29 @@ ADVERSARIAL_COVERAGE = {
                 "kagemusha_recursive_spend_lineage_append_boundary_final_note_binding_digest",
                 "kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile",
                 "validate_against_transition_profile",
+                "kagemusha_recursive_spend_transition_profile_binds_adversarial_mutations",
+                "assert_self_consistent_forged_boundary_rejected",
+                "forged_boundary_cases",
                 "kagemusha_recursive_spend_accumulator_append_evidence_with_opening_preflight_contract",
                 "kagemusha_recursive_spend_append_boundary_free_public_inputs_hash",
+                "append_boundary.transition_profile_digest",
+                "append_boundary.transition_profile_binding_digest",
                 "append_boundary.chain_asset_binding_digest",
                 "append_boundary.final_note_binding_digest",
+                "append_boundary.previous_recursive_proof_artifact_digest",
+                "append_boundary.previous_recursive_proof_open_envelopes_archive_digest",
                 'field: "append_boundary.append_boundary_digest"',
                 'field: "append_boundary.previous_accumulator_digest"',
                 'field: "append_boundary.append_opening_preflight_digest"',
+                "append_boundary.current_hop_proof_hash",
                 'field: "append_boundary.current_hop_opening_aggregate_digest"',
+                "append_boundary.resulting_accumulator_digest",
                 'field: "append_boundary.resulting_public_inputs_hash"',
+                "append_boundary.verifier_opening_len",
                 'field: "append_boundary.verifier_params_fingerprint"',
+                "append_boundary.fixed_window_table_schedule_digest",
+                "append_boundary.fixed_window_shared_table_manifest_digest",
+                "self-consistent-forged-append-boundary-shared-table",
                 'field: "append_boundary.hop_count"',
                 "self_consistent_forged_current_opening",
                 "append-boundary digest must not feed back into the accumulator digest",
@@ -306,6 +334,19 @@ ADVERSARIAL_COVERAGE = {
     ),
     "crates/iroha_core/src/zk.rs": (
         "fn kagemusha_recursive_spend_chain_admission_validates_enabled_lineage_profile",
+        "decode_kagemusha_recursive_compact_pallas_open_envelopes",
+        "failed to decode Kagemusha recursive compact Pallas open-envelope archive",
+        "invalid Kagemusha recursive compact Pallas open-envelope archive",
+        "invalid Kagemusha recursive compact record-backed Pallas preflight",
+        "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+        "composed private-hop verifier batch to be proved in-circuit",
+        "fn kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable",
+        "Norito-valid data-model proof envelope must not decode as Pallas openings",
+        "detached compact Pallas archive must reject before unavailable",
+        "extra compact Pallas opening must reject before unavailable",
+        "missing compact Pallas opening must reject before unavailable",
+        "record-bound multi-hop compact Pallas archive must reject before the unavailable gate",
+        "record-bound compact Pallas archive must remain unavailable",
         "ensure_kagemusha_recursive_compact_token_public_instance_context",
         "verifier_witness_batch_digest public instance digest must be non-zero",
         "forged verifier-witness batch digest must reject",
@@ -313,12 +354,54 @@ ADVERSARIAL_COVERAGE = {
         "non-u64 verifier metadata limb must reject",
         "recursive public-input hash must reject",
         "recursive_public_inputs_hash",
+        "recursive compact token multi-row public instances must reject",
+        "CID-spoofed ABI-7 compact verifier key must reject before unavailable",
         "ABI-7 compact token without scalar projection must reject",
         "recursive_verifier_scalar_projection_digest public instance digest must be non-zero for ABI-7 compact circuit",
         "canonical u64 limb",
         "stale previous recursive proof public-input hash must not pass append preflight",
         "context-spliced previous proof still has a valid generic profile",
         "previous proof verifier-context splice must reject",
+        "validate_append_pallas_witness_preflight_bindings",
+        "append recursive verifier slice binds detached previous and hop-bound current preflights",
+        "append slice must reject mismatched previous recursive proof witness",
+        "append slice must reject stale current-hop proof hash",
+        "append slice must reject detached current-hop preflight",
+        "fn kagemusha_verified_folded_public_inputs_rejects_input_output_overlap_before_proof_decode",
+        "output commitment overlaps an input nullifier",
+        "input nullifier overlaps an output commitment",
+        "record-backed cross-hop overlap error should come before proof decoding",
+        "fn kagemusha_recursive_spend_lineage_witness_preflights_fold_metadata_before_archive_decode",
+        "validate_kagemusha_fold_metadata(&fold_steps)",
+        "lineage witness root-continuity error should come before Pallas archive decoding",
+        "lineage witness root-continuity error should come before previous-proof checks",
+        "validate_kagemusha_hop_verifier_record_set(&fold_steps, &hop_verifier_records)",
+        "fn kagemusha_recursive_spend_lineage_witness_preflights_verifier_records_before_archive_decode",
+        "lineage witness verifier-record error should come before Pallas archive decoding",
+        "lineage witness verifier-record error should come before previous-proof checks",
+        "current note {hop_index} note commitment must be non-zero",
+        "current note {hop_index} amount must be a non-zero integer u128",
+        "fn kagemusha_recursive_spend_lineage_witness_preflights_current_notes_before_archive_decode",
+        "lineage witness current-note error should come before Pallas archive decoding",
+        "lineage witness current-note error should come before previous-proof checks",
+        "current note {hop_index} commitment is not created by its lineage hop",
+        "current note {hop_index} spend nullifier collides with its lineage input nullifiers",
+        "current note {hop_index} amount does not match the previous current note",
+        "fn kagemusha_recursive_spend_lineage_witness_preflights_current_note_bindings_before_archive_decode",
+        "lineage witness current-note binding error should come before Pallas archive decoding",
+        "lineage witness current-note binding error should come before previous-proof checks",
+        "hop {hop_index} append must have exactly one input nullifier",
+        "hop {hop_index} must consume the previous current-note spend nullifier",
+        "current note {hop_index} spend nullifier collides with the previous note commitment",
+        "hop {hop_index} output commitments recreate the previous current note",
+        "fn kagemusha_recursive_spend_lineage_witness_preflights_append_handoff_before_archive_decode",
+        "lineage witness append-handoff error should come before Pallas archive decoding",
+        "lineage witness append-handoff error should come before previous-proof checks",
+        "ensure_record_backed_recursive_spend_lineage_witness_matches_final_bundle",
+        "lineage witness final current note does not match redeem bundle",
+        "fn kagemusha_recursive_spend_lineage_witness_preflights_final_bundle_before_archive_decode",
+        "lineage witness final-bundle error should come before Pallas archive decoding",
+        "lineage witness final-bundle error should come before previous-proof checks",
         "verifier opening length",
         "verifier parameter fingerprint",
         "fixed-window table schedule digest",
@@ -380,12 +463,35 @@ ADVERSARIAL_COVERAGE = {
         "append-boundary digest must be non-zero",
         "scalar-projection digest mismatch",
         "fn kagemusha_recursive_spend_lineage_append_accumulator_opening_contract_rejects_splices",
+        "refresh_append_opening_contract_digest",
         "forged append transition boundary digest must reject",
         "forged append boundary chain binding must reject",
         "forged append boundary current-note binding must reject",
         "forged append boundary final-root binding must reject",
+        "forged previous accumulator digest must reject",
+        "forged contract previous accumulator digest must reject",
+        "previous accumulator digest mismatch",
+        "forged previous proof artifact digest must reject",
+        "forged contract previous proof artifact digest must reject",
+        "previous proof artifact digest mismatch",
+        "forged previous proof opening archive digest must reject",
+        "forged contract previous proof opening archive digest must reject",
+        "previous proof opening archive digest mismatch",
+        "forged previous proof verifier preflight must reject",
+        "forged contract previous proof verifier preflight must reject",
+        "previous proof preflight mismatch",
+        "forged contract current-hop verifier preflight must reject",
+        "metadata-spliced current-hop opening archive must reject",
+        "current-hop opening metadata splice error",
+        "forged current-hop proof hash must reject",
+        "forged contract current-hop proof hash must reject",
+        "current-hop proof hash mismatch",
         "forged accumulator append-opening digest must reject",
         "forged accumulator verifier parameter fingerprint must reject",
+        "forged accumulator opening length must reject",
+        "opening length mismatch",
+        "forged accumulator fixed-window schedule digest must reject",
+        "forged accumulator shared-table manifest digest must reject",
         "forged current-hop preflight schedule must reject",
         "stale previous accumulator hop count must reject",
         "ensure_kagemusha_recursive_spend_lineage_witnessless_append_available",
@@ -443,8 +549,20 @@ ADVERSARIAL_COVERAGE = {
     "crates/connect_norito_bridge/src/lib.rs": (
         "kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs",
         "malformed Pallas opening archives before the unavailable gate",
+        "detached valid Pallas opening archives before the unavailable gate",
+        "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
+        "is_kagemusha_recursive_compact_unavailable_error",
         "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
         "valid recursive compact Pallas envelope fixture must decode",
+        "ABI-7 compact prover must reject extra valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject missing valid Pallas opening archives before the unavailable gate",
+        "valid multi-hop recursive compact Pallas archives must map to unavailable",
+        "shape-valid ABI-7 compact tokens must return a soft invalid result",
+        "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result",
+        "non-canonical compact-token verifier-key hashes must clear stale valid flags",
+        "ABI-7 compact verifier must reject multi-row public instances before returning a soft invalid result",
+        "multi-row compact-token public instances must clear stale valid flags",
+        "shape-valid envelopes with stale folded-token bindings must hard-fail before soft invalid",
         "malformed public-input bindings before returning a soft invalid result",
         "preverify_kagemusha_recursive_compact_payment_token",
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
@@ -512,8 +630,18 @@ ADVERSARIAL_COVERAGE = {
     "crates/iroha_js_host/src/lib.rs": (
         "kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs",
         "invalid Kagemusha recursive compact Pallas open-envelope archive",
+        "invalid Kagemusha recursive compact record-backed Pallas preflight",
+        "detached valid recursive compact Pallas archive must reject",
+        "valid multi-hop recursive compact archive must remain unavailable",
+        "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+        "recursive compact prover must reject extra valid Pallas opening archive",
+        "recursive compact prover must reject missing valid Pallas opening archive",
         "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
         "recursive compact token with malformed binding must reject",
+        "recursive compact token with forged verifier-key hash must reject",
+        "envelope verifier-key hash mismatch",
+        "JS host recursive compact verifier must reject multi-row public instances",
+        "unexpected JS host multi-row compact-token error",
         "preverify_kagemusha_recursive_compact_payment_token",
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
         "fn kagemusha_recursive_spend_verify_requires_lineage_record_for_reserved_lineage",
@@ -581,8 +709,19 @@ ADVERSARIAL_COVERAGE = {
     "python/iroha_python/iroha_python_rs/src/lib.rs": (
         "kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle",
         "invalid Kagemusha recursive compact Pallas open-envelope archive",
-        "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
+        "invalid Kagemusha recursive compact record-backed Pallas preflight",
+        "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
+        "failed to decode Kagemusha recursive compact Pallas open-envelope archive",
+        "detached valid Pallas archive",
+        "valid multi-hop recursive compact archive must remain unavailable",
+        "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+        "recursive compact prover must reject extra valid Pallas opening archive",
+        "recursive compact prover must reject missing valid Pallas opening archive",
         "recursive compact verifier must reject malformed token binding",
+        "recursive compact token with forged verifier-key hash must reject",
+        "envelope verifier-key hash mismatch",
+        "Python recursive compact verifier must reject multi-row public instances",
+        "unexpected Python recursive compact multi-row error",
         "preverify_kagemusha_recursive_compact_payment_token",
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
         "fn kagemusha_recursive_spend_verify_python_function_requires_lineage_record",
@@ -1048,6 +1187,8 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "try requireValidInputArchive(",
         "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
         "Kagemusha Pallas open-envelope archive must contain a non-empty Norito payload.",
+        "recursiveCompactUnavailable",
+        "composed private-hop verifier-slice proof",
         "try requireValidRecursiveCompactTokenArchive(token)",
     ),
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift": (
@@ -1055,6 +1196,7 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
         ".invalidRecordBundleArchive",
         ".emptyPallasOpenEnvelopesPayload",
+        "testNativeRecursiveCompactUnavailableIsDistinctFromProofRejection",
         "validKagemushaNoritoArchive",
         "emptyPayloadKagemushaNoritoArchive",
     ),
@@ -1338,6 +1480,8 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
     "crates/iroha_core/src/zk.rs": (
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID",
         "pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID",
+        "kagemusha_recursive_spend_lineage_vk_record_from_box",
+        "kagemusha_recursive_spend_lineage_append_vk_record_from_box",
         "kagemusha_recursive_spend_lineage_append_vk_record",
         "derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes_from_pallas_open_envelope_archive",
         "derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes_from_pallas_open_envelope_archive",
@@ -1345,10 +1489,42 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
         "lineage_proving_key_archive_helpers_reject_profile_mismatch_and_malformed_inputs",
+        "lineage_vk_record_from_box_canonicalizes_profiles_without_keygen",
         "kagemusha_recursive_spend_lineage_init_default_rejects_missing_key_artifacts_before_runtime_keygen",
+        "fn kagemusha_recursive_fixed_window_shared_table_manifest_digest_rejects_layout_splices",
+        "kagemusha_recursive_fixed_window_shared_table_manifest_digest_from_parts",
+        "manifest schedule digest splice must change digest",
+        "manifest row splice must change digest",
+        "manifest row-count splice must change digest",
+        "manifest role splice must change digest",
+        "manifest family-count splice must change digest",
         "Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids",
         '"halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1"',
         '"halo2/pasta/kagemusha-recursive-spend-lineage-append-v1"',
+    ),
+    "crates/iroha_cli/src/zk.rs": (
+        "KagemushaCommand",
+        "LineageKeyArtifacts",
+        "LineageRecord",
+        "KagemushaLineageRecordArgs",
+        "kagemusha_lineage_vk_record_from_bytes",
+        "std::fs::read(&self.vk)",
+        "kagemusha_lineage_record_run_writes_norito_record_from_existing_vk_file",
+        "record_out",
+        "record_namespace",
+        "record_version",
+        "kagemusha_recursive_spend_lineage_vk_record_from_box",
+        "kagemusha_recursive_spend_lineage_append_vk_record_from_box",
+        '"offline_kagemusha"',
+    ),
+    "docs/source/offline_kagemusha.md": (
+        "--record-out",
+        "lineage-record",
+        "--vk artifacts/kagemusha/lineage-init-len128.vk",
+        "--vk artifacts/kagemusha/lineage-append-len128.vk",
+        "--record-namespace",
+        "--record-version",
+        "VerifyingKeyRecord",
     ),
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
         "recursiveSpendLineageOneHopProofCircuitIdV1",
@@ -1569,12 +1745,112 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-append-cap-boundary",
     ),
     (
+        "data-model self-consistent forged append-boundary negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary",
+    ),
+    (
         "core append cap direct-prover negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary",
     ),
     (
+        "data-model lineage key package-binding negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-lineage-key-package-binding",
+    ),
+    (
         "Reserved-lineage profile split negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split",
+    ),
+    (
+        "core append opening-preflight splice negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-opening-preflight-splices",
+    ),
+    (
+        "current-hop opening metadata splice negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-current-hop-opening-metadata-splice",
+    ),
+    (
+        "append verifier-slice Pallas preflight binding negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-verifier-slice-preflight-binding",
+    ),
+    (
+        "core checked-fold input/output overlap negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-overlap-predecode",
+    ),
+    (
+        "core lineage witness fold metadata predecode negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-fold-predecode",
+    ),
+    (
+        "core lineage witness verifier-record predecode negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-record-predecode",
+    ),
+    (
+        "core lineage witness current-note predecode negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-note-predecode",
+    ),
+    (
+        "core lineage witness current-note binding predecode negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-note-binding-predecode",
+    ),
+    (
+        "core lineage witness append-handoff predecode negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-handoff-predecode",
+    ),
+    (
+        "core lineage witness final-bundle predecode negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-final-bundle-predecode",
+    ),
+    (
+        "recursive compact public instance shape negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-public-instance-shape",
+    ),
+    (
+        "recursive compact Pallas opening count negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-pallas-count",
+    ),
+    (
+        "recursive compact CID-spoof verifier-key negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-cid-spoof-key",
+    ),
+    (
+        "bridge recursive compact public instance shape negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-public-instance-shape",
+    ),
+    (
+        "bridge recursive compact Pallas opening count negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-pallas-count",
+    ),
+    (
+        "bridge recursive compact verifier-key hash negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-vk-hash",
+    ),
+    (
+        "JS host recursive compact verifier-key hash negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-vk-hash",
+    ),
+    (
+        "JS host recursive compact Pallas opening count negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-pallas-count",
+    ),
+    (
+        "JS host recursive compact public instance shape negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-public-instance-shape",
+    ),
+    (
+        "Python recursive compact verifier-key hash negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-vk-hash",
+    ),
+    (
+        "Python recursive compact Pallas opening count negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-pallas-count",
+    ),
+    (
+        "Python recursive compact public instance shape negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-public-instance-shape",
+    ),
+    (
+        "fixed-window manifest digest splice negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-fixed-window-manifest-digest-splice",
     ),
     (
         "workflow path negative control",
@@ -2697,6 +2973,24 @@ if mode == "--negative-control-data-model-append-cap-boundary":
         raise SystemExit(0)
     raise SystemExit("negative control failed: data-model append cap boundary drift was not detected")
 
+if mode == "--negative-control-data-model-self-consistent-boundary":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "assert_self_consistent_forged_boundary_rejected",
+        "assert_profile_bound_forged_boundary_rejected",
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate self-consistent append-boundary coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected self-consistent append-boundary drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: self-consistent append-boundary drift was not detected")
+
 if mode == "--negative-control-core-append-cap-boundary":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
@@ -2732,8 +3026,484 @@ if mode == "--negative-control-core-lineage-profile-split":
     except PolicyError as error:
         print("negative control rejected Reserved-lineage profile split drift")
         print(str(error).splitlines()[0])
-        raise SystemExit(0)
+    raise SystemExit(0)
     raise SystemExit("negative control failed: Reserved-lineage profile split drift was not detected")
+
+if mode == "--negative-control-data-model-lineage-key-package-binding":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        "kagemusha_lineage_key_artifact_packages_reject_profile_splices",
+        "kagemusha_lineage_key_artifact_packages_allow_profile_splices",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate data-model lineage key package-binding coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected data-model lineage key package-binding drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: data-model lineage key package-binding drift was not detected")
+
+if mode == "--negative-control-core-opening-preflight-splices":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "forged contract current-hop proof hash must reject",
+        "forged contract current-hop proof hash must be checked",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate append opening-preflight splice coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append opening-preflight splice drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append opening-preflight splice drift was not detected")
+
+if mode == "--negative-control-core-current-hop-opening-metadata-splice":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "metadata-spliced current-hop opening archive must reject",
+        "metadata-spliced current-hop opening archive may pass",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate current-hop opening metadata splice coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected current-hop opening metadata splice drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: current-hop opening metadata splice drift was not detected")
+
+if mode == "--negative-control-core-append-verifier-slice-preflight-binding":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "append slice must reject detached current-hop preflight",
+        "append slice may accept detached current-hop preflight",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate append verifier-slice preflight binding coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected append verifier-slice preflight binding drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: append verifier-slice preflight binding drift was not detected")
+
+if mode == "--negative-control-core-fold-overlap-predecode":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "record-backed cross-hop overlap error should come before proof decoding",
+        "record-backed cross-hop overlap may decode proof first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate checked-fold overlap predecode coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected checked-fold overlap predecode drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: checked-fold overlap predecode drift was not detected")
+
+if mode == "--negative-control-core-lineage-witness-fold-predecode":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "lineage witness root-continuity error should come before Pallas archive decoding",
+        "lineage witness root-continuity error may decode Pallas first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate lineage witness fold predecode coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected lineage witness fold predecode drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: lineage witness fold predecode drift was not detected")
+
+if mode == "--negative-control-core-lineage-witness-record-predecode":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "lineage witness verifier-record error should come before Pallas archive decoding",
+        "lineage witness verifier-record error may decode Pallas first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate lineage witness record predecode coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected lineage witness verifier-record predecode drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: lineage witness verifier-record predecode drift was not detected")
+
+if mode == "--negative-control-core-lineage-witness-note-predecode":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "lineage witness current-note error should come before Pallas archive decoding",
+        "lineage witness current-note error may decode Pallas first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate lineage witness current-note predecode coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected lineage witness current-note predecode drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: lineage witness current-note predecode drift was not detected")
+
+if mode == "--negative-control-core-lineage-witness-note-binding-predecode":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "lineage witness current-note binding error should come before Pallas archive decoding",
+        "lineage witness current-note binding error may decode Pallas first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate lineage witness current-note binding predecode coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected lineage witness current-note binding predecode drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: lineage witness current-note binding predecode drift was not detected")
+
+if mode == "--negative-control-core-lineage-witness-handoff-predecode":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "lineage witness append-handoff error should come before Pallas archive decoding",
+        "lineage witness append-handoff error may decode Pallas first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate lineage witness append-handoff predecode coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected lineage witness append-handoff predecode drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: lineage witness append-handoff predecode drift was not detected")
+
+if mode == "--negative-control-core-lineage-witness-final-bundle-predecode":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "lineage witness final-bundle error should come before Pallas archive decoding",
+        "lineage witness final-bundle error may decode Pallas first",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate lineage witness final-bundle predecode coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected lineage witness final-bundle predecode drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: lineage witness final-bundle predecode drift was not detected")
+
+if mode == "--negative-control-core-recursive-compact-public-instance-shape":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "recursive compact token multi-row public instances must reject",
+        "recursive compact token multi-row public instances may pass",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate recursive compact public instance shape coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected recursive compact public instance shape drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: recursive compact public instance shape drift was not detected")
+
+if mode == "--negative-control-core-recursive-compact-pallas-count":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "extra compact Pallas opening must reject before unavailable",
+        "extra compact Pallas opening may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "missing compact Pallas opening must reject before unavailable",
+        "missing compact Pallas opening may return unavailable",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate recursive compact Pallas opening count coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected recursive compact Pallas opening count drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: recursive compact Pallas opening count drift was not detected")
+
+if mode == "--negative-control-core-recursive-compact-cid-spoof-key":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "CID-spoofed ABI-7 compact verifier key must reject before unavailable",
+        "CID-spoofed ABI-7 compact verifier key may return unavailable",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate recursive compact CID-spoof key coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected recursive compact CID-spoof key drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: recursive compact CID-spoof key drift was not detected")
+
+if mode == "--negative-control-bridge-recursive-compact-public-instance-shape":
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "ABI-7 compact verifier must reject multi-row public instances before returning a soft invalid result",
+        "ABI-7 compact verifier may soft-invalid multi-row public instances",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate bridge recursive compact public instance shape coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected bridge recursive compact public instance shape drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: bridge recursive compact public instance shape drift was not detected")
+
+if mode == "--negative-control-bridge-recursive-compact-pallas-count":
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "ABI-7 compact prover must reject extra valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover may accept extra valid Pallas opening archives",
+        1,
+    )
+    mutated = mutated.replace(
+        "ABI-7 compact prover must reject missing valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover may accept missing valid Pallas opening archives",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate bridge recursive compact Pallas opening count coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected bridge recursive compact Pallas opening count drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: bridge recursive compact Pallas opening count drift was not detected")
+
+if mode == "--negative-control-bridge-recursive-compact-vk-hash":
+    target = "crates/connect_norito_bridge/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result",
+        "ABI-7 compact verifier may soft-invalid non-canonical envelope verifier-key hashes",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate bridge recursive compact verifier-key hash coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected bridge recursive compact verifier-key hash drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: bridge recursive compact verifier-key hash drift was not detected")
+
+if mode == "--negative-control-js-host-recursive-compact-vk-hash":
+    target = "crates/iroha_js_host/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "recursive compact token with forged verifier-key hash must reject",
+        "recursive compact token with forged verifier-key hash may soft-invalid",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate JS host recursive compact verifier-key hash coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected JS host recursive compact verifier-key hash drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JS host recursive compact verifier-key hash drift was not detected")
+
+if mode == "--negative-control-js-host-recursive-compact-pallas-count":
+    target = "crates/iroha_js_host/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "recursive compact prover must reject extra valid Pallas opening archive",
+        "recursive compact prover may accept extra valid Pallas opening archive",
+        1,
+    )
+    mutated = mutated.replace(
+        "recursive compact prover must reject missing valid Pallas opening archive",
+        "recursive compact prover may accept missing valid Pallas opening archive",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate JS host recursive compact Pallas opening count coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected JS host recursive compact Pallas opening count drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JS host recursive compact Pallas opening count drift was not detected")
+
+if mode == "--negative-control-js-host-recursive-compact-public-instance-shape":
+    target = "crates/iroha_js_host/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "JS host recursive compact verifier must reject multi-row public instances",
+        "JS host recursive compact verifier may soft-invalid multi-row public instances",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate JS host recursive compact public instance shape coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected JS host recursive compact public instance shape drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: JS host recursive compact public instance shape drift was not detected")
+
+if mode == "--negative-control-python-recursive-compact-vk-hash":
+    target = "python/iroha_python/iroha_python_rs/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "recursive compact token with forged verifier-key hash must reject",
+        "recursive compact token with forged verifier-key hash may soft-invalid",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate Python recursive compact verifier-key hash coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected Python recursive compact verifier-key hash drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python recursive compact verifier-key hash drift was not detected")
+
+if mode == "--negative-control-python-recursive-compact-pallas-count":
+    target = "python/iroha_python/iroha_python_rs/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "recursive compact prover must reject extra valid Pallas opening archive",
+        "recursive compact prover may accept extra valid Pallas opening archive",
+        1,
+    )
+    mutated = mutated.replace(
+        "recursive compact prover must reject missing valid Pallas opening archive",
+        "recursive compact prover may accept missing valid Pallas opening archive",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate Python recursive compact Pallas opening count coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected Python recursive compact Pallas opening count drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python recursive compact Pallas opening count drift was not detected")
+
+if mode == "--negative-control-python-recursive-compact-public-instance-shape":
+    target = "python/iroha_python/iroha_python_rs/src/lib.rs"
+    source = read(target)
+    mutated = source.replace(
+        "Python recursive compact verifier must reject multi-row public instances",
+        "Python recursive compact verifier may soft-invalid multi-row public instances",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate Python recursive compact public instance shape coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected Python recursive compact public instance shape drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: Python recursive compact public instance shape drift was not detected")
+
+if mode == "--negative-control-fixed-window-manifest-digest-splice":
+    target = "crates/iroha_core/src/zk.rs"
+    source = read(target)
+    mutated = source.replace(
+        "manifest row splice must change digest",
+        "manifest row splice should change digest",
+        1,
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate fixed-window manifest digest splice coverage")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected fixed-window manifest digest splice drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: fixed-window manifest digest splice drift was not detected")
 
 if mode == "--negative-control-workflow":
     target = WORKFLOW_PATH

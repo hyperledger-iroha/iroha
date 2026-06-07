@@ -17,10 +17,14 @@ public final class KagemushaRecursiveAggregationProofBundleProver {
         recordBundleArchive, "recordBundleArchive");
     KagemushaCompactPaymentTokenProver.requireNativeInput(
         pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive");
+    final byte[] recordBundle = KagemushaCompactPaymentTokenProver.ownedNativeInput(
+        recordBundleArchive, "recordBundleArchive");
+    final byte[] pallasOpenEnvelopes = KagemushaCompactPaymentTokenProver.ownedNativeInput(
+        pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive");
     requireNative();
     final byte[] proofBundleArchive =
         nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-            recordBundleArchive, pallasOpenEnvelopesArchive);
+            recordBundle, pallasOpenEnvelopes);
     return KagemushaCompactPaymentTokenProver.requireNativeOutput(
         proofBundleArchive,
         "nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes");

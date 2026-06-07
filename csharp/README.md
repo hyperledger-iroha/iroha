@@ -90,7 +90,10 @@ Use `PreferredMode(...)` to select `recursive_spend_v1` when the complete
 ABI-6-or-later native surface is available, otherwise fall back to
 `checked_prefold_v1`.
 The ABI-7 compact-token symbols remain source-stable but fail closed until the
-compact token proof composes the private-hop verifier-slice relation in-circuit. For
+compact token proof composes the private-hop verifier-slice relation in-circuit.
+The native bridge reports that reserved path with error code `-312`, and the
+C# wrapper surfaces it as a recursive compact proof-composition unavailable
+diagnostic instead of a generic proof rejection. For
 Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
 `RequiresLineageWitnessForRedeem(...)`, `PreferredAppendOutputCircuitId(...)`,
 `CanProveAppendOutputCircuitId(...)`, and
@@ -118,6 +121,9 @@ Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
 rejected before runtime key generation.
+Use `LineageKeyArtifactsForInit(...)` and `LineageKeyArtifactsForAppend(...)`
+to package and validate these verifier/proving key artifacts before building
+the raw request.
 Semantic append is bounded by the separate `CompactTokenMaxHops` constant;
 witnessless Reserved-lineage append and redeem use
 `RecursiveSpendLineageWitnesslessMaxHopsV1`.

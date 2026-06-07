@@ -264,6 +264,137 @@ def capture_redirect_server(body=b"redirect"):
 
 
 class IsoAuditNotaryAdapterTest(unittest.TestCase):
+    def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
+        cases = (
+            ("password_audit_unknown_secret", "audit_unknown_secret"),
+            ("%70assword_audit_unknown_leak", "audit_unknown_leak"),
+            ("private-key_audit_unknown_leak", "audit_unknown_leak"),
+        )
+        for unknown_key, hidden in cases:
+            with self.subTest(unknown_key=unknown_key):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._reject_unknown_keys({unknown_key: "redacted"}, set(), "anchor")
+
+                message = str(caught.exception)
+                self.assertIn("contains unknown keys", message)
+                self.assertNotIn("password", message)
+                self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_output_cli_path_flags_reject_flag_like_values(self):
+        cases = (
+            ["--receipt-dir"],
+            ["--receipt-dir", ""],
+            ["--receipt-dir", "--allow-insecure-http"],
+            ["--receipt-dir="],
+            ["--receipt-dir=--allow-insecure-http"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(
+                    ADAPTER.AdapterError,
+                    "--receipt-dir requires a path value",
+                ):
+                    ADAPTER._preflight_output_cli_paths(argv, {"--receipt-dir"})
+
+    def test_output_cli_paths_reject_encoded_secret_material_without_echo(self):
+        cases = (
+            ("token=notary-path-leak.receipts", "token=notary-path-leak"),
+            ("token%3Dnotary-path-leak.receipts", "token=notary-path-leak"),
+            ("%70assword%253Dnotary-path-leak.receipts", "password=notary-path-leak"),
+            ("token-notary-path-secret.receipts", "token-notary-path-secret"),
+        )
+        for raw_path, decoded_secret in cases:
+            with self.subTest(raw_path=raw_path):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._preflight_output_cli_paths(
+                        ["--receipt-dir", raw_path], {"--receipt-dir"}
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(raw_path, message)
+                self.assertNotIn(decoded_secret, message)
+                self.assertNotIn("notary-path-leak", message)
+
+    def test_boolean_cli_flags_reject_values_without_echo(self):
+        cases = (
+            (["--all=true"], "--all", "--all=true"),
+            (
+                ["--allow-missing-record-sources", "true"],
+                "--allow-missing-record-sources",
+                "true",
+            ),
+        )
+        for argv, flag, rejected in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"{flag} does not take a value", stderr)
+                self.assertNotIn(rejected, stderr)
+
+    def test_numeric_cli_flags_reject_malformed_values_without_echo(self):
+        cases = (
+            ["--response-limit-bytes", "token=notary-secret"],
+            ["--response-limit-bytes=token=notary-secret"],
+            ["--timeout-secs", "--receipt-dir"],
+            ["--timeout-secs="],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("numeric value", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("notary-secret", stderr)
+
+    def test_raw_cli_secret_like_values_rejected_without_echo(self):
+        cases = (
+            ["--private-key=notary-secret"],
+            ["token=notary-secret"],
+            ["password=notary-secret"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("secret-looking", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("password=", stderr)
+                self.assertNotIn("notary-secret", stderr)
+
+    def test_url_cli_flags_reject_missing_empty_or_flag_like_values(self):
+        cases = (
+            ["--endpoint"],
+            ["--endpoint", ""],
+            ["--endpoint", "--receipt-dir"],
+            ["--endpoint="],
+            ["--endpoint=--receipt-dir"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("--endpoint requires a URL value", stderr)
+
+    def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "latest.notary.json"
+            path.write_text("{}\n", encoding="utf-8")
+
+            for limit in (True, "64"):
+                with self.subTest(limit=limit):
+                    with self.assertRaisesRegex(
+                        ADAPTER.AdapterError,
+                        "max file bytes must be a positive integer",
+                    ):
+                        ADAPTER._read_regular_file(path, max_bytes=limit)
+
     def test_publish_posts_verified_anchor_and_writes_receipt(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -452,6 +583,11 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "store_dir must not contain semicolon path parameters",
             ),
             (
+                "secret-looking",
+                "/ops/iso/token=notary-secret",
+                "store_dir must not contain secret-looking material",
+            ),
+            (
                 "empty-segment",
                 "/ops//iso",
                 "store_dir must not contain empty path segments",
@@ -485,6 +621,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
+                    if name == "secret-looking":
+                        self.assertNotIn("notary-secret", stderr)
                     self.assertEqual(requests, [])
 
     def test_tampered_persisted_record_source_is_rejected_before_network_delivery(self):
@@ -682,7 +820,46 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             finally:
                 ADAPTER.MAX_BEARER_TOKEN_BYTES = original_limit
 
-            self.assertIn("exceeds 8 byte input limit", str(raised.exception))
+            self.assertIn("exceeds 8 byte bearer token limit", str(raised.exception))
+
+    def test_bearer_token_file_errors_do_not_echo_runtime_path(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            secret_dir = Path(raw_export) / "private_key=notary-secret"
+            secret_dir.mkdir()
+            cases = [
+                (
+                    "missing",
+                    secret_dir / "token=notary-secret-missing.txt",
+                    None,
+                    "does not exist",
+                ),
+                ("empty", secret_dir / "token=notary-secret-empty.txt", b"", "empty"),
+                (
+                    "non-utf8",
+                    secret_dir / "token=notary-secret-nonutf8.txt",
+                    b"notary-token\xff",
+                    "not UTF-8",
+                ),
+                (
+                    "oversized",
+                    secret_dir / "token=notary-secret-oversized.txt",
+                    b"a" * (ADAPTER.MAX_BEARER_TOKEN_BYTES + 1),
+                    "exceeds",
+                ),
+            ]
+            for name, token_file, token_bytes, message in cases:
+                with self.subTest(name=name):
+                    if token_bytes is not None:
+                        token_file.write_bytes(token_bytes)
+                    with self.assertRaises(ADAPTER.AdapterError) as raised:
+                        ADAPTER._load_bearer_token(token_file)
+
+                    error = str(raised.exception)
+                    self.assertIn("bearer token file", error)
+                    self.assertIn(message, error)
+                    self.assertNotIn("private_key=notary-secret", error)
+                    self.assertNotIn("token=notary-secret", error)
+                    self.assertNotIn(str(token_file), error)
 
     def test_non_regular_bearer_token_files_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -776,6 +953,24 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 r"nested\token.txt",
                 "forward slashes",
             ),
+            (
+                "token secret-looking",
+                "--bearer-token-file",
+                "token=notary-secret",
+                "secret-looking material",
+            ),
+            (
+                "export secret-looking",
+                "--export-dir",
+                "private_key=notary-secret",
+                "secret-looking material",
+            ),
+            (
+                "receipt secret-looking",
+                "--receipt-dir",
+                "token=notary-secret",
+                "secret-looking material",
+            ),
         )
         for name, flag, raw_path, message in cases:
             with self.subTest(name=name):
@@ -799,6 +994,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+                    if "secret-looking" in name:
+                        self.assertNotIn("notary-secret", stderr)
 
     def test_numeric_cli_limits_reject_nonpositive_and_nonfinite_before_network_delivery(self):
         cases = (
@@ -1140,6 +1337,62 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertNotIn("token=", stderr)
             self.assertNotIn("notary-secret", stderr)
 
+    def test_rejected_endpoint_does_not_echo_secret_path(self):
+        cases = (
+            "https://notary.example/archive/token=notary-path-secret",
+            "https://notary.example/archive/token-notary-path-secret",
+            "https://notary.example/archive/token%3Dnotary-path-secret",
+            "https://notary.example/archive/token%253Dnotary-path-secret",
+        )
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            for secret_endpoint in cases:
+                with self.subTest(secret_endpoint=secret_endpoint):
+                    rc, _stdout, stderr = run_main(
+                        ["--export-dir", str(export_dir), "--endpoint", secret_endpoint]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn(secret_endpoint, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("notary-path-secret", stderr)
+
+    def test_rejected_endpoint_does_not_echo_secret_port(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            secret_endpoint = "https://notary.example:token-notary-port-secret/archive"
+
+            rc, _stdout, stderr = run_main(
+                ["--export-dir", str(export_dir), "--endpoint", secret_endpoint]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid port", stderr)
+            self.assertNotIn(secret_endpoint, stderr)
+            self.assertNotIn("token-notary-port-secret", stderr)
+
+    def test_rejected_endpoint_does_not_echo_secret_host_or_parser_error(self):
+        cases = (
+            ("https://token-notary-host-secret.notary.example/archive", "secret-looking material"),
+            ("https://[token-notary-host-secret/archive", "is not a valid URL"),
+        )
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            for secret_endpoint, message in cases:
+                with self.subTest(secret_endpoint=secret_endpoint):
+                    rc, _stdout, stderr = run_main(
+                        ["--export-dir", str(export_dir), "--endpoint", secret_endpoint]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(secret_endpoint, stderr)
+                    self.assertNotIn("token-notary-host-secret", stderr)
+
     def test_duplicate_endpoint_is_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -1160,13 +1413,14 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
             self.assertIn("duplicates --endpoint[0]", stderr)
+            self.assertNotIn(endpoint, stderr)
 
     def test_duplicate_anchor_json_keys_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
             write_export(export_dir)
             (export_dir / ADAPTER.LATEST_ANCHOR_FILE).write_text(
-                '{"version":1,"version":1}\n',
+                '{"version":1,"token=notary-duplicate-key-secret":1,"token=notary-duplicate-key-secret":2}\n',
                 encoding="utf-8",
             )
             with capture_server() as (endpoint, requests):
@@ -1183,6 +1437,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
             self.assertIn("duplicate key", stderr)
+            self.assertNotIn("notary-duplicate-key-secret", stderr)
 
     def test_non_finite_anchor_json_numbers_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -1347,6 +1602,89 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(index["record_count"], 1)
 
+    def test_boolean_export_versions_and_counts_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = []
+
+            def boolean_index(export_dir):
+                index = sample_index()
+                index["version"] = True
+                write_export(export_dir, index=index)
+
+            cases.append(("index", boolean_index, "audit index version must be 1"))
+
+            def boolean_index_record_count(export_dir):
+                index = sample_index()
+                index["record_count"] = True
+                index = with_digest(index, ADAPTER.INDEX_DIGEST_FIELD)
+                write_export(export_dir, index=index)
+
+            cases.append(
+                (
+                    "index-record-count",
+                    boolean_index_record_count,
+                    "audit index record_count must be a non-negative integer",
+                )
+            )
+
+            def boolean_anchor(export_dir):
+                index = sample_index()
+                anchor = sample_anchor(index)
+                anchor["version"] = True
+                write_export(export_dir, index=index, anchor=anchor)
+
+            cases.append(("anchor", boolean_anchor, "unsupported anchor version"))
+
+            def boolean_anchor_record_count(export_dir):
+                index = sample_index()
+                anchor = sample_anchor(index)
+                anchor["record_count"] = True
+                anchor = with_digest(anchor, ADAPTER.ANCHOR_DIGEST_FIELD)
+                write_export(export_dir, index=index, anchor=anchor)
+
+            cases.append(
+                (
+                    "anchor-record-count",
+                    boolean_anchor_record_count,
+                    "record_count must be a non-negative integer",
+                )
+            )
+
+            def boolean_record_source(export_dir):
+                index, _anchor, _digest_anchor = write_export(export_dir)
+                record = index["records"][0]
+                source_path = (
+                    export_dir
+                    / "store"
+                    / ADAPTER.RECORDS_DIR
+                    / record["filename"]
+                )
+                source = json.loads(source_path.read_text(encoding="utf-8"))
+                source["version"] = True
+                source_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+
+            cases.append(
+                (
+                    "record-source",
+                    boolean_record_source,
+                    "unsupported persisted record version",
+                )
+            )
+
+            for name, setup, message in cases:
+                with self.subTest(name=name):
+                    export_dir = root / name
+                    export_dir.mkdir()
+                    setup(export_dir)
+
+                    rc, _stdout, stderr = run_main(
+                        ["--export-dir", str(export_dir), "--dry-run"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
     def test_unknown_audit_index_or_anchor_fields_are_rejected(self):
         def unknown_index(index, _anchor):
             index = {**index, "operator_note": "publish anyway"}
@@ -1451,6 +1789,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("records[1].message_id duplicates", stderr)
+            self.assertNotIn("msg-1", stderr)
 
     def test_digest_addressed_filename_must_match_index_digest(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -1513,39 +1852,93 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             self.assertEqual(receipt["status_code"], 302)
             self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(b"redirect"))
 
-    def test_secret_looking_remote_response_preview_is_redacted(self):
-        body = b'{"error":"private_key=notary-secret"}'
-        with tempfile.TemporaryDirectory() as raw_export:
-            export_dir = Path(raw_export)
-            write_export(export_dir)
-            with capture_server(status=500, body=body) as (endpoint, requests):
-                rc, _stdout, _stderr = run_main(
-                    [
-                        "--export-dir",
-                        str(export_dir),
-                        "--endpoint",
-                        endpoint,
-                        "--allow-insecure-http",
-                    ]
-                )
+    def test_oversized_remote_response_error_does_not_echo_endpoint(self):
+        body = b"notary response"
+        cases = [
+            (200, "endpoint response exceeded 4 byte limit"),
+            (500, "endpoint error response exceeded 4 byte limit"),
+        ]
+        for status, expected in cases:
+            with self.subTest(status=status):
+                with tempfile.TemporaryDirectory() as raw_export:
+                    export_dir = Path(raw_export)
+                    write_export(export_dir)
+                    with capture_server(status=status, body=body) as (endpoint, requests):
+                        rc, _stdout, stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                                "--response-limit-bytes",
+                                "4",
+                            ]
+                        )
 
-            self.assertEqual(rc, 1)
-            self.assertEqual(len(requests), 1)
-            receipts = list((export_dir / "receipts").glob("*.receipt.json"))
-            self.assertEqual(len(receipts), 1)
-            receipt_text = receipts[0].read_text(encoding="utf-8")
-            receipt = json.loads(receipt_text)
-            self.assertEqual(receipt["status_code"], 500)
-            self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(body))
-            self.assertEqual(
-                receipt["response_body_preview"],
-                ADAPTER.REDACTED_RESPONSE_PREVIEW,
-            )
-            self.assertNotIn("notary-secret", receipt_text)
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(len(requests), 1)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(endpoint, stderr)
+
+    def test_secret_looking_remote_response_preview_is_redacted(self):
+        cases = (
+            b'{"error":"private_key=notary-secret"}',
+            b'{"error":"password=notary-secret"}',
+            b'{"error":"%70assword%253Dnotary-secret"}',
+            b'{"error":"private-key=notary-secret"}',
+            b'{"error":"Set-Cookie: notary-secret"}',
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                with tempfile.TemporaryDirectory() as raw_export:
+                    export_dir = Path(raw_export)
+                    write_export(export_dir)
+                    with capture_server(status=500, body=body) as (
+                        endpoint,
+                        requests,
+                    ):
+                        rc, _stdout, _stderr = run_main(
+                            [
+                                "--export-dir",
+                                str(export_dir),
+                                "--endpoint",
+                                endpoint,
+                                "--allow-insecure-http",
+                            ]
+                        )
+
+                    self.assertEqual(rc, 1)
+                    self.assertEqual(len(requests), 1)
+                    receipts = list((export_dir / "receipts").glob("*.receipt.json"))
+                    self.assertEqual(len(receipts), 1)
+                    receipt_text = receipts[0].read_text(encoding="utf-8")
+                    receipt = json.loads(receipt_text)
+                    self.assertEqual(receipt["status_code"], 500)
+                    self.assertEqual(
+                        receipt["response_body_sha256"], ADAPTER.sha256_hex(body)
+                    )
+                    self.assertEqual(
+                        receipt["response_body_preview"],
+                        ADAPTER.REDACTED_RESPONSE_PREVIEW,
+                    )
+                    self.assertNotIn("notary-secret", receipt_text)
 
     def test_secret_looking_url_error_is_redacted(self):
         self.assertEqual(
             ADAPTER._receipt_error("upstream secret=notary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream password=notary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream %70assword%253Dnotary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream private-key=notary-secret"),
             ADAPTER.REDACTED_ERROR,
         )
         self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")

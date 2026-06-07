@@ -1044,6 +1044,8 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       ...REQUIRED_RECURSIVE_COMPACT_JS_METHODS.map((name) => `js_name = "${name}"`),
       "napi::Result<bool>",
       "Ok(false)",
+      "is_kagemusha_recursive_compact_unavailable_error",
+      "sentinel-spoofed recursive compact token must reject",
     ],
     "Node recursive compact verifier export",
   );
@@ -1055,10 +1057,14 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
         "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7",
         "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
         "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
+        "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
+        "hasKagemushaRecursiveCompactPaymentTokenVerifierNative",
         ...REQUIRED_RECURSIVE_COMPACT_JS_METHODS,
         'typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"',
         "native.kagemushaVerifyRecursiveCompactPaymentToken(KAGEMUSHA_NATIVE_PROBE_ARCHIVE)",
+        "/\\b(?:archive|Norito|probe)\\b/i.test(error.message)",
         'assertKagemushaNoritoArchive(compactToken, "compactTokenArchive")',
+        "recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with the compact verifier symbol",
         "kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result",
       ],
       `${relative} recursive compact verifier gate`,
@@ -1069,6 +1075,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       source(relative),
       [
         "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
+        "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
         ...REQUIRED_RECURSIVE_COMPACT_JS_METHODS,
         'unsupported("kagemushaVerifyRecursiveCompactPaymentToken")',
       ],
@@ -1082,6 +1089,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("javascript/iroha_js/index.d.ts"),
     [
       "isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean",
+      "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(): boolean",
       "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(",
       "kagemushaVerifyRecursiveCompactPaymentToken(",
     ],
@@ -1091,6 +1099,9 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"),
     [
       "kagemushaNoritoFrameWithPayload",
+      "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
+      "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(), true",
+      "with the compact verifier symbol",
       "compactTokenArchive must be a valid Norito archive",
       "compactTokenArchive must contain a non-empty Norito payload",
       "kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result",
@@ -1112,6 +1123,7 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       '"kagemusha_verify_recursive_compact_payment_token"',
       "globals()[_RECURSIVE_COMPACT_TOKEN_METHOD]",
       "globals()[_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD]",
+      '("archive", "norito", "probe")',
       '_assert_kagemusha_norito_archive(compact_token, "compact_token_archive")',
       "returned non-boolean result",
     ],
@@ -1123,13 +1135,19 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "_kagemusha_norito_frame_with_payload",
       "compact_token_archive must be a valid Norito archive",
       "compact_token_archive must contain a non-empty Norito payload",
+      "Kagemusha recursive compact proof unavailable",
+      "Kagemusha recursive compact verifier unavailable",
       "returned non-boolean result",
     ],
     "Python recursive compact verifier tests",
   );
   assertContainsAll(
     source("python/iroha_python/iroha_python_rs/src/lib.rs"),
-    REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS.map((name) => `name = "${name}"`),
+    [
+      ...REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS.map((name) => `name = "${name}"`),
+      "is_kagemusha_recursive_compact_unavailable_error",
+      "sentinel-spoofed recursive compact token must reject",
+    ],
     "Python PyO3 recursive compact exports",
   );
 
@@ -1138,7 +1156,10 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     [
       "requiredBridgeAbiVersion: UInt32 = 7",
       'recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"',
+      "public static var isVerifierNativeAvailable",
+      "isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
       "public static func verifyRecursiveCompactPaymentToken",
+      "bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
       "try requireValidInputArchive(",
       "try requireValidRecursiveCompactTokenArchive(token)",
       "requireValidRecursiveCompactTokenArchive(compactTokenArchive)",
@@ -1156,6 +1177,10 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "connect_norito_kagemusha_verify_recursive_compact_payment_token",
       "probeKagemushaRecursiveCompactPaymentTokenVerifierFunction",
       "kagemushaVerifyRecursiveCompactPaymentTokenFn != nil",
+      "isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
+      "kagemushaRecursiveCompactPaymentTokenVerifierNativeProbeOk",
+      "normalizeKagemushaRecursiveCompactVerifierOutput",
+      "invalidKagemushaVerifierOutput",
     ],
     "Swift recursive compact bridge probe",
   );
@@ -1171,6 +1196,10 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "testReturnsValidNativeOutput",
       "validKagemushaNoritoArchive",
       "testVerifyReturnsNativeBoolean",
+      "testVerifyRequiresVerifierNativeAvailabilityAfterInputValidation",
+      "testNativeBridgeRejectsInvalidVerifierBooleanOutput",
+      "valid: 2",
+      "invalidKagemushaVerifierOutput",
       "testVerifyNativeRejectionIsVerificationRejected",
     ],
     "Swift recursive compact verifier tests",
@@ -1180,9 +1209,14 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"),
     [
       "REQUIRED_BRIDGE_ABI_VERSION: Int = 7",
-      "fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray): Boolean",
-      "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(compactTokenArchive)",
-      "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(compactTokenArchive)",
+      "fun isVerifierNativeAvailable(): Boolean",
+      "fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray?): Boolean",
+      "private val nativeVerifierAvailable: Boolean = loadVerifierLibrary()",
+      "check(nativeVerifierAvailable)",
+      "private fun loadVerifierLibrary(): Boolean",
+      'val compactToken = ownedNativeInput(compactTokenArchive, "compactTokenArchive")',
+      "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)",
+      "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)",
       "nativeVerifyRecursiveCompactPaymentToken(ByteArray(0))",
     ],
     "Kotlin recursive compact wrapper",
@@ -1191,9 +1225,14 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"),
     [
       "REQUIRED_BRIDGE_ABI_VERSION = 7",
+      "public static boolean isVerifierNativeAvailable()",
       "public static boolean verifyRecursiveCompactPaymentToken(final byte[] compactTokenArchive)",
-      "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(compactTokenArchive)",
-      "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(compactTokenArchive)",
+      "NATIVE_VERIFIER_AVAILABLE = loadVerifierLibrary()",
+      "requireVerifierNative()",
+      "private static boolean loadVerifierLibrary()",
+      'final byte[] compactToken = ownedNativeInput(compactTokenArchive, "compactTokenArchive")',
+      "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)",
+      "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)",
       "nativeVerifyRecursiveCompactPaymentToken(new byte[0])",
     ],
     "Android Java recursive compact wrapper",
@@ -1667,13 +1706,27 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-workflow",
     "--negative-control-native-manifest-workflow",
     "--negative-control-js-browser-helper",
+    "--negative-control-js-lineage-key-artifact-copy",
+    "--negative-control-js-lineage-key-package-binding",
+    "--negative-control-python-lineage-key-package-binding",
+    "--negative-control-csharp-lineage-key-package-binding",
+    "--negative-control-swift-lineage-key-package-binding",
+    "--negative-control-jvm-lineage-key-package-binding",
+    "--negative-control-android-lineage-key-package-binding",
+    "--negative-control-js-lineage-readonly-declarations",
+    "--negative-control-sdk-archive-input-copy",
+    "--negative-control-sdk-lineage-proving-key-copy",
     "--negative-control-sdk-helper-surface",
     "--negative-control-sdk-readme-boundary",
     "--negative-control-sdk-readme-availability-surface",
+    "--negative-control-sdk-readme-recursive-compact-unavailable",
     "--negative-control-sdk-readme-stale-future-lineage",
     "--negative-control-cross-sdk-helper-bodies",
+    "--negative-control-mobile-halo2-vk-hash",
+    "--negative-control-rust-recursive-compact-unavailable-classifier",
     "--negative-control-recursive-compact-verifier-surface",
     "--negative-control-kagemusha-abi-probe-bounds",
+    "--negative-control-kagemusha-probe-rejection-shape",
     "--negative-control-sdk-negative-controls-workflow",
     "--negative-control-sdk-negative-controls-comment-workflow",
     "--negative-control-sdk-main-guard-workflow",
@@ -1698,6 +1751,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-python-sdk-native-build-script",
     "--negative-control-python-sdk-venv-activation-script",
     "--negative-control-python-sdk-bytecode-script",
+    "--negative-control-python-lineage-frozen-copy",
     "--negative-control-python-sdk-test-workflow",
     "--negative-control-python-sdk-needs-workflow",
     "--negative-control-jvm-sdk-job-workflow",
@@ -1709,11 +1763,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-jvm-sdk-jdk21-script",
     "--negative-control-jvm-sdk-java-home-override-script",
     "--negative-control-jvm-sdk-java-home-reject-script",
+    "--negative-control-jvm-recursive-compact-verifier-availability",
+    "--negative-control-jvm-recursive-compact-shape-classifier",
+    "--negative-control-jvm-sdk-android-harness-script",
     "--negative-control-jvm-sdk-test-order-workflow",
     "--negative-control-jvm-sdk-needs-workflow",
     "--negative-control-swift-sdk-job-workflow",
     "--negative-control-swift-sdk-runner-workflow",
     "--negative-control-swift-sdk-parse-workflow",
+    "--negative-control-swift-sdk-uc4-skip",
+    "--negative-control-swift-lineage-data-copy",
+    "--negative-control-swift-recursive-compact-verifier-bool",
+    "--negative-control-swift-recursive-compact-verifier-availability",
     "--negative-control-swift-sdk-version-script",
     "--negative-control-swift-sdk-override-script",
     "--negative-control-swift-sdk-needs-workflow",
@@ -1725,6 +1786,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-csharp-sdk-dotnet-override-script",
     "--negative-control-csharp-sdk-dotnet-major-script",
     "--negative-control-csharp-sdk-native-bridge-script",
+    "--negative-control-csharp-archive-copy",
+    "--negative-control-csharp-recursive-compact-verifier-unavailable",
     "--negative-control-csharp-sdk-test-workflow",
     "--negative-control-csharp-sdk-needs-workflow",
     "--negative-control-js-sdk-job-workflow",
@@ -1809,7 +1872,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
 
   const browserHelperBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-js-browser-helper":'),
-    guard.indexOf('if mode == "--negative-control-sdk-helper-surface":'),
+    guard.indexOf('if mode == "--negative-control-js-lineage-key-artifact-copy":'),
   );
   assert.match(
     browserHelperBranch,
@@ -1820,6 +1883,279 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     browserHelperBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "browser-helper negative control must not unconditionally pass after run_checks",
+  );
+  const jsLineageKeyArtifactCopyBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-lineage-key-artifact-copy":'),
+    guard.indexOf('if mode == "--negative-control-js-lineage-key-package-binding":'),
+  );
+  assert.match(
+    jsLineageKeyArtifactCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS lineage key artifact copy drift was not detected"\)/u,
+    "JS lineage key artifact copy negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsLineageKeyArtifactCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS lineage key artifact copy negative control must not unconditionally pass after run_checks",
+  );
+  const jsLineageKeyPackageBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
+  );
+  assert.match(
+    jsLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JS lineage key package binding drift was not detected"\)/u,
+    "JS lineage key package binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const pythonLineageKeyPackageBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-csharp-lineage-key-package-binding":'),
+  );
+  assert.match(
+    pythonLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Python lineage key package binding drift was not detected"\)/u,
+    "Python lineage key package binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const csharpLineageKeyPackageBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
+  );
+  assert.match(
+    csharpLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# lineage key package binding drift was not detected"\)/u,
+    "C# lineage key package binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const swiftLineageKeyPackageBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-jvm-lineage-key-package-binding":'),
+  );
+  assert.match(
+    swiftLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift lineage key package binding drift was not detected"\)/u,
+    "Swift lineage key package binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const jvmLineageKeyPackageBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-android-lineage-key-package-binding":'),
+  );
+  assert.match(
+    jvmLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Kotlin\/JVM lineage key package binding drift was not detected"\)/u,
+    "Kotlin/JVM lineage key package binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Kotlin/JVM lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const androidLineageKeyPackageBindingBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-android-lineage-key-package-binding":'),
+    guard.indexOf('if mode == "--negative-control-js-lineage-readonly-declarations":'),
+  );
+  assert.match(
+    androidLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Android Java lineage key package binding drift was not detected"\)/u,
+    "Android Java lineage key package binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    androidLineageKeyPackageBindingBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Android Java lineage key package binding negative control must not unconditionally pass after run_checks",
+  );
+  const jsLineageReadonlyDeclarationsBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-lineage-readonly-declarations":'),
+    guard.indexOf('if mode == "--negative-control-sdk-archive-input-copy":'),
+  );
+  assert.match(
+    jsLineageReadonlyDeclarationsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS lineage key artifact readonly declaration drift was not detected"\s*\)/u,
+    "JS lineage key artifact readonly declaration negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsLineageReadonlyDeclarationsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS lineage key artifact readonly declaration negative control must not unconditionally pass after run_checks",
+  );
+  const sdkArchiveInputCopyBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-archive-input-copy":'),
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-proving-key-copy":'),
+  );
+  assert.match(
+    sdkArchiveInputCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK archive input copy drift was not detected"\)/u,
+    "SDK archive input copy negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkArchiveInputCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK archive input copy negative control must not unconditionally pass after run_checks",
+  );
+  const sdkLineageProvingKeyCopyBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-lineage-proving-key-copy":'),
+    guard.indexOf('if mode == "--negative-control-sdk-helper-surface":'),
+  );
+  assert.match(
+    sdkLineageProvingKeyCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: SDK lineage proving key artifact copy drift was not detected"\)/u,
+    "SDK lineage proving key artifact copy negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkLineageProvingKeyCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK lineage proving key artifact copy negative control must not unconditionally pass after run_checks",
+  );
+  const rustRecursiveCompactUnavailableClassifierBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":'),
+    guard.indexOf('if mode == "--negative-control-recursive-compact-verifier-surface":'),
+  );
+  assert.match(
+    rustRecursiveCompactUnavailableClassifierBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Rust recursive compact unavailable classifier negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    rustRecursiveCompactUnavailableClassifierBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Rust recursive compact unavailable classifier drift was not detected"\)/u,
+    "Rust recursive compact unavailable classifier negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    rustRecursiveCompactUnavailableClassifierBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Rust recursive compact unavailable classifier negative control must not unconditionally pass after run_checks",
+  );
+  const kagemushaProbeRejectionShapeBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-kagemusha-probe-rejection-shape":'),
+    guard.indexOf("if mode:\n    raise SystemExit"),
+  );
+  assert.match(
+    kagemushaProbeRejectionShapeBranch,
+    /mutated\s*=\s*dict\(texts\)[\s\S]*?mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "Kagemusha probe rejection shape negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    kagemushaProbeRejectionShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Kagemusha probe rejection shape drift was not detected"\)/u,
+    "Kagemusha probe rejection shape negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    kagemushaProbeRejectionShapeBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Kagemusha probe rejection shape negative control must not unconditionally pass after run_checks",
+  );
+  const jvmRecursiveCompactVerifierAvailabilityBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-jvm-recursive-compact-verifier-availability":'),
+    guard.indexOf('if mode == "--negative-control-jvm-recursive-compact-shape-classifier":'),
+  );
+  assert.match(
+    jvmRecursiveCompactVerifierAvailabilityBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "JVM recursive compact verifier availability negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jvmRecursiveCompactVerifierAvailabilityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: JVM recursive compact verifier availability drift was not detected"\)/u,
+    "JVM recursive compact verifier availability negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jvmRecursiveCompactVerifierAvailabilityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JVM recursive compact verifier availability negative control must not unconditionally pass after run_checks",
+  );
+  const csharpArchiveCopyBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-archive-copy":'),
+    guard.indexOf('if mode == "--negative-control-csharp-recursive-compact-verifier-unavailable":'),
+  );
+  assert.match(
+    csharpArchiveCopyBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "C# archive wrapper copy negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    csharpArchiveCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# archive wrapper copy drift was not detected"\)/u,
+    "C# archive wrapper copy negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpArchiveCopyBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# archive wrapper copy negative control must not unconditionally pass after run_checks",
+  );
+  const csharpRecursiveCompactVerifierUnavailableBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-recursive-compact-verifier-unavailable":'),
+    guard.indexOf('if mode == "--negative-control-csharp-sdk-test-workflow":'),
+  );
+  assert.match(
+    csharpRecursiveCompactVerifierUnavailableBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "C# recursive compact verifier unavailable negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    csharpRecursiveCompactVerifierUnavailableBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: C# recursive compact verifier unavailable drift was not detected"\)/u,
+    "C# recursive compact verifier unavailable negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    csharpRecursiveCompactVerifierUnavailableBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "C# recursive compact verifier unavailable negative control must not unconditionally pass after run_checks",
+  );
+  const swiftRecursiveCompactVerifierBoolBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-recursive-compact-verifier-bool":'),
+    guard.indexOf('if mode == "--negative-control-swift-sdk-version-script":'),
+  );
+  assert.match(
+    swiftRecursiveCompactVerifierBoolBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift recursive compact verifier bool negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftRecursiveCompactVerifierBoolBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift recursive compact verifier bool drift was not detected"\)/u,
+    "Swift recursive compact verifier bool negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftRecursiveCompactVerifierBoolBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift recursive compact verifier bool negative control must not unconditionally pass after run_checks",
+  );
+  const swiftRecursiveCompactVerifierAvailabilityBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-recursive-compact-verifier-availability":'),
+    guard.indexOf('if mode == "--negative-control-swift-sdk-version-script":'),
+  );
+  assert.match(
+    swiftRecursiveCompactVerifierAvailabilityBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift recursive compact verifier availability negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftRecursiveCompactVerifierAvailabilityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Swift recursive compact verifier availability drift was not detected"\)/u,
+    "Swift recursive compact verifier availability negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftRecursiveCompactVerifierAvailabilityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift recursive compact verifier availability negative control must not unconditionally pass after run_checks",
   );
   const jsRunner = source("ci/check_kagemusha_recursive_spend_js_sdk.sh");
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");
@@ -1873,7 +2209,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     jsRunner,
-    /Kagemusha recursive spend\|Kagemusha \.\* SDK runner[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/package_dist\.test\.js/,
+    /Kagemusha recursive spend\|Kagemusha record-backed\|Kagemusha \.\* SDK runner\|browser crypto exposes native-only helpers as safe stubs[\s\S]*test\/crypto\.browser\.test\.js[\s\S]*test\/kagemushaFfiContractParity\.test\.js[\s\S]*test\/kagemushaRecursiveSpend\.test\.js[\s\S]*test\/package_dist\.test\.js/,
     "Kagemusha JavaScript SDK runner must exercise recursive spend, package-dist, and runtime-gate meta tests",
   );
 });
