@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -2480,12 +2480,7 @@ and completed history lives in [`status.md`](./status.md).
   RBC chunk post scheduling/debug-mask semantics,
   RBC READY/DELIVER deferral throttle semantics,
   RBC missing-INIT broad rebroadcast semantics,
-  RBC persisted chunk sampling/proof semantics,
-  RBC persisted session-store guard semantics,
-  RBC store status accounting semantics,
-  RBC store pressure-log throttling semantics,
   round-gap marker/snapshot/EMA status semantics,
-  RBC stale-message/payload-refetch helper semantics,
   RBC missing BlockCreated recovery semantics,
   RBC unverified-roster escape-hatch semantics,
   RBC signing-preimage binding semantics,
@@ -8097,6 +8092,11 @@ corridor into broader release validation.
   land.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
+- Treat the explicit DA/RBC integration soft fallbacks as closed:
+  `sumeragi_adversarial_chunk_drop_recovery` now requires post-drop progress
+  and bounded peer skew, while the NPoS restart/large-payload tests require
+  restarted-peer catch-up, recovered-session evidence, primary-cluster height,
+  and quorum-visible commit height before accepting RBC persistence proofs.
 - Keep hardware acceleration paths feature-gated with deterministic scalar
   fallbacks.
 
@@ -8156,80 +8156,7 @@ RBC targeted READY/DELIVER repair helper gate (`rbc-targeted-repair`),
 RBC outbound chunk flush helper gate (`rbc-outbound-flush`),
 RBC chunk post scheduling/debug-mask helper gate (`rbc-chunk-post-debug`),
 RBC READY/DELIVER deferral throttle helper gate (`rbc-deferral-throttle`),
-RBC missing-INIT broad rebroadcast gate (`rbc-missing-init-rebroadcast`),
-RBC persisted chunk sampling helper gate
-(`rbc-sampling`), RBC persisted session-store guard gate
-(`rbc-store`), RBC store status accounting helper gate (`rbc-store-status`),
-RBC store pressure log throttling helper gate (`rbc-store-pressure-log`),
 round-gap marker/snapshot/EMA status helper gate (`round-gap-status`),
-RBC recovery helper gate, RBC missing BlockCreated recovery
-helper gate (`rbc-missing-block-recovery`), RBC unverified-roster escape-hatch gate,
-RBC signing-preimage gate, classic Vote/VRF
-signing-preimage gate, classic Vote/QC signature-verification gate,
-invalid-signature kind/outcome label helper gate
-(`invalid-signature-labels`),
-invalid-signature throttle/penalty helper gate (`invalid-signature-throttle`),
-TLC-cross-checked vote-validation drop telemetry status helper gate
-(`vote-validation-drop-status`),
-penalty offender/epoch/roster selection helper gate
-(`penalty-offender-selection`),
-consensus penalty action derivation/application helper gate
-(`consensus-penalty-action`),
-penalty status projection helper gate (`penalty-status`),
-local peer removed flag helper gate (`local-peer-removed-status`),
-TLC-cross-checked execution-witness recorder lifecycle/keying helper gate
-(`exec-witness-recorder`),
-TLC-cross-checked execution-witness access-key parser helper gate
-(`exec-witness-access-key`),
-execution-witness root projection helper gate (`exec-witness-roots`),
-TLC-cross-checked sparse-Merkle path/hash helper gate (`smt-path-hash`),
-RBC compact block-message helper gate (`block-message-rbc-compact`),
-consensus block-message priority helper gate (`block-message-priority`),
-consensus block-message height/view projection helper gate
-(`block-message-height-view`),
-consensus block-message log/status kind projection helper gate
-(`block-message-kind`),
-TLC-cross-checked Kura replica advert ingress helper gate
-(`kura-replica-advert`),
-consensus message timing/control/native-AMX projection helper gate
-(`message-projection`),
-pipeline event emission helper gate (`pipeline-event-emission`),
-cached block-message Norito frame helper gate (`block-message-wire`),
-BlockCreated frontier metadata wire/rebuild helper gate
-(`block-created-frontier-wire`),
-TLC-cross-checked canonical block payload bytes helper gate
-(`block-payload-canonicalization`),
-cached proposal rebroadcast helper gate (`cached-proposal-rebroadcast`),
-TLC-cross-checked frontier block-sync hint/direct-response permit gate
-(`frontier-block-sync-hint`),
-exact-slot frontier recovery activity helper gate
-(`frontier-same-slot-activity`),
-frontier reassembly activity helper gate
-(`frontier-reassembly-activity`),
-frontier quorum-timeout actionable-owner cleanup helper gate
-(`frontier-quorum-owner-actionable`),
-contiguous-frontier sidecar retarget helper gate
-(`frontier-sidecar-retarget`),
-contiguous-frontier sidecar expected-hash helper gate
-(`frontier-sidecar-expected-hash`),
-contiguous-frontier payload-hint selector helper gate
-(`contiguous-frontier-payload-hint`),
-contiguous-frontier parent QC-hint retarget helper gate
-(`frontier-parent-qc-hint-retarget`),
-TLC-cross-checked live-frontier idle missing-QC suppression helper gate
-(`live-frontier-idle-missing-qc`),
-TLC-cross-checked missing-QC reacquire admission helper gate
-(`missing-qc-reacquire-admission`),
-TLC-cross-checked missing-QC reacquire action orchestration helper gate
-(`missing-qc-reacquire-action`),
-TLC-cross-checked missing commit-QC actionable dependency helper gate
-(`missing-commit-qc-actionable`),
-TLC-cross-checked same-height missing-QC stall dampening helper gate
-(`missing-qc-height-stall`),
-TLC-cross-checked same-height missing-QC stall range-pull helper gate
-(`missing-qc-stall-range-pull`),
-TLC-cross-checked same-height missing-payload fetch-window and hash-miss cap helper gate
-(`missing-payload-fetch-window`),
 TLC-cross-checked canonical contiguous-frontier reanchor helper gate
 (`canonical-frontier-reanchor`),
 TLC-cross-checked contiguous-frontier repair view-change suppression helper gate
@@ -8558,7 +8485,7 @@ TLC-cross-checked proposal stale same-height vote helper gate,
 TLC-cross-checked same-height vote recovery view-gap helper gate,
 TLC-cross-checked tip-extension helper gate,
 TLC-cross-checked DA gate helper gate,
-TLC-cross-checked DA gate status counter/snapshot helper gate
+TLC-cross-checked DA gate status transition semantics helper gate
 (`da-gate-status`),
 TLC-cross-checked DA manifest guard helper gate,
 TLC-cross-checked consensus handshake capability construction helper gate,

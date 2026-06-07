@@ -5583,6 +5583,7 @@ impl Telemetry {
     fn da_gate_satisfaction_label(satisfaction: GateSatisfaction) -> (&'static str, u64) {
         match satisfaction {
             GateSatisfaction::MissingDataRecovered => ("missing_data_recovered", 1),
+            GateSatisfaction::ManifestGuardRecovered => ("manifest_guard_recovered", 2),
         }
     }
 
@@ -10275,6 +10276,7 @@ mod tests {
         let telemetry = Telemetry::new(metrics.clone(), true);
 
         telemetry.note_da_gate_satisfaction(GateSatisfaction::MissingDataRecovered);
+        telemetry.note_da_gate_satisfaction(GateSatisfaction::ManifestGuardRecovered);
 
         assert_eq!(
             metrics
@@ -10283,7 +10285,14 @@ mod tests {
                 .get(),
             1
         );
-        assert_eq!(metrics.sumeragi_da_gate_last_satisfied.get(), 1);
+        assert_eq!(
+            metrics
+                .sumeragi_da_gate_satisfied_total
+                .with_label_values(&["manifest_guard_recovered"])
+                .get(),
+            1
+        );
+        assert_eq!(metrics.sumeragi_da_gate_last_satisfied.get(), 2);
     }
 
     #[test]

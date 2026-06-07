@@ -117,6 +117,8 @@ pub enum DaGateSatisfactionSnapshot {
     None,
     /// Missing local data recovered.
     MissingDataRecovered,
+    /// Manifest guard recovered.
+    ManifestGuardRecovered,
 }
 
 impl DaGateSatisfactionSnapshot {
@@ -124,12 +126,14 @@ impl DaGateSatisfactionSnapshot {
         match self {
             Self::None => 0,
             Self::MissingDataRecovered => 1,
+            Self::ManifestGuardRecovered => 2,
         }
     }
 
     fn from_code(code: u8) -> Self {
         match code {
             1 => Self::MissingDataRecovered,
+            2 => Self::ManifestGuardRecovered,
             _ => Self::None,
         }
     }
@@ -139,6 +143,7 @@ impl DaGateSatisfactionSnapshot {
         match self {
             Self::None => "none",
             Self::MissingDataRecovered => "missing_data_recovered",
+            Self::ManifestGuardRecovered => "manifest_guard_recovered",
         }
     }
 }
@@ -147,6 +152,7 @@ impl From<GateSatisfaction> for DaGateSatisfactionSnapshot {
     fn from(value: GateSatisfaction) -> Self {
         match value {
             GateSatisfaction::MissingDataRecovered => Self::MissingDataRecovered,
+            GateSatisfaction::ManifestGuardRecovered => Self::ManifestGuardRecovered,
         }
     }
 }
@@ -8574,6 +8580,17 @@ mod tests {
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
     use crate::sumeragi::consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate};
 
+    fn reset_penalty_status_for_tests() {
+        super::set_vrf_penalties(0, 0, 0, 0);
+        super::set_vrf_late_reveals_total(0);
+        super::set_epoch_parameters(0, 0, 0);
+        super::CONSENSUS_PENALTIES_APPLIED_TOTAL.store(0, Ordering::Relaxed);
+        super::CONSENSUS_PENALTIES_PENDING.store(0, Ordering::Relaxed);
+        super::VRF_PENALTIES_APPLIED_TOTAL.store(0, Ordering::Relaxed);
+        super::VRF_PENALTIES_PENDING.store(0, Ordering::Relaxed);
+        super::set_mode_tags(PERMISSIONED_TAG, None, None);
+    }
+
     #[test]
     fn locked_qc_updates_monotonically() {
         let _guard = super::qc_status_test_guard();
@@ -8881,6 +8898,155 @@ mod tests {
     }
 
     #[test]
+    fn vote_validation_drop_reason_labels_match_formal_gate() {
+        let labels = [
+            (super::VoteValidationDropReason::StaleHeight, "stale_height"),
+            (super::VoteValidationDropReason::StaleView, "stale_view"),
+            (
+                super::VoteValidationDropReason::EpochMismatch,
+                "epoch_mismatch",
+            ),
+            (
+                super::VoteValidationDropReason::PenalizedSender,
+                "penalized_sender",
+            ),
+            (
+                super::VoteValidationDropReason::RosterMissing,
+                "roster_missing",
+            ),
+            (super::VoteValidationDropReason::LockedQc, "locked_qc"),
+            (super::VoteValidationDropReason::Duplicate, "duplicate"),
+            (
+                super::VoteValidationDropReason::Backpressure,
+                "backpressure",
+            ),
+            (
+                super::VoteValidationDropReason::SignerIndexOverflow,
+                "signer_index_overflow",
+            ),
+            (
+                super::VoteValidationDropReason::SignerOutOfRange,
+                "signer_out_of_range",
+            ),
+            (
+                super::VoteValidationDropReason::SignatureInvalid,
+                "invalid_signature",
+            ),
+            (
+                super::VoteValidationDropReason::MissingHighestQc,
+                "missing_highest_qc",
+            ),
+            (
+                super::VoteValidationDropReason::HighestQcMismatch,
+                "highest_qc_mismatch",
+            ),
+            (
+                super::VoteValidationDropReason::ConflictingVote,
+                "conflicting_vote",
+            ),
+            (
+                super::VoteValidationDropReason::ChainOrderMismatch,
+                "chain_order_mismatch",
+            ),
+        ];
+
+        let expected_len = labels.len();
+        let mut unique = BTreeSet::new();
+        for (reason, expected) in labels {
+            assert_eq!(reason.as_str(), expected);
+            unique.insert(reason.as_str());
+        }
+        assert_eq!(unique.len(), expected_len);
+    }
+
+    fn vote_validation_drop_record(
+        reason: super::VoteValidationDropReason,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        signer_index: u32,
+        peer_id: Option<PeerId>,
+        roster_hash: Option<HashOf<Vec<PeerId>>>,
+        roster_len: u32,
+    ) -> super::VoteValidationDropRecord {
+        super::VoteValidationDropRecord {
+            reason,
+            height,
+            view,
+            epoch,
+            signer_index,
+            peer_id,
+            roster_hash,
+            roster_len,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+                [height as u8; UntypedHash::LENGTH],
+            )),
+        }
+    }
+
+    #[test]
+    fn vote_validation_drop_reset_clears_global_and_peer_state() {
+        let _guard = super::vote_validation_drops_test_guard();
+        super::reset_vote_validation_drops_for_tests();
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let roster_hash = HashOf::new(&vec![peer.clone()]);
+
+        super::record_vote_validation_drop(vote_validation_drop_record(
+            super::VoteValidationDropReason::SignatureInvalid,
+            3,
+            1,
+            0,
+            0,
+            Some(peer),
+            Some(roster_hash),
+            1,
+        ));
+        let populated = super::snapshot().vote_validation_drops;
+        assert_eq!(populated.total, 1);
+        assert_eq!(populated.entries.len(), 1);
+        assert_eq!(populated.peer_entries.len(), 1);
+
+        super::reset_vote_validation_drops_for_tests();
+        let cleared = super::snapshot().vote_validation_drops;
+        assert_eq!(cleared.total, 0);
+        assert!(cleared.entries.is_empty());
+        assert!(cleared.peer_entries.is_empty());
+    }
+
+    #[test]
+    fn vote_validation_drop_without_peer_records_entry_without_peer_aggregate() {
+        let _guard = super::vote_validation_drops_test_guard();
+        super::reset_vote_validation_drops_for_tests();
+        let roster_hash = HashOf::new(&vec![PeerId::new(KeyPair::random().public_key().clone())]);
+
+        super::record_vote_validation_drop(vote_validation_drop_record(
+            super::VoteValidationDropReason::Backpressure,
+            7,
+            2,
+            1,
+            3,
+            None,
+            Some(roster_hash),
+            4,
+        ));
+
+        let snap = super::snapshot().vote_validation_drops;
+        assert_eq!(snap.total, 1);
+        assert_eq!(snap.entries.len(), 1);
+        assert!(snap.peer_entries.is_empty());
+        let entry = &snap.entries[0];
+        assert_eq!(entry.reason, super::VoteValidationDropReason::Backpressure);
+        assert_eq!(entry.height, 7);
+        assert_eq!(entry.view, 2);
+        assert_eq!(entry.epoch, 1);
+        assert_eq!(entry.signer_index, 3);
+        assert_eq!(entry.peer_id, None);
+        assert_eq!(entry.roster_hash, Some(roster_hash));
+        assert_eq!(entry.roster_len, 4);
+        assert!(entry.timestamp_ms > 0);
+    }
+
+    #[test]
     fn vote_validation_drop_snapshot_tracks_peer_entries() {
         let _guard = super::vote_validation_drops_test_guard();
         super::reset_vote_validation_drops_for_tests();
@@ -8939,6 +9105,216 @@ mod tests {
         assert_eq!(entry.last_view, 2);
         assert_eq!(entry.last_epoch, 1);
         assert!(entry.last_timestamp_ms > 0);
+    }
+
+    #[test]
+    fn vote_validation_drop_peer_aggregates_match_formal_key_and_count_cases() {
+        let _guard = super::vote_validation_drops_test_guard();
+        super::reset_vote_validation_drops_for_tests();
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let roster_a = HashOf::new(&vec![peer_a.clone()]);
+        let roster_ab = HashOf::new(&vec![peer_a.clone(), peer_b.clone()]);
+
+        for (reason, height, view, epoch, peer, roster_hash, roster_len) in [
+            (
+                super::VoteValidationDropReason::SignatureInvalid,
+                3,
+                1,
+                0,
+                peer_a.clone(),
+                roster_a,
+                1,
+            ),
+            (
+                super::VoteValidationDropReason::SignatureInvalid,
+                4,
+                2,
+                1,
+                peer_a.clone(),
+                roster_a,
+                1,
+            ),
+            (
+                super::VoteValidationDropReason::Duplicate,
+                5,
+                3,
+                2,
+                peer_a.clone(),
+                roster_a,
+                1,
+            ),
+            (
+                super::VoteValidationDropReason::SignatureInvalid,
+                6,
+                4,
+                3,
+                peer_b.clone(),
+                roster_a,
+                1,
+            ),
+            (
+                super::VoteValidationDropReason::SignatureInvalid,
+                7,
+                5,
+                4,
+                peer_a.clone(),
+                roster_ab,
+                2,
+            ),
+        ] {
+            super::record_vote_validation_drop(vote_validation_drop_record(
+                reason,
+                height,
+                view,
+                epoch,
+                0,
+                Some(peer),
+                Some(roster_hash),
+                roster_len,
+            ));
+        }
+
+        let snap = super::snapshot().vote_validation_drops;
+        assert_eq!(snap.total, 5);
+        assert_eq!(snap.peer_entries.len(), 3);
+
+        let peer_a_roster_a = snap
+            .peer_entries
+            .iter()
+            .find(|entry| entry.peer_id == peer_a && entry.roster_hash == Some(roster_a))
+            .expect("peer_a roster_a aggregate");
+        let reason_counts: BTreeMap<_, _> = peer_a_roster_a
+            .reasons
+            .iter()
+            .map(|entry| (entry.reason, entry.total))
+            .collect();
+        assert_eq!(peer_a_roster_a.total, 3);
+        assert_eq!(peer_a_roster_a.roster_len, 1);
+        assert_eq!(
+            reason_counts.get(&super::VoteValidationDropReason::SignatureInvalid),
+            Some(&2)
+        );
+        assert_eq!(
+            reason_counts.get(&super::VoteValidationDropReason::Duplicate),
+            Some(&1)
+        );
+        assert_eq!(peer_a_roster_a.last_height, 5);
+        assert_eq!(peer_a_roster_a.last_view, 3);
+        assert_eq!(peer_a_roster_a.last_epoch, 2);
+        assert!(peer_a_roster_a.last_timestamp_ms > 0);
+
+        let peer_b_roster_a = snap
+            .peer_entries
+            .iter()
+            .find(|entry| entry.peer_id == peer_b && entry.roster_hash == Some(roster_a))
+            .expect("peer_b roster_a aggregate");
+        assert_eq!(peer_b_roster_a.total, 1);
+        assert_eq!(peer_b_roster_a.last_height, 6);
+
+        let peer_a_roster_ab = snap
+            .peer_entries
+            .iter()
+            .find(|entry| entry.peer_id == peer_a && entry.roster_hash == Some(roster_ab))
+            .expect("peer_a roster_ab aggregate");
+        assert_eq!(peer_a_roster_ab.total, 1);
+        assert_eq!(peer_a_roster_ab.roster_len, 2);
+        assert_eq!(peer_a_roster_ab.last_height, 7);
+    }
+
+    #[test]
+    fn vote_validation_drop_snapshot_is_newest_first_and_caps_old_entries() {
+        let _guard = super::vote_validation_drops_test_guard();
+        super::reset_vote_validation_drops_for_tests();
+
+        for height in 0..=u64::try_from(super::VOTE_VALIDATION_DROPS_CAP).expect("cap fits u64") {
+            super::record_vote_validation_drop(vote_validation_drop_record(
+                super::VoteValidationDropReason::Backpressure,
+                height,
+                0,
+                0,
+                0,
+                None,
+                None,
+                0,
+            ));
+        }
+
+        let snap = super::snapshot().vote_validation_drops;
+        assert_eq!(snap.total, 257);
+        assert_eq!(snap.entries.len(), super::VOTE_VALIDATION_DROPS_CAP);
+        assert_eq!(
+            snap.entries.first().map(|entry| entry.height),
+            Some(256),
+            "recent entries are projected newest-first"
+        );
+        assert_eq!(
+            snap.entries.last().map(|entry| entry.height),
+            Some(1),
+            "oldest entries beyond the cap are dropped"
+        );
+        assert!(!snap.entries.iter().any(|entry| entry.height == 0));
+    }
+
+    #[test]
+    fn vote_validation_drop_peer_counters_saturate_without_wrapping() {
+        let _guard = super::vote_validation_drops_test_guard();
+        super::reset_vote_validation_drops_for_tests();
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let roster_hash = HashOf::new(&vec![peer.clone()]);
+        {
+            let mut registry =
+                super::vote_validation_drop_peer_registry().expect("peer registry lock");
+            registry.insert(
+                super::VoteValidationDropPeerKey {
+                    peer_id: peer.clone(),
+                    roster_hash: Some(roster_hash),
+                },
+                super::VoteValidationDropPeerState {
+                    roster_len: 1,
+                    total: u64::MAX,
+                    reasons: BTreeMap::from([(
+                        super::VoteValidationDropReason::Duplicate,
+                        u64::MAX,
+                    )]),
+                    last_height: 3,
+                    last_view: 1,
+                    last_epoch: 0,
+                    last_timestamp_ms: 1,
+                },
+            );
+        }
+
+        super::record_vote_validation_drop(vote_validation_drop_record(
+            super::VoteValidationDropReason::Duplicate,
+            9,
+            4,
+            2,
+            0,
+            Some(peer.clone()),
+            Some(roster_hash),
+            1,
+        ));
+
+        let snap = super::snapshot().vote_validation_drops;
+        let entry = snap
+            .peer_entries
+            .iter()
+            .find(|entry| entry.peer_id == peer && entry.roster_hash == Some(roster_hash))
+            .expect("saturating peer aggregate");
+        let reason_counts: BTreeMap<_, _> = entry
+            .reasons
+            .iter()
+            .map(|entry| (entry.reason, entry.total))
+            .collect();
+        assert_eq!(entry.total, u64::MAX);
+        assert_eq!(
+            reason_counts.get(&super::VoteValidationDropReason::Duplicate),
+            Some(&u64::MAX)
+        );
+        assert_eq!(entry.last_height, 9);
+        assert_eq!(entry.last_view, 4);
+        assert_eq!(entry.last_epoch, 2);
     }
 
     #[test]
@@ -9884,6 +10260,7 @@ mod tests {
 
     #[test]
     fn da_gate_transition_counters_surface_in_snapshot() {
+        let _guard = super::da_gate_test_guard();
         super::reset_da_gate_counters_for_tests();
 
         super::record_da_gate_transition(
@@ -9921,7 +10298,7 @@ mod tests {
         assert_eq!(snapshot.da_gate.reason, super::DaGateReasonSnapshot::None);
         assert_eq!(
             snapshot.da_gate.last_satisfied,
-            super::DaGateSatisfactionSnapshot::None
+            super::DaGateSatisfactionSnapshot::ManifestGuardRecovered
         );
     }
 
@@ -9987,6 +10364,119 @@ mod tests {
         assert_eq!(oldest.view, key_a.2);
     }
 
+    fn rbc_store_test_key(
+        id: u8,
+        height: u64,
+        view: u64,
+    ) -> crate::sumeragi::rbc_store::SessionKey {
+        (
+            HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+                [id; UntypedHash::LENGTH],
+            )),
+            height,
+            view,
+        )
+    }
+
+    #[test]
+    fn rbc_store_status_reset_overwrite_and_counter_accumulation_are_exact() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_store_evictions_for_tests();
+
+        super::set_rbc_store_pressure(9, 16_384, 2);
+        super::set_rbc_store_pressure(0, 0, 0);
+        super::inc_rbc_store_backpressure_deferrals();
+        super::inc_rbc_store_backpressure_deferrals();
+        super::inc_rbc_store_persist_drops();
+        super::inc_rbc_store_persist_drops();
+        super::inc_rbc_store_evictions(0);
+        super::inc_rbc_store_evictions(3);
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.rbc_store_sessions, 0);
+        assert_eq!(snapshot.rbc_store_bytes, 0);
+        assert_eq!(snapshot.rbc_store_pressure_level, 0);
+        assert_eq!(snapshot.rbc_store_backpressure_deferrals_total, 2);
+        assert_eq!(snapshot.rbc_store_persist_drops_total, 2);
+        assert_eq!(snapshot.rbc_store_evictions_total, 3);
+        assert!(
+            snapshot.rbc_store_recent_evictions.is_empty(),
+            "direct eviction counter increments must not synthesize recent eviction records"
+        );
+
+        super::reset_rbc_store_evictions_for_tests();
+        let reset = super::snapshot();
+        assert_eq!(reset.rbc_store_sessions, 0);
+        assert_eq!(reset.rbc_store_bytes, 0);
+        assert_eq!(reset.rbc_store_pressure_level, 0);
+        assert_eq!(reset.rbc_store_backpressure_deferrals_total, 0);
+        assert_eq!(reset.rbc_store_persist_drops_total, 0);
+        assert_eq!(reset.rbc_store_evictions_total, 0);
+        assert!(reset.rbc_store_recent_evictions.is_empty());
+    }
+
+    #[test]
+    fn rbc_store_eviction_history_ignores_empty_and_caps_newest_first() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_store_evictions_for_tests();
+
+        super::record_rbc_store_evictions(&[]);
+        let empty = super::snapshot();
+        assert_eq!(empty.rbc_store_evictions_total, 0);
+        assert!(empty.rbc_store_recent_evictions.is_empty());
+
+        let cap = super::RBC_STORE_RECENT_EVICTIONS_CAP;
+        let keys: Vec<_> = (0..(cap + 3))
+            .map(|idx| {
+                rbc_store_test_key(
+                    u8::try_from(idx + 1).expect("test key id fits"),
+                    100 + u64::try_from(idx).expect("height offset fits"),
+                    u64::try_from(idx % 5).expect("view fits"),
+                )
+            })
+            .collect();
+        super::record_rbc_store_evictions(&keys);
+
+        let snapshot = super::snapshot();
+        assert_eq!(
+            snapshot.rbc_store_evictions_total,
+            u64::try_from(keys.len()).expect("key count fits")
+        );
+        assert_eq!(snapshot.rbc_store_recent_evictions.len(), cap);
+        let newest = snapshot
+            .rbc_store_recent_evictions
+            .first()
+            .expect("newest eviction");
+        let newest_key = keys.last().expect("last key");
+        let expected_newest_hash: [u8; UntypedHash::LENGTH] =
+            UntypedHash::from(newest_key.0).into();
+        assert_eq!(newest.block_hash, expected_newest_hash);
+        assert_eq!(newest.height, newest_key.1);
+        assert_eq!(newest.view, newest_key.2);
+
+        let oldest_retained = snapshot
+            .rbc_store_recent_evictions
+            .last()
+            .expect("oldest retained eviction");
+        let oldest_retained_key = keys
+            .get(keys.len() - cap)
+            .expect("oldest retained source key");
+        let expected_oldest_hash: [u8; UntypedHash::LENGTH] =
+            UntypedHash::from(oldest_retained_key.0).into();
+        assert_eq!(oldest_retained.block_hash, expected_oldest_hash);
+        assert_eq!(oldest_retained.height, oldest_retained_key.1);
+        assert_eq!(oldest_retained.view, oldest_retained_key.2);
+    }
+
+    #[test]
+    fn rbc_store_pressure_labels_are_exact() {
+        assert_eq!(super::rbc_store_pressure_label(0), "normal");
+        assert_eq!(super::rbc_store_pressure_label(1), "soft");
+        assert_eq!(super::rbc_store_pressure_label(2), "hard");
+        assert_eq!(super::rbc_store_pressure_label(3), "unknown");
+        assert_eq!(super::rbc_store_pressure_label(u8::MAX), "unknown");
+    }
+
     #[test]
     fn rbc_store_pressure_log_state_updates_on_transition() {
         let _guard = super::rbc_status_test_guard();
@@ -10013,6 +10503,39 @@ mod tests {
             interval.saturating_sub(1)
         ));
         assert!(super::should_log_rbc_store_pressure(1, 1, 0, interval));
+        assert!(super::should_log_rbc_store_pressure(2, 1, 60, 1));
+        assert!(super::should_log_rbc_store_pressure(3, 2, 60, 1));
+        assert!(!super::should_log_rbc_store_pressure(1, 1, 60, 59));
+        assert!(!super::should_log_rbc_store_pressure(1, 1, 60, 0));
+    }
+
+    #[test]
+    fn rbc_store_pressure_log_state_preserves_suppressed_repeats_and_resets() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_store_pressure_log_state_for_tests();
+
+        super::set_rbc_store_pressure(2, 8_192, 1);
+        let first = super::rbc_store_pressure_log_state_for_tests();
+        assert_eq!(first.0, 1);
+        assert!(first.1 > 0);
+
+        super::set_rbc_store_pressure(3, 16_384, 1);
+        let suppressed = super::rbc_store_pressure_log_state_for_tests();
+        assert_eq!(
+            suppressed, first,
+            "suppressed same-level elevated repeats must not update level or timestamp"
+        );
+
+        super::set_rbc_store_pressure(4, 32_768, 2);
+        let transitioned = super::rbc_store_pressure_log_state_for_tests();
+        assert_eq!(transitioned.0, 2);
+        assert!(
+            transitioned.1 >= first.1,
+            "logged transition timestamp should be monotonic under wall-clock progress"
+        );
+
+        super::reset_rbc_store_pressure_log_state_for_tests();
+        assert_eq!(super::rbc_store_pressure_log_state_for_tests(), (0, 0));
     }
 
     #[test]
@@ -10306,6 +10829,129 @@ mod tests {
         super::set_vrf_late_reveals_total(4);
         assert_eq!(super::snapshot().vrf_late_reveals_total, 4);
         super::set_vrf_late_reveals_total(0);
+    }
+
+    #[test]
+    fn penalty_status_initial_snapshot_matches_formal_zero_state() {
+        let _guard = super::qc_status_test_guard();
+        reset_penalty_status_for_tests();
+
+        assert_eq!(super::vrf_penalty_snapshot(), (0, 0, 0, 0));
+        assert_eq!(super::penalty_counters(), (0, 0, 0, 0));
+
+        let snap = super::snapshot();
+        assert_eq!(snap.vrf_penalty_epoch, 0);
+        assert_eq!(snap.vrf_non_reveal_total, 0);
+        assert_eq!(snap.vrf_no_participation_total, 0);
+        assert_eq!(snap.vrf_late_reveals_total, 0);
+        assert_eq!(snap.epoch_length_blocks, 0);
+        assert_eq!(snap.epoch_commit_deadline_offset, 0);
+        assert_eq!(snap.epoch_reveal_deadline_offset, 0);
+        assert_eq!(snap.consensus_penalties_applied_total, 0);
+        assert_eq!(snap.consensus_penalties_pending, 0);
+        assert_eq!(snap.vrf_penalties_applied_total, 0);
+        assert_eq!(snap.vrf_penalties_pending, 0);
+    }
+
+    #[test]
+    fn penalty_status_vrf_late_reveal_and_epoch_projection_match_formal_gate() {
+        let _guard = super::qc_status_test_guard();
+        reset_penalty_status_for_tests();
+        super::set_mode_tags(NPOS_TAG, None, None);
+
+        super::set_vrf_penalties(7, 2, 3, 5);
+        super::set_vrf_late_reveals_total(11);
+        assert_eq!(
+            super::vrf_penalty_snapshot(),
+            (7, 2, 3, 11),
+            "late-reveal updates must preserve the existing VRF penalty context"
+        );
+
+        super::set_epoch_parameters(30, 8, 13);
+        let snap = super::snapshot();
+        assert_eq!(snap.vrf_penalty_epoch, 7);
+        assert_eq!(snap.vrf_non_reveal_total, 2);
+        assert_eq!(snap.vrf_no_participation_total, 3);
+        assert_eq!(snap.vrf_late_reveals_total, 11);
+        assert_eq!(snap.epoch_length_blocks, 30);
+        assert_eq!(snap.epoch_commit_deadline_offset, 8);
+        assert_eq!(snap.epoch_reveal_deadline_offset, 13);
+
+        super::set_mode_tags(PERMISSIONED_TAG, None, None);
+        let permissioned = super::snapshot();
+        assert_eq!(permissioned.epoch_length_blocks, 0);
+        assert_eq!(permissioned.epoch_commit_deadline_offset, 0);
+        assert_eq!(permissioned.epoch_reveal_deadline_offset, 0);
+    }
+
+    #[test]
+    fn penalty_status_counters_match_formal_zero_accumulate_and_pending_cases() {
+        let _guard = super::qc_status_test_guard();
+        reset_penalty_status_for_tests();
+
+        super::inc_consensus_penalties_applied(0);
+        super::inc_vrf_penalties_applied(0);
+        assert_eq!(
+            super::penalty_counters(),
+            (0, 0, 0, 0),
+            "zero deltas must not affect penalty counters"
+        );
+
+        super::inc_consensus_penalties_applied(2);
+        super::inc_consensus_penalties_applied(5);
+        super::inc_vrf_penalties_applied(3);
+        super::inc_vrf_penalties_applied(7);
+        super::set_penalties_pending(4, 6);
+        super::set_penalties_pending(8, 9);
+
+        assert_eq!(
+            super::penalty_counters(),
+            (7, 8, 10, 9),
+            "applied counters accumulate while pending counters store the latest values"
+        );
+        let snap = super::snapshot();
+        assert_eq!(snap.consensus_penalties_applied_total, 7);
+        assert_eq!(snap.consensus_penalties_pending, 8);
+        assert_eq!(snap.vrf_penalties_applied_total, 10);
+        assert_eq!(snap.vrf_penalties_pending, 9);
+    }
+
+    #[test]
+    fn local_peer_removed_status_matches_formal_gate() {
+        let _guard = super::local_removed_test_guard();
+        super::set_local_removed_from_world(false);
+        assert!(
+            !super::local_peer_removed(),
+            "local peer should start present after reset"
+        );
+
+        super::set_local_removed_from_world(true);
+        assert!(super::local_peer_removed());
+        assert!(
+            super::local_peer_removed(),
+            "reading removed state must not clear the flag"
+        );
+
+        super::set_local_removed_from_world(false);
+        assert!(!super::local_peer_removed());
+        assert!(
+            !super::local_peer_removed(),
+            "reading present state must not set the flag"
+        );
+
+        super::set_local_removed_from_world(false);
+        assert!(
+            !super::local_peer_removed(),
+            "repeated present writes must be idempotent"
+        );
+        super::set_local_removed_from_world(true);
+        super::set_local_removed_from_world(true);
+        assert!(
+            super::local_peer_removed(),
+            "repeated removed writes must be idempotent"
+        );
+
+        super::set_local_removed_from_world(false);
     }
 
     #[test]

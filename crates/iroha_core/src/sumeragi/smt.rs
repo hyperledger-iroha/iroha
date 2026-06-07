@@ -202,6 +202,47 @@ mod tests {
         KvPair::new(k.as_bytes(), v.as_bytes())
     }
 
+    fn manual_hash_bytes(bytes: &[u8]) -> [u8; 32] {
+        <[u8; 32]>::from(Hash::new(bytes))
+    }
+
+    fn manual_node_hash(left: Hash, right: Hash) -> Hash {
+        let mut preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
+        preimage.push(0x01);
+        preimage.extend_from_slice(left.as_ref());
+        preimage.extend_from_slice(right.as_ref());
+        Hash::new(preimage)
+    }
+
+    fn manual_leaf_hash(pair: &KvPair) -> Hash {
+        let key_hash = manual_hash_bytes(&pair.key);
+        let value_hash = manual_hash_bytes(&pair.value);
+        let mut preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
+        preimage.push(0x00);
+        preimage.extend_from_slice(&key_hash);
+        preimage.extend_from_slice(&value_hash);
+        Hash::new(preimage)
+    }
+
+    fn manual_single_leaf_root(pair: &KvPair) -> Hash {
+        let empty = Hash::new([]);
+        let mut current = manual_leaf_hash(pair);
+        let mut prefix = manual_hash_bytes(&pair.key).to_vec();
+        let mut len_bits = 256u16;
+        while len_bits > 0 {
+            let parent = parent_prefix(&prefix, len_bits);
+            let right_id = child_prefix(&parent, len_bits, true);
+            current = if right_id == prefix {
+                manual_node_hash(empty, current)
+            } else {
+                manual_node_hash(current, empty)
+            };
+            prefix = parent;
+            len_bits -= 1;
+        }
+        current
+    }
+
     #[test]
     fn empty_inputs_yield_empty_hash() {
         let h = compute_post_state_root(&[], &[]);
@@ -241,5 +282,76 @@ mod tests {
         let h1 = compute_post_state_root(&r, &w);
         let h2 = compute_post_state_root(&[r[1].clone(), r[0].clone()], &w);
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn smt_hash_preimages_and_missing_children_match_formal_gate() {
+        let pair = kv("leaf-key", "leaf-value");
+        let root = compute_post_state_root(std::slice::from_ref(&pair), &[]);
+        assert_eq!(root, manual_single_leaf_root(&pair));
+
+        let key_changed = compute_post_state_root(&[kv("other-key", "leaf-value")], &[]);
+        let value_changed = compute_post_state_root(&[kv("leaf-key", "other-value")], &[]);
+        assert_ne!(root, key_changed);
+        assert_ne!(root, value_changed);
+
+        let left = Hash::prehashed([0x11; Hash::LENGTH]);
+        let right = Hash::prehashed([0x22; Hash::LENGTH]);
+        let mut untagged_node = Vec::with_capacity(2 * Hash::LENGTH);
+        untagged_node.extend_from_slice(left.as_ref());
+        untagged_node.extend_from_slice(right.as_ref());
+        assert_eq!(node_hash(left, right), manual_node_hash(left, right));
+        assert_ne!(node_hash(left, right), Hash::new(untagged_node));
+        assert_ne!(node_hash(left, right), manual_node_hash(right, left));
+    }
+
+    #[test]
+    fn duplicate_keys_and_canonical_order_match_formal_gate() {
+        let duplicate_reads = [kv("same", "old"), kv("same", "new")];
+        let last_read = [kv("same", "new")];
+        let first_read = [kv("same", "old")];
+        assert_eq!(
+            compute_post_state_root(&duplicate_reads, &[]),
+            compute_post_state_root(&last_read, &[])
+        );
+        assert_ne!(
+            compute_post_state_root(&duplicate_reads, &[]),
+            compute_post_state_root(&first_read, &[])
+        );
+
+        let duplicate_writes = [kv("same", "old"), kv("same", "new")];
+        assert_eq!(
+            compute_post_state_root(&[], &duplicate_writes),
+            compute_post_state_root(&[], &last_read)
+        );
+
+        let ordered = [kv("a", "1"), kv("b", "2"), kv("c", "3")];
+        let reordered = [kv("c", "3"), kv("a", "1"), kv("b", "2")];
+        assert_eq!(
+            compute_post_state_root(&ordered, &[]),
+            compute_post_state_root(&reordered, &[])
+        );
+        assert_eq!(
+            compute_post_state_root(&[], &ordered),
+            compute_post_state_root(&[], &reordered)
+        );
+    }
+
+    #[test]
+    fn prefix_truncation_and_child_bit_order_match_formal_gate() {
+        let bytes = [0b1010_1100, 0b1111_0000];
+        assert_eq!(truncate_prefix(&bytes, 0), Vec::<u8>::new());
+        assert_eq!(truncate_prefix(&bytes, 8), vec![0b1010_1100]);
+        assert_eq!(truncate_prefix(&bytes, 5), vec![0b0000_1100]);
+
+        assert_eq!(parent_prefix(&[0b1010_1101], 5), vec![0b0000_1101]);
+        assert_eq!(child_prefix(&[], 1, false), vec![0b0000_0000]);
+        assert_eq!(child_prefix(&[], 1, true), vec![0b0000_0001]);
+
+        let parent = [0b0000_1101];
+        assert_eq!(child_prefix(&parent, 5, false), vec![0b0000_1101]);
+        assert_eq!(child_prefix(&parent, 5, true), vec![0b0001_1101]);
+        assert_eq!(child_prefix(&[0xFF, 0xFF], 9, false), vec![0xFF, 0x00]);
+        assert_eq!(child_prefix(&[0xFF, 0xFF], 9, true), vec![0xFF, 0x01]);
     }
 }

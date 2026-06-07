@@ -3908,6 +3908,7 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         "last_satisfied".into(),
         Value::from(match wire.da_gate.last_satisfied {
             SumeragiDaGateSatisfaction::MissingDataRecovered => "missing_data_recovered",
+            SumeragiDaGateSatisfaction::ManifestGuardRecovered => "manifest_guard_recovered",
             SumeragiDaGateSatisfaction::None => "none",
         }),
     );
@@ -21713,9 +21714,9 @@ mod tests {
             roster_sidecar_mismatch_obsolete_total: 0,
             da_gate: SumeragiDaGateStatus {
                 reason: SumeragiDaGateReason::None,
-                last_satisfied: SumeragiDaGateSatisfaction::None,
-                missing_local_data_total: 0,
-                manifest_guard_total: 0,
+                last_satisfied: SumeragiDaGateSatisfaction::ManifestGuardRecovered,
+                missing_local_data_total: 2,
+                manifest_guard_total: 3,
             },
             kura_store: SumeragiKuraStoreStatus {
                 failures_total: 0,
@@ -21897,6 +21898,32 @@ mod tests {
         assert_eq!(
             view_change_causes.get("last_cause").and_then(Value::as_str),
             Some("missing_qc")
+        );
+        let da_gate = root
+            .get("da_gate")
+            .and_then(Value::as_object)
+            .expect("da_gate object");
+        assert_eq!(
+            da_gate.get("reason").and_then(Value::as_str),
+            Some("none"),
+            "da_gate reason mismatch"
+        );
+        assert_eq!(
+            da_gate.get("last_satisfied").and_then(Value::as_str),
+            Some("manifest_guard_recovered"),
+            "da_gate last_satisfied mismatch"
+        );
+        assert_eq!(
+            da_gate
+                .get("missing_local_data_total")
+                .and_then(Value::as_u64),
+            Some(2),
+            "da_gate missing_local_data_total mismatch"
+        );
+        assert_eq!(
+            da_gate.get("manifest_guard_total").and_then(Value::as_u64),
+            Some(3),
+            "da_gate manifest_guard_total mismatch"
         );
         let npos_timeouts = root
             .get("effective_npos_timeouts")

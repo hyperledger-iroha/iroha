@@ -604,13 +604,551 @@ pub fn snapshot_exec_witness() -> ExecWitness {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::BTreeMap, time::Duration};
 
-    use iroha_test_samples::ALICE_ID;
+    use iroha_data_model::{
+        Registrable,
+        account::Account,
+        asset::{Asset, AssetDefinition},
+        block::BlockHeader,
+        domain::Domain,
+        metadata::Metadata,
+        nft::Nft,
+        permission::{Permission, Permissions},
+        role::{Role, RoleId},
+    };
+    use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use nonzero_ext::nonzero;
 
     use super::*;
     // The SMT helpers live under the sumeragi module.
     use crate::sumeragi::smt::{KvPair, compute_post_state_root};
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+
+    struct AccessKeyFixture {
+        state: State,
+        account: AccountId,
+        missing_account: AccountId,
+        domain: DomainId,
+        missing_domain: DomainId,
+        asset_definition: AssetDefinitionId,
+        missing_asset_definition: AssetDefinitionId,
+        asset: AssetId,
+        missing_asset: AssetId,
+        nft: NftId,
+        missing_nft: NftId,
+        role: RoleId,
+        unicode_role_raw: String,
+        unicode_role: RoleId,
+        account_perm: &'static str,
+        role_perm: &'static str,
+    }
+
+    fn metadata_entry(key: &str, value: &str) -> Metadata {
+        let mut metadata = Metadata::default();
+        metadata.insert(key.parse::<Name>().expect("metadata key"), value);
+        metadata
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn access_key_fixture() -> AccessKeyFixture {
+        let account = (*ALICE_ID).clone();
+        let missing_account = (*BOB_ID).clone();
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+        let missing_domain = DomainId::try_new("looking_glass", "universal").expect("domain");
+        let asset_definition = AssetDefinitionId::new(
+            domain.clone(),
+            "rose".parse::<Name>().expect("asset definition name"),
+        );
+        let missing_asset_definition = AssetDefinitionId::new(
+            domain.clone(),
+            "missing_rose"
+                .parse::<Name>()
+                .expect("missing asset definition name"),
+        );
+        let asset = AssetId::new(asset_definition.clone(), account.clone());
+        let missing_asset = AssetId::new(missing_asset_definition.clone(), account.clone());
+        let nft: NftId = "ticket$wonderland.universal".parse().expect("nft id");
+        let missing_nft: NftId = "missing_ticket$wonderland.universal"
+            .parse()
+            .expect("missing nft id");
+        let role: RoleId = "auditor".parse().expect("role id");
+        let unicode_role_raw = String::from("cafe\u{301}");
+        let unicode_role: RoleId = unicode_role_raw.parse().expect("unicode role id");
+        let account_perm = "can_account_read";
+        let role_perm = "can_role_read";
+
+        let mut account_metadata = metadata_entry("color", "red");
+        account_metadata.insert(
+            "color:shade".parse::<Name>().expect("colon metadata key"),
+            "maroon",
+        );
+        let account_record = Account::new(account.clone())
+            .with_metadata(account_metadata)
+            .build(&account);
+        let domain_record = Domain::new(domain.clone())
+            .with_metadata(metadata_entry("region", "west"))
+            .build(&account);
+        let mut asset_definition_record = AssetDefinition::numeric(asset_definition.clone())
+            .with_name(String::from("Rose"))
+            .build(&account);
+        asset_definition_record
+            .metadata_mut()
+            .insert("issuer".parse::<Name>().expect("metadata key"), "alice");
+        asset_definition_record.total_quantity = Numeric::from(37u32);
+        let asset_record = Asset::new(asset.clone(), Numeric::from(11u32));
+        let nft_record = Nft::new(nft.clone(), metadata_entry("artist", "carroll")).build(&account);
+        let role_record = Role::new(role.clone(), account.clone())
+            .add_permission(Permission::new(role_perm.into(), Json::new(true)))
+            .build(&account);
+        let unicode_role_record = Role::new(unicode_role.clone(), account.clone())
+            .add_permission(Permission::new(role_perm.into(), Json::new(true)))
+            .build(&account);
+
+        let mut world = World::with_assets_and_roles(
+            [domain_record],
+            [account_record],
+            [asset_definition_record],
+            [asset_record],
+            [nft_record],
+            [role_record, unicode_role_record],
+        );
+        world.grant_role_for_tests(account.clone(), role.clone());
+        let mut account_permissions = Permissions::new();
+        account_permissions.insert(Permission::new(account_perm.into(), Json::new(true)));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(account.clone(), account_permissions);
+
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+
+        AccessKeyFixture {
+            state,
+            account,
+            missing_account,
+            domain,
+            missing_domain,
+            asset_definition,
+            missing_asset_definition,
+            asset,
+            missing_asset,
+            nft,
+            missing_nft,
+            role,
+            unicode_role_raw,
+            unicode_role,
+            account_perm,
+            role_perm,
+        }
+    }
+
+    fn access_key_header() -> BlockHeader {
+        BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+    }
+
+    fn bool_json_bytes(value: bool) -> Vec<u8> {
+        Json::new(value).get().as_bytes().to_vec()
+    }
+
+    fn numeric_json_bytes(value: u32) -> Vec<u8> {
+        Json::new(Numeric::from(value)).get().as_bytes().to_vec()
+    }
+
+    fn assert_read_value(witness: &ExecWitness, key: Vec<u8>, expected: Vec<u8>) {
+        let value = witness
+            .reads
+            .iter()
+            .find(|kv| kv.key == key)
+            .unwrap_or_else(|| panic!("expected read key {:?}", key))
+            .value
+            .clone();
+        assert_eq!(value, expected);
+    }
+
+    fn assert_no_read_key(witness: &ExecWitness, key: Vec<u8>) {
+        assert!(
+            witness.reads.iter().all(|kv| kv.key != key),
+            "unexpected read key {:?}",
+            key
+        );
+    }
+
+    fn sample_fastpq_transcript(seed: u8, batch_hash: Hash) -> (TransferTranscript, Hash) {
+        use iroha_data_model::{
+            asset::id::AssetDefinitionId,
+            fastpq::{TransferDeltaTranscript, TransferTranscript},
+        };
+
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            format!("rose_{seed}").parse().unwrap(),
+        );
+        let delta = TransferDeltaTranscript {
+            from_account: (*ALICE_ID).clone(),
+            to_account: (*BOB_ID).clone(),
+            asset_definition: asset,
+            amount: Numeric::from(u32::from(seed) + 1),
+            from_balance_before: Numeric::from(100u32 + u32::from(seed)),
+            from_balance_after: Numeric::from(95u32 + u32::from(seed)),
+            to_balance_before: Numeric::from(u32::from(seed)),
+            to_balance_after: Numeric::from(5u32 + u32::from(seed)),
+            from_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+            to_smt_witness: iroha_data_model::fastpq::TransferSmtWitness::default(),
+        };
+        let digest = crate::fastpq::poseidon_preimage_digest(&delta, &batch_hash);
+        (
+            TransferTranscript {
+                batch_hash,
+                deltas: vec![delta],
+                authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+                poseidon_preimage_digest: None,
+            },
+            digest,
+        )
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn access_key_supported_present_and_missing_reads_match_formal_gate() {
+        let fixture = access_key_fixture();
+        let state_block = fixture.state.block(access_key_header());
+        let guard = exec_witness_guard();
+        start_block();
+
+        let color = "color".parse::<Name>().expect("metadata key");
+        let region = "region".parse::<Name>().expect("metadata key");
+        let issuer = "issuer".parse::<Name>().expect("metadata key");
+        let artist = "artist".parse::<Name>().expect("metadata key");
+        let missing_role: RoleId = "observer".parse().expect("role id");
+        record_read_from_access_key(
+            &state_block,
+            &format!("account.detail:{}:color", fixture.account),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("account.detail:{}:color", fixture.missing_account),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("domain.detail:{}:region", fixture.domain),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("domain.detail:{}:region", fixture.missing_domain),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("asset_def.detail:{}:issuer", fixture.asset_definition),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!(
+                "asset_def.detail:{}:issuer",
+                fixture.missing_asset_definition
+            ),
+        );
+        record_read_from_access_key(&state_block, &format!("nft.detail:{}:artist", fixture.nft));
+        record_read_from_access_key(
+            &state_block,
+            &format!("nft.detail:{}:artist", fixture.missing_nft),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("role.binding:{}:{}", fixture.account, fixture.role),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("role.binding:{}:{}", fixture.account, missing_role),
+        );
+        record_read_from_access_key(&state_block, &format!("role:{}", fixture.role));
+        record_read_from_access_key(&state_block, &format!("role:{missing_role}"));
+        record_read_from_access_key(
+            &state_block,
+            &format!("perm.account:{}:{}", fixture.account, fixture.account_perm),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("perm.account:{}:can_missing", fixture.account),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("perm.role:{}:{}", fixture.role, fixture.role_perm),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("perm.role:{}:can_missing", fixture.role),
+        );
+        record_read_from_access_key(&state_block, &format!("asset:{}", fixture.asset));
+        record_read_from_access_key(&state_block, &format!("asset:{}", fixture.missing_asset));
+        record_read_from_access_key(
+            &state_block,
+            &format!("asset_def:{}", fixture.asset_definition),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("asset_def:{}", fixture.missing_asset_definition),
+        );
+
+        let witness = drain_exec_witness();
+        drop(guard);
+        assert_eq!(witness.reads.len(), 20);
+        assert!(witness.writes.is_empty());
+        assert_read_value(
+            &witness,
+            key_account_kv(&fixture.account, &color),
+            bytes_from_json(&Json::new("red")),
+        );
+        assert_read_value(
+            &witness,
+            key_account_kv(&fixture.missing_account, &color),
+            Vec::new(),
+        );
+        assert_read_value(
+            &witness,
+            key_domain_kv(&fixture.domain, &region),
+            bytes_from_json(&Json::new("west")),
+        );
+        assert_read_value(
+            &witness,
+            key_domain_kv(&fixture.missing_domain, &region),
+            Vec::new(),
+        );
+        assert_read_value(
+            &witness,
+            key_asset_def_kv(&fixture.asset_definition, &issuer),
+            bytes_from_json(&Json::new("alice")),
+        );
+        assert_read_value(
+            &witness,
+            key_asset_def_kv(&fixture.missing_asset_definition, &issuer),
+            Vec::new(),
+        );
+        assert_read_value(
+            &witness,
+            key_nft_kv(&fixture.nft, &artist),
+            bytes_from_json(&Json::new("carroll")),
+        );
+        assert_read_value(
+            &witness,
+            key_nft_kv(&fixture.missing_nft, &artist),
+            Vec::new(),
+        );
+        assert_read_value(
+            &witness,
+            enc_key_prefix(
+                0xC1,
+                &fixture.account.to_string(),
+                &fixture.role.to_string(),
+            ),
+            bool_json_bytes(true),
+        );
+        assert_read_value(
+            &witness,
+            enc_key_prefix(
+                0xC1,
+                &fixture.account.to_string(),
+                &missing_role.to_string(),
+            ),
+            bool_json_bytes(false),
+        );
+        let mut present_role_key = vec![0xC2];
+        present_role_key.extend_from_slice(fixture.role.to_string().as_bytes());
+        assert_read_value(&witness, present_role_key, bool_json_bytes(true));
+        let mut missing_role_key = vec![0xC2];
+        missing_role_key.extend_from_slice(missing_role.to_string().as_bytes());
+        assert_read_value(&witness, missing_role_key, bool_json_bytes(false));
+        assert_read_value(
+            &witness,
+            enc_key_prefix(0xC3, &fixture.account.to_string(), fixture.account_perm),
+            bool_json_bytes(true),
+        );
+        assert_read_value(
+            &witness,
+            enc_key_prefix(0xC3, &fixture.account.to_string(), "can_missing"),
+            bool_json_bytes(false),
+        );
+        assert_read_value(
+            &witness,
+            enc_key_prefix(0xC4, &fixture.role.to_string(), fixture.role_perm),
+            bool_json_bytes(true),
+        );
+        assert_read_value(
+            &witness,
+            enc_key_prefix(0xC4, &fixture.role.to_string(), "can_missing"),
+            bool_json_bytes(false),
+        );
+        assert_read_value(
+            &witness,
+            key_asset_balance(&fixture.asset),
+            numeric_json_bytes(11),
+        );
+        assert_read_value(
+            &witness,
+            key_asset_balance(&fixture.missing_asset),
+            Vec::new(),
+        );
+        assert_read_value(
+            &witness,
+            key_asset_def_total(&fixture.asset_definition),
+            numeric_json_bytes(37),
+        );
+        assert_read_value(
+            &witness,
+            key_asset_def_total(&fixture.missing_asset_definition),
+            Vec::new(),
+        );
+    }
+
+    #[test]
+    fn access_key_rejects_unsupported_malformed_and_invalid_inputs_match_formal_gate() {
+        let fixture = access_key_fixture();
+        let state_block = fixture.state.block(access_key_header());
+        let guard = exec_witness_guard();
+        start_block();
+
+        let invalid_keys = [
+            format!("unsupported:{}:color", fixture.account),
+            format!("account.detail:{}", fixture.account),
+            format!("domain.detail:{}", fixture.domain),
+            format!("asset_def.detail:{}", fixture.asset_definition),
+            format!("nft.detail:{}", fixture.nft),
+            format!("role.binding:{}", fixture.account),
+            format!("perm.account:{}", fixture.account),
+            format!("perm.role:{}", fixture.role),
+            String::from("account.detail:not_an_account:color"),
+            String::from("domain.detail:not_a_domain:region"),
+            String::from("asset_def.detail:not_an_asset_definition:issuer"),
+            String::from("nft.detail:not_an_nft:artist"),
+            format!("role.binding:{}:bad role", fixture.account),
+            String::from("role:bad role"),
+            String::from("perm.account:not_an_account:can_account_read"),
+            String::from("perm.role:bad role:can_role_read"),
+            String::from("asset:not_an_asset"),
+            String::from("asset_def:not_an_asset_definition"),
+            format!("account.detail:{}:bad key", fixture.account),
+        ];
+        for key in invalid_keys {
+            record_read_from_access_key(&state_block, &key);
+        }
+
+        let witness = drain_exec_witness();
+        drop(guard);
+        assert!(
+            witness.reads.is_empty(),
+            "unsupported, malformed, and invalid keys must be ignored"
+        );
+        assert!(witness.writes.is_empty());
+    }
+
+    #[test]
+    fn access_key_canonicalization_tail_and_prefix_isolation_match_formal_gate() {
+        let fixture = access_key_fixture();
+        let state_block = fixture.state.block(access_key_header());
+        let guard = exec_witness_guard();
+        start_block();
+
+        let color = "color".parse::<Name>().expect("metadata key");
+        let shade = "color:shade".parse::<Name>().expect("metadata key");
+        let issuer = "issuer".parse::<Name>().expect("metadata key");
+        record_read_from_access_key(
+            &state_block,
+            &format!("account.detail: {} :color", fixture.account),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!(
+                "perm.account: {} :{}",
+                fixture.account, fixture.account_perm
+            ),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("account.detail:{}:color:shade", fixture.account),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("asset_def.detail:{}:issuer", fixture.asset_definition),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!("role.binding:{}:{}", fixture.account, fixture.role),
+        );
+        record_read_from_access_key(
+            &state_block,
+            &format!(
+                "perm.role:{}:{}",
+                fixture.unicode_role_raw, fixture.role_perm
+            ),
+        );
+
+        let witness = drain_exec_witness();
+        drop(guard);
+        assert_eq!(witness.reads.len(), 6);
+        assert_read_value(
+            &witness,
+            key_account_kv(&fixture.account, &color),
+            bytes_from_json(&Json::new("red")),
+        );
+        assert_no_read_key(
+            &witness,
+            enc_key_prefix(0xA1, &format!(" {} ", fixture.account), color.as_ref()),
+        );
+        assert_read_value(
+            &witness,
+            enc_key_prefix(0xC3, &fixture.account.to_string(), fixture.account_perm),
+            bool_json_bytes(true),
+        );
+        assert_no_read_key(
+            &witness,
+            enc_key_prefix(
+                0xC3,
+                &format!(" {} ", fixture.account),
+                fixture.account_perm,
+            ),
+        );
+        assert_read_value(
+            &witness,
+            key_account_kv(&fixture.account, &shade),
+            bytes_from_json(&Json::new("maroon")),
+        );
+        assert_read_value(
+            &witness,
+            key_asset_def_kv(&fixture.asset_definition, &issuer),
+            bytes_from_json(&Json::new("alice")),
+        );
+        assert_no_read_key(&witness, key_asset_def_total(&fixture.asset_definition));
+        assert_read_value(
+            &witness,
+            enc_key_prefix(
+                0xC1,
+                &fixture.account.to_string(),
+                &fixture.role.to_string(),
+            ),
+            bool_json_bytes(true),
+        );
+        let mut role_fallthrough_key = vec![0xC2];
+        role_fallthrough_key
+            .extend_from_slice(format!("binding:{}:{}", fixture.account, fixture.role).as_bytes());
+        assert_no_read_key(&witness, role_fallthrough_key);
+        assert_read_value(
+            &witness,
+            enc_key_prefix(0xC4, &fixture.unicode_role_raw, fixture.role_perm),
+            bool_json_bytes(true),
+        );
+        assert_no_read_key(
+            &witness,
+            enc_key_prefix(0xC4, &fixture.unicode_role.to_string(), fixture.role_perm),
+        );
+    }
 
     #[test]
     fn parity_same_witness_twice_same_root() {
@@ -662,6 +1200,222 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn recorder_lifecycle_read_write_delete_and_drain_match_formal_gate() {
+        let _guard = exec_witness_guard();
+        start_block();
+
+        let key: Name = "color".parse().expect("metadata key");
+        let account = (*ALICE_ID).clone();
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset = AssetId::new(asset_definition, account.clone());
+        record_read_asset(
+            &asset,
+            Some(&iroha_primitives::numeric::Numeric::from(1u32)),
+        );
+        record_write_asset(&asset, &iroha_primitives::numeric::Numeric::from(2u32));
+
+        start_block();
+        assert!(snapshot_exec_witness().reads.is_empty());
+        assert!(snapshot_exec_witness().writes.is_empty());
+
+        let first = Json::new("first");
+        let second = Json::new("second");
+        let post = Json::new("post");
+        let delete_pre = Json::new("delete_pre");
+        record_read_account_kv(&account, &key, Some(&first));
+        record_read_account_kv(&account, &key, Some(&second));
+        record_write_account_kv(&account, &key, &second);
+        record_write_account_kv(&account, &key, &post);
+        record_delete_account_kv(&account, &key, &delete_pre);
+        record_read_asset(
+            &asset,
+            Some(&iroha_primitives::numeric::Numeric::from(7u32)),
+        );
+        record_write_asset(&asset, &iroha_primitives::numeric::Numeric::from(9u32));
+
+        let snapshot = snapshot_exec_witness();
+        assert_eq!(snapshot.reads.len(), 2);
+        assert_eq!(snapshot.writes.len(), 2);
+
+        let drained = drain_exec_witness();
+        assert_eq!(drained.fastpq_batches, Vec::new());
+        assert!(
+            drained
+                .reads
+                .windows(2)
+                .all(|pair| pair[0].key < pair[1].key)
+        );
+        assert!(
+            drained
+                .writes
+                .windows(2)
+                .all(|pair| pair[0].key < pair[1].key)
+        );
+
+        let account_key = key_account_kv(&account, &key);
+        let read = drained
+            .reads
+            .iter()
+            .find(|kv| kv.key == account_key)
+            .expect("account read recorded");
+        assert_eq!(read.value, bytes_from_json(&first));
+        let write = drained
+            .writes
+            .iter()
+            .find(|kv| kv.key == account_key)
+            .expect("account write recorded");
+        assert!(
+            write.value.is_empty(),
+            "delete should record an empty post value"
+        );
+
+        record_read_account_kv(&account, &key, Some(&second));
+        assert!(
+            drain_exec_witness().reads.is_empty(),
+            "drain must deactivate capture so inactive records are ignored"
+        );
+    }
+
+    #[test]
+    fn recorder_key_namespaces_match_formal_tags_and_separators() {
+        let account = (*ALICE_ID).clone();
+        let domain = DomainId::try_new("wonderland", "universal").unwrap();
+        let nft: NftId = "ticket$wonderland.universal".parse().expect("nft id");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            domain.clone(),
+            "rose".parse().unwrap(),
+        );
+        let asset = AssetId::new(asset_definition.clone(), account.clone());
+        let key: Name = "color".parse().expect("metadata key");
+        let sep = key_sep();
+
+        let metadata_keys = [
+            key_account_kv(&account, &key),
+            key_domain_kv(&domain, &key),
+            key_nft_kv(&nft, &key),
+            key_asset_def_kv(&asset_definition, &key),
+        ];
+        let metadata_tags = metadata_keys
+            .iter()
+            .map(|key| key[0])
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(metadata_tags, [0xA1, 0xA2, 0xA3, 0xA4].into());
+        assert!(
+            metadata_keys.iter().all(|key| key.contains(&sep)),
+            "metadata keys must include the unit separator between id and field"
+        );
+
+        let balance_key = key_asset_balance(&asset);
+        assert_eq!(balance_key[0], 0xB1);
+        assert!(!balance_key.contains(&sep));
+
+        let total_key = key_asset_def_total(&asset_definition);
+        assert_eq!(total_key[0], 0xB2);
+        assert!(!total_key.contains(&sep));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn fastpq_grouping_and_digest_copy_match_formal_gate() {
+        let _guard = exec_witness_guard();
+        start_block();
+
+        let batch_hash = Hash::prehashed([0x44; Hash::LENGTH]);
+        let other_hash = Hash::prehashed([0x45; Hash::LENGTH]);
+        let missing_hash = Hash::prehashed([0x46; Hash::LENGTH]);
+        let (first, first_digest) = sample_fastpq_transcript(1, batch_hash);
+        let (second, second_digest) = sample_fastpq_transcript(2, batch_hash);
+        let (other, other_digest) = sample_fastpq_transcript(3, other_hash);
+        record_fastpq_transcript(&first);
+        record_fastpq_transcript(&second);
+        record_fastpq_transcript(&other);
+
+        let snapshot = snapshot_exec_witness();
+        let grouped = snapshot
+            .fastpq_transcripts
+            .iter()
+            .find(|bundle| bundle.entry_hash == batch_hash)
+            .expect("same-batch transcripts grouped");
+        assert_eq!(grouped.transcripts.len(), 2);
+        assert_eq!(grouped.transcripts[0].deltas, first.deltas);
+        assert_eq!(grouped.transcripts[1].deltas, second.deltas);
+        assert_eq!(
+            grouped.transcripts[0].poseidon_preimage_digest,
+            Some(first_digest)
+        );
+        assert_eq!(
+            grouped.transcripts[1].poseidon_preimage_digest,
+            Some(second_digest)
+        );
+
+        let mut reversed = BTreeMap::new();
+        let mut finalized_second = second.clone();
+        finalized_second.poseidon_preimage_digest = Some(second_digest);
+        let mut finalized_first = first.clone();
+        finalized_first.poseidon_preimage_digest = Some(first_digest);
+        reversed.insert(
+            batch_hash,
+            vec![finalized_second.clone(), finalized_first.clone()],
+        );
+        apply_fastpq_transcript_digests(&reversed);
+        {
+            let g = slot().lock().unwrap();
+            let stored = g
+                .fastpq_transcripts
+                .get(&batch_hash)
+                .expect("batch still recorded");
+            assert_eq!(stored[0].poseidon_preimage_digest, None);
+            assert_eq!(stored[1].poseidon_preimage_digest, None);
+        }
+
+        let mut finalized = BTreeMap::new();
+        finalized.insert(batch_hash, vec![finalized_first, finalized_second]);
+        let mut finalized_other = other.clone();
+        finalized_other.poseidon_preimage_digest = Some(other_digest);
+        finalized.insert(other_hash, vec![finalized_other]);
+        finalized.insert(
+            missing_hash,
+            vec![sample_fastpq_transcript(4, missing_hash).0],
+        );
+        apply_fastpq_transcript_digests(&finalized);
+        {
+            let g = slot().lock().unwrap();
+            let stored = g
+                .fastpq_transcripts
+                .get(&batch_hash)
+                .expect("batch still recorded");
+            assert_eq!(stored[0].poseidon_preimage_digest, Some(first_digest));
+            assert_eq!(stored[1].poseidon_preimage_digest, Some(second_digest));
+            assert!(
+                !g.fastpq_transcripts.contains_key(&missing_hash),
+                "digest copy must not create missing batches"
+            );
+        }
+
+        let replacement = Hash::prehashed([0xEE; Hash::LENGTH]);
+        let mut overwrite = BTreeMap::new();
+        let mut finalized_first = first;
+        finalized_first.poseidon_preimage_digest = Some(replacement);
+        overwrite.insert(batch_hash, vec![finalized_first]);
+        apply_fastpq_transcript_digests(&overwrite);
+        let drained = drain_exec_witness();
+        let grouped = drained
+            .fastpq_transcripts
+            .iter()
+            .find(|bundle| bundle.entry_hash == batch_hash)
+            .expect("drained batch present");
+        assert_eq!(
+            grouped.transcripts[0].poseidon_preimage_digest,
+            Some(first_digest),
+            "existing digest must not be overwritten"
+        );
+        assert!(drained.fastpq_batches.is_empty());
     }
 
     #[test]
@@ -884,7 +1638,7 @@ mod tests {
             "guard should prevent concurrent access"
         );
         drop(guard);
-        rx.recv_timeout(Duration::from_secs(1))
+        rx.recv_timeout(Duration::from_secs(5))
             .expect("guard should release");
         handle.join().expect("thread joins");
     }

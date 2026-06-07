@@ -608,22 +608,15 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before_recovery.blocks);
-    if recovery_max_blocks >= recovery_height {
-        ensure!(
-            recovery_max_blocks.saturating_sub(recovery_min_blocks) <= 1,
-            "recovery phase should keep the cluster within one block after progress resumes (min={recovery_min_blocks}, max={recovery_max_blocks})"
-        );
-    } else {
-        // TODO: tighten this back to mandatory post-recovery progress once the grouped
-        // consensus test binary can reliably re-establish liveness after the stalled
-        // drop phase under serialized network startup.
-        ensure!(
-            recovery_max_blocks == status_before_recovery.blocks
-                && recovery_min_blocks == status_before_recovery.blocks,
-            "recovery phase stall should keep the cluster pinned at the prior height when grouped-harness liveness does not re-establish (before={}, min={recovery_min_blocks}, max={recovery_max_blocks})",
-            status_before_recovery.blocks
-        );
-    }
+    ensure!(
+        recovery_max_blocks >= recovery_height,
+        "recovery phase should make post-drop progress to height {recovery_height} (before={}, min={recovery_min_blocks}, max={recovery_max_blocks})",
+        status_before_recovery.blocks
+    );
+    ensure!(
+        recovery_max_blocks.saturating_sub(recovery_min_blocks) <= 1,
+        "recovery phase should keep the cluster within one block after progress resumes (min={recovery_min_blocks}, max={recovery_max_blocks})"
+    );
 
     let mut summary_map = Map::new();
     summary_map.insert("scenario".into(), Value::from("chunk_drop_recovery"));
