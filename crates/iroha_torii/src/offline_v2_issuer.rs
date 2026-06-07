@@ -12,6 +12,7 @@ use base64::{
 use iroha_config::parameters::actual;
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
+    ValidationFail,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, IssueOfflineNoteV2},
@@ -59,14 +60,15 @@ impl OfflineV2IssuerRuntime {
         }
     }
 
-    fn sign_bytes(&self, payload: &[u8]) -> Signature {
-        Signature::new(self.key_pair.private_key(), payload)
+    fn sign_bytes(&self, payload: &[u8], context: &'static str) -> Result<Signature, Error> {
+        Signature::try_new(self.key_pair.private_key(), payload)
+            .map_err(|source| offline_v2_signing_error(context, source))
     }
 
     fn sign_json_base64(&self, payload: &Value, context: &'static str) -> Result<String, Error> {
         let bytes = json::to_vec(payload)
             .map_err(|source| Error::SerializationFailure { context, source })?;
-        Ok(BASE64_STANDARD.encode(self.sign_bytes(&bytes).payload()))
+        Ok(BASE64_STANDARD.encode(self.sign_bytes(&bytes, context)?.payload()))
     }
 }
 
@@ -399,6 +401,12 @@ fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> 
             code: "OFFLINE_V2_ISSUER_DISABLED",
             message: "Offline Notes V2 issuer is not configured on this Torii node.".to_string(),
         })
+}
+
+fn offline_v2_signing_error(context: &'static str, source: iroha_crypto::Error) -> Error {
+    Error::Query(ValidationFail::InternalError(format!(
+        "Offline Notes V2 issuer failed to sign {context}: {source}"
+    )))
 }
 
 fn parse_and_authorize(
@@ -1075,7 +1083,8 @@ fn build_chain_certificate(
                 context: "offline_v2_key_certificate_payload",
                 source: source.into(),
             })?;
-    certificate.issuer_signature = issuer.sign_bytes(&signing_bytes);
+    certificate.issuer_signature =
+        issuer.sign_bytes(&signing_bytes, "offline_v2_key_certificate")?;
     Ok(certificate)
 }
 

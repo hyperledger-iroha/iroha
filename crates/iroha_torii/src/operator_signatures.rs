@@ -130,6 +130,14 @@ impl OperatorSignatureError {
             format!("operator signature nonce RNG failed: {}", message.into()),
         )
     }
+
+    fn signing(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "operator_signature_signing",
+            format!("operator signature signing failed: {}", message.into()),
+        )
+    }
 }
 
 impl fmt::Display for OperatorSignatureError {
@@ -399,7 +407,8 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
     let nonce = operator_signature_nonce_with_rng(rng)?;
 
     let msg = OperatorSignatures::operator_request_message(method, uri, body, timestamp_ms, &nonce);
-    let signature = Signature::new(key_pair.private_key(), &msg);
+    let signature = Signature::try_new(key_pair.private_key(), &msg)
+        .map_err(|error| OperatorSignatureError::signing(error.to_string()))?;
 
     Ok(operator_signature_headers(
         key_pair,
@@ -663,6 +672,15 @@ mod tests {
                 .contains("operator signature nonce RNG failed")
         );
         assert!(error.message.contains("failing operator nonce RNG"));
+    }
+
+    #[test]
+    fn operator_signature_signing_error_is_internal() {
+        let error = OperatorSignatureError::signing("backend rejected message");
+
+        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, "operator_signature_signing");
+        assert!(error.message.contains("backend rejected message"));
     }
 
     #[tokio::test]

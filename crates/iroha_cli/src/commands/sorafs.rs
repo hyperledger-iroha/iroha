@@ -6265,7 +6265,8 @@ fn build_repair_worker_signature(
     payload
         .validate()
         .map_err(|err| eyre!("invalid repair worker signature payload: {err}"))?;
-    let signature = SignatureOf::new(config.key_pair.private_key(), &payload);
+    let signature = SignatureOf::try_new(config.key_pair.private_key(), &payload)
+        .wrap_err("failed to sign SoraFS repair worker payload")?;
     Ok((worker_id, signature))
 }
 

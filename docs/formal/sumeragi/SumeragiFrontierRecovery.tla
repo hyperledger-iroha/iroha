@@ -35,17 +35,31 @@ CONSTANTS
   \* @type: Bool;
   BugDisableStaleRecovery,
   \* @type: Bool;
+  BugKeepStaleRecoveryOwnerAfterUnlock,
+  \* @type: Bool;
   BugDisableQueueDrain,
   \* @type: Bool;
   BugDisablePayloadRecovery,
   \* @type: Bool;
+  BugKeepPayloadRecoveryOwner,
+  \* @type: Bool;
   BugDisableRetransmitFollowthrough,
+  \* @type: Bool;
+  BugKeepQuorumWindowAfterRetransmit,
+  \* @type: Bool;
+  BugDropViewBoundRetransmitEvidence,
   \* @type: Bool;
   BugDisableFuturePromotion,
   \* @type: Bool;
   BugDisableFutureReanchorClear,
   \* @type: Bool;
   BugAllowFutureEvidenceDrop,
+  \* @type: Bool;
+  BugAllowZeroEvidenceFutureDrop,
+  \* @type: Bool;
+  BugMarkFutureReanchorRotated,
+  \* @type: Bool;
+  BugPreserveFutureReanchorActiveMarkers,
   \* @type: Bool;
   BugPromoteWithoutReset,
   \* @type: Bool;
@@ -229,12 +243,19 @@ TypeInvariant ==
   /\ MaxProgressAge \in Nat
   /\ MaxProgressAge > 0
   /\ BugDisableStaleRecovery \in BOOLEAN
+  /\ BugKeepStaleRecoveryOwnerAfterUnlock \in BOOLEAN
   /\ BugDisableQueueDrain \in BOOLEAN
   /\ BugDisablePayloadRecovery \in BOOLEAN
+  /\ BugKeepPayloadRecoveryOwner \in BOOLEAN
   /\ BugDisableRetransmitFollowthrough \in BOOLEAN
+  /\ BugKeepQuorumWindowAfterRetransmit \in BOOLEAN
+  /\ BugDropViewBoundRetransmitEvidence \in BOOLEAN
   /\ BugDisableFuturePromotion \in BOOLEAN
   /\ BugDisableFutureReanchorClear \in BOOLEAN
   /\ BugAllowFutureEvidenceDrop \in BOOLEAN
+  /\ BugAllowZeroEvidenceFutureDrop \in BOOLEAN
+  /\ BugMarkFutureReanchorRotated \in BOOLEAN
+  /\ BugPreserveFutureReanchorActiveMarkers \in BOOLEAN
   /\ BugPromoteWithoutReset \in BOOLEAN
   /\ BugFutureStaleOwnerBlocksReanchor \in BOOLEAN
   /\ BugDisablePendingProgressTouch \in BOOLEAN
@@ -470,6 +491,111 @@ TlcFastCanonicalInit ==
         /\ commitQcObserved = FALSE
         /\ TlcFutureInit(1, 0, "Missing", "None")
 
+ZeroEvidenceFutureDropBugInit ==
+  /\ Init
+  /\ TlcFastCommonInit
+  /\ commitVotes = 0
+  /\ queuedVotes = 0
+  /\ payloadState = "Missing"
+  /\ recoveryOwner = "Stale"
+  /\ quorumRescheduleArmed = FALSE
+  /\ quorumWindowAge = 0
+  /\ view = 0
+  /\ validationState = "Pending"
+  /\ localVoteEmitted = FALSE
+  /\ commitQcObserved = FALSE
+  /\ TlcFutureInit(0, 1, "Missing", "Local")
+
+FutureReanchorRotationBugInit ==
+  /\ Init
+  /\ TlcFastCommonInit
+  /\ commitVotes = 1
+  /\ queuedVotes = 0
+  /\ payloadState = "Local"
+  /\ recoveryOwner = "None"
+  /\ quorumRescheduleArmed = FALSE
+  /\ quorumWindowAge = 0
+  /\ view = 0
+  /\ validationState = "Valid"
+  /\ localVoteEmitted = TRUE
+  /\ commitQcObserved = FALSE
+  /\ TlcFutureInit(1, 0, "Missing", "None")
+
+FutureReanchorActiveMarkerBugInit ==
+  /\ Init
+  /\ TlcFastCommonInit
+  /\ commitVotes = 1
+  /\ queuedVotes = 0
+  /\ payloadState = "Missing"
+  /\ recoveryOwner = "None"
+  /\ quorumRescheduleArmed = FALSE
+  /\ quorumWindowAge = 0
+  /\ view = 0
+  /\ validationState = "Pending"
+  /\ localVoteEmitted = FALSE
+  /\ commitQcObserved = FALSE
+  /\ TlcNoFutureInit
+
+QuorumRetransmitWindowCleanupBugInit ==
+  /\ Init
+  /\ TlcFastCommonInit
+  /\ commitVotes = 1
+  /\ queuedVotes = 0
+  /\ payloadState = "Local"
+  /\ recoveryOwner = "None"
+  /\ quorumRescheduleArmed = TRUE
+  /\ quorumWindowAge = RescheduleWindow
+  /\ view = 0
+  /\ validationState = "Valid"
+  /\ localVoteEmitted = TRUE
+  /\ commitQcObserved = FALSE
+  /\ TlcNoFutureInit
+
+PayloadRecoveryOwnerBugInit ==
+  /\ Init
+  /\ TlcFastCommonInit
+  /\ commitVotes = 1
+  /\ queuedVotes = 0
+  /\ payloadState = "Missing"
+  /\ recoveryOwner = "Remote"
+  /\ quorumRescheduleArmed = FALSE
+  /\ quorumWindowAge = 0
+  /\ view = 0
+  /\ validationState = "Pending"
+  /\ localVoteEmitted = FALSE
+  /\ commitQcObserved = FALSE
+  /\ TlcNoFutureInit
+
+StaleRecoveryUnlockOwnerBugInit ==
+  /\ Init
+  /\ TlcFastCommonInit
+  /\ commitVotes = 1
+  /\ queuedVotes = 0
+  /\ payloadState = "Local"
+  /\ recoveryOwner = "Stale"
+  /\ quorumRescheduleArmed = FALSE
+  /\ quorumWindowAge = 0
+  /\ view = 1
+  /\ validationState = "Valid"
+  /\ localVoteEmitted = TRUE
+  /\ commitQcObserved = FALSE
+  /\ TlcNoFutureInit
+
+ViewBoundRetransmitEvidenceBugInit ==
+  /\ Init
+  /\ TlcFastCommonInit
+  /\ commitVotes = 1
+  /\ queuedVotes = 0
+  /\ payloadState = "Local"
+  /\ recoveryOwner = "None"
+  /\ quorumRescheduleArmed = TRUE
+  /\ quorumWindowAge = RescheduleWindow
+  /\ view = MaxView
+  /\ validationState = "Valid"
+  /\ localVoteEmitted = TRUE
+  /\ commitQcObserved = FALSE
+  /\ TlcNoFutureInit
+
 ClearStaleRecoveryEnabled ==
   /\ ~BugDisableStaleRecovery
   /\ ~(BugFutureStaleOwnerBlocksReanchor /\ FutureFrontierEvidence)
@@ -606,6 +732,7 @@ DropZeroEvidenceEnabled ==
   /\ gst
   /\ ActiveFrontier
   /\ ~FutureReanchorReadyForCurrent
+  /\ (~FutureFrontierEvidence \/ BugAllowZeroEvidenceFutureDrop)
   /\ ~VoteBacked
 
 LearnFutureFrontierEvidenceEnabled ==
@@ -837,7 +964,8 @@ ObserveCommitQc ==
 ClearStaleRecovery ==
   /\ ClearStaleRecoveryEnabled
   /\ RecordProgress("StaleRecovery")
-  /\ recoveryOwner' = "None"
+  /\ recoveryOwner' =
+       IF BugKeepStaleRecoveryOwnerAfterUnlock THEN recoveryOwner ELSE "None"
   /\ staleRecoveryUnlocked' = TRUE
   /\ promotionFresh' = FALSE
   /\ UNCHANGED PendingProgressFlags
@@ -911,7 +1039,7 @@ RecoverPayload ==
   /\ RecordProgress("PayloadRecovery")
   /\ payloadState' = "Local"
   /\ payloadRecovered' = TRUE
-  /\ recoveryOwner' = "Local"
+  /\ recoveryOwner' = IF BugKeepPayloadRecoveryOwner THEN recoveryOwner ELSE "Local"
   /\ promotionFresh' = FALSE
   /\ UNCHANGED PendingProgressFlags
   /\ UNCHANGED ViewRecoveryBookkeeping
@@ -1050,8 +1178,9 @@ QuorumRetransmit ==
   /\ QuorumRetransmitEnabled
   /\ RecordProgress("QuorumRetransmit")
   /\ quorumRetransmitted' = TRUE
-  /\ quorumRescheduleArmed' = FALSE
-  /\ quorumWindowAge' = 0
+  /\ quorumRescheduleArmed' = BugKeepQuorumWindowAfterRetransmit
+  /\ quorumWindowAge' =
+       IF BugKeepQuorumWindowAfterRetransmit THEN quorumWindowAge ELSE 0
   /\ promotionFresh' = FALSE
   /\ UNCHANGED PendingProgressFlags
   /\ UNCHANGED ViewRecoveryBookkeeping
@@ -1127,6 +1256,8 @@ DropAtViewBound ==
   /\ rotated' = TRUE
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
+  /\ quorumRetransmitted' =
+       IF BugDropViewBoundRetransmitEvidence THEN FALSE ELSE quorumRetransmitted
   /\ promotionFresh' = FALSE
   /\ UNCHANGED PendingProgressFlags
   /\ UNCHANGED ViewRecoveryBookkeeping
@@ -1140,7 +1271,6 @@ DropAtViewBound ==
       recoveryOwner,
       view,
       payloadRecovered,
-      quorumRetransmitted,
       futurePresent,
       futureContiguous,
       futureCommitVotes,
@@ -1157,11 +1287,22 @@ ClearCurrentForFutureReanchor ==
   /\ ClearCurrentForFutureReanchorEnabled
   /\ RecordProgress("FutureReanchor")
   /\ pending' = FALSE
+  /\ rotated' = BugMarkFutureReanchorRotated
+  /\ recoveryOwner' = IF BugPreserveFutureReanchorActiveMarkers THEN recoveryOwner ELSE "None"
   /\ quorumRescheduleArmed' = FALSE
   /\ quorumWindowAge' = 0
+  /\ validationState' =
+       IF BugPreserveFutureReanchorActiveMarkers THEN validationState ELSE "Pending"
+  /\ localVoteEmitted' =
+       IF BugPreserveFutureReanchorActiveMarkers THEN localVoteEmitted ELSE FALSE
+  /\ commitQcObserved' =
+       IF BugPreserveFutureReanchorActiveMarkers THEN commitQcObserved ELSE FALSE
+  /\ payloadRecovered' =
+       IF BugPreserveFutureReanchorActiveMarkers THEN payloadRecovered ELSE FALSE
+  /\ quorumRetransmitted' =
+       IF BugPreserveFutureReanchorActiveMarkers THEN quorumRetransmitted ELSE FALSE
   /\ futurePromotionReady' = TRUE
   /\ promotionFresh' = FALSE
-  /\ UNCHANGED PendingProgressFlags
   /\ UNCHANGED ViewRecoveryBookkeeping
   /\ UNCHANGED <<
       frontierSlot,
@@ -1172,11 +1313,7 @@ ClearCurrentForFutureReanchor ==
       commitVotes,
       queuedVotes,
       payloadState,
-      recoveryOwner,
       view,
-      payloadRecovered,
-      quorumRetransmitted,
-      rotated,
       futurePresent,
       futureContiguous,
       futureCommitVotes,
@@ -1351,8 +1488,31 @@ CommitImpliesVoteQuorum ==
 CommitImpliesPayloadAvailability ==
   committed => PayloadAvailable
 
+CommittedFrontierHasNoStagedFuture ==
+  committed
+  => /\ FreshRecoveryOwner
+     /\ ~futurePresent
+     /\ ~futurePromotionReady
+     /\ (futureEvidenceObserved => futurePromoted)
+
 VoteBackedNotDroppedAsZeroEvidenceZombie ==
   dropReason = "ZeroEvidence" => ~VoteBacked
+
+ZeroEvidenceDropHasNoConsensusEvidence ==
+  dropReason = "ZeroEvidence"
+  => /\ dropped
+     /\ ~rotated
+     /\ ~VoteBacked
+     /\ ~FullQuorum
+     /\ ~commitQcObserved
+     /\ ~quorumRetransmitted
+     /\ ~futurePromotionReady
+
+ZeroEvidenceDropHasNoStagedFuture ==
+  dropReason = "ZeroEvidence"
+  => /\ ~futurePresent
+     /\ ~futurePromotionReady
+     /\ (futureEvidenceObserved => futurePromoted)
 
 PostGstVoteBackedFrontierHasProgress ==
   /\ gst
@@ -1390,6 +1550,11 @@ MissingPayloadHasRecoveryProgress ==
   /\ payloadState = "Missing"
   => RecoverPayloadEnabled
 
+PayloadRecoveredHasLocalOwner ==
+  payloadRecovered
+  => /\ PayloadAvailable
+     /\ recoveryOwner = "Local"
+
 QuorumWindowHasRetransmitProgress ==
   /\ gst
   /\ ActiveFrontier
@@ -1401,6 +1566,13 @@ QuorumWindowHasRetransmitProgress ==
   /\ quorumRescheduleArmed
   /\ quorumWindowAge >= RescheduleWindow
   => QuorumRetransmitEnabled
+
+QuorumRetransmitClearsRescheduleWindow ==
+  quorumRetransmitted
+  => /\ ~quorumRescheduleArmed
+     /\ quorumWindowAge = 0
+     /\ VoteBacked
+     /\ PayloadAvailable
 
 RetransmitHasFollowthroughProgress ==
   /\ gst
@@ -1461,6 +1633,7 @@ FuturePromotionReadyClearsCurrentWrapper ==
      /\ ~pending
      /\ ~committed
      /\ ~dropped
+     /\ ~rotated
      /\ dropReason = "None"
      /\ ~quorumRescheduleArmed
      /\ quorumWindowAge = 0
@@ -1471,6 +1644,15 @@ FuturePromotionReadyClearsCurrentWrapper ==
      /\ ~futurePromoted
      /\ lastProgressKind = "FutureReanchor"
      /\ progressAge = 0
+
+FuturePromotionReadyClearsActiveMarkers ==
+  futurePromotionReady
+  => /\ recoveryOwner = "None"
+     /\ validationState = "Pending"
+     /\ ~localVoteEmitted
+     /\ ~commitQcObserved
+     /\ ~payloadRecovered
+     /\ ~quorumRetransmitted
 
 TerminalFrontierOutcomesAreExclusive ==
   /\ committed =>
@@ -1497,11 +1679,51 @@ TerminalFrontierOutcomesAreExclusive ==
        /\ ~quorumRescheduleArmed
        /\ quorumWindowAge = 0
 
+RotatedFrontierHasRetransmitEvidence ==
+  rotated /\ ~dropped
+  => /\ ~committed
+     /\ dropReason = "None"
+     /\ view > 0
+     /\ subjectView = view
+     /\ recoveryLastRotationView = view
+     /\ ~staleRecoveryUnlocked
+     /\ quorumRetransmitted
+     /\ VoteBacked
+     /\ PayloadAvailable
+     /\ FreshRecoveryOwner
+     /\ ~FullQuorum
+
+RotatedFrontierHasNoStagedFuture ==
+  rotated /\ ~dropped
+  => /\ ~futurePresent
+     /\ ~futurePromotionReady
+     /\ (futureEvidenceObserved => futurePromoted)
+
+ViewBoundDropHasRetransmitEvidence ==
+  dropReason = "ViewBound"
+  => /\ dropped
+     /\ rotated
+     /\ view = MaxView
+     /\ quorumRetransmitted
+     /\ VoteBacked
+     /\ PayloadAvailable
+     /\ FreshRecoveryOwner
+     /\ ~FullQuorum
+
+ViewBoundDropHasNoStagedFuture ==
+  dropReason = "ViewBound"
+  => /\ ~futurePresent
+     /\ ~futurePromotionReady
+     /\ (futureEvidenceObserved => futurePromoted)
+
 PendingProgressEventsTouchAge ==
   lastProgressKind # "None" => progressAge = 0
 
 StaleRecoveryUnlockIsViewScoped ==
   staleRecoveryUnlocked => StaleRecoveryViewCovered
+
+StaleRecoveryUnlockClearsStaleOwner ==
+  staleRecoveryUnlocked => FreshRecoveryOwner
 
 PostGstVoteBackedFrontierEventuallyResolves ==
   [] (

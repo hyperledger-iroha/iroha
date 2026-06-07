@@ -113,6 +113,7 @@ ActualTimeoutMarkPresent(c) ==
   \/ /\ SpecTimeoutMarkPresent(c)
      /\ ~(Bug = "at_timeout_missed" /\ c \in AtTimeoutNewCases)
      /\ ~(Bug = "above_timeout_missed" /\ c \in AboveTimeoutNewCases)
+     /\ ~(Bug = "timeout_without_mark" /\ c \in NewReportCases)
      /\ ~(Bug = "already_reported_clears_flag" /\ c \in AlreadyReportedCases)
   \/ /\ ~SpecTimeoutMarkPresent(c)
      /\ Bug = "non_timeout_sets_flag"
@@ -121,6 +122,7 @@ ActualTimeoutNewlyMarked(c) ==
   \/ /\ SpecTimeoutNewlyMarked(c)
      /\ ~(Bug = "at_timeout_missed" /\ c \in AtTimeoutNewCases)
      /\ ~(Bug = "above_timeout_missed" /\ c \in AboveTimeoutNewCases)
+     /\ ~(Bug = "timeout_without_mark" /\ c \in NewReportCases)
   \/ /\ c \in AlreadyReportedCases
      /\ Bug = "already_reported_repeats"
   \/ /\ c \in NoReportCases

@@ -8428,6 +8428,32 @@ fn require_sccp_sora_message_nexus_finality_for_production(
     ))
 }
 
+#[cfg(feature = "app_api")]
+fn require_sccp_runtime_envelope_launch_scope(bundle: &NexusSccpMessageProofV1) -> Result<()> {
+    require_sccp_message_supported_launch_scope(bundle, "runtime SCALE envelope export")
+}
+
+fn require_sccp_message_supported_launch_scope(
+    bundle: &NexusSccpMessageProofV1,
+    surface: &str,
+) -> Result<()> {
+    let counterparty_domain = iroha_sccp::sccp_counterparty_domain_for_message_payload(
+        &bundle.payload,
+    )
+    .ok_or_else(|| {
+        conversion_error(format!(
+            "{surface} requires a remote SCCP counterparty domain"
+        ))
+    })?;
+    if iroha_sccp::sccp_domain_in_supported_launch_scope_v1(counterparty_domain) {
+        return Ok(());
+    }
+    Err(conversion_error(format!(
+        "{surface} is not supported for SCCP launch domain {counterparty_domain}: {}",
+        iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1
+    )))
+}
+
 fn sccp_message_artifact_for_destination_material(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
@@ -8436,6 +8462,7 @@ fn sccp_message_artifact_for_destination_material(
     allow_unready: bool,
     configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
 ) -> Result<Option<NexusSccpMessageTransparentProofV1>> {
+    require_sccp_message_supported_launch_scope(bundle, "proof artifact generation")?;
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
     if let Some(configured_source_lane) = configured_source_lane {
         if destination_binding.is_some() || proof_bytes.is_some() {
@@ -8537,6 +8564,7 @@ fn sccp_message_proof_job_for_destination_material(
     allow_unready: bool,
     configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
 ) -> Result<Option<SccpCounterpartyProofJobV1>> {
+    require_sccp_message_supported_launch_scope(bundle, "proof job generation")?;
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
     if let Some(configured_source_lane) = configured_source_lane {
         if destination_binding.is_some() || proof_bytes.is_some() {
@@ -8636,6 +8664,7 @@ fn bridge_proof_from_sccp_message_bundle(
     allow_unready: bool,
     configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
+    require_sccp_message_supported_launch_scope(bundle, "transparent proof consumption")?;
     let diagnostic_taira_tron_xor = allow_unready
         && configured_source_lane.is_none()
         && destination_binding.is_none()
@@ -9021,20 +9050,9 @@ mod sccp_message_backend_tests {
     }
 
     fn sample_ton_artifact_with_open_verify_envelope() -> NexusSccpMessageTransparentProofV1 {
-        let open = iroha_data_model::zk::StarkFriOpenProofV1 {
-            version: 1,
-            public_inputs: vec![vec![[0x55; 32]]],
-            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
-        };
-        let env = iroha_data_model::zk::OpenVerifyEnvelope {
-            backend: iroha_data_model::zk::BackendTag::Stark,
-            circuit_id: "sccp-message-transparent-v1".to_owned(),
-            vk_hash: [0x66; 32],
-            public_inputs: vec![0x77, 0x88, 0x99],
-            proof_bytes: norito::to_bytes(&open).expect("encode open proof"),
-            aux: vec![0xDE, 0xAD],
-        };
-        sample_ton_artifact_with_proof_bytes(norito::to_bytes(&env).expect("encode envelope"))
+        let artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
+        iroha_sccp::build_nexus_sccp_message_transparent_proof_allow_unready(&artifact.bundle, true)
+            .expect("canonical TON OpenVerify transparent artifact")
     }
 
     fn sample_ton_job() -> SccpCounterpartyProofJobV1 {
@@ -9923,6 +9941,44 @@ mod sccp_message_backend_tests {
             version: 1,
             kind: SccpHubMessageKind::Transfer,
             target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            message_id: iroha_sccp::sccp_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
+                &payload,
+            )),
+        };
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: sample_sccp_finality_proof_bytes(commitment_root),
+        }
+    }
+
+    fn sample_sora2_message_bundle(nonce: u64) -> NexusSccpMessageProofV1 {
+        let payload = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 17,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: b"sora2:alice".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:sora2:xor".to_vec(),
+        });
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Transfer,
+            target_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
             message_id: iroha_sccp::sccp_message_id(&payload),
             payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
                 &payload,
@@ -11903,13 +11959,16 @@ mod sccp_message_backend_tests {
     #[test]
     fn sccp_artifact_json_value_includes_open_verify_summary() {
         let artifact = sample_ton_artifact_with_open_verify_envelope();
+        let expected_summary =
+            summarize_sccp_message_transparent_open_verify_proof_from_artifact(&artifact)
+                .expect("artifact summary");
         let json = sccp_artifact_json_value(&artifact).expect("artifact json");
         let object = json.as_object().expect("artifact json object");
         let summary = object
             .get("proof_envelope_summary")
             .and_then(serde_json::Value::as_object)
             .expect("proof envelope summary");
-        let expected_vk_hash = "66".repeat(32);
+        let expected_vk_hash = hex::encode(expected_summary.vk_hash);
 
         assert_eq!(
             summary.get("backend").and_then(serde_json::Value::as_str),
@@ -11929,7 +11988,21 @@ mod sccp_message_backend_tests {
             summary
                 .get("public_input_column_count")
                 .and_then(serde_json::Value::as_u64),
-            Some(1)
+            Some(u64::from(expected_summary.public_input_column_count))
+        );
+    }
+
+    #[test]
+    fn sccp_artifact_json_value_omits_open_verify_summary_for_metadata_drift() {
+        let mut artifact = sample_ton_artifact_with_open_verify_envelope();
+        artifact.submission_package.envelope_bytes.push(0x00);
+
+        let json = sccp_artifact_json_value(&artifact).expect("artifact json");
+        let object = json.as_object().expect("artifact json object");
+
+        assert!(
+            !object.contains_key("proof_envelope_summary"),
+            "artifact JSON must not summarize proof bytes when typed wrapper metadata drifts"
         );
     }
 
@@ -12733,6 +12806,80 @@ mod sccp_message_backend_tests {
         let result = handle_v1_sccp_message_runtime_envelope(&state, hex::encode(message_id)).await;
         clear_sccp_bundles_for_tests();
         result.expect("signed SORA cache bundle should not depend on proof-registry lookup");
+    }
+
+    #[tokio::test]
+    async fn runtime_scale_export_rejects_unsupported_substrate_launch_scope() {
+        let _guard = SCCP_BUNDLE_CACHE_TEST_LOCK.lock().await;
+        clear_sccp_bundles_for_tests();
+        let mut bundle = sample_sora2_message_bundle(54);
+        bundle.finality_proof = sample_signed_sccp_finality_proof_bytes(bundle.commitment_root);
+        let message_id = bundle.commitment.message_id;
+        SCCP_MESSAGE_BUNDLES
+            .write()
+            .expect("SCCP message bundle registry poisoned")
+            .insert(message_id, bundle);
+        let state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+
+        let result = handle_v1_sccp_message_runtime_envelope(&state, hex::encode(message_id)).await;
+        clear_sccp_bundles_for_tests();
+        let err = result.expect_err(
+            "signed SORA2 runtime export must fail closed while Substrate is out of launch scope",
+        );
+        assert!(conversion_message(&err).is_some_and(|message| {
+            message.contains("runtime SCALE envelope export is not supported")
+                && message.contains("domain 8")
+                && message
+                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
+        }));
+    }
+
+    #[test]
+    fn proof_outputs_reject_unsupported_substrate_when_unready_allowed() {
+        let mut bundle = sample_sora2_message_bundle(55);
+        bundle.finality_proof = sample_signed_sccp_finality_proof_bytes(bundle.commitment_root);
+        let signer = KeyPair::from_seed(
+            b"iroha:torii:routing:test:sora2-proof-scope".to_vec(),
+            Algorithm::Secp256k1,
+        );
+
+        let artifact_err = sccp_message_artifact_for_destination_material(
+            &bundle, &signer, None, None, true, None,
+        )
+        .expect_err("allow-unready artifact generation must not expose unsupported SORA2");
+        assert!(conversion_message(&artifact_err).is_some_and(|message| {
+            message.contains("proof artifact generation is not supported")
+                && message.contains("domain 8")
+                && message
+                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
+        }));
+
+        let job_err = sccp_message_proof_job_for_destination_material(
+            &bundle, &signer, None, None, true, None,
+        )
+        .expect_err("allow-unready proof job generation must not expose unsupported SORA2");
+        assert!(conversion_message(&job_err).is_some_and(|message| {
+            message.contains("proof job generation is not supported")
+                && message.contains("domain 8")
+                && message
+                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
+        }));
+
+        let bridge_err =
+            bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
+                .expect_err(
+                    "allow-unready bridge proof conversion must not expose unsupported SORA2",
+                );
+        assert!(conversion_message(&bridge_err).is_some_and(|message| {
+            message.contains("transparent proof consumption is not supported")
+                && message.contains("domain 8")
+                && message
+                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
+        }));
     }
 
     #[test]
@@ -13638,6 +13785,7 @@ pub async fn handle_v1_sccp_message_runtime_envelope(
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
     let bundle = sccp_message_bundle_for_request(state, message_id)?.ok_or_else(sccp_not_found)?;
+    require_sccp_runtime_envelope_launch_scope(&bundle)?;
     require_sccp_sora_message_nexus_finality_for_production(&bundle, false)?;
     let envelope = if sccp_message_source_domain(&bundle.payload) == iroha_sccp::SCCP_DOMAIN_SORA {
         iroha_sccp::sccp_runtime_envelope_bytes_from_message_bundle(&bundle)

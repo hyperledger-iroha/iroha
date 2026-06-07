@@ -320,7 +320,10 @@ pub async fn handler_post_da_ingest(
                 pdp_commitment_bytes.clone(),
                 manifest.manifest.rent_quote,
                 stripe_layout,
-            );
+            )
+            .map_err(|(status, message)| {
+                ResponseError::from(build_error_response(status, &message, format))
+            })?;
             let commitment_record = build_da_commitment_record(
                 &request,
                 &manifest,
@@ -1066,7 +1069,7 @@ fn build_receipt(
     pdp_commitment: Vec<u8>,
     rent_quote: DaRentQuote,
     stripe_layout: DaStripeLayout,
-) -> DaIngestReceipt {
+) -> Result<DaIngestReceipt, (StatusCode, String)> {
     let mut receipt = DaIngestReceipt {
         client_blob_id: request.client_blob_id.clone(),
         lane_id: request.lane_id,
@@ -1081,10 +1084,20 @@ fn build_receipt(
         rent_quote,
         operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
     };
-    let unsigned_bytes =
-        to_bytes(&receipt).expect("DA receipt is Norito-serializable before signing");
-    receipt.operator_signature = Signature::new(signer.private_key(), &unsigned_bytes);
-    receipt
+    let unsigned_bytes = to_bytes(&receipt).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to encode DA ingest receipt for signing: {err}"),
+        )
+    })?;
+    receipt.operator_signature = Signature::try_new(signer.private_key(), &unsigned_bytes)
+        .map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to sign DA ingest receipt: {err}"),
+            )
+        })?;
+    Ok(receipt)
 }
 
 fn stripe_layout_from_manifest(manifest: &DaManifestV1) -> DaStripeLayout {

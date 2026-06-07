@@ -1973,7 +1973,6 @@ pub struct WsvHost {
 #[derive(Clone)]
 struct WsvHostSnapshot {
     wsv: MockWorldStateView,
-    state_snapshot: DurableStateSnapshot,
     caller: AccountId,
     account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
@@ -2110,7 +2109,6 @@ impl WsvHost {
     fn checkpoint_state(&self) -> WsvHostSnapshot {
         WsvHostSnapshot {
             wsv: self.wsv.clone(),
-            state_snapshot: self.wsv.sc_snapshot(),
             caller: self.caller.clone(),
             account_map: self.account_map.clone(),
             asset_map: self.asset_map.clone(),
@@ -2136,9 +2134,7 @@ impl WsvHost {
 
     fn restore_state(&mut self, snapshot: &WsvHostSnapshot) {
         self.wsv = snapshot.wsv.clone();
-        self.wsv
-            .sc_restore(&snapshot.state_snapshot)
-            .expect("restore durable state snapshot");
+        self.wsv.sc_flush().expect("restore durable state snapshot");
         self.caller = snapshot.caller.clone();
         self.account_map = snapshot.account_map.clone();
         self.asset_map = snapshot.asset_map.clone();
@@ -5996,6 +5992,12 @@ impl IVMHost for WsvHost {
                 Ok(Self::sysvar_gas(0))
             }
             syscalls::SYSCALL_GRANT_PERMISSION => {
+                if !self
+                    .wsv
+                    .has_permission(&self.caller, &PermissionToken::ManagePermissions)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
                 // r10=&AccountId (subject), r11=permission as Name or Json
                 let subject = self.decode_account_subject_reg(vm, 10)?;
                 // Decode permission token from TLV in r11
@@ -6022,6 +6024,12 @@ impl IVMHost for WsvHost {
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_REVOKE_PERMISSION => {
+                if !self
+                    .wsv
+                    .has_permission(&self.caller, &PermissionToken::ManagePermissions)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
                 let subject = self.decode_account_subject_reg(vm, 10)?;
                 let token = {
                     let v = vm.register(11);
@@ -6036,6 +6044,12 @@ impl IVMHost for WsvHost {
                 Ok(Self::mutation_gas(0))
             }
             syscalls::SYSCALL_CREATE_ROLE => {
+                if !self
+                    .wsv
+                    .has_permission(&self.caller, &PermissionToken::ManageRoles)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
                 // r10 = &Name (role), r11 = &Json (perm set)
                 let rname = self.decode_name_reg(vm, 10)?.to_string();
                 let perms = {
@@ -6060,6 +6074,12 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_DELETE_ROLE => {
+                if !self
+                    .wsv
+                    .has_permission(&self.caller, &PermissionToken::ManageRoles)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
                 // r10 = &Name
                 let rname = self.decode_name_reg(vm, 10)?.to_string();
                 if self.wsv.delete_role(&rname) {
@@ -6069,6 +6089,12 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_GRANT_ROLE => {
+                if !self
+                    .wsv
+                    .has_permission(&self.caller, &PermissionToken::ManageRoles)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
                 // r10 = &AccountId, r11=&Name
                 let subj = self.decode_account_subject_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
@@ -6079,6 +6105,12 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REVOKE_ROLE => {
+                if !self
+                    .wsv
+                    .has_permission(&self.caller, &PermissionToken::ManageRoles)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
                 let subj = self.decode_account_subject_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.revoke_role(&subj, &rname) {
@@ -7615,6 +7647,110 @@ mod tests_null_decode {
         let gas = call_syscall(&mut vm, syscalls::SYSCALL_SET_ACCOUNT_DETAIL)
             .expect("set account detail");
         assert_eq!(gas, WsvHost::mutation_gas(detail_payload.len()));
+    }
+
+    #[test]
+    fn direct_admin_syscalls_require_management_permissions() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+
+        let role: Name = "operator".parse().expect("role name");
+        let role_payload = norito::to_bytes(&role).expect("encode role name");
+        let role_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &role_payload))
+            .expect("alloc role name");
+        let perms = Json::from_str_norito("{\"permissions\":[\"manage_roles\"]}")
+            .expect("role permissions json");
+        let perms_payload = norito::to_bytes(&perms).expect("encode permissions json");
+        let perms_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &perms_payload))
+            .expect("alloc permissions");
+        vm.set_register(10, role_ptr);
+        vm.set_register(11, perms_ptr);
+
+        let err = host
+            .syscall(syscalls::SYSCALL_CREATE_ROLE, &mut vm)
+            .expect_err("create_role must require ManageRoles");
+        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(!host.wsv.roles.contains_key("operator"));
+
+        let account_payload = norito::to_bytes(&caller).expect("encode account id");
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account_payload))
+            .expect("alloc account");
+        let permission: Name = "BenefitSpend".parse().expect("permission name");
+        let permission_payload = norito::to_bytes(&permission).expect("encode permission name");
+        let permission_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &permission_payload))
+            .expect("alloc permission");
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, permission_ptr);
+
+        let err = host
+            .syscall(syscalls::SYSCALL_GRANT_PERMISSION, &mut vm)
+            .expect_err("grant_permission must require ManagePermissions");
+        assert!(matches!(err, VMError::PermissionDenied));
+        assert!(!host.wsv.has_permission(
+            &caller,
+            &PermissionToken::Custom("BenefitSpend".to_string())
+        ));
+    }
+
+    #[test]
+    fn direct_admin_syscalls_succeed_with_management_permissions() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        wsv.grant_permission(&caller, PermissionToken::ManageRoles);
+        wsv.grant_permission(&caller, PermissionToken::ManagePermissions);
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+
+        let role: Name = "operator".parse().expect("role name");
+        let role_payload = norito::to_bytes(&role).expect("encode role name");
+        let role_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &role_payload))
+            .expect("alloc role name");
+        let perms = Json::from_str_norito("{\"permissions\":[\"manage_permissions\"]}")
+            .expect("role permissions json");
+        let perms_payload = norito::to_bytes(&perms).expect("encode permissions json");
+        let perms_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &perms_payload))
+            .expect("alloc permissions");
+        vm.set_register(10, role_ptr);
+        vm.set_register(11, perms_ptr);
+
+        host.syscall(syscalls::SYSCALL_CREATE_ROLE, &mut vm)
+            .expect("create_role should accept ManageRoles caller");
+        assert!(host.wsv.roles.contains_key("operator"));
+
+        let account_payload = norito::to_bytes(&caller).expect("encode account id");
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account_payload))
+            .expect("alloc account");
+        let permission: Name = "BenefitSpend".parse().expect("permission name");
+        let permission_payload = norito::to_bytes(&permission).expect("encode permission name");
+        let permission_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &permission_payload))
+            .expect("alloc permission");
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, permission_ptr);
+
+        host.syscall(syscalls::SYSCALL_GRANT_PERMISSION, &mut vm)
+            .expect("grant_permission should accept ManagePermissions caller");
+        assert!(host.wsv.has_permission(
+            &caller,
+            &PermissionToken::Custom("BenefitSpend".to_string())
+        ));
     }
 
     #[test]

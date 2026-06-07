@@ -1,6 +1,3318 @@
 # Status
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
+
+## 2026-06-07 SCCP Solana vote-message preflight binding
+
+- Tightened Solana finalized source-adapter structural admission so the
+  vote-message hash must be recomputed from the Solana domain, finalized slot,
+  blockhash, bank hash, transaction-status root, message-proof hash, and
+  finality-context hash before deeper account/finality and Ed25519 verifier
+  work runs.
+- Extended the validator-vote regression so a stale but non-zero
+  `vote_message_hash` now fails the early source-adapter shape gate as well as
+  the full finalized-vote verifier.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_verifies_validator_vote_certificate --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+
+## 2026-06-07 Sumeragi finality-latch GST-only remaining gate
+
+- Added `FinalityLatchChangeLeavesOnlyGstElapsedGateStep` and
+  `FinalityLatchChangeOnlyLeavesGstElapsedGate` to the top-level Sumeragi model
+  so finality-latch transitions close protocol progress gates and expose only
+  the `GstElapsed` gate when GST is still unobserved, while preserving the
+  exact latch source effects and GST flag.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the finality-latch GST-only remaining
+  gate obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this latch gate addition;
+    the preceding top-level fast attempts exhausted heap at `4` GiB and
+    `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi finality-latch GST preservation
+
+- Added `FinalityLatchChangePreservesGstStep` and
+  `FinalityLatchChangeNeverChangesGst` to the top-level Sumeragi model so
+  finality-latch transitions explicitly preserve the GST observation flag while
+  following the commit-or-delivery source classification.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the finality-latch GST preservation
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this finality-latch
+    preservation addition; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi commit-view GST preservation
+
+- Added `CommitViewWitnessChangePreservesGstStep` and
+  `CommitViewWitnessChangeNeverChangesGst` to the top-level Sumeragi model so
+  nonzero commit-view witness changes preserve the GST observation flag while
+  following the certified finality stack and commit-certificate witness GST
+  preservation chain.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the commit-view GST preservation
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this commit-view
+    preservation addition; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 BFV full-bootstrap typed artifact envelopes
+
+- Added `BfvFullBootstrapCircuitArtifactRoleV1` and
+  `BfvFullBootstrapCircuitArtifactPayloadV1`, plus a Norito encoder helper, so
+  each full-bootstrap artifact byte field now declares its role, canonical
+  circuit id, registered BFV parameter digest, RNS/decomposition digests, and
+  max bootstrap depth before validation accepts it.
+- Hardened artifact bundle validation to reject malformed Norito payloads,
+  role-swapped artifacts, stale parameter profiles, and empty inner payloads even
+  when the governed material digest is updated to match the attacker-controlled
+  artifact bytes. Soracloud runtime artifact preflight now propagates the same
+  role/profile checks before the existing unavailable-evaluator boundary.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`7` passed, `661` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_job_run_provenance_payload_binds_full_bootstrap_artifact_bundle_option --lib -- --nocapture`
+    (`1` passed, `1455` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core full_bootstrap_artifact --lib -- --nocapture`
+    (`2` passed, `6990` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+    (`1` passed, `6991` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-artifact-transport CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_signature_payload_binds_full_bootstrap_artifact_option --lib -- --nocapture`
+    (`1` passed, `2295` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-07 Daemon Soracloud runtime provenance signing
+
+- Routed the embedded `irohad` Soracloud runtime model-host heartbeat and Inrou
+  host advert provenance signatures through a shared
+  `Signature::try_new` helper, so backend signing failures return contextual
+  `eyre` errors instead of unwinding while staging runtime-originated
+  authoritative mutations.
+- Added a helper-level unit test proving the canonical heartbeat provenance
+  payload signs and verifies under the embedded runtime feature.
+- Validation:
+  - `rustfmt --edition 2024 crates/irohad/src/soracloud_runtime.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-soracloud-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p irohad --features embedded-soracloud-runtime runtime_provenance_signature_verifies -- --nocapture`
+    (`1` passed in `iroha3d`, `1` passed in `irohad`, `1` integration test filtered out)
+
+## 2026-06-07 P2P handshake signature fallible route
+
+- Routed `SendKey::send_our_public_key(...)` through `Signature::try_new`, so
+  local peer handshake signature backend failures propagate through the existing
+  P2P `Result`/crypto error path instead of the compatibility constructor
+  unwinding while building the versioned handshake hello.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_p2p/src/peer.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-p2p-handshake-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_p2p handshake_v1_defaults_to_trust_gossip --lib -- --nocapture`
+    (`1` passed, `181` filtered out)
+
+## 2026-06-07 Sumeragi commit-certificate GST preservation
+
+- Added `CommitCertificateWitnessChangePreservesGstStep` and
+  `CommitCertificateWitnessChangeNeverChangesGst` to the top-level Sumeragi
+  model so latched commit-certificate vote/stake witness changes preserve the
+  GST observation flag while following the certified finality stack and
+  commit-artifact GST preservation chain.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the commit-certificate GST
+  preservation obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this commit-certificate
+    preservation addition; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 SCCP TON/TRON transition-chain adjacency preflight
+
+- Tightened supported TON and TRON transition-chain shape gates so a multi-step
+  chain must carry each transition's derived next validator/witness schedule
+  hash into the next transition's parent hash before deeper Ed25519 or
+  secp256k1 verifier work runs.
+- Added adversarial TON and TRON regressions with self-consistent signed second
+  transitions whose parent hashes do not match the previous step's next hash;
+  both now fail the early source-adapter shape gate and the deeper verifier.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_validator_set_transition_chain_requires_adjacent_seqnos_and_increasing_masterchain_seqnos --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_adapter_verifies_witness_schedule_transition_chain --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+
+## 2026-06-07 Sumeragi commit-artifact GST preservation
+
+- Added `CommitArtifactsChangePreservesGstStep` and
+  `CommitArtifactsChangeNeverChangesGst` to the top-level Sumeragi model so any
+  durable commit-view or commit-certificate witness change preserves the GST
+  observation flag while remaining sourced by an exact finality branch.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the commit-artifact GST preservation
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this commit-artifact
+    preservation addition; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 BFV full-bootstrap artifact transport preflight
+
+- Added optional `full_bootstrap_circuit_artifacts` transport to
+  `RunSoracloudFheJob` and Torii FHE job-run requests, bound it into the
+  canonical job provenance/signature payload, and routed Soracloud
+  exact/bounded full-bootstrap runtime paths through the artifact-aware crypto
+  preflight.
+- Core now rejects missing full-bootstrap artifacts for `FullBootstrapV1`
+  bootstrap jobs, rejects artifact attachments on refresh-only jobs, rejects
+  digest drift before the unavailable-evaluator boundary, and still fails closed
+  for valid artifacts until the executable BFV bootstrap evaluator lands.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_data_model -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_job_run_provenance_payload_binds_full_bootstrap_artifact_bundle_option --lib -- --nocapture`
+    (`1` passed, `1455` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core full_bootstrap_artifact --lib -- --nocapture`
+    (`2` passed, `6990` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+    (`1` passed, `6991` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-artifact-transport CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_refresh_only_runtime_rejects_full_bootstrap_artifact_attachment --lib -- --nocapture`
+    (`1` passed, `6991` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-artifact-transport CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core fhe_job_provenance_binds_full_bootstrap_artifact_bundle_option --lib -- --nocapture`
+    (`1` passed, `6991` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-artifact-transport CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_signature_payload_binds_full_bootstrap_artifact_option --lib -- --nocapture`
+    (`1` passed, `2295` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-artifact-transport CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model -p iroha_core -p iroha_torii --lib --no-deps -- -D warnings`
+
+## 2026-06-07 Streaming KeyUpdate signing fallible route
+
+- Routed `StreamingSession::build_key_update(...)` through
+  `Signature::try_new` and added `HandshakeError::Signing`, so local
+  `KeyUpdate` signing backend failures propagate through the streaming
+  handshake result instead of the compatibility constructor unwinding.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/streaming.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto x25519_content_key_update_roundtrips_after_key_exchange --lib -- --nocapture`
+    (`1` passed, `667` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --test streaming_handshake x25519_process_remote_key_update_lazily_generates_local_ephemeral -- --nocapture`
+    (`1` passed, `58` filtered out)
+
+## 2026-06-07 Sumeragi committed-phase GST-only remaining gate
+
+- Added `CommittedPhaseEntryLeavesOnlyGstElapsedGateStep` and
+  `CommittedPhaseEntryOnlyLeavesGstElapsedGate` to the top-level Sumeragi model
+  so first entry into `Committed` leaves all protocol progress closed and
+  exposes only the `GstElapsed` gate when GST is still unobserved.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed-phase GST-only gate
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`; the first attempt caught an ordering issue in the new
+    helper, which was fixed by moving it below
+    `CommittedPhaseEntryDisablesProgressActionsStep`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this branch-entry post-state
+    gate addition; the preceding top-level fast attempts exhausted heap at
+    `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Torii offline issuer signing fallible route
+
+- Routed the wired Torii Offline Notes issuer JSON payload and key-certificate
+  signing helpers through `Signature::try_new`, returning
+  `ValidationFail::InternalError` query errors with issuer context instead of
+  unwinding on backend signing failures.
+- Mirrored the same fallible helper shape in `offline_v2_issuer.rs`; that source
+  is not currently wired into the `iroha_torii` module graph, so focused runtime
+  validation covers the active v1 issuer only.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/offline_issuer.rs crates/iroha_torii/src/offline_v2_issuer.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii issue_lineage_state_uses_signed_balance_and_rejects_tampering --lib -- --nocapture`
+    (`1` passed, `2295` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii revocation_bundle_is_issuer_signed_and_sorted --lib -- --nocapture`
+    (`1` passed, `2295` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii verified_attestation_canonicalizes_certificate_key_bytes --lib -- --nocapture`
+    (`1` passed, `2295` filtered out)
+
+## 2026-06-07 SCCP ETH transition-chain terminal preflight
+
+- Added an adapter-level ETH sync-committee transition-chain shape gate so
+  non-empty chains must be internally adjacent by committee hash and sync
+  period, cannot point past the adapter beacon slot or sync period, and must
+  terminate at the adapter's declared active sync-committee root and sync
+  period before BLS transition verification runs.
+- Extended the ETH transition-chain regression with early shape-gate coverage
+  for skipped periods, wrong transition-slot periods, and stale terminal
+  periods, while keeping the existing malformed payload, payload-hash drift,
+  wrong next-committee payload, and parent-roster drift negatives.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp eth_source_adapter_verifies_sync_committee_transition_chain --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+
+## 2026-06-07 Sumeragi committed-phase entry GST preservation
+
+- Added `CommittedPhaseEntryPreservesGstStep` and
+  `CommittedPhaseEntryNeverChangesGst` to the top-level Sumeragi model so first
+  entry into `Committed` preserves the GST observation flag while using the
+  finality-source classification required for committed-phase entry.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed-phase GST preservation
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this branch-entry
+    preservation addition; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi finality-source GST-only remaining gate
+
+- Added `FinalitySourceActionLeavesOnlyGstElapsedGateStep` and
+  `FinalitySourceActionOnlyLeavesGstElapsedGate` to the top-level Sumeragi model
+  so honest commit-vote, Byzantine commit-vote, and RBC DELIVER finality-source
+  actions leave protocol progress closed and expose only the `GstElapsed` gate
+  when GST is still unobserved.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the post-finality GST-only gate
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this post-state gate
+    addition; the preceding top-level fast attempts exhausted heap at `4` GiB
+    and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi finality-source GST preservation
+
+- Added `FinalitySourceActionPreservesGstStep` and
+  `FinalitySourceActionNeverChangesGst` to the top-level Sumeragi model so
+  honest commit-vote, Byzantine commit-vote, and RBC DELIVER finality-source
+  actions preserve the GST observation flag while installing finality.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the branch-level finality-source GST
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this branch-level
+    preservation addition; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 SCCP BSC transition payload/header preflight
+
+- Tightened the BSC validator-set transition shape gate so it now recomputes
+  the next-validator payload hash, payload-derived next-set hash,
+  transition-header Parlia payload binding, nested ValidatorSet metadata proof
+  hash, transition message hash, and transition seal hash before deeper MPT or
+  secp256k1 verifier work.
+- Added adapter-level transition-chain shape checks for internal adjacency,
+  strictly increasing transition blocks, transition blocks no later than the
+  adapter block, and final termination at the adapter's declared active
+  validator epoch and validator-set hash.
+- Extended the BSC transition-chain regression with adversarial early-preflight
+  coverage for stale terminal epochs, next-validator payload hash drift,
+  transition-header payload drift, and decoded next-set hash drift.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_validator_set_transition_chain_requires_increasing_transition_blocks --lib -- --nocapture`
+    (`1` passed, `256` filtered out)
+
+## 2026-06-07 Sumeragi delivered RBC progress-gate closure
+
+- Added `RbcDeliveredDisablesRbcProgress` and
+  `RbcDeliveredNeverEnablesRbcProgress` to the top-level Sumeragi model so a
+  delivered RBC session keeps INIT, CHUNK, READY, DELIVER, and Byzantine
+  RBC-fault gates closed.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the delivered-RBC terminal gate
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this narrow state-predicate
+    addition; the preceding top-level fast attempts exhausted heap at `4` GiB
+    and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi pending protocol GST formal preservation
+
+- Added `PendingProtocolStepsPreserveGst` and
+  `PendingProtocolStepsNeverChangeGst` to the top-level Sumeragi model so
+  non-final NewView, prepare-vote, honest commit-vote, Byzantine commit-vote,
+  and RBC DELIVER pending branches cannot mutate the GST observation flag.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the branch-level GST preservation
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx4096m" APALACHE_LENGTH=1 APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    exhausted the `4` GiB heap during optimization; no counterexample was
+    produced.
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx12288m" APALACHE_LENGTH=1 APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    exhausted the `12` GiB heap during optimization after reaching the new
+    obligation's VC; no counterexample was produced.
+  - Full Apalache length-10 `fast` runs with the default `4` GiB heap and with
+    `JVM_ARGS="-Xss16m -Xmx12288m"` also exhausted heap during optimization, so
+    full length-10 Apalache remains unverified for this slice.
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+
+## 2026-06-07 Transaction submission receipt signing fallible route
+
+- Added `TransactionSubmissionReceipt::try_sign(...)` and routed the Torii
+  transaction submission response through it so receipt signing backend failures
+  return a formatted HTTP 500 error envelope instead of unwinding through the
+  compatibility `sign(...)` wrapper.
+- Kept the existing `TransactionSubmissionReceipt::sign(...)` API as a
+  compatibility wrapper and extended the receipt unit test to verify both
+  fallible and infallible construction paths.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/transaction/receipt.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model submission_receipt_roundtrips_signature --lib -- --nocapture`
+    (`1` passed, `1454` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii handler_post_transaction_entrypoint_accepts_external_entrypoint --lib -- --nocapture`
+    (`1` passed, `2294` filtered out)
+
+## 2026-06-07 Cross-SDK Soracloud full-bootstrap material fixture guards
+
+- Extended the Swift, Kotlin/JVM, and Java Android shared Soracloud BFV
+  operation-fixture validators so they now require the new
+  `full_bootstrap_material` block, canonical lowercase digest fields, RNS digest
+  linkage, verifier-key commitment linkage, and duplicate-free material digest
+  roles.
+- Added adversarial SDK coverage for missing full-bootstrap material,
+  verifier-commitment drift, and noncanonical material digests. The Java Android
+  mirror also now trims only Unicode whitespace in `IdentifierNormalization`
+  instead of `String.trim()`'s control-byte behavior, preserving exact binary
+  BFV operation inputs while still rejecting whitespace-only identifiers.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.sharedSoracloudBfvKeyBundleComponentVectorsAreComplete --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.sharedSoracloudBfvKeyBundleComponentVectorsRejectAdversarialDrift --console=plain`
+    (`BUILD SUCCESSFUL`; warnings were pre-existing unchecked casts in
+    `OfflineNoteTest`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.identifierBfvEnvelopeBuilderMatchesSharedSoracloudOperationInputVectors --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `swift test --filter ToriiClientTests/testSharedSoracloudBfvKeyBundleComponentVectors`
+    (`2` tests passed; emitted existing `ToriiClientTests` deprecation/no-throw
+    warnings outside the fixture validator)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+
+## 2026-06-07 SCCP transparent artifact summary metadata gate
+
+- Routed
+  `summarize_sccp_message_transparent_open_verify_proof_from_artifact(...)`
+  through the typed transparent proof artifact structure verifier before
+  reporting OpenVerify metadata, so a valid proof byte envelope is no longer
+  enough when the surrounding artifact metadata drifts.
+- Rebuilt the positive summary test from a canonical transparent artifact and
+  added adversarial coverage for artifact version, local/counterparty domain,
+  proof-family, verifier-backend, public-input finality/target, submission
+  envelope, and submission argument drift. Torii JSON rendering now uses a
+  canonical artifact fixture and omits the OpenVerify summary when the typed
+  artifact wrapper drifts.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp transparent_fastpq_open_verify_summary --lib -- --nocapture`
+    (`4` passed, `253` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_artifact_json_value --lib -- --nocapture`
+    (`2` passed, `2293` filtered out)
+
+## 2026-06-07 BFV full-bootstrap artifact bundle preflight
+
+- Added `BfvFullBootstrapCircuitArtifactBundleV1` for concrete full-bootstrap
+  evaluator/proof-profile bytes separate from the existing commitment-only
+  `BfvFullBootstrapCircuitMaterialV1` governance material.
+- Added crypto validation and digest helpers that require every artifact byte
+  payload to be non-empty, capped, and digest-bound to the governed material,
+  plus an artifact-aware full-bootstrap execution preflight. Execution still
+  fails closed until artifact transport/runtime wiring, an executable BFV
+  bootstrap evaluator, and real prover/verifier artifacts land.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_preflight --lib -- --nocapture`
+    (`1` passed, `667` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`7` passed, `661` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-artifacts CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap execution preflight boundary
+
+- Added explicit crypto full-bootstrap execution preflight helpers for
+  `FullBootstrapV1` keys. The new boundary validates governed material
+  commitments, registered parameter/RNS/decomposition profile digests, carried
+  refresh-material shapes, input ciphertext shape, and exact/bounded metadata
+  before returning the current unavailable-evaluator error.
+- Routed Soracloud exact and bounded bootstrap execution plus their
+  residual/bounded-noise output-bound wrappers through the full-mode preflight
+  helpers. Valid full material still fails closed because the executable BFV
+  bootstrap evaluator is not implemented, but malformed material/profile drift
+  and oversized metadata now fail before the generic unavailable-evaluator
+  boundary on the runtime path used by `RunSoracloudFheJob`.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-exec-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_execution_stays_unavailable --lib -- --nocapture`
+    (`1` passed, `666` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-exec-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material --lib -- --nocapture`
+    (`2` passed, `6987` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-exec-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bounded_noise_bootstrap_full_material --lib -- --nocapture`
+    (`2` passed, `6987` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-exec-preflight CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+  - `cargo fmt -p iroha_crypto -p iroha_core -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-07 Soracloud BFV full-bootstrap material fixture vector
+
+- Extended the shared Soracloud BFV operation fixture and Rust fixture harness
+  with a full-bootstrap material vector that pins the governed material
+  commitments, canonical proof public-input schema digest, verifier-key
+  commitment, material digest, and full-material proof statement digest.
+- The fixture test now recomputes those values through the crypto
+  material/profile validator and also refreshes the evaluation-key bundle's
+  Norito length, SHA-256, and domain-separated digest after the bootstrap
+  key-mode metadata landed.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `node -e 'JSON.parse(require("fs").readFileSync("fixtures/soracloud/bfv_identifier_vectors_v1.json","utf8")); console.log("json ok")'`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-fixture CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed, `6988` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-fixture CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed, `6988` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-fixture CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-07 CLI/exporter signing fallible routes
+
+- Routed the SoraFS chunker manifest-signature exporter, CLI domain
+  endorsement preparation, and SoraFS repair worker payload signing through
+  `Signature::try_new`/`SignatureOf::try_new`, so backend signing failures
+  return command errors instead of unwinding through compatibility wrappers.
+- Strengthened the endorsement helper test to verify every generated
+  endorsement signature against the endorsement body hash; existing SoraFS
+  repair command tests continue to verify claim/complete/fail worker payload
+  signatures.
+- Validation:
+  - `rustfmt --edition 2024 crates/sorafs_chunker/src/bin/export_vectors.rs crates/iroha_cli/src/endorsement.rs crates/iroha_cli/src/commands/sorafs.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_chunker --bin export_vectors manifest_signatures_merge_without_duplicates -- --nocapture`
+    (`1` passed, `3` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli prepare_signs_payload_and_keeps_body_hash_stable -- --nocapture`
+    (`3` matching CLI unit tests passed across `iroha`, `iroha3`, and
+    `iroha_cli`; other targets had `0` matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signing-sweep CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli repair_ -- --nocapture`
+    (`22` matching tests passed across CLI unit/integration targets)
+
+## 2026-06-07 SCCP transparent OpenVerify summary preflight
+
+- Tightened `summarize_sccp_message_transparent_open_verify_proof(...)` so
+  release/readiness metadata summaries require a production-shaped transparent
+  OpenVerify wrapper: exact transparent circuit id, non-zero verifier-key hash,
+  non-empty schema and public-input columns, no auxiliary envelope bytes, and
+  non-empty nonzero backend proof bytes.
+- Replaced the previous metadata-only summary allowance with adversarial tests
+  for aux-bearing envelopes, wrong circuits, zero verifier keys, empty schema,
+  empty STARK public inputs, all-zero backend proof bytes, wrong backends,
+  malformed nested wrappers, and non-V1 STARK wrappers.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp transparent_fastpq_open_verify_summary --lib -- --nocapture`
+    (`3` passed, `253` filtered out)
+
+## 2026-06-07 SCCP adapter verifier commitment metadata preflight
+
+- Added a shared source-adapter OpenVerify envelope-shape gate and routed
+  `sccp_source_chain_proof_adapter_verifier_commitment(...)` plus deployment
+  matching through it, so metadata helpers cannot return verifier-key hashes
+  from malformed outer proof wrappers, opaque proof bytes, zero verifier keys,
+  auxiliary envelope data, or empty STARK public-input columns.
+- Extended the plan-specific source-adapter proof regression across all remote
+  SCCP source domains with direct metadata-helper negatives for those malformed
+  adapter verification capsules.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_chain_proof_material_requires_plan_specific_adapter_proofs --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 Sumeragi precommit locked-payload formal alignment
+
+- Tightened `SumeragiPrecommitVoteGate.tla` so a missing locked-QC payload is
+  always a reject/recovery condition for same-height candidates, including a
+  newer-view candidate at the locked height.
+- Added `MissingLockedPayloadNeverEmits` to the precommit fast CFG and updated
+  the formal bridge notes to cite
+  `emit_precommit_vote_skips_newer_view_when_same_height_locked_payload_missing`
+  instead of the stale newer-view override case.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitVoteGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-fast`
+    (`NoError`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-fast`
+    (`131073` states generated, `16384` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-bug-missing-locked-payload`
+    (expected Apalache rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-bug-missing-locked-payload`
+    (expected TLC failure observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home CARGO_TARGET_DIR=/tmp/iroha-codex-precommit-vote CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core emit_precommit_vote_skips_newer_view_when_same_height_locked_payload_missing --lib -- --nocapture`
+    (`1` passed, `6988` filtered out)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home CARGO_TARGET_DIR=/tmp/iroha-codex-precommit-vote CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core emit_precommit_vote_requests_missing_locked_payload_before_skipping --lib -- --nocapture`
+    (`1` passed, `6988` filtered out)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+
+## 2026-06-07 SCCP source-state transcript hash preflight
+
+- Aligned Solana AccountsLtHash and TON shard-state source-state transcript
+  hash helpers with the shared canonical OpenVerify/STARK preflight, so opaque
+  nonzero proof bytes can no longer be committed into full-light audit
+  statements before lane-local verifier work.
+- Kept canonical but cryptographically invalid capsules hashable for negative
+  verifier tests while adding explicit opaque-byte rejection coverage for the
+  Solana and TON audit paths.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 SoraFS Taikai cache admission signing fallible route
+
+- Routed cache-admission envelope and gossip signing through `Signature::try_new`
+  so backend signing failures return `CacheAdmissionError::Signing` instead of
+  unwinding through the infallible compatibility wrapper.
+- Added direct coverage proving both the signed admission envelope and the
+  signed gossip wrapper verify after construction.
+- Validation:
+  - `rustfmt --edition 2024 crates/sorafs_orchestrator/src/taikai_cache.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-taikai-cache-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_orchestrator cache_admission_envelope_and_gossip_signatures_verify --lib -- --nocapture`
+    (`1` passed, `153` filtered out; emitted an unrelated unused-import warning
+    in `crates/sorafs_orchestrator/src/lib.rs`)
+
+## 2026-06-07 SCCP source-state OpenVerify preflight hardening
+
+- Tightened shared `SccpSourceStateVerificationProofV1` structural admission so
+  non-empty source-state capsules must decode as canonical STARK
+  `OpenVerifyEnvelope` bytes with matching outer/inner circuit id, non-zero
+  verifier-key hash, non-empty schema and public-input columns, no auxiliary
+  bytes, and non-empty nonzero backend proof material.
+- Expanded adversarial unit coverage for opaque proof bytes, outer/inner circuit
+  mismatch, non-canonical trailing bytes, auxiliary envelope bytes, wrong
+  backend tags, all-zero proof bytes, and zero verifier-key hashes before
+  Solana, TON, or Substrate lane-local verifier work runs.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_state_proof_preflight_requires_canonical_present_capsules --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_source_adapter_verifies_authority_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_source_adapter_deployment_requires_audited_full_light_client_engines --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 SCCP Substrate diagnostic transition preflight hardening
+
+- Tightened diagnostic Substrate authority-set transition structural admission
+  so each transition decodes and binds the next authority-set payload, payload
+  hash, payload-derived next-set hash, parent-set hash, transition message hash,
+  nested GRANDPA precommit hash, and transition justification hash before
+  Ed25519 signature verification.
+- Added chain-level Substrate preflight checks for internally contiguous
+  GRANDPA set transitions and final termination at the adapter's declared active
+  `grandpa_set_id` and authority-set hash.
+- Added explicit launch-scope documentation that SCCP will not support
+  Substrate/Polkadot production networks for now, including Kusama, Polkadot,
+  SORA Kusama, SORA Polkadot, and SORA2.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_source_adapter_verifies_authority_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 Sumeragi frontier slot nested-state formal alignment
+
+- Updated `SumeragiFrontierSlotHelpersGate.tla` and
+  `SumeragiFrontierSlotTrackerGate.tla` so the exact-frontier slot proofs track
+  the refactored single-source `FrontierCandidate`, `FrontierTimers`, and
+  `FrontierRepairState` layout instead of the removed compatibility mirror
+  fields.
+- Renamed the helper expected-failure modes from `sync_skips_*` to
+  `nested_skips_*` and the tracker mutation from `missing_sync_compat` to
+  `missing_nested_slot_update`, keeping the coverage inventory stable while
+  matching the production slot-state shape.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-fast`
+    (`NoError`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-fast`
+    (`NoError`, `EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-tracker-fast`
+    (`2` states generated, `1` distinct state)
+  - Apalache and TLC expected-failure checks for
+    `frontier-slot-helpers-bug-nested-skips-{candidate,body-state,peer-sets,timers,repair,requesters}`
+    and `frontier-slot-tracker-bug-missing-nested-slot-update` (all observed the
+    expected invariant violation).
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Scoped `rg` stale-name/conflict-marker/trailing-whitespace checks for the
+    renamed helper/tracker formal files, cfgs, CI scripts, and documentation.
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate.tla docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_fast.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_fast.cfg ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+  - `git diff --cached --check -- docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate.tla docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_fast.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_fast.cfg ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+  - `git diff -- Cargo.lock` (no output)
+
+## 2026-06-07 SCCP TRON transition chain preflight hardening
+
+- Tightened TRON witness-schedule transition structural admission so each
+  transition now binds the parent witness-schedule hash, canonical next-schedule
+  payload hash, payload-derived next-schedule hash, and transition message hash
+  before DPoS transition-step verifier work.
+- Added chain-level TRON preflight checks for epoch-contiguous transition chains,
+  strictly increasing transition block numbers no later than the adapter solid
+  block, and final next-schedule hash matching the adapter's active witness
+  schedule.
+- Extended adversarial TRON transition-chain coverage so too many transitions,
+  parent hash drift, payload drift, wrong next payload/schedule hash, skipped
+  schedule epochs, and out-of-order transition blocks fail the early source
+  adapter shape gate as well as the deeper verifier path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_adapter_verifies_witness_schedule_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+  - `git diff --cached --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-07 Connect Soracloud request signer fallible provenance signing
+
+- Routed `soracloud_request_signer` upload init/finalize provenance signing
+  through `Signature::try_new`, returning command errors when the signing
+  backend rejects a payload instead of unwinding through the infallible
+  compatibility wrapper.
+- Added direct provenance sign/verify coverage for the mutation signer helper.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-request-signer CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge --bin soracloud_request_signer mutation_signer_provenance_signature_verifies -- --nocapture`
+    (`1` passed, `1` filtered out)
+
+## 2026-06-07 SCCP TON transition chain preflight hardening
+
+- Tightened TON validator-set transition structural admission so each transition
+  must pass the canonical transition-signature transcript checks before Ed25519
+  validator verification. The shape gate now decodes the next validator-set
+  payload, binds the payload hash, next-set hash, parent-roster hash, transition
+  message hash, nested validator-signature message hash, and transition
+  signature-hash transcript.
+- Added chain-level TON preflight checks for internally adjacent validator-set
+  seqnos, strictly increasing transition masterchain seqnos, transition seqnos no
+  later than the adapter masterchain seqno, and final next-set hash matching the
+  adapter's active validator-set hash.
+- Added adversarial TON coverage for malformed next validator-set payload bytes
+  with refreshed message/signature fields, parent hash drift, payload drift,
+  wrong final validator set, skipped seqnos, and non-monotonic transition
+  masterchain seqnos.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_source_adapter_verifies_validator_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_validator_set_transition_chain_requires_adjacent_seqnos_and_increasing_masterchain_seqnos --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+  - `git diff --cached --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-07 Soracloud full-bootstrap material proof vk commitment gate
+
+- Tightened Core's full-bootstrap material proof profile gate so any supplied
+  full-material proof attachment must carry `vk_commitment` before Core derives
+  the expected verifier-key digest for the BFV crypto proof-profile validator.
+  Missing verifier-key binding now fails at material/profile admission before
+  backend verifier lookup.
+- Extended the full-bootstrap material profile regression with a missing
+  `vk_commitment` adversarial case. Full `FullBootstrapV1` execution remains
+  fail-closed until the executable BFV bootstrap evaluator and production
+  prover/verifier artifacts land.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_profile --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_proof --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_full_bootstrap_material_proof_accepts_preverified_active_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto -p iroha_core --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --lib -- --nocapture`
+    (`1453` passed, `2` ignored)
+  - `cargo fmt -p iroha_core -- --check`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-07 BFV full-bootstrap proof profile validator
+
+- Added `validate_bfv_full_bootstrap_material_proof_profile_v1` in
+  `iroha_crypto` so full-bootstrap material validation now has a crypto-owned
+  check for the proof public-input schema digest and, when a proof attachment
+  is present, the verifier-key digest expected by the verifier profile.
+- Wired Soracloud job admission through that validator instead of open-coding
+  the material/proof commitment comparison in Core. Full-bootstrap execution
+  remains fail-closed until the executable BFV evaluator and production
+  prover/verifier artifacts land.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_material_proof_profile_binds_expected_verifier_inputs --lib -- --nocapture`
+    (`1` passed, `666` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_profile --lib -- --nocapture`
+    (`1` passed, `6986` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-profile CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-profile CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-07 SCCP ETH transition payload preflight hardening
+
+- Tightened ETH sync-committee transition structural admission so the next
+  sync-committee payload must decode canonically and agree with the advertised
+  next-committee hash and payload hash. The preflight now also binds the parent
+  sync-committee roster hash, transition message hash, nested sync-committee
+  message hash, and transition signature-hash transcript before BLS
+  transition-chain verification runs.
+- Added adversarial ETH transition-chain coverage for malformed payload bytes
+  with refreshed transcript hashes, stale payload/hash drift, mismatched
+  next-committee payloads, and parent-roster hash drift, proving these envelopes
+  fail the early source-adapter shape gate as well as deeper verifier checks.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp eth_source_adapter_verifies_sync_committee_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-07 Sumeragi frontier live-owner conflict adapter
+
+- Strengthened `SumeragiFrontierLiveOwnerWorkGate.tla` so the live-owner work
+  model now also covers `frontier_slot_conflicts_with_live_local_owner(...)`:
+  same-height conflicting handoffs are blocked only when the tracked owner has
+  live work and the candidate hash differs, while same-hash, wrong-height,
+  passive, and no-work cases fall through.
+- Added `conflict_rejects_pending_live`, `conflict_rejects_slot_qc`,
+  `conflict_rejects_competing_quorum`, `conflict_rejects_local_history`,
+  `conflict_same_hash_blocks`, `conflict_wrong_height_blocks`,
+  `conflict_no_work_blocks`, and `conflict_passive_blocks` expected-failure
+  cfgs and wired them into the Sumeragi expected-failure CI runner and README
+  inventory.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierLiveOwnerWorkGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-live-owner-work-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - Apalache expected-failure modes:
+    `frontier-live-owner-work-bug-conflict-rejects-pending-live`,
+    `frontier-live-owner-work-bug-conflict-rejects-slot-qc`,
+    `frontier-live-owner-work-bug-conflict-rejects-competing-quorum`,
+    `frontier-live-owner-work-bug-conflict-rejects-local-history`,
+    `frontier-live-owner-work-bug-conflict-same-hash-blocks`,
+    `frontier-live-owner-work-bug-conflict-wrong-height-blocks`,
+    `frontier-live-owner-work-bug-conflict-no-work-blocks`, and
+    `frontier-live-owner-work-bug-conflict-passive-blocks`
+    (expected rejection observed for each)
+  - TLC expected-failure modes:
+    `frontier-live-owner-work-bug-conflict-rejects-pending-live`,
+    `frontier-live-owner-work-bug-conflict-rejects-slot-qc`,
+    `frontier-live-owner-work-bug-conflict-rejects-competing-quorum`,
+    `frontier-live-owner-work-bug-conflict-rejects-local-history`,
+    `frontier-live-owner-work-bug-conflict-same-hash-blocks`,
+    `frontier-live-owner-work-bug-conflict-wrong-height-blocks`,
+    `frontier-live-owner-work-bug-conflict-no-work-blocks`, and
+    `frontier-live-owner-work-bug-conflict-passive-blocks`
+    (expected rejection observed for each)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual
+    mode, `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation
+    modes)
+
+## 2026-06-07 Kura pending-budget scan guardrail
+
+- Added a test-only raw pending-budget scan counter and a deterministic
+  `kura_budget_check_scales_with_pending_depth` regression. Repeated storage
+  budget checks over a 128-block pending queue now prove the cached pending
+  byte total is reused and that cache invalidation triggers exactly one fresh
+  raw pending scan.
+- Added the `kura_storage_budget_cached_pending_depth` Criterion benchmark for
+  cached storage-budget checks across pending depths 0, 128, and 2,048.
+- Refreshed the Kura/WSV audit so the pending-depth enqueue budget guardrail and
+  wall-clock benchmark coverage are listed as existing coverage; only
+  long-history eviction latency under contention remains as a Kura performance
+  gap.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/kura.rs crates/iroha_core/benches/kura.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core kura_budget_check_scales_with_pending_depth --lib -- --nocapture`
+    (`1` passed, `6991` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core budget --lib -- --nocapture`
+    (`92` passed, `6895` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo bench -j 1 -p iroha_core --features bench --bench kura --no-run`
+    (`target/release/deps/kura-e716fef8f5400e47`)
+
+## 2026-06-07 IVM WSV checkpoint durable-state dedupe
+
+- Removed the duplicate `DurableStateSnapshot` from `WsvHostSnapshot`.
+  Checkpoints now rely on the cloned `MockWorldStateView` for durable
+  smart-contract state, and restore flushes that cloned overlay so persisted
+  test state still rolls back on disk.
+- Added `checkpoint_restore_flushes_persisted_wsv_state` to prove a persisted
+  state store is restored both in memory and after reloading from disk.
+- Added the `mock_wsv_checkpoint_restore` Criterion benchmark for persisted
+  mock WSV checkpoint/restore over 128-entry and 2,048-entry state maps.
+- Refreshed the Kura/WSV audit so the IVM mock-host checkpoint/restore clone
+  guardrail and wall-clock clone-cost benchmark coverage are marked as covered.
+- Validation:
+  - `rustfmt --edition 2024 crates/ivm/src/mock_wsv.rs crates/ivm/tests/wsv_state_overlay.rs crates/ivm/benches/bench_wsv.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test wsv_state_overlay checkpoint_restore_flushes_persisted_wsv_state -- --nocapture`
+    (`1` passed, `3` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test wsv_state_overlay -- --nocapture`
+    (`4` passed)
+  - `CARGO_INCREMENTAL=0 cargo bench -j 1 -p ivm --bench bench_wsv --no-run`
+    (compiled `target/release/deps/bench_wsv-5e2586229ba1cf8f`)
+
+## 2026-06-07 JS host signing fallible route
+
+- Routed the N-API `cryptoSign` export, Soracloud provenance signing helper,
+  and SoraFS alias-proof council signing helper through `Signature::try_new`.
+  Signing backend failures now return N-API errors instead of unwinding through
+  the infallible compatibility wrapper.
+- Added a crypto sign/verify regression for the exported JS host helper and
+  reused the alias-proof fixture test for the council-signing path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_js_host/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_js_host crypto_sign_exports_verifiable_signature --lib -- --nocapture`
+    (`1` passed, `148` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_js_host alias_proof_fixture_uses_checked_council_signer_payload --lib -- --nocapture`
+    (`1` passed, `148` filtered out)
+
+## 2026-06-07 Sumeragi frontier slot apply-wrapper mutations
+
+- Strengthened `SumeragiFrontierSlotTrackerGate.tla` so the exact-frontier slot
+  tracker model now also covers the `apply_frontier_slot_event(...)` wrapper:
+  absent fetch retries return default actions, absent view/quorum timeouts emit
+  exact-frontier view-change requests, absent block-created events create a
+  fresh slot, stale non-commit events drop the stale slot before continuing,
+  same-height events reuse the existing slot, and committed-height events
+  remove only retired slots while retaining still-live slot state.
+- Added `apply_absent_fetch_retry_creates_slot`,
+  `apply_absent_view_advance_no_request`,
+  `apply_absent_quorum_timeout_no_request`,
+  `apply_absent_block_created_no_slot`,
+  `apply_stale_fetch_retry_keeps_slot`,
+  `apply_stale_block_created_reuses_slot`,
+  `apply_same_height_recreates_slot`,
+  `apply_commit_retire_reinserts_slot`, and
+  `apply_commit_below_drops_slot` expected-failure cfgs and wired them into the
+  Sumeragi expected-failure CI runner and README inventory.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-tracker-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - Apalache expected-failure modes:
+    `frontier-slot-tracker-bug-apply-absent-fetch-retry-creates-slot`,
+    `frontier-slot-tracker-bug-apply-absent-view-advance-no-request`,
+    `frontier-slot-tracker-bug-apply-absent-quorum-timeout-no-request`,
+    `frontier-slot-tracker-bug-apply-absent-block-created-no-slot`,
+    `frontier-slot-tracker-bug-apply-stale-fetch-retry-keeps-slot`,
+    `frontier-slot-tracker-bug-apply-stale-block-created-reuses-slot`,
+    `frontier-slot-tracker-bug-apply-same-height-recreates-slot`,
+    `frontier-slot-tracker-bug-apply-commit-retire-reinserts-slot`, and
+    `frontier-slot-tracker-bug-apply-commit-below-drops-slot`
+    (expected rejection observed for each)
+  - TLC expected-failure modes:
+    `frontier-slot-tracker-bug-apply-absent-fetch-retry-creates-slot`,
+    `frontier-slot-tracker-bug-apply-absent-view-advance-no-request`,
+    `frontier-slot-tracker-bug-apply-absent-quorum-timeout-no-request`,
+    `frontier-slot-tracker-bug-apply-absent-block-created-no-slot`,
+    `frontier-slot-tracker-bug-apply-stale-fetch-retry-keeps-slot`,
+    `frontier-slot-tracker-bug-apply-stale-block-created-reuses-slot`,
+    `frontier-slot-tracker-bug-apply-same-height-recreates-slot`,
+    `frontier-slot-tracker-bug-apply-commit-retire-reinserts-slot`, and
+    `frontier-slot-tracker-bug-apply-commit-below-drops-slot`
+    (expected rejection observed for each)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9833` expected-failure modes, `1` scheduled/manual
+    mode, `10338` documented modes, `499` TLC fast modes, `9833` TLC mutation
+    modes)
+
+## 2026-06-07 Sumeragi proposal-seen horizon mutations
+
+- Strengthened `SumeragiSlotTrackerStateGate.tla` so the slot tracker state
+  model now covers `proposals_seen` exact-match behavior: new proposal
+  observations are inserted, duplicate observations preserve the seen entry,
+  absent reads stay absent, and view-change pruning drops only same-height
+  views below the installed next view.
+- Added bounded `prune_proposals_seen_horizon(...)` obligations for committed
+  entries, too-low and too-high heights, active-height old/current/above-cap
+  views, and non-active heights whose views exceed the active view cap.
+- Added `proposal_insert_missing`, `proposal_duplicate_drops_seen`,
+  `proposal_read_absent_returns_seen`, `view_prune_keeps_old_view`,
+  `view_prune_drops_next_view`, `horizon_keeps_committed_seen`,
+  `horizon_keeps_far_future_seen`, `horizon_keeps_active_old_view`,
+  `horizon_drops_active_current_view`, and
+  `horizon_applies_view_cap_to_other_height` expected-failure cfgs and wired
+  them into the Sumeragi expected-failure CI runner and README inventory.
+- Validation:
+  - `rg -n "proposal_insert_missing|proposal-insert-missing|proposal_duplicate_drops_seen|proposal-duplicate-drops-seen|proposal_read_absent_returns_seen|proposal-read-absent-returns-seen|view_prune_keeps_old_view|view-prune-keeps-old-view|view_prune_drops_next_view|view-prune-drops-next-view|horizon_keeps_committed_seen|horizon-keeps-committed-seen|horizon_keeps_far_future_seen|horizon-keeps-far-future-seen|horizon_keeps_active_old_view|horizon-keeps-active-old-view|horizon_drops_active_current_view|horizon-drops-active-current-view|horizon_applies_view_cap_to_other_height|horizon-applies-view-cap-to-other-height|ProposalSeen|ProposalHorizon|ViewChangeProposalPrune" docs/formal/sumeragi/SumeragiSlotTrackerStateGate.tla docs/formal/sumeragi/SumeragiSlotTrackerStateGate_fast.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_*.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiSlotTrackerStateGate.tla docs/formal/sumeragi/SumeragiSlotTrackerStateGate_fast.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_proposal_insert_missing.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_proposal_duplicate_drops_seen.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_proposal_read_absent_returns_seen.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_view_prune_keeps_old_view.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_view_prune_drops_next_view.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_horizon_keeps_committed_seen.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_horizon_keeps_far_future_seen.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_horizon_keeps_active_old_view.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_horizon_drops_active_current_view.cfg docs/formal/sumeragi/SumeragiSlotTrackerStateGate_bug_horizon_applies_view_cap_to_other_height.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh ci/check_sumeragi_formal.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9824` expected-failure modes, `1` scheduled/manual
+    mode, `10329` documented modes, `499` TLC fast modes, `9824` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSlotTrackerStateGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh slot-tracker-state-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - Apalache expected-failure modes:
+    `slot-tracker-state-bug-proposal-insert-missing`,
+    `slot-tracker-state-bug-proposal-duplicate-drops-seen`,
+    `slot-tracker-state-bug-proposal-read-absent-returns-seen`,
+    `slot-tracker-state-bug-view-prune-keeps-old-view`,
+    `slot-tracker-state-bug-view-prune-drops-next-view`,
+    `slot-tracker-state-bug-horizon-keeps-committed-seen`,
+    `slot-tracker-state-bug-horizon-keeps-far-future-seen`,
+    `slot-tracker-state-bug-horizon-keeps-active-old-view`,
+    `slot-tracker-state-bug-horizon-drops-active-current-view`, and
+    `slot-tracker-state-bug-horizon-applies-view-cap-to-other-height`
+    (expected rejection observed for each)
+  - TLC expected-failure modes:
+    `slot-tracker-state-bug-proposal-insert-missing`,
+    `slot-tracker-state-bug-proposal-duplicate-drops-seen`,
+    `slot-tracker-state-bug-proposal-read-absent-returns-seen`,
+    `slot-tracker-state-bug-view-prune-keeps-old-view`,
+    `slot-tracker-state-bug-view-prune-drops-next-view`,
+    `slot-tracker-state-bug-horizon-keeps-committed-seen`,
+    `slot-tracker-state-bug-horizon-keeps-far-future-seen`,
+    `slot-tracker-state-bug-horizon-keeps-active-old-view`,
+    `slot-tracker-state-bug-horizon-drops-active-current-view`, and
+    `slot-tracker-state-bug-horizon-applies-view-cap-to-other-height`
+    (expected failure observed on `Safety` for each)
+
+## 2026-06-07 SCCP TRON transition payload preflight hardening
+
+- Tightened TRON witness-schedule transition structural admission so the next
+  witness-schedule payload must decode as the canonical
+  `sccp:tron:witness-schedule:v1` address/weight roster before transition-step
+  verifier work. The TRON witness seal shape gate now also uses the shared
+  canonical signer-bitmap predicate explicitly.
+- Added adversarial TRON transition-chain coverage proving malformed
+  next-witness-schedule payload bytes fail the early source-adapter shape gate
+  and the deeper DPoS verifier path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp tron_source_adapter_verifies_witness_schedule_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 Iroha client request-header signing fallible route
+
+- Routed the client account-signed and operator-signed HTTP request builders
+  through `Signature::try_new`, returning `eyre` errors when backend signing
+  fails instead of using the infallible compatibility wrapper.
+- Reused signed-request tests that exercise nonce failure handling and
+  multisig evidence account-signed request construction.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha/src/client.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha signed_request --lib -- --nocapture`
+    (`3` passed, `381` filtered out)
+
+## 2026-06-07 SCCP Solana adapter envelope preflight hardening
+
+- Tightened Solana finalized source-adapter structural admission so malformed
+  envelopes fail before vote, account, finality-context, or source-state proof
+  verifier work. The preflight now requires V1 Solana adapters, non-zero
+  finalized slots and block/bank/status/message roots, exact non-zero
+  transaction signature and emitter program id widths, mainnet epoch/slot
+  adjacency, non-zero finality-context roots, positive bank-signature counts,
+  non-zero vote-message hashes, non-empty StakeHistory sysvar data, and exact
+  non-zero AccountsLtHash bytes.
+- Added adversarial Solana preflight coverage for wrong domain/version
+  envelopes, zero adapter roots, zero transaction identities, malformed
+  finality context version/parent slot/root/signature-count fields, zero
+  vote-message hashes, all-zero AccountsLtHash bytes, and empty StakeHistory
+  sysvar data.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-solana-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_verifies_validator_vote_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 Soracloud full-bootstrap material proof profile binding
+
+- Added Core job-admission validation that binds `FullBootstrapV1` material
+  proof-profile commitments to the actual Soracloud full-bootstrap material
+  proof attachment: the material `proof_public_input_schema_digest` must equal
+  the canonical Soracloud full-material proof public-input schema hash, and the
+  material `verifier_key_digest` must match the proof attachment's
+  verifier-key commitment.
+- This keeps full-bootstrap execution fail-closed while making the admitted
+  material commitments line up with the verifier profile Core will use for the
+  material proof. The executable BFV full-bootstrap evaluator and production
+  prover/verifier artifacts remain pending.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_profile --lib -- --nocapture`
+    (`1` passed, `6985` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material --lib -- --nocapture`
+    (`5` passed, `6981` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap material proof job binding
+
+- Added the optional `full_bootstrap_material_proof` attachment to
+  `RunSoracloudFheJob` and the Torii signed FHE job payload. The canonical job
+  provenance/signature tuple now covers the distinct full-bootstrap material
+  proof option in addition to the existing zero-refresh bootstrap proof option.
+- Wired Core runtime admission so policy-bound full-bootstrap jobs require the
+  full-material proof, reject proofs on non-bootstrap jobs, reject statement
+  hash drift, and fail closed on unverified fake proofs unless an active
+  Soracloud full-material verifier record/preverified proof admits the
+  attachment. Full-bootstrap execution remains fail-closed until the executable
+  BFV bootstrap evaluator and real prover/verifier artifacts land.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_job_run_provenance_payload --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_full_bootstrap_material_proof --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_execution_policy -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_proof --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_full_bootstrap_material_proof_accepts_preverified_active_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core fhe_job_provenance_binds_full_bootstrap_material_proof_option --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_signature_payload --lib -- --nocapture`
+    (`3` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_torii --lib --no-deps -- -D warnings`
+
+## 2026-06-07 DA SDK request signing fallible route
+
+- Changed `iroha::da::build_da_request` to return `eyre::Result` and sign
+  payloads through `Signature::try_new`, so DA ingest request signing failures
+  propagate through SDK/CLI error paths instead of the infallible compatibility
+  wrapper.
+- Updated the client DA request builder, DA submit CLI, and Taikai ingest
+  request generation to propagate the new error surface. Client docs now call
+  out request-signing failures for build/write/submit helpers.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha/src/da.rs crates/iroha/src/client.rs crates/iroha_cli/src/commands/da.rs crates/iroha_cli/src/commands/taikai.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha build_da --lib -- --nocapture`
+    (`7` passed, `377` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli build_da -- --nocapture`
+    (CLI test targets built successfully; no tests matched the filter)
+
+## 2026-06-07 Sumeragi frontier slot peer-evidence mutations
+
+- Strengthened `SumeragiFrontierSlotTrackerGate.tla` so the exact-frontier
+  slot FSM now models same-candidate peer evidence effects, not only
+  hash/view preservation. The model now requires fresh same-candidate
+  `BlockCreated` observations to merge block-created peer hints, body-available
+  observations to track the sender as voter evidence, and same-candidate
+  future-gap observations to merge peer hints and pending requesters.
+- Added the fresh-body same-candidate `BlockCreated` case that records progress
+  and clears the bounded quorum-timeout rebroadcast guard without requesting a
+  duplicate commit-pipeline wakeup.
+- Added `same_missing_skips_peer_hints`,
+  `same_fresh_body_skips_progress`, `body_available_skips_sender`,
+  `future_gap_same_skips_peer_hints`, and
+  `future_gap_same_skips_requester` expected-failure cfgs and wired them into
+  the Sumeragi formal expected-failure CI runner and README command inventory.
+- Validation:
+  - `rg -n "same_missing_skips_peer_hints|same-missing-skips-peer-hints|same_fresh_body_skips_progress|same-fresh-body-skips-progress|body_available_skips_sender|body-available-skips-sender|future_gap_same_skips_peer_hints|future-gap-same-skips-peer-hints|future_gap_same_skips_requester|future-gap-same-skips-requester|SameBlockCreatedFreshBodyRecordsProgress|MergeBlockCreatedHints|TrackBodySender|MergeFutureGapHints|PeerEvidenceAnchors" docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_fast.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_bug_*.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_fast.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_bug_same_missing_skips_peer_hints.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_bug_same_fresh_body_skips_progress.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_bug_body_available_skips_sender.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_bug_future_gap_same_skips_peer_hints.cfg docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate_bug_future_gap_same_skips_requester.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh ci/check_sumeragi_formal.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9814` expected-failure modes, `1` scheduled/manual
+    mode, `10319` documented modes, `499` TLC fast modes, `9814` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-tracker-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - Apalache expected-failure modes:
+    `frontier-slot-tracker-bug-same-missing-skips-peer-hints`,
+    `frontier-slot-tracker-bug-same-fresh-body-skips-progress`,
+    `frontier-slot-tracker-bug-body-available-skips-sender`,
+    `frontier-slot-tracker-bug-future-gap-same-skips-peer-hints`, and
+    `frontier-slot-tracker-bug-future-gap-same-skips-requester`
+    (expected rejection observed for each)
+  - TLC expected-failure modes:
+    `frontier-slot-tracker-bug-same-missing-skips-peer-hints`,
+    `frontier-slot-tracker-bug-same-fresh-body-skips-progress`,
+    `frontier-slot-tracker-bug-body-available-skips-sender`,
+    `frontier-slot-tracker-bug-future-gap-same-skips-peer-hints`, and
+    `frontier-slot-tracker-bug-future-gap-same-skips-requester`
+    (expected failure observed on `Safety` for each)
+
+## 2026-06-07 SCCP BSC metadata structural preflight hardening
+
+- Tightened the nested BSC ValidatorSet metadata/storage proof structural gate
+  used inside validator-set transition proofs. Metadata preflight now requires
+  V1 mainnet ValidatorSet material, the canonical length slot, non-zero storage
+  root and value/metadata hashes, non-empty bounded length/storage proof
+  material, canonical per-validator storage slots, and storage-value hash
+  agreement before MPT metadata verification runs.
+- Added adversarial BSC transition coverage for malformed metadata versions,
+  zero metadata storage roots, wrong length slots, empty validator storage proof
+  lists, wrong validator storage slots, storage-value hash drift, and
+  non-mainnet ValidatorSet contract addresses.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 Sumeragi frontier slot body-available helper mutations
+
+- Strengthened `SumeragiFrontierSlotHelpersGate.tla` with
+  `mark_body_available(...)` helper obligations: body state becomes available,
+  Unknown validation moves to Pending, existing Pending validation is
+  preserved, phase moves to `ValidateBody`, and progress/rebroadcast timers are
+  refreshed through the same record-progress effects.
+- Added `body_available_skips_body_state`,
+  `body_available_unknown_skips_validation`,
+  `body_available_pending_clears_validation`,
+  `body_available_skips_phase`, and
+  `body_available_skips_record_progress` expected-failure cfgs to model
+  broken body-available helper paths.
+- Added expected-failure CI coverage, README command/docs coverage, and the
+  roadmap marker for frontier slot body-available helper mutations.
+- Validation:
+  - `rg -n "body_available_skips_body_state|body-available-skips-body-state|body_available_unknown_skips_validation|body-available-unknown-skips-validation|body_available_pending_clears_validation|body-available-pending-clears-validation|body_available_skips_phase|body-available-skips-phase|body_available_skips_record_progress|body-available-skips-record-progress|MarkBodyAvailable|BodyAvailable|body-available" docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate.tla docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_fast.cfg docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_bug_body_available_*.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate.tla docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_fast.cfg docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_bug_body_available_skips_body_state.cfg docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_bug_body_available_unknown_skips_validation.cfg docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_bug_body_available_pending_clears_validation.cfg docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_bug_body_available_skips_phase.cfg docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate_bug_body_available_skips_record_progress.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9809` expected-failure modes, `1` scheduled/manual
+    mode, `10314` documented modes, `499` TLC fast modes, `9809` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-body-state`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-unknown-skips-validation`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-pending-clears-validation`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-phase`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-record-progress`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-bug-body-available-skips-body-state`
+    (expected failure observed on `Safety`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-bug-body-available-unknown-skips-validation`
+    (expected failure observed on `Safety`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-bug-body-available-pending-clears-validation`
+    (expected failure observed on `Safety`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-bug-body-available-skips-phase`
+    (expected failure observed on `Safety`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-bug-body-available-skips-record-progress`
+    (expected failure observed on `Safety`)
+
+## 2026-06-07 SCCP BSC transition structural preflight hardening
+
+- Tightened BSC validator-set transition structural admission so malformed
+  transition envelopes fail before Parlia transition-step verifier work. The
+  preflight now requires V1 BSC transitions, adjacent validator epochs, the
+  Parlia epoch-start block for `to_validator_epoch`, non-empty bounded
+  transition header/payload material, non-zero transition hashes, and a seal
+  commit-message hash that matches the transition message hash.
+- Added adversarial BSC transition-chain coverage for wrong transition domains,
+  non-adjacent validator epochs, zero transition hashes, stale transition seal
+  messages, skipped epochs, wrong epoch-start blocks, and non-monotonic
+  transition blocks under the early shape gate and deeper verifier.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_validator_set_transition_chain_requires_increasing_transition_blocks --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 WSV state write lock telemetry aliases
+
+- Added `state_commit_write_lock_wait_ms` and
+  `state_commit_write_lock_hold_ms` histograms for the commit-path
+  `state_write_lock`, while continuing to populate the legacy
+  `state_commit_view_lock_*` histograms for existing dashboards.
+- Switched the state commit observer call to the semantically accurate
+  `observe_state_commit_write_lock` API and kept
+  `observe_state_commit_view_lock` as a compatibility wrapper.
+- Refreshed the Kura/WSV audit evidence and telemetry-dashboard notes to use
+  the current state-write-lock regression and metric names.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/telemetry.rs crates/iroha_core/src/state.rs crates/iroha_telemetry/src/metrics.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features telemetry state_commit_write_lock_metrics_recorded --lib -- --nocapture`
+    (`1` passed, `7169` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features telemetry state_commit_view_lock_metrics_remain_compatibility_aliases --lib -- --nocapture`
+    (`1` passed, `7169` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core state_commit_lock_order_tests --lib -- --nocapture`
+    (`2` passed, `6984` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/telemetry.rs crates/iroha_core/src/state.rs crates/iroha_telemetry/src/metrics.rs`
+  - `git diff --check -- crates/iroha_core/src/telemetry.rs crates/iroha_core/src/state.rs crates/iroha_telemetry/src/metrics.rs docs/source/kura_wsv_security_performance_audit_20260219.md docs/source/kura_wsv_security_performance_audit_20260219*.md docs/source/nexus*.md docs/i18n/root status.md roadmap.md`
+
+## 2026-06-07 WSV state write lock separation
+
+- Replaced commit-path use of the coarse `view_lock` with a dedicated
+  `state_write_lock` for multi-component writer serialization. Block commit,
+  merge-ledger commit, and lane lifecycle updates now serialize writers without
+  occupying a reader/writer view lock during heavy world, transaction, topology,
+  and block-hash commits.
+- Kept full `State::view` consistency on the existing even/odd generation
+  guard, so full views still retry while a writer is active and writer-vs-writer
+  ordering remains explicit.
+- Updated the lock-order regressions to block on `state_write_lock` and prove
+  block commit still does not hold the tiered backend while waiting for writer
+  serialization.
+- Refreshed the Kura/WSV audit so the WSV `view_lock` high finding is marked
+  addressed; the audit currently has zero open critical/high/medium/low items.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/state.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core state_commit_lock_order_tests --lib -- --nocapture`
+    (`2` passed, `6983` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core state_view_waits_for_active_view_generation --lib -- --nocapture`
+    (`1` passed, `6984` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core commit_merge_entry_ --lib -- --nocapture`
+    (`9` passed, `6976` filtered out)
+
+## 2026-06-07 Sumeragi frontier proposal full-grace tx-budget mutations
+
+- Strengthened `SumeragiFrontierProposalGraceGate.tla` with cap-sensitive full
+  proposal grace cases proving `frontier_full_proposal_grace(...)` consumes the
+  transaction count after both local config and world-parameter caps are
+  applied.
+- Added `full_ignores_config_tx_cap`,
+  `full_ignores_world_tx_limit`, and their cfgs to model broken cases where
+  full proposal grace assembly ignores one side of the clamped transaction
+  budget and over-extends the exact-frontier proposal window.
+- Reduced `SumeragiFrontierProposalGraceGate_fast.cfg` to `TypeInvariant` plus
+  aggregate `SafetyFast`, avoiding duplicate Apalache VCs while preserving the
+  component equalities and anchors through `SafetyFast`.
+- Added expected-failure CI coverage, README command/docs coverage, and the
+  roadmap marker for frontier proposal full-grace transaction-budget
+  mutations.
+- Validation:
+  - `rg -n "full_ignores_config_tx_cap|full-ignores-config-tx-cap|full_ignores_world_tx_limit|full-ignores-world-tx-limit|full_config_cap_reduces_assembly|full_world_cap_reduces_assembly|full-grace transaction-budget" docs/formal/sumeragi/SumeragiFrontierProposalGraceGate.tla docs/formal/sumeragi/SumeragiFrontierProposalGraceGate_bug_full_ignores_config_tx_cap.cfg docs/formal/sumeragi/SumeragiFrontierProposalGraceGate_bug_full_ignores_world_tx_limit.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierProposalGraceGate.tla docs/formal/sumeragi/SumeragiFrontierProposalGraceGate_fast.cfg docs/formal/sumeragi/SumeragiFrontierProposalGraceGate_bug_full_ignores_config_tx_cap.cfg docs/formal/sumeragi/SumeragiFrontierProposalGraceGate_bug_full_ignores_world_tx_limit.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9804` expected-failure modes, `1` scheduled/manual
+    mode, `10309` documented modes, `499` TLC fast modes, `9804` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierProposalGraceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-ignores-config-tx-cap`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-ignores-world-tx-limit`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-proposal-grace-bug-full-ignores-config-tx-cap`
+    (expected failure observed on `BugFullIgnoresConfigTxCap`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-proposal-grace-bug-full-ignores-world-tx-limit`
+    (expected failure observed on `BugFullIgnoresWorldTxLimit`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-proposal-grace-fast`
+    (`2` states generated, `1` distinct, no errors)
+
+## 2026-06-07 SCCP Substrate/Polkadot launch-scope note
+
+- Confirmed the active SCCP launch scope excludes Substrate/Polkadot-family
+  networks for now, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and
+  SORA2. The bridge-proof docs and public roadmap keep the existing
+  Substrate/SORA2 material as diagnostic/backlog-only notes until that scope is
+  explicitly re-opened.
+- Validation:
+  - documentation-only change
+
+## 2026-06-07 SCCP TON adapter envelope preflight hardening
+
+- Tightened TON masterchain source-adapter structural admission so malformed
+  envelopes fail before shard-state, config, validator-signature, or
+  validator-set transition verifier work. The preflight now requires V1 TON
+  envelopes, canonical masterchain/basechain ids, non-zero masterchain and shard
+  sequence numbers, non-zero masterchain/shard file and block hashes, and
+  non-zero validator-set, config, shard-state, transaction, masterchain
+  signature, and shard-proof roots.
+- Added adversarial TON source-adapter binding coverage for wrong domain/version
+  envelopes and zeroed masterchain/shard fields, while keeping the valid TON
+  shard-proof and validator-certificate fixtures green under the stricter gate.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-ton-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_source_adapter_binds_shard_proof_hash_to_inclusion_witness --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-ton-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_source_adapter_verifies_masterchain_validator_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+  - `git diff --check --cached -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-07 SoraFS gateway PoR proof signing fallible route
+
+- Routed SoraFS gateway PoR proof signing through `Signature::try_new` so
+  backend signing failures propagate through the existing `eyre` gateway proof
+  builder path instead of the infallible compatibility wrapper.
+- Reused PoR proof tests that verify a valid proof signature and reject
+  tampered proofs, plus the non-Ed25519 signing-key rejection coverage.
+- Validation:
+  - `rustfmt --edition 2024 crates/sorafs_node/src/gateway.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p sorafs_node por_proof --lib -- --nocapture`
+    (`2` passed, `147` filtered out)
+
+## 2026-06-07 Kura background storage-budget eviction
+
+- Changed Kura storage-budget checks to fail fast and schedule background
+  block-body eviction instead of running `evict_block_bodies` on the caller
+  path. Over-budget enqueue and top-replacement checks now coalesce the needed
+  reclaim bytes into a pending maintenance request, wake the Kura writer, and
+  return `StorageBudgetExceeded` until maintenance actually frees space.
+- Added the writer-loop maintenance drain for pending storage-budget eviction
+  requests. The existing compaction path remains the single reclaim
+  implementation, now reached from background maintenance for budget pressure.
+- Updated the budget regression so it proves the first over-budget store leaves
+  the old body inline, wakes maintenance, background eviction creates the DA
+  sidecar, and a retry succeeds after reclamation.
+- Refreshed the Kura/WSV audit so inline foreground Kura eviction is marked
+  addressed; the follow-up WSV state-write-lock entry closes the final open
+  WSV commit-lock item.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/kura.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core store_block_schedules_background_eviction_when_budget_exceeded --lib -- --nocapture`
+    (`1` passed, `6984` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core budget --lib -- --nocapture`
+    (`91` passed, `6894` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core evict_block_bodies --lib -- --nocapture`
+    (`3` passed, `6982` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core cache_block_body --lib -- --nocapture`
+    (`5` passed, `6980` filtered out)
+
+## 2026-06-07 Sumeragi stalled pending commit-pipeline evidence mutations
+
+- Strengthened `SumeragiStalledPendingTimeoutDecisionGate.tla` by splitting
+  valid queued commit-pipeline recovery evidence into observed commit-QC and
+  validated commit-artifact cases, matching the Rust
+  `commit_pipeline_has_recovery_evidence` disjunction.
+- Added `skip_commit_qc_observed_backlog`,
+  `skip_validated_artifact_backlog`, and their cfgs to model broken cases
+  where valid queued commit-pipeline work is not classified as active recovery
+  backlog despite commit-QC or validated-artifact evidence.
+- Added expected-failure CI coverage, README command/docs coverage, and the
+  roadmap marker for stalled-pending commit-pipeline evidence mutations.
+- Validation:
+  - `rg -n "skip_commit_qc_observed_backlog|skip-commit-qc-observed-backlog|skip_validated_artifact_backlog|skip-validated-artifact-backlog|commit_pipeline_commit_qc_observed|commit_pipeline_validated_artifact|commit-pipeline evidence" docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate.tla docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate_bug_skip_commit_qc_observed_backlog.cfg docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate_bug_skip_validated_artifact_backlog.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate.tla docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate_bug_skip_commit_qc_observed_backlog.cfg docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate_bug_skip_validated_artifact_backlog.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9802` expected-failure modes, `1` scheduled/manual
+    mode, `10307` documented modes, `499` TLC fast modes, `9802` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-commit-qc-observed-backlog`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-validated-artifact-backlog`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stalled-pending-timeout-bug-skip-commit-qc-observed-backlog`
+    (expected failure observed on `BugSkipCommitQcObservedBacklog`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stalled-pending-timeout-bug-skip-validated-artifact-backlog`
+    (expected failure observed on `BugSkipValidatedArtifactBacklog`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stalled-pending-timeout-fast`
+    (`2` states generated, `1` distinct, no errors)
+
+## 2026-06-07 SCCP BSC adapter envelope preflight hardening
+
+- Tightened BSC validator-set source-adapter structural admission so malformed
+  envelopes fail before receipt MPT, Parlia seal, or transition-chain verifier
+  work. The preflight now requires V1 BSC envelopes, non-zero validator epoch
+  and block number, and non-zero block hash, receipts root, validator-set hash,
+  commit-seal hash, and receipt-proof hash.
+- Added adversarial EVM-family source-adapter preflight coverage for wrong BSC
+  domain/version envelopes and zeroed block, receipt-root, validator-set,
+  commit-seal, and receipt-proof fields. The valid BSC seal-certificate fixture
+  still passes under the stricter adapter shape gate.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-adapter-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_seal_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+  - `git diff --check --cached -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-07 Torii operator header signing fallible route
+
+- Routed Torii's outbound operator signed-header helper through
+  `Signature::try_new` so backend signing failures now return the existing
+  operator-signature error response shape instead of unwinding through the
+  infallible compatibility wrapper.
+- Added an `operator_signature_signing` internal error code and pinned its
+  status/message fields in unit coverage while preserving the existing
+  successful signed-header authorization and nonce-RNG failure tests.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/operator_signatures.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii signed_request_headers --lib -- --nocapture`
+    (`2` passed, `2292` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii operator_signature_signing_error_is_internal --lib -- --nocapture`
+    (`1` passed, `2293` filtered out)
+
+## 2026-06-07 Sumeragi pending fast-path DA-floor cap mutation
+
+- Strengthened `SumeragiPendingFastPathTimeoutGate.tla` so DA inline
+  validation's 750 ms fallback is modeled as a floor only, not a cap, for large
+  pending fast-path timeouts.
+- Added `da_floor_caps_high` and
+  `SumeragiPendingFastPathTimeoutGate_bug_da_floor_caps_high.cfg` to model the
+  broken case where a large DA inline-validation fallback timeout is clamped
+  down to 750 ms.
+- Added expected-failure CI coverage, README command/docs coverage, and the
+  roadmap marker for the pending fast-path DA-floor cap mutation.
+- Validation:
+  - `rg -n "da_floor_caps_high|da-floor-caps-high|DA-floor cap|DA-floor/cap|without capping larger timeouts|larger fast-path timeouts" docs/formal/sumeragi/SumeragiPendingFastPathTimeoutGate.tla docs/formal/sumeragi/SumeragiPendingFastPathTimeoutGate_bug_da_floor_caps_high.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiPendingFastPathTimeoutGate.tla docs/formal/sumeragi/SumeragiPendingFastPathTimeoutGate_bug_da_floor_caps_high.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9800` expected-failure modes, `1` scheduled/manual
+    mode, `10305` documented modes, `499` TLC fast modes, `9800` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingFastPathTimeoutGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-caps-high`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-fast-path-timeout-bug-da-floor-caps-high`
+    (expected failure observed on `BugDaFloorCapsHigh`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-fast-path-timeout-fast`
+    (`2` states generated, `1` distinct, no errors)
+
+## 2026-06-07 Sumeragi cached-slot streak saturation mutation
+
+- Strengthened `SumeragiCachedSlotTimeoutGate.tla` with
+  `hysteresis_streak_max_before`, matching
+  `next_cached_slot_timeout_streak(...)` using `u8::saturating_add` for
+  repeated same-height newer-view cached-slot timeouts.
+- Added `MaxStreakSaturatesAndCapsFactor` and
+  `SumeragiCachedSlotTimeoutGate_bug_streak_overflow_wraps.cfg` to model the
+  broken case where a max recorded timeout streak wraps back to zero while the
+  NPoS hysteresis factor should remain capped at four quorum-timeout windows.
+- Added expected-failure CI coverage, README command/docs coverage, and the
+  roadmap marker for cached-slot streak saturation.
+- Validation:
+  - `rg -n "streak_overflow_wraps|streak-overflow-wraps|streak saturation|streak-saturation|hysteresis_streak_max_before|MaxStreakSaturatesAndCapsFactor" docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate.tla docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate_fast.cfg docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate_bug_streak_overflow_wraps.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate.tla docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate_fast.cfg docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate_bug_streak_overflow_wraps.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9799` expected-failure modes, `1` scheduled/manual
+    mode, `10304` documented modes, `499` TLC fast modes, `9799` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-streak-overflow-wraps`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh cached-slot-timeout-bug-streak-overflow-wraps`
+    (expected failure observed on `hysteresis_streak_max_before`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh cached-slot-timeout-fast`
+    (`45` states generated, `23` distinct, no errors)
+
+## 2026-06-07 Kura eviction block-store lock split
+
+- Split `evict_block_bodies` so it snapshots durable block-store metadata under
+  `block_store`, releases that mutex while copying DA sidecars and compacting
+  `blocks.data`/`blocks.index` into temp files, then reacquires `block_store`
+  only for final count validation, atomic replacement, directory sync, and
+  cache refresh.
+- Added `block_store_write_lock` to serialize block-store mutations across
+  eviction, appends, prunes, rehydration, and active path retargeting while
+  allowing metadata readers to acquire `block_store` during long compaction.
+- Refreshed the Kura/WSV audit so the full-rewrite-under-`block_store` high
+  finding is marked addressed; foreground inline eviction remains tracked as
+  the open medium item.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/kura.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core evict_block_bodies_releases_block_store_lock_while_compacting --lib -- --nocapture`
+    (`1` passed, `6980` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core evict_block_bodies --lib -- --nocapture`
+    (`3` passed, `6978` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core cache_block_body --lib -- --nocapture`
+    (`5` passed, `6976` filtered out)
+
+## 2026-06-07 Torii DA ingest receipt signing fail-closed path
+
+- Changed DA ingest receipt construction to return an HTTP-ready error when
+  Norito receipt encoding or operator signing fails. The handler now maps those
+  failures to `500` responses instead of relying on panic-only receipt
+  serialization or the infallible `Signature::new` compatibility wrapper.
+- Updated DA receipt and commitment-record tests to consume the fallible receipt
+  builder while preserving signature verification and artifact assertions.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/da/ingest.rs crates/iroha_torii/src/da/tests.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii build_receipt --lib -- --nocapture`
+    (`4` passed, `2289` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-da-receipt-sign CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii build_da_commitment_record --lib -- --nocapture`
+    (`2` passed, `2291` filtered out)
+
+## 2026-06-07 Sumeragi idle-view no-queue hard-stop mutation
+
+- Strengthened `SumeragiIdleViewProposalBudgetGate.tla` with no-queue
+  pacing and hard-backpressure cases, matching the Rust helper's
+  `queue_len > 0 && ... && proposal_backpressure_allows_queue_work(...)`
+  admission order.
+- Added `preserve_no_queue_hard_stop` and
+  `SumeragiIdleViewProposalBudgetGate_bug_preserve_no_queue_hard_stop.cfg` to
+  model the broken case where due proposal handling preserves the idle-view
+  budget despite zero queued transactions and all hard-stop signals being
+  present.
+- Added expected-failure CI coverage, README command/docs coverage, and the
+  roadmap marker for the idle-view no-queue hard-stop mutation.
+- Validation:
+  - `rg -n "preserve_no_queue_hard_stop|preserve-no-queue-hard-stop|no-queue hard-stop|preserve_no_queue_all_backpressure|preserve_no_queue_active_pending|preserve_no_queue_rbc_backlog|preserve_no_queue_relay_backpressure" docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate.tla docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate_bug_preserve_no_queue_hard_stop.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate.tla docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate_bug_preserve_no_queue_hard_stop.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9798` expected-failure modes, `1` scheduled/manual
+    mode, `10303` documented modes, `499` TLC fast modes, `9798` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-no-queue-hard-stop`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh idle-view-proposal-budget-bug-preserve-no-queue-hard-stop`
+    (expected failure observed on `preserve_no_queue_all_backpressure`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh idle-view-proposal-budget-fast`
+    (`59` states generated, `30` distinct, no errors)
+
+## 2026-06-07 Soracloud full-bootstrap material proof envelope
+
+- Added the data-model `SoracloudFheFullBootstrapMaterialProofV1` attachment
+  surface for governed `FullBootstrapV1` material statements, with canonical
+  STARK/FRI backend validation, verifier-key id binding, verifier-key
+  commitment binding, envelope-hash binding, and an exported schema-hash helper
+  for the full-bootstrap material public-input layout.
+- Added Soracloud-specific `OpenVerifyEnvelope` bounds for full-bootstrap
+  material proofs and validation that rejects malformed envelopes, wrong
+  circuit/schema metadata, mismatched statement public inputs, empty native
+  STARK envelopes, and oversized outer/wrapper/native proof payloads before
+  verifier dispatch.
+- Added focused coverage for canonical envelopes, required commitments,
+  attachment metadata drift, OpenVerify drift, published bounds, oversized
+  payloads, and canonical verifier ids. This is still only the data-model
+  envelope surface; the existing Core admission path dispatches full-material
+  proofs through active Soracloud verifier records and the preverified-proof
+  cache, while executable full BFV bootstrapping and the real prover/verifier
+  artifacts remain pending.
+- Hardened `RegisterVerifyingKey`/`UpdateVerifyingKey` admission for the
+  canonical full-bootstrap material verifier profile, matching the existing
+  bootstrap-key profile guard: id name/backend, namespace, STARK backend,
+  Goldilocks field, circuit id/version, public-input schema hash,
+  gas-schedule id, and active inline key presence now fail at registry
+  admission instead of first failing during FHE job execution.
+- Exported the full-bootstrap material proof constants, attachment type, bounds
+  helper, and public-input schema hash through `soracloud::prelude` so the
+  public Soracloud data-model surface stays aligned with Core imports.
+- Validation:
+  - `cargo fmt --all --check`
+  - `cargo check -p iroha_core`
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_full_bootstrap_material_proof --lib -- --nocapture`
+    (`7` passed, `1448` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_proof --lib -- --nocapture`
+    (`4` passed, `6977` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_full_bootstrap_material_proof_accepts_preverified_active_verifier --lib -- --nocapture`
+    (`1` passed, `6991` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_full_bootstrap_material --lib -- --nocapture`
+    (`4` passed, `6981` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-07 SCCP signer certificate shape preflight hardening
+
+- Tightened ETH sync-committee, BSC Parlia, Solana finalized-vote, TON
+  masterchain, and Substrate GRANDPA signer certificate structural preflights so
+  source-adapter shape checks reject non-canonical signer bitmap width/padding,
+  empty signer sets, signer/signature count drift, claimed total/signed stake or
+  weight drift, and sub-quorum certificates before transcript hashing.
+- Added adversarial source-adapter coverage for ETH, BSC, Solana, TON, and
+  Substrate certificates with signer bitmap padding bits, missing signatures,
+  and claimed quorum drift. The Substrate sub-quorum negative case now also
+  asserts that the GRANDPA justification hash fails closed instead of
+  serializing a malformed certificate transcript.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-signer-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_seal_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-signer-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_source_adapter_verifies_masterchain_validator_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-signer-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_source_adapter_verifies_grandpa_justification_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-signer-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_verifies_validator_vote_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-signer-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp solana_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-signer-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp eth_source_adapter_verifies_beacon_sync_committee_certificate --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-signer-shape CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp evm_family_source_adapter_preflight_rejects_oversized_shapes --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+  - `git diff --check --cached -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-07 Sumeragi post-commit no-queue hard-stop mutation
+
+- Strengthened `SumeragiPostCommitPacemakerKickGate.tla` with no-queue
+  combined-pacing and hard-backpressure cases, matching the Rust helper's
+  `queue_len > 0 && proposal_backpressure_allows_queue_work(...)` gate.
+- Added `trigger_no_queue_hard_stop` and
+  `SumeragiPostCommitPacemakerKickGate_bug_trigger_no_queue_hard_stop.cfg` to
+  model the broken case where a durable commit kickstarts the pacemaker despite
+  zero queued transactions and all hard-stop signals being present.
+- Added expected-failure CI coverage, README command/docs coverage, and the
+  roadmap marker for the no-queue hard-stop mutation.
+- Validation:
+  - `rg -n "trigger_no_queue_hard_stop|trigger-no-queue-hard-stop|no-queue hard-stop|no_queue_all_backpressure|no_queue_active_pending|no_queue_rbc_backlog|no_queue_relay_backpressure" docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate.tla docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate_bug_trigger_no_queue_hard_stop.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate.tla docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate_bug_trigger_no_queue_hard_stop.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9797` expected-failure modes, `1` scheduled/manual
+    mode, `10302` documented modes, `499` TLC fast modes, `9797` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-trigger-no-queue-hard-stop`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh post-commit-pacemaker-kick-bug-trigger-no-queue-hard-stop`
+    (expected failure observed on `no_queue_all_backpressure`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh post-commit-pacemaker-kick-fast`
+    (`47` states generated, `24` distinct, no errors)
+
+## 2026-06-07 Sumeragi commit-inflight timeout mark mutation
+
+- Added a focused expected-failure mutation for
+  `SumeragiCommitInflightTimeoutGate.tla`: `timeout_without_mark` models the
+  broken case where a new timeout report records diagnostics but does not
+  persist the inflight timeout marker needed for one-shot reporting.
+- Added
+  `SumeragiCommitInflightTimeoutGate_bug_timeout_without_mark.cfg`, expected
+  failure CI coverage, README command/docs coverage, and the roadmap marker for
+  the timeout-mark persistence mutation.
+- Validation:
+  - `rg -n "timeout_without_mark|timeout-without-mark|timeout mark persistence|timeout-mark persistence" docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate.tla docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate_bug_timeout_without_mark.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate.tla docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate_bug_timeout_without_mark.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9796` expected-failure modes, `1` scheduled/manual
+    mode, `10301` documented modes, `499` TLC fast modes, `9796` TLC mutation
+    modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-without-mark`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-inflight-timeout-bug-timeout-without-mark`
+    (expected failure observed on `at_timeout_unreported` with diagnostics
+    recorded but both timeout mark fields false)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-fast`
+    (`NoError` through length `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-inflight-timeout-fast`
+    (`17` states generated, `9` distinct, no errors)
+
+## 2026-06-07 Sumeragi frontier view-bound retransmit evidence mutation
+
+- Added a focused view-bound drop mutation for `SumeragiFrontierRecovery`:
+  `BugDropViewBoundRetransmitEvidence` models the broken case where
+  `DropAtViewBound` clears the retransmit marker after quorum retransmit has
+  made a terminal max-view drop admissible.
+- Added `ViewBoundRetransmitEvidenceBugInit`,
+  `SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence.cfg`,
+  Apalache/CI routing, README command coverage, and the roadmap marker for the
+  expected-failure mutation.
+- Validation:
+  - `rg -n "BugDropViewBoundRetransmitEvidence|ViewBoundRetransmitEvidenceBugInit|frontier-bug-view-bound-retransmit-evidence|SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `for f in docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg; do c=$(rg -c '^  BugDropViewBoundRetransmitEvidence = ' "$f" || true); if [ "$c" -ne 1 ]; then printf '%s %s\n' "$f" "$c"; fi; done`
+  - `rg -n "BugDropViewBoundRetransmitEvidence = TRUE" docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-bug-view-bound-retransmit-evidence`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-bug-view-bound-retransmit-evidence`
+    (expected failure observed after `GstElapsed`, `QuorumRetransmit`, and
+    `DropAtViewBound`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`218` states generated, `132` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through length `7`)
+
+## 2026-06-07 BFV full-bootstrap execution policy binding
+
+- Added `FheExecutionPolicyV1::full_bootstrap_material_proof_statement_digest`
+  so bootstrap-capable Soracloud policies can bind the governed
+  `FullBootstrapV1` material statement instead of the deterministic
+  zero-refresh statement used by `RefreshOnlyV1`. Policy validation now rejects
+  missing statement bindings, stale statement fields on zero-bootstrap
+  policies, and policies that bind both statement classes.
+- Wired Core refresh-transcript verification to derive the full-bootstrap
+  material statement from the supplied BFV parameters, evaluation keys, and
+  refresh transcript before execution. Full-bootstrap bundles now omit
+  deterministic zero-refresh bootstrap transcript seeds; Core rejects missing,
+  mismatched, stale, and cross-mode full-material policy bindings.
+- Added negative/adversarial coverage for missing full-material statements,
+  wrong statement digests, cross-mode zero-refresh/full-material policies,
+  stale zero-bootstrap policies, and full-bootstrap bundles that try to carry
+  deterministic zero-refresh transcript seeds.
+- Validation:
+  - `cargo fmt -p iroha_crypto -p iroha_data_model -p iroha_core`
+  - `cargo fmt -p iroha_crypto -p iroha_data_model -p iroha_core -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`5` passed, `661` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1446` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1446` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_policy --lib -- --nocapture`
+    (`4` passed, `6971` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_execution_policy -- --nocapture`
+    (`3` passed, `74` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-policy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-07 SCCP transition-chain active epoch binding
+
+- Hardened BSC and Substrate-family source transition-chain verification so a
+  chain must terminate at the adapter's declared active epoch/set id, not only
+  at the same final validator or authority-set hash. This closes a stale-chain
+  replay shape where an otherwise valid transition could derive the active hash
+  at an earlier epoch/set id.
+- Added adversarial BSC and Substrate fixtures with valid transition
+  transcripts and final set hashes but stale `validator_epoch` /
+  `grandpa_set_id` termination; both now fail source verification.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-transition-epoch CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-transition-epoch CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_source_adapter_verifies_authority_set_transition_chain --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+
+## 2026-06-07 Connect bridge detached signing fallible route
+
+- Routed the generic `connect_norito_sign_detached` FFI entrypoint and the
+  Java/JNI detached-signing helper through `Signature::try_new` instead of the
+  infallible compatibility `Signature::new` wrapper, so mobile bridge signing
+  failures now propagate through existing error surfaces instead of unwinding.
+- Added a direct Java helper sign/verify regression and reused the generic FFI
+  detached sign/verify coverage for Ed25519, Secp256k1, and ML-DSA.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-secp CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge sign --lib -- --nocapture`
+    (`12` passed, `186` filtered out)
+
+## 2026-06-07 Sumeragi frontier stale recovery-owner cleanup mutation
+
+- Added a focused stale-recovery owner cleanup mutation for
+  `SumeragiFrontierRecovery`: `BugKeepStaleRecoveryOwnerAfterUnlock` now models
+  the broken case where `ClearStaleRecovery` unlocks recovery but keeps the
+  stale owner label.
+- Added `StaleRecoveryUnlockOwnerBugInit`, the
+  `SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg` expected
+  failure config, Apalache/CI routing, README command coverage, and the roadmap
+  marker for the mutation.
+- Validation:
+  - `rg -n "BugKeepStaleRecoveryOwnerAfterUnlock|StaleRecoveryUnlockOwnerBugInit|frontier-bug-stale-recovery-owner-cleanup|SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `for f in docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg; do c=$(rg -c '^  BugKeepStaleRecoveryOwnerAfterUnlock = ' "$f" || true); if [ "$c" -ne 1 ]; then printf '%s %s\n' "$f" "$c"; fi; done`
+  - `rg -n "BugKeepStaleRecoveryOwnerAfterUnlock = TRUE" docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-recovery-owner-cleanup`
+    (expected rejection observed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-bug-stale-recovery-owner-cleanup`
+    (expected failure observed after `GstElapsed` and `ClearStaleRecovery`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`218` states generated, `132` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through length `7`)
+
+## 2026-06-07 SCCP inbound source-proof production scope
+
+- Hardened the generic deployment-backed SCCP source-chain production verifier
+  APIs so production verification and bundle extraction are explicitly limited
+  to inbound remote -> SORA source proofs. Remote -> remote source-adapter proofs
+  can still be structurally inspected for future target-specific profiles, but
+  cannot pass `*_production*` verification or production bundle extraction.
+- Added an adversarial ETH -> BSC fixture with governed ETH source material and
+  a matching BSC-target source-adapter deployment, proving the proof remains
+  structurally inspectable while production verification/extraction fails
+  closed.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-inbound-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_adapter_engine_readiness_with_deployment_opens_source_adapter --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md`
+
+## 2026-06-07 BFV full-bootstrap material digest-role collision gate
+
+- Tightened `BfvFullBootstrapCircuitMaterialV1` admission so artifact and
+  proof-profile commitments cannot reuse the registered BFV parameter, RNS
+  modulus-chain, or key-switch decomposition-chain digests. The validator now
+  checks every governed material digest role for cross-role collisions after
+  confirming the profile digests match the registered parameter set.
+- Added adversarial crypto coverage for artifact-vs-profile and
+  proof-vs-profile digest reuse, while retaining the existing zero hash,
+  duplicate artifact/proof, wrong circuit, wrong parameter profile, and depth
+  rejections.
+- Updated the engineering backlog and roadmap to state that full-bootstrap
+  material admission keeps digest roles partitioned, while executable
+  full-bootstrap evaluation and verifier/prover support remain open production
+  work.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-profile-roles CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`5` passed, `661` filtered out)
+  - `cargo fmt -p iroha_crypto -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-profile-roles CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-prod-audit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1446` filtered out)
+
+## 2026-06-07 State view generation retry
+
+- Replaced the `State::view` write-lock `try_read` fallback with a
+  generation-stabilized retry loop. Multi-component writers now mark an odd
+  state-view generation while committing, and full state views drop partial
+  snapshots and retry if that generation is active or changes during acquisition.
+- Covered the behavior with `state_view_waits_for_active_view_generation` and
+  re-ran the existing commit lock-order regressions to keep the tiered backend
+  and lane lifecycle deadlock checks green.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/state.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core state_view_waits_for_active_view_generation --lib -- --nocapture`
+    (`1` passed, `6973` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core state_commit_lock_order_tests --lib -- --nocapture`
+    (`2` passed, `6972` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core commit_merge_entry_ --lib -- --nocapture`
+    (`9` passed, `6965` filtered out)
+
+## 2026-06-07 Sumeragi frontier payload recovery ownership mutation
+
+- Added `BugKeepPayloadRecoveryOwner` and a focused
+  `PayloadRecoveryOwnerBugInit` witness so the frontier recovery
+  expected-failure suite now proves `PayloadRecoveredHasLocalOwner` turns red
+  if payload recovery marks the payload local but preserves a non-local
+  recovery owner.
+- Kept the normal `RecoverPayload` path transferring recovery ownership to
+  `Local` while making the buggy path explicitly preserve the previous owner
+  for mutation testing.
+- Added `SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg`, wired the
+  `frontier-bug-payload-recovery-owner` mode into the Apalache runner and
+  expected-failure CI list, and documented the mutation in the Sumeragi formal
+  README/roadmap.
+- Validation:
+  - `rg -n "BugKeepPayloadRecoveryOwner|PayloadRecoveryOwnerBugInit|frontier-bug-payload-recovery-owner|SumeragiFrontierRecovery_bug_payload_recovery_owner" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `for f in docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg; do c=$(rg -c "^  BugKeepPayloadRecoveryOwner = " "$f" || true); if [ "$c" -ne 1 ]; then printf '%s %s\n' "$f" "$c"; fi; done`
+  - `rg -n "BugKeepPayloadRecoveryOwner = TRUE" docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg`
+    (`SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg` only)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9793` expected-failure modes, `1` scheduled/manual mode,
+    `10298` documented modes, `499` TLC fast modes, `9793` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-bug-payload-recovery-owner`
+    (`expected Apalache rejection observed`, `EXITCODE: ERROR (12)`,
+    `4.180 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home bash scripts/formal/sumeragi_tlc.sh frontier-bug-payload-recovery-owner`
+    (`6` states generated, `5` distinct states found, depth `3`, expected
+    `PayloadRecoveredHasLocalOwner` violation)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`218` states generated, `132` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `104.822 sec`)
+
+## 2026-06-07 Connect bridge secp256k1 signing fallible route
+
+- Routed the `connect_norito_secp256k1_sign` FFI entrypoint through
+  `EcdsaSecp256k1Sha256::try_sign` instead of the compatibility `sign` wrapper,
+  so backend signing failures now return the existing `ERR_SECP_SIGN` code
+  directly instead of first collapsing to an empty signature payload.
+- Reused the bridge secp256k1 sign/verify regressions to keep the C ABI output
+  and verification behavior unchanged.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-secp CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge secp256k1 --lib -- --nocapture`
+    (`3` passed, `194` filtered out)
+
+## 2026-06-07 Sumeragi frontier quorum-retransmit window cleanup mutation
+
+- Added `BugKeepQuorumWindowAfterRetransmit` and a focused
+  `QuorumRetransmitWindowCleanupBugInit` witness so the frontier recovery
+  expected-failure suite now proves `QuorumRetransmitClearsRescheduleWindow`
+  turns red if quorum retransmit preserves the armed reschedule timer.
+- Kept the normal `QuorumRetransmit` path clearing the reschedule arm and
+  window age while making the buggy path explicitly preserve them for mutation
+  testing.
+- Added `SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg`, wired the
+  `frontier-bug-quorum-window-cleanup` mode into the Apalache runner and
+  expected-failure CI list, and documented the mutation in the Sumeragi formal
+  README/roadmap.
+- Validation:
+  - `rg -n "BugKeepQuorumWindowAfterRetransmit|QuorumRetransmitWindowCleanupBugInit|frontier-bug-quorum-window-cleanup|SumeragiFrontierRecovery_bug_quorum_window_cleanup" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `for f in docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg; do c=$(rg -c "^  BugKeepQuorumWindowAfterRetransmit = " "$f" || true); if [ "$c" -ne 1 ]; then printf '%s %s\n' "$f" "$c"; fi; done`
+  - `rg -n "BugKeepQuorumWindowAfterRetransmit = TRUE" docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg`
+    (`SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg` only)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9792` expected-failure modes, `1` scheduled/manual mode,
+    `10297` documented modes, `499` TLC fast modes, `9792` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-bug-quorum-window-cleanup`
+    (`expected Apalache rejection observed`, `EXITCODE: ERROR (12)`,
+    `4.801 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-bug-quorum-window-cleanup`
+    (`5` states generated, `4` distinct states found, depth `3`, expected
+    `QuorumRetransmitClearsRescheduleWindow` violation)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`218` states generated, `132` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `104.836 sec`)
+
+## 2026-06-07 Sumeragi frontier promotion-ready active-marker cleanup proof
+
+- Added `BugPreserveFutureReanchorActiveMarkers` and a focused
+  `FutureReanchorActiveMarkerBugInit` witness so the frontier recovery mutation
+  suite now proves that future-reanchor staging must not carry current active
+  recovery markers into `futurePromotionReady`.
+- Updated `ClearCurrentForFutureReanchor` to reset the current recovery owner,
+  validation/local vote/commit-QC, payload-recovery, and quorum-retransmit
+  markers before entering the promotion-ready state.
+- Added `FuturePromotionReadyClearsActiveMarkers`, wired it through the normal
+  frontier configs, and documented the invariant and the expected-failure
+  mutation mode.
+- Added
+  `SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg`, wired the
+  `frontier-bug-future-reanchor-active-marker` mode into the Apalache
+  expected-failure runner/CI list, and kept the new bug flag disabled in all
+  existing exact frontier configs.
+- Validation:
+  - `rg -n "BugPreserveFutureReanchorActiveMarkers|FutureReanchorActiveMarkerBugInit|FuturePromotionReadyClearsActiveMarkers|frontier-bug-future-reanchor-active-marker|SumeragiFrontierRecovery_bug_future_reanchor_active_marker" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `for f in docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg; do c=$(rg -c "^  BugPreserveFutureReanchorActiveMarkers = " "$f" || true); if [ "$c" -ne 1 ]; then printf '%s %s\n' "$f" "$c"; fi; done`
+  - `rg -n "BugPreserveFutureReanchorActiveMarkers = TRUE" docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg`
+    (`SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg` only)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9791` expected-failure modes, `1` scheduled/manual mode,
+    `10296` documented modes, `499` TLC fast modes, `9791` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-active-marker`
+    (`expected Apalache rejection observed`, `EXITCODE: ERROR (12)`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-bug-future-reanchor-active-marker`
+    (`15` states generated, `14` distinct states found, depth `5`, expected
+    `FuturePromotionReadyClearsActiveMarkers` violation)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`218` states generated, `132` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `94.834 sec`)
+
+## 2026-06-06 Kura durable budget metadata snapshot
+
+- Added a cached durable-budget snapshot for Kura's hot storage-budget path:
+  durable block count and unindexed byte metadata are published after successful
+  appends, prunes, eviction rewrites, and disk-usage refreshes.
+- Budget checks now use the snapshot before falling back to raw
+  `block_store` metadata reads, avoiding repeated durable-count/file-length
+  reads while the snapshot is valid.
+- Added `durable_budget_snapshot_avoids_repeated_metadata_reads` to prove a
+  cold fallback populates the snapshot, repeated checks avoid extra raw reads,
+  and successful appends publish fresh durable metadata directly.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/kura.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core durable_budget_snapshot_avoids_repeated_metadata_reads --lib -- --nocapture`
+    (`1` passed, `6973` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core budget --lib -- --nocapture`
+    (`91` passed, `6883` filtered out)
+
+## 2026-06-07 SoraFS proof-token base64 encode fallback removal
+
+- Reworked the SoraFS proof-token base64url encoder so it no longer returns an
+  empty string on internal encode or UTF-8 conversion failures; the helper now
+  pre-sizes the base64 buffer, asserts that the invariant-sized encode succeeds,
+  and converts the emitted ASCII bytes into a `String` without a fallible
+  UTF-8 fallback.
+- Reused the proof-token base64 roundtrip and malformed decode regressions to
+  keep header encoding/decoding behavior stable.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sorafs/proof_token.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keypair-try-seed CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto base64 --lib -- --nocapture`
+    (`3` passed, `663` filtered out)
+
+## 2026-06-07 Sumeragi frontier future-reanchor rotated-marker mutation
+
+- Added `BugMarkFutureReanchorRotated` and a focused
+  `FutureReanchorRotationBugInit` witness so the frontier expected-failure
+  suite now proves `FuturePromotionReadyClearsCurrentWrapper` turns red if
+  future reanchor clears the current wrapper but also marks it as rotated.
+- Added `SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg`, wired the
+  `frontier-bug-future-reanchor-rotated` mode into the Apalache
+  expected-failure runner/CI list, and documented the mutation alongside the
+  existing frontier recovery bug configs.
+- Kept the new bug flag explicitly disabled in every existing
+  `SumeragiFrontierRecovery_*.cfg` config; only the new mutation config enables
+  it.
+- Validation:
+  - `rg -n "BugMarkFutureReanchorRotated|FutureReanchorRotationBugInit|frontier-bug-future-reanchor-rotated|SumeragiFrontierRecovery_bug_future_reanchor_rotated" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg docs/formal/sumeragi/README.md ci/check_sumeragi_formal_expected_failures.sh roadmap.md`
+  - `for f in docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg; do c=$(rg -c "^  BugMarkFutureReanchorRotated = " "$f" || true); if [ "$c" -ne 1 ]; then printf '%s %s\n' "$f" "$c"; fi; done`
+  - `rg -n "BugMarkFutureReanchorRotated = TRUE" docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg`
+    (`SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg` only)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9790` expected-failure modes, `1` scheduled/manual mode,
+    `10295` documented modes, `499` TLC fast modes, `9790` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-rotated`
+    (`expected Apalache rejection observed`, `EXITCODE: ERROR (12)`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-bug-future-reanchor-rotated`
+    (`4` states generated, `3` distinct states found, depth `3`, expected
+    `FuturePromotionReadyClearsCurrentWrapper` violation)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `113.939 sec`)
+
+## 2026-06-07 Classic seeded keypair checked routing
+
+- Routed the Ed25519 and Secp256k1 branches of fallible
+  `KeyPair::try_from_seed` through their checked `try_keypair` helpers instead
+  of the panic-compatible `keypair` wrappers, keeping the top-level fallible API
+  on checked crypto plumbing for both classic algorithms.
+- Reused the existing classic private-key roundtrip regression, which derives
+  Ed25519 and Secp256k1 keys through `KeyPair::try_from_seed`, exports and
+  reparses their private payloads, and verifies a signature with the original
+  public key.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keypair-try-seed CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto private_key_try_to_bytes_roundtrips_classic_payloads --lib -- --nocapture`
+    (`1` passed, `665` filtered out)
+
+## 2026-06-07 Torii identifier receipt signing fail-closed path
+
+- Replaced the live identifier-resolution receipt and output-opening
+  `SignatureOf::new` calls with a shared fallible signing helper, so Torii now
+  surfaces crypto signing failures as `IdentifierResolutionError::Signing`
+  instead of unwinding while issuing RAM-LFE attestations.
+- Added a focused regression that issues both a generic RAM-LFE execution
+  receipt and an output opening, then verifies both signatures through the
+  data-model verifier APIs.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/identifier_resolution.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii issue_execution_receipt --lib -- --nocapture`
+    (`2` passed, `2290` filtered out)
+
+## 2026-06-07 Sumeragi frontier promotion-ready rotation isolation proof
+
+- Strengthened `FuturePromotionReadyClearsCurrentWrapper` so the
+  promotion-ready future handoff now also requires `~rotated`, keeping the
+  staged-future promotion state separate from the rotated terminal outcome
+  while the current pending wrapper is cleared.
+- Updated the Sumeragi formal README and roadmap so the outstanding/checkpoint
+  text records the promotion-ready rotation-isolation proof obligation.
+- Validation:
+  - `rg -n "FuturePromotionReadyClearsCurrentWrapper|frontier promotion-ready rotation isolation|stayed separate from rotation|~rotated" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/README.md roadmap.md docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/README.md roadmap.md status.md docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9789` expected-failure modes, `1` scheduled/manual mode,
+    `10294` documented modes, `499` TLC fast modes, `9789` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `111.315 sec`)
+
+## 2026-06-07 Sumeragi frontier zero-evidence staged-future mutation
+
+- Added `BugAllowZeroEvidenceFutureDrop` and a focused
+  `ZeroEvidenceFutureDropBugInit` witness so the formal suite now has an
+  expected-failure mutation for the unsafe zero-evidence terminal cleanup that
+  drops the active frontier while concrete future frontier evidence remains
+  staged.
+- Added `SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg`, wired it
+  through the Apalache expected-failure runner/CI list, documented the mode in
+  the Sumeragi formal README, and kept the bug flag explicitly disabled in all
+  existing non-bug and unrelated frontier mutation configs.
+- Validation:
+  - `rg -n "BugAllowZeroEvidenceFutureDrop|ZeroEvidenceFutureDropBugInit|frontier-bug-zero-evidence-future-drop|SumeragiFrontierRecovery_bug_zero_evidence_future_drop" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal_expected_failures.sh docs/formal/sumeragi/README.md`
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery*.cfg docs/formal/sumeragi/README.md scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py ci/check_sumeragi_formal_expected_failures.sh roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9789` expected-failure modes, `1` scheduled/manual mode,
+    `10294` documented modes, `499` TLC fast modes, `9789` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-bug-zero-evidence-future-drop`
+    (`expected Apalache rejection observed`, `EXITCODE: ERROR (12)`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-bug-zero-evidence-future-drop`
+    (`5` states generated, `4` distinct states found, depth `3`, expected
+    `ZeroEvidenceDropHasNoStagedFuture` violation)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `113.404 sec`)
+
+## 2026-06-07 Sumeragi frontier zero-evidence source isolation proof
+
+- Strengthened the focused frontier recovery model so `DropZeroEvidence` is
+  only enabled when no concrete future frontier evidence is staged, preventing
+  stale-owner zero-evidence terminal drops from discarding a future recovery
+  source.
+- Added `ZeroEvidenceDropHasNoStagedFuture` so a zero-evidence terminal drop
+  cannot leave a live future slot or promotion-ready wrapper competing with the
+  no-evidence decision; any observed future evidence must already be promoted.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  TLC fast/small configs, and documented the proof obligation in the Sumeragi
+  formal README and roadmap.
+- Validation:
+  - `rg -n "ZeroEvidenceDropHasNoStagedFuture|frontier zero-evidence drop future-stage isolation|FutureFrontierEvidence|zero-evidence" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`29` invariants in each sampled frontier config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `103.721 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,254,915` states generated, `1,162,132` distinct states found, depth
+    `11`, final temporal pass `1min 32s`, total `6min 02s`)
+
+## 2026-06-07 SessionKey zeroization debug-log poison recovery
+
+- Reworked the `SessionKey` zeroization debug log to acquire the global mutex
+  through a poison-recovering guard, so drop-time zeroization recording and
+  debug helper reads no longer panic after a prior panic while the mutex was
+  held.
+- Added a regression that deliberately poisons the debug mutex, drops a fresh
+  `SessionKey`, and confirms the recorded bytes are still zeroized; the shared
+  debug-log tests now serialize their access with a test-only mutex so the Rust
+  parallel test runner cannot race the global buffer.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto session_key_ --lib -- --nocapture`
+    (`4` passed, `661` filtered out)
+
+## 2026-06-06 IVM WSV admin syscall permission gates
+
+- Added caller-scoped `ManageRoles`/`ManagePermissions` checks to direct WSV
+  role and permission admin syscalls, matching the JSON admin alias policy.
+- Updated role/permission TLV and Kotodama fixtures so successful admin flows
+  seed explicit management permissions, while negative role-state tests still
+  fail on their intended conditions.
+- Validation:
+  - `rustfmt --edition 2024 crates/ivm/src/mock_wsv.rs crates/ivm/tests/wsv_host_role_admin_tlv.rs crates/ivm/tests/wsv_host_role_vs_direct_perm.rs crates/ivm/tests/wsv_host_grant_revoke_tlv.rs crates/ivm/tests/wsv_host_role_admin_neg.rs crates/ivm/tests/kotodama_role_builtins.rs crates/ivm/tests/kotodama_roles_wsvhost.rs crates/ivm/tests/kotodama_role_cleanup.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm direct_admin_syscalls --lib -- --nocapture`
+    (`2` passed, `338` filtered out)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test wsv_host_role_admin_tlv -- --nocapture`
+    (`2` passed)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test wsv_host_role_vs_direct_perm -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p ivm --test wsv_host_grant_revoke_tlv --test wsv_host_role_admin_neg --test kotodama_role_builtins --test kotodama_roles_wsvhost --test kotodama_role_cleanup -- --nocapture`
+    (`13` passed)
+
+## 2026-06-06 GOST nonce digest-length fail-closed guard
+
+- Reworked the private GOST deterministic nonce generator and Streebog HMAC
+  helpers to return `Error::Signing` for unsupported digest lengths instead of
+  panicking in the hash selector.
+- Added a regression with a deliberately invalid test curve descriptor proving
+  unsupported Streebog digest lengths fail closed, while existing deterministic
+  nonce domain-separation and legacy-compatibility checks continue to pass.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/gost.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto --features gost deterministic_nonce_ --lib -- --nocapture`
+    (`3` passed, `687` filtered out)
+
+## 2026-06-07 Sumeragi frontier rotated source isolation proof
+
+- Added `RotatedFrontierHasNoStagedFuture` to the focused frontier recovery
+  model so a rotated non-dropped terminal frontier cannot leave a live future
+  slot or promotion-ready wrapper competing with its rotation source; any
+  observed future evidence must already be promoted.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  TLC fast/small configs, and documented the proof obligation in the Sumeragi
+  formal README and roadmap.
+- Validation:
+  - `rg -n "RotatedFrontierHasNoStagedFuture|frontier rotated source future-stage isolation|rotated non-dropped" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`28` invariants in each sampled frontier config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `99.982 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states found, depth
+    `11`, final temporal pass `1min 44s`, total `6min 18s`)
+
+## 2026-06-06 Sumeragi frontier view-bound source isolation proof
+
+- Added `ViewBoundDropHasNoStagedFuture` to the focused frontier recovery
+  model so a view-bound terminal drop cannot leave a live future slot or
+  promotion-ready wrapper competing with its drop source; any observed future
+  evidence must already be promoted.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  TLC fast/small configs, and documented the proof obligation in the Sumeragi
+  formal README and roadmap.
+- Validation:
+  - `rg -n "ViewBoundDropHasNoStagedFuture|frontier view-bound drop future-stage isolation|view-bound drop" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`27` invariants in each sampled frontier config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `94.548 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states found, depth
+    `11`, final temporal pass `1min 32s`, total `5min 59s`)
+
+## 2026-06-06 Soracloud BFV bit-width helper panic removal
+
+- Replaced the BFV descriptor bit-width helper's infallible `u16::try_from`
+  plus `expect` with a direct cast from the guaranteed `0..=64` u64 width,
+  preserving descriptor validation behavior without a production panic marker.
+- Added a boundary regression covering zero, one-bit, byte-width, and full
+  `u64::MAX` width cases.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core u64_bit_width_reports_zero_and_boundary_widths --lib -- --nocapture`
+    (`1` passed, `6970` filtered out)
+
+## 2026-06-06 State DA cursor apply fault regression
+
+- Added a focused `apply_without_execution` regression that applies a committed
+  block carrying DA commitments for an unknown lane and proves the apply path
+  records the cursor error without panicking, while retaining the commitment
+  bundle and avoiding bogus cursor creation.
+- Refreshed the Kura/WSV audit so the DA cursor apply panic item is marked
+  addressed and the remaining Production WSV gaps only list unresolved
+  contention/atomicity work.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/state.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core apply_without_execution_records_da_cursor_errors_without_panic --lib -- --nocapture`
+    (`1` passed, `6969` filtered out)
+
+## 2026-06-06 Sumeragi frontier committed source isolation proof
+
+- Added `CommittedFrontierHasNoStagedFuture` to the focused frontier recovery
+  model so a committed terminal frontier keeps fresh recovery ownership and
+  cannot retain a live future slot or promotion-ready wrapper competing with
+  its commit source; observed future evidence must already be promoted.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  TLC fast/small configs, and documented the proof obligation in the Sumeragi
+  formal README and roadmap.
+- Validation:
+  - `rg -n "CommittedFrontierHasNoStagedFuture|frontier committed source future-stage isolation|committed frontier" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`26` invariants in each sampled frontier config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states found, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError` through computation length `7`, `EXITCODE: OK`, `99.81 sec`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states found, depth
+    `11`, final temporal pass `1min 35s`, total `6min 06s`)
+
+## 2026-06-06 SCCP source-proof production launch-scope gate
+
+- Hardened core SCCP source-chain production verifier APIs so
+  `verify_sccp_source_chain_proof_envelope_production*` requires the source
+  remote domain to be in `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`.
+  Substrate/Polkadot-family source proofs with complete governed material and
+  matching source-adapter deployment remain structurally inspectable for
+  diagnostics, but direct production verification and bundle-level production
+  extraction now fail closed while the launch scope is unsupported.
+- Updated adversarial Substrate-family regressions to prove complete SORA2 and
+  SORA Kusama deployment-bound evidence cannot pass direct production source
+  verification even though the diagnostic structure and deployment binding still
+  verify.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-core-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_source_adapter_deployment_requires_runtime_storage_verifier --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-core-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_family_lane_remains_unsupported_with_complete_evidence --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-core-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`2` passed, `254` filtered out)
+
+## 2026-06-06 SCCP Torii proof-output launch-scope gate
+
+- Hardened Torii SCCP message proof output conversion so typed proof artifacts,
+  normalized proof jobs, and `BridgeProof` conversion all reject remote domains
+  outside `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, even when
+  `sccp_allow_unready_transparent_proofs` is enabled for diagnostics.
+- Added an adversarial signed SORA2 bundle regression proving allow-unready
+  diagnostic mode cannot emit a production-looking proof artifact, proof job, or
+  bridge proof while Substrate/Polkadot-family lanes remain out of launch scope.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii proof_outputs_reject_unsupported_substrate_when_unready_allowed --lib -- --nocapture`
+    (`1` passed, `2290` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii runtime_scale_export_rejects_unsupported_substrate_launch_scope --lib -- --nocapture`
+    (`1` passed, `2291` filtered out)
+
+## 2026-06-06 SCCP local-admission launch-scope gate
+
+- Hardened core SCCP local-admission submission packaging so a remote source
+  domain must be in `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1` before a SORA
+  `local_admission` package can be emitted. Complete Substrate/Polkadot-family
+  diagnostic material and deployment evidence remains inspectable only through
+  diagnostic allow-unready runtime-call tooling while that launch scope is
+  closed.
+- Added an adversarial SORA2 regression with complete source material,
+  source-adapter deployment, destination rollout, and route allowlist evidence
+  proving production artifact construction fails and the diagnostic artifact does
+  not use `local_admission`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-core-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp substrate_family_lane_remains_unsupported_with_complete_evidence --lib -- --nocapture`
+    (`1` passed, `255` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-core-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`2` passed, `254` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-core-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp local_admission --lib -- --nocapture`
+    (compiled successfully; `0` tests matched)
+  - `rustfmt --edition 2024 --check crates/iroha_sccp/src/lib.rs`
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-06 Soracloud HF placement ranking digest guard
+
+- Replaced the HF validator-ranking digest prefix `expect` with an explicit
+  fixed-array copy so rendezvous entropy derivation remains byte-for-byte the
+  same without a production panic assumption.
+- Added a direct regression that recomputes the rendezvous digest and first-half
+  entropy independently, then verifies the ranking score and tie-break digest.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core hf_ranked_validator_score_uses_digest_prefix_entropy --lib -- --nocapture`
+    (`1` passed, `6968` filtered out)
+
+## 2026-06-06 Kura writer periodic fsync fault regression
+
+- Added a focused Kura writer-loop regression that forces the batched commit
+  marker flush to fail and proves the writer records a `periodic fsync` fault
+  without panicking or clearing pending fsync work.
+- Refreshed the Kura/WSV audit to mark current writer fault handling,
+  pending-budget byte caching, and IVM TLV/JSON envelope-size bounds as
+  addressed while keeping the remaining Kura/WSV production risks open.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/kura.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core writer_loop_records_periodic_fsync_failure_without_panic --lib -- --nocapture`
+    (`1` passed, `6967` filtered out)
+
+## 2026-06-06 SCCP Torii runtime SCALE launch-scope gate
+
+- Hardened Torii's direct SCCP runtime SCALE envelope export so it rejects any
+  bundle whose remote counterparty domain is outside
+  `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, even when a SORA-origin bundle
+  carries cryptographically valid Nexus finality. This keeps SORA2/Substrate
+  runtime export diagnostic/backlog-only while public discovery hides the
+  runtime SCALE capability fields.
+- Added a signed SORA -> SORA2 runtime-export regression proving the endpoint
+  returns the explicit Substrate/Polkadot launch-scope blocker instead of
+  envelope bytes, while the supported ETH token-control runtime export remains
+  accepted.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-core-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp --lib -- --nocapture`
+    (`256` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`340` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii runtime_scale_export_rejects_unsupported_substrate_launch_scope --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_message_bundle_endpoint_roundtrips_json --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_token_control_message_bundle_endpoint_roundtrips_json --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_ --lib -- --nocapture`
+    (`79` tests passed)
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/openapi.rs`
+  - `git diff --check -- crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/openapi.rs docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-06 Soracloud HF placement lookup duplicate guard
+
+- Replaced the HF placement-id loader's single-match `expect` with a slice
+  match so duplicate or missing authoritative placement state always returns
+  the existing invariant diagnostics instead of relying on an internal unwrap.
+- Added a focused regression that seeds two authoritative HF placements with
+  the same placement id and verifies the duplicate-state invariant error.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core load_hf_placement_by_placement_id_rejects_duplicate_authoritative_state --lib -- --nocapture`
+    (`1` passed, `6965` filtered out)
+
+## 2026-06-06 Sumeragi frontier rotated terminal evidence proof
+
+- Added `RotatedFrontierHasRetransmitEvidence` to the focused frontier recovery
+  model so any rotated non-dropped terminal frontier must preserve retransmit,
+  vote, payload, fresh-owner, and non-quorum evidence while aligning
+  subject-view and recovery-rotation bookkeeping.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "RotatedFrontierHasRetransmitEvidence|frontier rotated terminal retransmit evidence|rotated non-dropped" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`25` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 37 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`,
+    final temporal pass 1 min 37 sec, total 6 min 5 sec)
+
+## 2026-06-06 Soracloud balanced FHE fold invariant fail-closed guard
+
+- Replaced the balanced FHE fold's final non-empty-level assumption with an
+  explicit invalid-parameter error so future fold-shape drift cannot panic after
+  a validated multiply plan.
+- Revalidated the existing multi-input multiply regression that exercises the
+  balanced fold path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_multi_input_multiply_matches_plaintext_slots --lib -- --nocapture`
+    (`1` passed, `6964` filtered out)
+
+## 2026-06-06 Sumeragi frontier zero-evidence drop evidence absence proof
+
+- Added `ZeroEvidenceDropHasNoConsensusEvidence` to the focused frontier
+  recovery model so any `ZeroEvidence` terminal drop must have no vote,
+  quorum, commit-QC, retransmit, rotation, or promotion-ready evidence attached
+  to it.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "ZeroEvidenceDropHasNoConsensusEvidence|frontier zero-evidence drop consensus-evidence absence|zero-evidence" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`24` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 41 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`,
+    final temporal pass 1 min 32 sec, total 5 min 59 sec)
+
+## 2026-06-06 Soracloud FHE runtime empty-input fail-closed helpers
+
+- Replaced the FHE runtime helper layer's `inputs.first().expect(...)`
+  assumptions with a shared `first_matching_fhe_slots` guard that rejects
+  missing input envelopes, empty slot envelopes, and mismatched slot counts
+  through `InvalidParameter` before exact, bounded-noise, rotate, bootstrap, or
+  metadata-bound paths can evaluate.
+- Extended `soracloud_fhe_job_rejects_missing_input_envelopes` so exact
+  execution, bounded-noise execution, residual-bound execution, and
+  bounded-noise-bound execution all prove the same fail-closed missing-input
+  diagnostic.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_job_rejects_missing_input_envelopes --lib -- --nocapture`
+    (`1` passed, `6962` filtered out)
+
+## 2026-06-06 Kura pipeline sidecar queue cap
+
+- Bounded the pending pipeline recovery sidecar queue by the configured
+  `kura.blocks_in_memory` depth and made enqueue overflow return
+  `RejectedQueueFull` instead of allowing unbounded `VecDeque` growth.
+- Updated the block-application caller to log queue pressure while continuing
+  consensus execution because pipeline recovery sidecars are best-effort
+  diagnostic metadata.
+- Added a regression proving a cap of one accepts the first sidecar, rejects the
+  second, and leaves only the first sidecar queued.
+- Validation:
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core pipeline_sidecar_enqueue --lib -- --nocapture`
+    (`3` passed, `6962` filtered out)
+
+## 2026-06-07 BFV full-bootstrap artifact digest role separation
+
+- Hardened `BfvFullBootstrapCircuitMaterialV1` validation so the
+  coefficient-to-slot, slot-to-coefficient, blind-rotation, sample-extraction,
+  and accumulator artifact commitments must be non-zero and pairwise distinct,
+  preventing one artifact digest from silently standing in for another
+  full-bootstrap role.
+- Extended the registered-profile material regression to cover duplicate
+  artifact digests, while keeping bundle admission and direct execution
+  fail-closed for `FullBootstrapV1`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `664` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`4` passed, `661` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap material proof statement digest
+
+- Added `BfvEvaluationKeyBundle::full_bootstrap_material_proof_statement_digest`
+  so governed `FullBootstrapV1` bundles can expose a domain-separated public
+  statement digest without routing through refresh-only bootstrap proof paths.
+  The digest binds the BFV parameter set, public key, evaluation-key bundle
+  digest, bootstrap-key id/mode/round capacity, and full-bootstrap material
+  digest.
+- Refresh-only bundles and bundles without bootstrap keys now return `None`
+  for this full-bootstrap statement lookup, while full-mode keys missing
+  circuit material still reject during admission metadata preflight. Full
+  bootstrap execution remains fail-closed until the executable evaluator and
+  verifier/prover path is implemented.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_material_proof_statement_digest_binds_governance_inventory --lib -- --nocapture`
+    (`1` passed, `665` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_rejects_full_bootstrap_mode --lib -- --nocapture`
+    (`1` passed, `665` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`5` passed, `661` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_proof_statement_digest_preflights_public_metadata --lib -- --nocapture`
+    (`1` passed, `665` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-07 Soracloud data-model full-bootstrap statement derivation
+
+- Added
+  `BfvEvaluationKeyRefreshTranscriptV1::full_bootstrap_material_proof_statement_digest_for_evaluation_keys`
+  so manifest/data-model callers can derive the crypto
+  full-bootstrap material proof-statement digest from the governed public key
+  and evaluation-key bundle without using the zero-refresh bootstrap proof
+  path.
+- Covered `FullBootstrapV1` derivation against the crypto API, refresh-only
+  `None` behavior, material-digest drift, and missing-material error mapping.
+  Policy validation now accepts exactly one bootstrap statement class for
+  bootstrap-capable policies: zero-refresh for `RefreshOnlyV1` or
+  full-material for `FullBootstrapV1`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1446` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap proof-profile commitments
+
+- Extended `BfvFullBootstrapCircuitMaterialV1` with proof public-input schema,
+  prover-key, and verifier-key digests, so the full-bootstrap material digest
+  and material proof-statement digest bind the future verifier/prover profile
+  instead of only evaluator artifacts.
+- Hardened material validation so the new proof-profile commitments must be
+  non-zero and pairwise distinct from every other full-bootstrap digest role.
+  Crypto, data-model, and Core test fixtures now carry the new commitments,
+  while Core exact and bounded bootstrap execution remain fail-closed for
+  `FullBootstrapV1`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `665` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_material_proof_statement_digest_binds_governance_inventory --lib -- --nocapture`
+    (`1` passed, `665` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`5` passed, `661` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1446` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material_stays_execution_unavailable --lib -- --nocapture`
+    (`1` passed, `6973` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bounded_noise_bootstrap_full_material_stays_execution_unavailable --lib -- --nocapture`
+    (`1` passed, `6974` filtered out)
+
+## 2026-06-07 Crypto zeroization debug mutex clippy cleanup
+
+- Kept the dirty-tree `iroha_crypto` clippy gate green by replacing redundant
+  poisoned-mutex recovery closures in the session-key zeroization debug helper
+  with `PoisonError::into_inner`, without changing the helper's recovery
+  behavior.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto session_key_zeroization --lib -- --nocapture`
+    (`1` passed, `664` filtered out; the test intentionally catches a panic to poison the debug mutex)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 BFV full-bootstrap material commitment surface
+
+- Added versioned `BfvFullBootstrapCircuitMaterialV1` commitments to BFV
+  bootstrap keys so `FullBootstrapV1` admission can bind the canonical circuit
+  id, registered BFV parameter digest, RNS modulus-chain digest,
+  key-switch-decomposition digest, and full-bootstrap artifact digests.
+- Split bootstrap-key admission from refresh execution: evaluation-key bundle
+  validation and digesting can bind full-bootstrap material, while direct
+  refresh/proof/execution paths still fail closed with
+  `full BFV bootstrap execution is not implemented`.
+- Added a serialization regression proving refresh-only bootstrap keys roundtrip
+  with no full-bootstrap material, `FullBootstrapV1` material survives canonical
+  Norito decode, and bundle digests change when full-bootstrap material is
+  present.
+- Added Core exact and bounded-noise Soracloud regressions proving
+  material-bearing `FullBootstrapV1` keys still fail with
+  `full BFV bootstrap execution is not implemented` before refresh-count
+  capacity errors.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
+    (`1` passed, `662` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_execution_stays_unavailable --lib -- --nocapture`
+    (`1` passed, `662` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_proof_statement_digest_preflights_public_metadata --lib -- --nocapture`
+    (`1` passed, `662` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_full_mode_requires_circuit_material --lib -- --nocapture`
+    (`1` passed, `662` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_rejects_full_bootstrap_mode --lib -- --nocapture`
+    (`1` passed, `662` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_material_serialization_roundtrips_and_digest_binds --lib -- --nocapture`
+    (`1` passed, `663` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`4` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material_stays_execution_unavailable --lib -- --nocapture`
+    (`1` passed, `6972` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bounded_noise_bootstrap_full_material_stays_execution_unavailable --lib -- --nocapture`
+    (`1` passed, `6973` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-06 BFV bootstrap bundle metadata preflight ordering
+
+- Moved bootstrap key public metadata validation ahead of reserved-mode checks
+  in the shared crypto bootstrap key-shape validator, so malformed key ids or
+  round-capacity metadata are not hidden by `FullBootstrapV1` in bundle
+  validation, bundle digesting, or bootstrap proof-statement construction.
+- Extended raw proof-statement and evaluation-key bundle regressions to prove
+  malformed bootstrap metadata wins before the full-bootstrap circuit-material
+  diagnostic.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_proof_statement_digest_preflights_public_metadata --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_rejects_full_bootstrap_mode --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud bootstrap reserved-mode preflight handoff
+
+- Removed the duplicate Core-side `max_refresh_rounds` checks from exact and
+  bounded-noise Soracloud Bootstrap execution so both paths delegate
+  refresh-count and reserved full-bootstrap mode precedence to the shared
+  `iroha_crypto` bootstrap request preflight.
+- Added exact and bounded-noise regressions proving `FullBootstrapV1` still
+  fails with the missing circuit-material diagnostic even when the requested
+  bootstrap count is also above key capacity.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_mode_preflights_before_refresh_count_capacity --lib -- --nocapture`
+    (`1` passed, `6964` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bounded_noise_bootstrap_full_mode_preflights_before_refresh_count_capacity --lib -- --nocapture`
+    (`1` passed, `6966` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi frontier view-bound drop evidence proof
+
+- Added `ViewBoundDropHasRetransmitEvidence` to the focused frontier recovery
+  model so any `ViewBound` terminal drop must preserve the retransmit, vote,
+  payload, fresh-owner, max-view, and non-quorum evidence that made the
+  view-bound outcome admissible.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "ViewBoundDropHasRetransmitEvidence|frontier view-bound drop retransmit evidence|view-bound drop" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`23` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 35 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`,
+    final temporal pass 1 min 34 sec, total 7 min 45 sec)
+
+## 2026-06-06 BFV bootstrap reserved-mode request preflight
+
+- Added shared bootstrap refresh-request preflight in `iroha_crypto` that
+  validates bootstrap key id/capacity, rejects reserved `FullBootstrapV1`, and
+  then checks requested round index/count before heavier capacity, key-entry, or
+  ciphertext-shape validation.
+- Routed scalar, bounded-noise, exact RNS, bounded RNS, bounded target-limb
+  basis-extension, and key-authorized bootstrap output-bound helpers through the
+  mode-aware request preflight.
+- Extended the full-mode regression so reserved full-bootstrap keys fail before
+  invalid round requests, oversized output-bound inputs, malformed ciphertexts,
+  and basis-extension zero-round requests while full circuit/key material remains
+  unavailable.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_full_mode_requires_circuit_material --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 BFV bounded bootstrap basis-extension corridor preflight
+
+- Consolidated bounded-noise target-limb basis-extension preflight in
+  `iroha_crypto`, so Multiply, Galois, packed `RotateLeft`, and Bootstrap
+  refresh wrappers share the same rounded-capacity and decomposition/evaluator
+  prefix validation before key or ciphertext-shape checks.
+- Extended the bounded RNS preflight regression to prove Bootstrap basis-extension
+  refresh rejects a structurally valid but non-prefix decomposition chain before
+  malformed bootstrap-key or ciphertext material can mask the chain error.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` passed, `660` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud BFV descriptor empty-chain fail-closed guard
+
+- Replaced the Core BFV descriptor validator's non-empty
+  `ciphertext_modulus_bits` assumption with an explicit invalid-parameter
+  rejection, so malformed runtime BFV parameter metadata cannot panic if a
+  future call path reaches the descriptor validator directly.
+- Extended `soracloud_registered_bfv_parameters_reject_descriptor_drift` with a
+  direct empty-chain regression against
+  `validate_registered_soracloud_bfv_descriptor`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_registered_bfv_parameters_reject_descriptor_drift --lib -- --nocapture`
+    (`1` passed, `6960` filtered out)
+
+## 2026-06-06 Kura writer wake coalescing
+
+- Replaced the Kura writer notification channel with a capacity-one
+  `sync_channel` and routed producer wakeups through non-blocking `try_send`, so
+  redundant `NewBlock` wake events coalesce instead of accumulating under
+  sustained producer pressure.
+- Updated pipeline sidecar enqueueing to wake the writer only on an
+  empty-to-nonempty transition; the sidecar queue itself is still intentionally
+  tracked as an open cap/backpressure item.
+- Added a regression proving consecutive pipeline sidecar enqueue calls leave
+  both sidecars queued but only one writer wake pending.
+- Validation:
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core pipeline_sidecar_enqueue_coalesces_writer_notifications --lib -- --nocapture`
+    (`1` passed, `6961` filtered out)
+
+## 2026-06-06 Soracloud FHE bootstrap proof attachment context
+
+- Split Soracloud FHE proof attachment decoding so input-admission proofs keep
+  using the input-admission envelope context while bootstrap-key proofs now use
+  their own attachment context and
+  `SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES` cap.
+- Added a regression proving bootstrap-key proof envelopes accept the sample
+  OpenVerify payload, reject unsupported proof labels with bootstrap-specific
+  diagnostics, reject forged envelope hashes in the bootstrap context, and apply
+  the bootstrap proof byte cap.
+- Kept `iroha_core --lib` compiling in the current dirty worktree by updating
+  stale Sumeragi test references to the nested frontier slot state layout.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_bootstrap_key_proof_envelope_uses_bootstrap_attachment_context --lib -- --nocapture`
+    (`1` passed, `6960` filtered out)
+
+## 2026-06-06 Sumeragi frontier stale-recovery unlock owner cleanup proof
+
+- Added `StaleRecoveryUnlockClearsStaleOwner` to the focused frontier recovery
+  model so any stale-recovery unlock must remove the stale owner label from the
+  active frontier instead of preserving stale ownership after progress.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "StaleRecoveryUnlockClearsStaleOwner|frontier stale-recovery unlock owner cleanup|stale-recovery unlock owner cleanup" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`22` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 33 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`,
+    final temporal pass 1 min 32 sec, total 5 min 57 sec)
+
+## 2026-06-06 Sumeragi frontier payload-recovery ownership proof
+
+- Added `PayloadRecoveredHasLocalOwner` to the focused frontier recovery model
+  so any recovered-payload marker must keep the active payload local and its
+  recovery ownership local across later frontier transitions.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "PayloadRecoveredHasLocalOwner|frontier payload recovery ownership|payload-recovery ownership" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`21` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 35 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`)
+
+## 2026-06-06 Sumeragi frontier slot single-source state cleanup
+
+- Removed the exact-frontier `FrontierSlot` compatibility mirrors from the
+  production slot tracker. Slot identity now dereferences to the canonical
+  `FrontierCandidate`, while body presence, fetch timing, retry stage, and
+  pending requesters read from `FrontierBodyState`, `FrontierTimers`, and
+  `FrontierRepairState` directly.
+- Updated block-sync, proposal, QC, reschedule, and main-loop helpers/tests so
+  they mutate nested slot FSM state instead of syncing duplicate flat fields.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop/slot_tracker.rs crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/iroha_core/src/sumeragi/main_loop/block_sync.rs crates/iroha_core/src/sumeragi/main_loop/reschedule.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs`
+  - `CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_core --lib` (passed; finished
+    dev profile in 25m 44s)
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core frontier_body_next_due --lib -- --nocapture`
+    (`13` tests passed, `6948` filtered out)
+
+## 2026-06-06 Sumeragi frontier quorum-retransmit cleanup proof
+
+- Added `QuorumRetransmitClearsRescheduleWindow` to the focused frontier
+  recovery model so a completed quorum retransmit must clear the reschedule
+  timer while preserving vote-backed, payload-available evidence for
+  deterministic rotation, view-bound follow-through, or a later queued-vote
+  quorum completion.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "QuorumRetransmitClearsRescheduleWindow|frontier quorum-retransmit window cleanup" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`20` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 30 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`)
+
+## 2026-06-06 BFV RNS negacyclic root metadata
+
+- Added registered primitive `2n`-th negacyclic NTT roots for the RAM-LFE BFV
+  RNS modulus chain and bound them by index to the registered modulus limbs.
+- Registered RNS chain admission now validates the concrete root table before
+  exposing the production chain or digest, and direct chain callers can use
+  `validate_negacyclic_ntt_support` to preflight root availability.
+- Shared RNS chain validation now enforces bounded concrete negacyclic NTT root
+  support for every validated limb, so direct callers cannot validate a chain
+  that later falls back because the NTT root is unsupported.
+- RNS limb multiplication now uses the registered root table for production
+  limbs before falling back to deterministic root discovery for non-registered
+  structural limbs.
+- Generic primitive-root discovery is now candidate-bounded, so unsupported
+  caller-supplied RNS or packed-slot primes fall back or fail closed instead of
+  scanning unbounded candidate ranges.
+- The RNS chain now exposes an exact scale-round helper for centered RNS
+  product polynomials at the rounded BFV `t/q` boundary, and rounded RNS
+  ciphertext multiplication uses that helper for direct product components
+  plus a centered two-product sum helper for `c1` cross terms before
+  relinearization; product-sum coverage rejects aliasing before
+  scale-and-rounding.
+- Bounded bootstrap refresh now has direct and registered target-limb
+  basis-extension wrappers, and Soracloud bounded Bootstrap execution uses the
+  registered wrapper so Add, Multiply, packed RotateLeft, and Bootstrap all stay
+  on governed production RNS entry points.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto primitive_root_discovery_respects_candidate_limit --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto rns_modulus_chain_validation_requires_bounded_root_support --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto registered_rns_negacyclic_roots_are_bound_to_moduli --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto rns_modulus_chain_rejects_noncanonical_limb_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto rns_negacyclic_ntt_limb_products_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto registered_rns_modulus_chain_covers_ram_lfe_profile --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto rns_negacyclic_multiplication_falls_back_for_non_ntt_limb --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_packed_rotate_left_tracks_galois_schedule --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_bfv_multiplication_rns_exact_matches_scalar_raw_bridge --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto rns_product_sum_coverage_rejects_cross_term_aliasing --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto registered_rns_chain_bounded_noise_basis_extension_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto registered_rns_chain_bounded_noise_refresh_helpers_match_scalar_baseline --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bounded_noise_bootstrap_uses_registered_rns_basis_extension_refresh_bridge --lib -- --nocapture`
+    (`1` test passed; finished in 13m 02s after rebuilding the isolated target)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi frontier promotion-ready wrapper cleanup proof
+
+- Added `FuturePromotionReadyClearsCurrentWrapper` to the focused frontier
+  recovery model so a future-promotion-ready staging state must have cleared the
+  current pending wrapper, reset the quorum-reschedule timer, recorded the
+  future-reanchor progress event, and kept concrete future evidence as the
+  sole promotion source.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "FuturePromotionReadyClearsCurrentWrapper|frontier promotion-ready wrapper cleanup" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`19` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `bash scripts/formal/install_apalache.sh 0.52.2`
+    (restored the pinned local TLC/Apalache jar after the checkout's
+    `target/apalache/toolchains/v0.52.2` directory was absent)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 35 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`)
 
 ## 2026-06-06 Connect bridge SM2 private-output zeroization
 
@@ -222,6 +3534,34 @@ Last updated: 2026-06-06
 - Tightened the Core bootstrap-proof verifier helper so a bootstrap operation
   fails closed if the policy-bound statement digest is absent, even when
   upstream policy validation would normally reject that state earlier.
+- Tightened the Core refresh-transcript verifier helper to reject stale
+  bootstrap-key proof statement digests when a policy has no bootstrap budget,
+  matching the data-model admission invariant even for direct helper calls.
+- Re-audited every Rust `FheExecutionPolicyV1` construction site and the shared
+  JSON fixture, including the Torii provenance fixture path, so the new digest
+  field is covered outside the data-model library target as well.
+- Refreshed the block-header Norito golden bytes against the current default
+  confidential-feature digest after the active BFV policy-hash changes, keeping
+  the full data-model crate suite aligned with the digest committed by
+  `BlockHeader::new`.
+- Added fixture-level JSON adversarial coverage proving a decoded
+  bootstrap-capable policy with an omitted defaulted digest is rejected, a
+  zero-bootstrap policy with a stale digest is rejected, and a zero-bootstrap
+  decoded policy may omit the digest.
+- Extended the same adversarial coverage to the nested `execution_policy` inside
+  the FHE governance bundle, proving bundle admission rejects defaulted missing
+  digests and stale non-bootstrap digests.
+- Added Torii-side fixture coverage so the shared FHE execution-policy fixture
+  validates against its parameter-set fixture and rejects missing or stale
+  bootstrap-key proof statement digests before provenance payload signing uses
+  the policy.
+- Added binary/Norito adversarial fixture coverage proving decoded policies
+  reject missing and stale bootstrap-key proof statement digests after binary
+  roundtrip, while a decoded zero-bootstrap policy may omit the digest.
+- Extended the binary/Norito adversarial coverage to the nested
+  `execution_policy` inside the FHE governance bundle, proving bundle admission
+  rejects missing and stale decoded policy digests and accepts the decoded
+  zero-bootstrap/no-digest path.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_data_model fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest --lib -- --nocapture`
     (`1` test passed)
@@ -237,8 +3577,65 @@ Last updated: 2026-06-06
     (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_core soracloud_fhe_bootstrap_key_proof --lib -- --nocapture`
     (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-validate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_policy_rejects_wrong_refresh_transcript_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-validate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_policy --lib -- --nocapture`
+    (`3` tests passed)
   - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo clippy -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `rg -n "FheExecutionPolicyV1\\s*\\{" . -g "*.rs" -g "!target"`
+    (only the struct/impl plus data-model, fixture, Torii JSON-loader, and Core
+    test construction sites)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-validate cargo test -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+    (`72` tests passed; `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-adversarial CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_execution_policy_fixture_rejects_adversarial_bootstrap_digest_drift -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-adversarial CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-adversarial CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+    (`74` tests passed; `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-adversarial CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_execution_policy_norito_rejects_adversarial_bootstrap_digest_drift_after_decode -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-adversarial CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+    (`75` tests passed; `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-adversarial CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_governance_bundle_norito_rejects_adversarial_policy_digest_drift_after_decode -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-adversarial CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+    (`76` tests passed; `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-validate cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-torii-fixture CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_execution_policy_fixture_validates_bootstrap_digest_contract --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-prod-audit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --lib -- --nocapture`
+    (`1444` tests passed; `2` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-prod-audit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+    (`76` tests passed; `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-prod-audit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_policy --lib -- --nocapture`
+    (`3` tests passed; `6971` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-prod-audit CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_execution_policy_fixture_validates_bootstrap_digest_contract --lib -- --nocapture`
+    (`1` test passed; `2291` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-prod-audit CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+    (passed; finished dev profile in 9m 14s)
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs`
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json docs/source/soracloud/manifest_schemas*.md status.md`
+  - `rg -n 'FheExecutionPolicyV1 \{' crates --glob '*.rs'`
+    (only the struct/impl plus data-model, fixture, Torii JSON-loader, and Core
+    test construction sites)
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json docs/source/soracloud/manifest_schemas*.md status.md`
+    (no matches)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-validate cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-validate cargo test -p iroha_data_model --test norito_golden_scaffold -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-fixture-validate cargo test -p iroha_data_model -- --nocapture`
+    (crate suite passed; library target reported `1444` tests passed and `2`
+    ignored, Soracloud fixture target reported `72` tests passed and `1`
+    ignored, and doctests reported `4` passed)
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/tests/norito_golden_scaffold.rs crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/tests/norito_golden_scaffold.rs crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `git diff --cached --check -- status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" status.md crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_data_model/tests/norito_golden_scaffold.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_crypto/src/fhe_bfv.rs fixtures/soracloud/fhe_execution_policy_v1.json docs/source/soracloud/manifest_schemas*.md`
+    (no matches)
 
 ## 2026-06-06 Classic private-key export temporary zeroization
 
@@ -64727,7 +68124,7 @@ Last updated: 2026-06-06
   invariants for constructor mode/phase selection, block-created handling,
   body/vote/commit-QC evidence handling, authoritative supersede, fetch retry,
   quorum-timeout rebroadcast/view-change behavior, lag-window expiry,
-  explicit view advance, finalization, and compatibility-field synchronization.
+  explicit view advance, finalization, and nested slot-state consistency.
 - Extended `scripts/formal/sumeragi_tlc.sh` with `frontier-slot-tracker-fast`
   and `frontier-slot-tracker-bug-*` modes so the FSM model has an independent
   TLC exhaustive check alongside its Apalache modes.
@@ -64744,7 +68141,7 @@ Last updated: 2026-06-06
 - Strengthened `SumeragiFrontierSlotHelpersGate.tla` with decomposed TLC
   invariants for lag-start fallback, body-state predicates, local-vote
   locking, timeout-view selection, progress/lag timer updates, catch-up
-  marker state, and compatibility mirror synchronization.
+  marker state, and nested slot-state consistency.
 - Extended `scripts/formal/sumeragi_tlc.sh` with `frontier-slot-helpers-fast`
   and `frontier-slot-helpers-bug-*` modes so the helper has an independent TLC
   exhaustive check alongside its Apalache modes.
@@ -84044,14 +87441,14 @@ Last updated: 2026-06-06
   the small `FrontierSlot` helper methods in `main_loop/slot_tracker.rs`.
 - The gate pins lag-start fallback, body-state predicates, local-vote locking,
   timeout view selection, progress and lag timer updates, deep/passive catch-up
-  marker semantics, and compatibility mirror synchronization.
+  marker semantics, and nested slot-state consistency.
 - Wired `frontier-slot-helpers-fast` plus thirty-one
   `frontier-slot-helpers-bug-*` expected-failure modes into the local Apalache
   runner, CI scripts, formal README, CI README, and roadmap.
 - Validation passed:
   - direct pinned Apalache fast check for the new gate
   - direct pinned Apalache expected-failure spot checks for
-    `lag_uses_progress`, `mark_deep_skips_reason`, and `sync_skips_repair`
+    `lag_uses_progress`, `mark_deep_skips_reason`, and `nested_skips_repair`
   - `PATH="$PWD/target/java/jre-21/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-fast`
   - all thirty-one `frontier-slot-helpers-bug-*` expected-failure configs
     under the stricter invariant-error check
@@ -84160,7 +87557,7 @@ Last updated: 2026-06-06
   missing-body exact repair, body/vote/commit-QC observations, duplicate
   rebroadcast-guard preservation, bounded quorum-timeout fetch-before-rotate
   behavior, deep/passive catch-up side effects, explicit view advance,
-  finalization, and compatibility-field synchronization.
+  finalization, and nested slot-state consistency.
 - Wired `frontier-slot-tracker-fast` plus thirty-five
   `frontier-slot-tracker-bug-*` expected-failure modes into the local Apalache
   runner, CI scripts, formal README, CI README, and roadmap.
@@ -99419,9 +102816,9 @@ Last updated: 2026-06-06
   state and local voting-topology membership; rejects duplicate same-slot
   votes, unsuperseded same-height conflicts, older-branch quorum-completion
   escapes, locked same-height conflicts, missing locked payloads at the same or
-  older view, and non-extending locked-chain candidates; and preserves the
-  intended allowed cases for superseded conflicts, newer-view quorum
-  completion, newer-view missing-lock override, and locked-chain extension.
+  older view or same-height newer view, and non-extending locked-chain
+  candidates; and preserves the intended allowed cases for superseded conflicts,
+  newer-view quorum completion, and locked-chain extension.
 - Formal CI now runs `precommit-fast` plus expected-failure mutations for
   invalid-validation emission, observer/out-of-topology emission, duplicate
   emission, unsuperseded conflict emission, older-branch quorum-completion
@@ -99445,7 +102842,7 @@ Last updated: 2026-06-06
   - `cargo test -p iroha_core --lib precommit_vote_skips_when_block_conflicts_with_locked_chain -- --nocapture`
   - `cargo test -p iroha_core --lib precommit_vote_allows_when_block_extends_locked_chain -- --nocapture`
   - `cargo test -p iroha_core --lib emit_precommit_vote_requests_missing_locked_payload_before_skipping -- --nocapture`
-  - `cargo test -p iroha_core --lib emit_precommit_vote_allows_newer_view_when_locked_payload_missing -- --nocapture`
+  - `cargo test -p iroha_core --lib emit_precommit_vote_skips_newer_view_when_same_height_locked_payload_missing -- --nocapture`
   - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
   - `git diff --check`
   - `rg -n "[[:blank:]]+$" docs/formal/sumeragi/SumeragiPrecommitVoteGate.tla docs/formal/sumeragi/SumeragiPrecommitVoteGate_*.cfg` (no matches)

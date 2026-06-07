@@ -166,8 +166,7 @@ these SCR བཀྲམ་སྤེལ་གྱི་མངོན་གསལ་�
 - FHE ལག་ལེན་འཐབ་སྲིད་བྱུས།
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
-  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
-    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
+  - Bootstrap-capable policies (`max_bootstrap_count > 0`) must bind exactly the statement class used by their bootstrap key material: `bootstrap_key_zero_refresh_proof_statement_digest` for `RefreshOnlyV1`, or `full_bootstrap_material_proof_statement_digest` for `FullBootstrapV1`. Policies with `max_bootstrap_count = 0` must omit both fields.
   - ཚད་བཟུང་-གཞི་སྒྲིག་བཱའིན་ཌིང་འདི་ `(param_set, version)` གིས་མཐུན་སྒྲིག་འབད་དགོ།
   - `max_multiplication_depth` ཚད་བཟུང་གཞི་སྒྲིག་གཏིང་ཚད་ལས་བརྒལ་མི་ཆོག།
   - སྲིད་བྱུས་འཛུལ་ཞུགས་ཀྱིས་ `Proposed` ཡང་ན་ `Withdrawn` ཚད་བཟུང་གཞི་སྒྲིག་མི་ཚེ་འཁོར་རིམ་བཀག་ཆ་འབདཝ་ཨིན།

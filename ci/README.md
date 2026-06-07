@@ -1549,14 +1549,14 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   bounded mutation family.
   The Sumeragi suite also includes the frontier-slot-helpers slice for
   lag-start fallback, body-state predicates, local-vote locking, timeout-view
-  selection, progress/lag timer updates, catch-up markers, and compatibility
-  mirror synchronization; the TLC helper independently cross-checks the same
+  selection, progress/lag timer updates, catch-up markers, and nested
+  slot-state consistency; the TLC helper independently cross-checks the same
   bounded mutation family.
   The Sumeragi suite also includes the frontier-slot-tracker helper slice for
   constructor mode/phase selection, block-created and body/vote/QC evidence
   steps, authoritative supersede, fetch retry, quorum timeout, lag-expiry,
-  view-advance, finalization, and compatibility-sync behavior; the TLC helper
-  independently cross-checks the same bounded mutation family.
+  view-advance, finalization, and nested slot-state consistency; the TLC
+  helper independently cross-checks the same bounded mutation family.
   The Sumeragi suite also includes the slot-tracker-state helper slice for
   authoritative owner/frontier replacement, retained-branch refresh and seed
   priority, clear/remove-height behavior, and committed/above-height pruning;

@@ -467,7 +467,8 @@ fn write_manifest_signatures(
         .into());
     }
 
-    let signature = Signature::new(key_pair.private_key(), manifest_digest.as_bytes());
+    let signature = Signature::try_new(key_pair.private_key(), manifest_digest.as_bytes())
+        .map_err(|err| format!("failed to sign manifest digest: {err}"))?;
     let signature_hex = to_hex(signature.payload());
     let manifest_digest_hex = to_hex(manifest_digest.as_bytes());
 

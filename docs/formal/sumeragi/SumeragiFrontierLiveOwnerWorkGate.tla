@@ -3,7 +3,8 @@ EXTENDS Naturals
 
 (***************************************************************************
 A bounded abstract model for
-`frontier_slot_has_live_local_owner_work_for_view(...)`.
+`frontier_slot_has_live_local_owner_work_for_view(...)` and the
+`frontier_slot_conflicts_with_live_local_owner(...)` adapter.
 
 The helper protects a same-height frontier owner while local work or quorum
 evidence still makes that owner live. Finalized and passive-catchup slots are
@@ -12,7 +13,9 @@ commit inflight work, validation inflight work, observed slot commit QC,
 later-view competing quorum lockout, explicit locally-voted lock state, or
 exact local vote history can keep the owner live. A terminal pending wrapper
 without observed commit QC blocks only the local-lock and local-history paths,
-not independent validation or slot-QC evidence.
+not independent validation or slot-QC evidence. The conflict adapter then
+blocks only exact-height, different-hash handoffs while the tracked owner is
+still live.
 ***************************************************************************)
 
 CONSTANT
@@ -70,6 +73,15 @@ LocalVoteHistoryRemote == "local_vote_history_remote"
 
 NoOwnerWork == "no_owner_work"
 
+ConflictPendingLive == "conflict_pending_live"
+ConflictSlotCommitQc == "conflict_slot_commit_qc"
+ConflictCompetingQuorum == "conflict_competing_quorum"
+ConflictLocalHistory == "conflict_local_history"
+SameHashPendingLive == "same_hash_pending_live"
+WrongHeightPendingLive == "wrong_height_pending_live"
+NoWorkDifferentHash == "no_work_different_hash"
+PassiveDifferentHash == "passive_different_hash"
+
 Cases == {
   PendingLive,
   FinalizedWithPending,
@@ -107,6 +119,17 @@ Cases == {
   LocalVoteHistoryPrevote,
   LocalVoteHistoryRemote,
   NoOwnerWork
+}
+
+ConflictCases == {
+  ConflictPendingLive,
+  ConflictSlotCommitQc,
+  ConflictCompetingQuorum,
+  ConflictLocalHistory,
+  SameHashPendingLive,
+  WrongHeightPendingLive,
+  NoWorkDifferentHash,
+  PassiveDifferentHash
 }
 
 ModeRejectedCases == {FinalizedWithPending, PassiveWithLocalVote}
@@ -250,6 +273,55 @@ ImplementationResult(c) ==
       TRUE
     [] OTHER -> SpecResult(c)
 
+ConflictWorkCase(c) ==
+  CASE c = ConflictPendingLive -> PendingLive
+    [] c = ConflictSlotCommitQc -> SlotCommitQcObserved
+    [] c = ConflictCompetingQuorum -> CompetingDirectQuorumLater
+    [] c = ConflictLocalHistory -> LocalVoteHistoryNoPending
+    [] c = SameHashPendingLive -> PendingLive
+    [] c = WrongHeightPendingLive -> PendingLive
+    [] c = NoWorkDifferentHash -> NoOwnerWork
+    [] c = PassiveDifferentHash -> PassiveWithLocalVote
+    [] OTHER -> NoOwnerWork
+
+ConflictHeightMatches(c) ==
+  c # WrongHeightPendingLive
+
+ConflictHashDiffers(c) ==
+  c # SameHashPendingLive
+
+SpecConflictResult(c) ==
+  ConflictHeightMatches(c)
+    /\ ConflictHashDiffers(c)
+    /\ SpecResult(ConflictWorkCase(c))
+
+ImplementationConflictResult(c) ==
+  CASE Bug = "conflict_rejects_pending_live"
+       /\ c = ConflictPendingLive ->
+      FALSE
+    [] Bug = "conflict_rejects_slot_qc"
+       /\ c = ConflictSlotCommitQc ->
+      FALSE
+    [] Bug = "conflict_rejects_competing_quorum"
+       /\ c = ConflictCompetingQuorum ->
+      FALSE
+    [] Bug = "conflict_rejects_local_history"
+       /\ c = ConflictLocalHistory ->
+      FALSE
+    [] Bug = "conflict_same_hash_blocks"
+       /\ c = SameHashPendingLive ->
+      TRUE
+    [] Bug = "conflict_wrong_height_blocks"
+       /\ c = WrongHeightPendingLive ->
+      TRUE
+    [] Bug = "conflict_no_work_blocks"
+       /\ c = NoWorkDifferentHash ->
+      TRUE
+    [] Bug = "conflict_passive_blocks"
+       /\ c = PassiveDifferentHash ->
+      TRUE
+    [] OTHER -> SpecConflictResult(c)
+
 Bugs == {
   "none",
   "reject_pending_live",
@@ -285,7 +357,15 @@ Bugs == {
   "accept_local_history_wrong_block",
   "accept_local_history_prevote",
   "accept_local_history_remote",
-  "accept_no_work"
+  "accept_no_work",
+  "conflict_rejects_pending_live",
+  "conflict_rejects_slot_qc",
+  "conflict_rejects_competing_quorum",
+  "conflict_rejects_local_history",
+  "conflict_same_hash_blocks",
+  "conflict_wrong_height_blocks",
+  "conflict_no_work_blocks",
+  "conflict_passive_blocks"
 }
 
 Init ==
@@ -300,10 +380,18 @@ TypeInvariant ==
   /\ \A c \in Cases:
        /\ SpecResult(c) \in BOOLEAN
        /\ ImplementationResult(c) \in BOOLEAN
+  /\ \A c \in ConflictCases:
+       /\ ConflictWorkCase(c) \in Cases
+       /\ SpecConflictResult(c) \in BOOLEAN
+       /\ ImplementationConflictResult(c) \in BOOLEAN
 
 ResultsMatchSpec ==
   \A c \in Cases:
     ImplementationResult(c) = SpecResult(c)
+
+ConflictAdapterMatchesSpec ==
+  \A c \in ConflictCases:
+    ImplementationConflictResult(c) = SpecConflictResult(c)
 
 TerminalModesSuppressOwnerWork ==
   /\ ~ImplementationResult(FinalizedWithPending)
@@ -406,6 +494,34 @@ LocalVoteHistoryRejectionAnchors ==
   /\ ~ImplementationResult(LocalVoteHistoryRemote)
   /\ ~ImplementationResult(NoOwnerWork)
 
+ConflictAdapterBlocksLiveDifferentHash ==
+  /\ ImplementationConflictResult(ConflictPendingLive)
+  /\ ImplementationConflictResult(ConflictSlotCommitQc)
+  /\ ImplementationConflictResult(ConflictCompetingQuorum)
+  /\ ImplementationConflictResult(ConflictLocalHistory)
+
+ConflictAdapterRequiresExactSlotMismatch ==
+  /\ ~ImplementationConflictResult(SameHashPendingLive)
+  /\ ~ImplementationConflictResult(WrongHeightPendingLive)
+
+ConflictAdapterRequiresLiveOwnerWork ==
+  /\ ~ImplementationConflictResult(NoWorkDifferentHash)
+  /\ ~ImplementationConflictResult(PassiveDifferentHash)
+
+ConflictAdapterAnchors ==
+  /\ ConflictWorkCase(ConflictPendingLive) = PendingLive
+  /\ ConflictWorkCase(ConflictSlotCommitQc) = SlotCommitQcObserved
+  /\ ConflictWorkCase(ConflictCompetingQuorum) = CompetingDirectQuorumLater
+  /\ ConflictWorkCase(ConflictLocalHistory) = LocalVoteHistoryNoPending
+  /\ ImplementationConflictResult(ConflictPendingLive)
+  /\ ImplementationConflictResult(ConflictSlotCommitQc)
+  /\ ImplementationConflictResult(ConflictCompetingQuorum)
+  /\ ImplementationConflictResult(ConflictLocalHistory)
+  /\ ~ImplementationConflictResult(SameHashPendingLive)
+  /\ ~ImplementationConflictResult(WrongHeightPendingLive)
+  /\ ~ImplementationConflictResult(NoWorkDifferentHash)
+  /\ ~ImplementationConflictResult(PassiveDifferentHash)
+
 NoBugInvariant ==
   /\ ResultsMatchSpec
   /\ TerminalModesSuppressOwnerWork
@@ -422,6 +538,11 @@ NoBugInvariant ==
   /\ CompetingQuorumRejectionAnchors
   /\ FallthroughPreservationAnchors
   /\ LocalVoteHistoryRejectionAnchors
+  /\ ConflictAdapterMatchesSpec
+  /\ ConflictAdapterBlocksLiveDifferentHash
+  /\ ConflictAdapterRequiresExactSlotMismatch
+  /\ ConflictAdapterRequiresLiveOwnerWork
+  /\ ConflictAdapterAnchors
 
 SafetyFast == NoBugInvariant
 

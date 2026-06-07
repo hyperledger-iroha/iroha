@@ -263,7 +263,7 @@ impl FrontierSlot {
         } else {
             SlotOwnerKind::ProposalLed
         };
-        let mut slot = Self {
+        Self {
             height,
             active_view: view,
             owner_generation: 0,

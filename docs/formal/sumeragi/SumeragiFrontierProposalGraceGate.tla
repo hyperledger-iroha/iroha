@@ -76,16 +76,25 @@ WorldTxLimit(c) ==
     [] c = "assembly_full_batch_grace" -> 128
     [] c = "assembly_two_batches" -> 256
     [] c = "assembly_capped_large" -> 512
+    [] c = "full_config_cap_reduces_assembly" -> 512
+    [] c = "full_world_cap_reduces_assembly" -> 128
     [] OTHER -> 64
 
 \* @type: Str => Bool;
 ConfigTxCapPresent(c) ==
-  c \in {"tx_config_caps_world_limit", "tx_world_caps_config_limit"}
+  c \in {
+    "tx_config_caps_world_limit",
+    "tx_world_caps_config_limit",
+    "full_config_cap_reduces_assembly",
+    "full_world_cap_reduces_assembly"
+  }
 
 \* @type: Str => Int;
 ConfigTxCap(c) ==
   CASE c = "tx_config_caps_world_limit" -> 50
     [] c = "tx_world_caps_config_limit" -> 200
+    [] c = "full_config_cap_reduces_assembly" -> 128
+    [] c = "full_world_cap_reduces_assembly" -> 512
     [] OTHER -> 0
 
 \* @type: Str => Int;
@@ -111,6 +120,10 @@ SpecAssemblyBatches(c) ==
   CASE c = "assembly_full_batch_grace" -> 1
     [] c = "assembly_two_batches" -> 2
     [] c = "assembly_capped_large" -> 4
+    [] c \in {
+         "full_config_cap_reduces_assembly",
+         "full_world_cap_reduces_assembly"
+       } -> 1
     [] OTHER -> 1
 
 \* @type: Str => Int;
@@ -118,7 +131,9 @@ SpecAssemblyFullBatchGrace(c) ==
   IF c \in {
     "assembly_full_batch_grace",
     "assembly_two_batches",
-    "assembly_capped_large"
+    "assembly_capped_large",
+    "full_config_cap_reduces_assembly",
+    "full_world_cap_reduces_assembly"
   }
   THEN 1
   ELSE 0
@@ -238,7 +253,11 @@ ActualFullBase(c) ==
 
 \* @type: Str => Int;
 ActualAssemblyBatches(c) ==
-  SpecAssemblyBatches(c)
+  CASE Bug = "full_ignores_config_tx_cap"
+       /\ c = "full_config_cap_reduces_assembly" -> 4
+    [] Bug = "full_ignores_world_tx_limit"
+       /\ c = "full_world_cap_reduces_assembly" -> 4
+    [] OTHER -> SpecAssemblyBatches(c)
 
 \* @type: Str => Int;
 ActualAssemblyFullBatchGrace(c) ==
@@ -375,6 +394,8 @@ TypeInvariant ==
        "full_omits_base_floor",
        "full_omits_ingress_grace",
        "full_uses_min_ingress_cooldown",
+       "full_ignores_config_tx_cap",
+       "full_ignores_world_tx_limit",
        "initial_ignores_da_gate",
        "initial_ignores_sla_gate_for_proposal",
        "initial_omits_active_gap_cap",
@@ -441,6 +462,8 @@ TxCountAnchors ==
   /\ SpecTxCount("tx_world_caps_config_limit") = 50
   /\ SpecTxCount("tx_zero_floor") = 1
   /\ SpecTxCount("tx_no_config_world_limit") = 64
+  /\ SpecTxCount("full_config_cap_reduces_assembly") = 128
+  /\ SpecTxCount("full_world_cap_reduces_assembly") = 128
 
 AssemblyAnchors ==
   /\ SpecAssemblyMultiplier("assembly_one_batch") = 1
@@ -449,6 +472,10 @@ AssemblyAnchors ==
   /\ SpecAssemblyMultiplier("assembly_capped_large") = MaxAssemblyMultiplier
   /\ SpecAssemblyWindow("assembly_full_batch_grace") = 800
   /\ SpecAssemblyWindow("assembly_capped_large") = 1600
+  /\ SpecAssemblyMultiplier("full_config_cap_reduces_assembly") = 2
+  /\ SpecAssemblyMultiplier("full_world_cap_reduces_assembly") = 2
+  /\ SpecAssemblyWindow("full_config_cap_reduces_assembly") = 800
+  /\ SpecAssemblyWindow("full_world_cap_reduces_assembly") = 800
 
 IngressAnchors ==
   /\ SpecIngressDrainGrace("ingress_idle_floor") = IngressIdleFloor
@@ -458,6 +485,14 @@ FullProposalGraceAnchors ==
   /\ SpecFullProposalGrace("full_zero_quorum_floor") = 751
   /\ SpecFullProposalGrace("full_uses_ingress") = 1150
   /\ SpecFullProposalGrace("full_active_uses_cooldown") = 1300
+  /\ SpecFullProposalGrace("full_config_cap_reduces_assembly") = 1550
+  /\ SpecFullProposalGrace("full_world_cap_reduces_assembly") = 1550
+
+FullProposalTxBudgetMatchesSpec ==
+  /\ ActualFullProposalGrace("full_config_cap_reduces_assembly") =
+       SpecFullProposalGrace("full_config_cap_reduces_assembly")
+  /\ ActualFullProposalGrace("full_world_cap_reduces_assembly") =
+       SpecFullProposalGrace("full_world_cap_reduces_assembly")
 
 InitialFrontierGraceAnchors ==
   /\ SpecInitialFrontierProposalGrace("initial_da_sla_uses_proposal") = 1150
@@ -490,6 +525,7 @@ SafetyFast ==
   /\ AssemblyAnchors
   /\ IngressAnchors
   /\ FullProposalGraceAnchors
+  /\ FullProposalTxBudgetMatchesSpec
   /\ InitialFrontierGraceAnchors
   /\ MissingQcAnchors
   /\ SaturatingArithmeticAnchors
@@ -532,6 +568,14 @@ BugFullOmitsIngressGrace ==
 BugFullUsesMinIngressCooldown ==
   ActualFullProposalGrace("full_active_uses_cooldown") =
     SpecFullProposalGrace("full_active_uses_cooldown")
+
+BugFullIgnoresConfigTxCap ==
+  ActualFullProposalGrace("full_config_cap_reduces_assembly") =
+    SpecFullProposalGrace("full_config_cap_reduces_assembly")
+
+BugFullIgnoresWorldTxLimit ==
+  ActualFullProposalGrace("full_world_cap_reduces_assembly") =
+    SpecFullProposalGrace("full_world_cap_reduces_assembly")
 
 BugInitialIgnoresDaGate ==
   ActualInitialFrontierProposalGrace("initial_no_da_uses_active_gap") =

@@ -29209,6 +29209,128 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_aggregation_append_verifier_slice_preflight_metadata_binding_rejects_splices()
+     {
+        let previous_preflight =
+            recursive_append_synthetic_preflight(2, b"append-verifier-slice-previous-light");
+        let current_preflight =
+            recursive_append_synthetic_preflight(2, b"append-verifier-slice-current-light");
+        let mut values = recursive_one_hop_instance_values_with_preflight(&current_preflight);
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX,
+            &previous_preflight.params_fingerprint,
+        );
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 2;
+        values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 2;
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX,
+            &fixed_bytes(b"append-verifier-slice-transition-profile"),
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX,
+            &fixed_bytes(b"append-verifier-slice-opening-preflight"),
+        );
+        set_recursive_one_hop_digest_limbs(
+            &mut values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX,
+            &fixed_bytes(b"append-verifier-slice-append-boundary"),
+        );
+        set_recursive_one_hop_scalar_projection_digest_limbs(&mut values, Scalar::from(7));
+        let semantic = recursive_one_hop_semantic(values.clone());
+
+        pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            2,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::validate_append_preflight_metadata_binding(
+            &semantic,
+            &previous_preflight,
+            &current_preflight,
+        )
+        .expect("append slice accepts synthetic production preflight metadata");
+
+        let mut forged_previous_count = previous_preflight;
+        forged_previous_count.proof_count = 2;
+        let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            2,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::validate_append_preflight_metadata_binding(
+            &semantic,
+            &forged_previous_count,
+            &current_preflight,
+        )
+        .err()
+        .expect("append slice must reject previous preflight over-count");
+        assert!(
+            err.contains("previous recursive proof preflight requires exactly one witness"),
+            "unexpected previous-count error: {err}"
+        );
+
+        let mut forged_current_params = current_preflight;
+        forged_current_params.params_fingerprint[0] ^= 0x01;
+        let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            2,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::validate_append_preflight_metadata_binding(
+            &semantic,
+            &previous_preflight,
+            &forged_current_params,
+        )
+        .err()
+        .expect("append slice must reject current verifier-context splice");
+        assert!(
+            err.contains("verifier parameter fingerprint mismatch"),
+            "unexpected current params error: {err}"
+        );
+
+        let mut one_hop_values = values.clone();
+        one_hop_values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 1;
+        one_hop_values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 1;
+        let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            2,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::validate_append_preflight_metadata_binding(
+            &recursive_one_hop_semantic(one_hop_values),
+            &previous_preflight,
+            &current_preflight,
+        )
+        .err()
+        .expect("append slice must reject one-hop public profile");
+        assert!(
+            err.contains("hop count at least 2"),
+            "unexpected one-hop append profile error: {err}"
+        );
+
+        let mut missing_boundary = values;
+        for offset in 0..4 {
+            missing_boundary.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX + offset] = 0;
+        }
+        let err = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
+            2,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+            KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+        >::validate_append_preflight_metadata_binding(
+            &recursive_one_hop_semantic(missing_boundary),
+            &previous_preflight,
+            &current_preflight,
+        )
+        .err()
+        .expect("append slice must reject missing append boundary public input");
+        assert!(
+            err.contains("append-boundary digest must be non-zero"),
+            "unexpected missing boundary error: {err}"
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy production append recursive verifier-slice witness materialization; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_append_verifier_slice_builder_accepts_two_opening_profile() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (previous_params, previous_witness) =
@@ -29273,6 +29395,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy production append recursive verifier-slice witness materialization; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_append_verifier_slice_builder_rejects_adversarial_profile_splices()
      {
         run_vesta_affine_ipa_verifier_test(|| {

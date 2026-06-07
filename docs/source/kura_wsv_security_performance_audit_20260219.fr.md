@@ -160,8 +160,8 @@ Hors de portée : caisses sans rapport et réexécutions de référence du syst
 ### Production WSV
 
 - Couverture existante :
-  - comportement de repli de contention : `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - sécurité de l'ordre de verrouillage autour du backend à plusieurs niveaux : `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - comportement de repli de contention : `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - sécurité de l'ordre de verrouillage autour du backend à plusieurs niveaux : `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Lacunes :
   - pas de test de contention quantitatif affirmant un temps de maintien de commit maximum acceptable sous des engagements mondiaux lourds
   - pas de test de régression pour une manipulation sans panique si les invariants d'avancement du curseur DA se cassent de manière inattendue
@@ -222,7 +222,7 @@ Hors de portée : caisses sans rapport et réexécutions de référence du syst
 ## Ajouts de tests suggérés1. `kura_writer_io_failures_do_not_panic` (unité, injection défaut)
 2. `kura_budget_check_scales_with_pending_depth` (régression des performances)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (intégration/perf)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (régression des conflits)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (régression des conflits)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (résilience)
 6. `mock_wsv_admin_alias_requires_permissions` (régression de sécurité)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (garde DoS)

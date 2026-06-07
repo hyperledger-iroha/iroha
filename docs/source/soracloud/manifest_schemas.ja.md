@@ -166,8 +166,7 @@ Rust の定義は `crates/iroha_data_model/src/soracloud.rs` にあります。
 - FHE 実行ポリシー:
   - `max_plaintext_bytes <= max_ciphertext_bytes`。
   - `max_output_ciphertexts <= max_input_ciphertexts`。
-  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
-    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
+  - Bootstrap-capable policies (`max_bootstrap_count > 0`) must bind exactly the statement class used by their bootstrap key material: `bootstrap_key_zero_refresh_proof_statement_digest` for `RefreshOnlyV1`, or `full_bootstrap_material_proof_statement_digest` for `FullBootstrapV1`. Policies with `max_bootstrap_count = 0` must omit both fields.
   - パラメータセットバインディングは `(param_set, version)` までに一致する必要があります。
   - `max_multiplication_depth` はパラメータセットの深さを超えてはなりません。
   - ポリシーアドミッションは、`Proposed` または `Withdrawn` パラメータセットのライフサイクルを拒否します。

@@ -2862,6 +2862,22 @@ final class ToriiClientTests: XCTestCase {
         rotationEvaluationKey["rotation_key_count"] = 99
         rotationCountDrift["evaluation_key_bundle"] = rotationEvaluationKey
         XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(rotationCountDrift))
+
+        var missingFullBootstrapMaterial = try object(loadSharedBfvFixture(), "operation_vectors")
+        missingFullBootstrapMaterial.removeValue(forKey: "full_bootstrap_material")
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(missingFullBootstrapMaterial))
+
+        var verifierCommitmentDrift = try object(loadSharedBfvFixture(), "operation_vectors")
+        var driftedMaterial = try object(verifierCommitmentDrift, "full_bootstrap_material")
+        driftedMaterial["vk_commitment_hex"] = try string(driftedMaterial, "expected_statement_digest_hex")
+        verifierCommitmentDrift["full_bootstrap_material"] = driftedMaterial
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(verifierCommitmentDrift))
+
+        var noncanonicalMaterialDigest = try object(loadSharedBfvFixture(), "operation_vectors")
+        var noncanonicalMaterial = try object(noncanonicalMaterialDigest, "full_bootstrap_material")
+        noncanonicalMaterial["expected_material_digest_hex"] = try string(noncanonicalMaterial, "expected_material_digest_hex").uppercased()
+        noncanonicalMaterialDigest["full_bootstrap_material"] = noncanonicalMaterial
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(noncanonicalMaterialDigest))
     }
 
     func testIdentifierBfvEnvelopeBuilderMatchesLiveJsVector() throws {
@@ -3322,6 +3338,7 @@ final class ToriiClientTests: XCTestCase {
         if roundRefreshes.count > 1 {
             XCTAssertNotEqual(try string(roundRefreshes[0], "expected_refresh_sha256"), try string(roundRefreshes[1], "expected_refresh_sha256"))
         }
+        try assertBfvFullBootstrapMaterialFixture(operationVectors)
         let bootstrapRefreshVectors = try objectArray(operationVectors, "bootstrap_refresh_vectors")
         XCTAssertFalse(bootstrapRefreshVectors.isEmpty)
         for vector in bootstrapRefreshVectors {
@@ -3428,6 +3445,54 @@ final class ToriiClientTests: XCTestCase {
         try assertBfvComponentDigest("packed RotateLeft schedule c1", try string(packedRotateScheduleComponents, "c1_sha256"), seen: &componentDigests)
     }
 
+    private func assertBfvFullBootstrapMaterialFixture(_ operationVectors: [String: Any]) throws {
+        let material = try object(operationVectors, "full_bootstrap_material")
+        try assertBfvEqual(try string(material, "circuit_id"), "iroha_bfv_full_bootstrap_v1", "full-bootstrap circuit id")
+        try assertBfvEqual(try int(material, "max_bootstrap_depth"), 1, "full-bootstrap max depth")
+
+        let digestFields = [
+            "parameter_digest_hex",
+            "rns_modulus_chain_digest_hex",
+            "key_switch_decomposition_chain_digest_hex",
+            "coefficient_to_slot_key_digest_hex",
+            "slot_to_coefficient_key_digest_hex",
+            "blind_rotation_key_digest_hex",
+            "sample_extraction_key_digest_hex",
+            "accumulator_digest_hex",
+            "proof_public_input_schema_digest_hex",
+            "prover_key_digest_hex",
+            "verifier_key_digest_hex",
+            "vk_commitment_hex",
+            "expected_material_digest_hex",
+            "expected_statement_digest_hex",
+        ]
+        let digestValues = try digestFields.map { field -> String in
+            let value = try string(material, field)
+            try requireBfvLowerDigest("full-bootstrap material \(field)", value)
+            return value
+        }
+        try assertBfvEqual(
+            try string(try object(operationVectors, "rns_modulus_chain"), "expected_digest_hex"),
+            try string(material, "rns_modulus_chain_digest_hex"),
+            "full-bootstrap RNS digest"
+        )
+        try assertBfvEqual(
+            try string(material, "verifier_key_digest_hex"),
+            try string(material, "vk_commitment_hex"),
+            "full-bootstrap verifier-key commitment"
+        )
+        var uniqueDigestValues: [String] = []
+        for (field, value) in zip(digestFields, digestValues) where field != "vk_commitment_hex" {
+            uniqueDigestValues.append(value)
+        }
+        try assertBfvEqual(Set(uniqueDigestValues).count, uniqueDigestValues.count, "full-bootstrap material digest roles")
+        XCTAssertNotEqual(
+            try string(material, "expected_material_digest_hex"),
+            try string(material, "expected_statement_digest_hex"),
+            "full-bootstrap material and statement digests must differ"
+        )
+    }
+
     private func assertBfvEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) throws {
         guard actual == expected else {
             throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) mismatch"])
@@ -3509,6 +3574,18 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(value.count, 64, "\(label) must be 32-byte hex")
         XCTAssertNil(value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789abcdef").inverted), "\(label) must be lowercase hex")
         XCTAssertNotEqual(value, String(repeating: "0", count: 64), "\(label) must not be zero")
+    }
+
+    private func requireBfvLowerDigest(_ label: String, _ value: String) throws {
+        guard value.count == 64 else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) must be 32-byte hex"])
+        }
+        guard value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789abcdef").inverted) == nil else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) must be lowercase hex"])
+        }
+        guard value != String(repeating: "0", count: 64) else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) must not be zero"])
+        }
     }
 
     private func bool(_ root: [String: Any], _ key: String) throws -> Bool {

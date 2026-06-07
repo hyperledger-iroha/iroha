@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -23,8 +23,10 @@ and completed history lives in [`status.md`](./status.md).
   do not advertise support for Substrate/Polkadot-family networks, including
   Kusama, Polkadot, SORA Kusama, SORA Polkadot, or SORA2, until governance
   explicitly re-opens that scope. Existing Substrate/SORA2 notes and evidence
-  helpers are diagnostic/backlog material only. Complete unsupported diagnostic
-  rows in public release bundles still have to pass canonical summary-schema
+  helpers are diagnostic/backlog material only, and retained Substrate-family
+  source-adapter transition checks must remain fail-closed diagnostics rather
+  than launch-readiness signals. Complete unsupported diagnostic rows in public
+  release bundles still have to pass canonical summary-schema
   checks and carry only the explicit unsupported launch-scope blocker. The
   strict release verifier now also scans the Rust SCCP constants, all-lanes
   evidence generator, and readiness reporter for the same supported-domain set,
@@ -37,10 +39,27 @@ and completed history lives in [`status.md`](./status.md).
   must not advertise SORA2, SORA Kusama, SORA Polkadot, or generic
   Substrate/Polkadot lanes while they remain outside launch scope. Optional
   runtime SCALE capability fields must also stay absent from public discovery
-  until that launch scope is explicitly re-opened. Torii configured all-lanes
-  launch readiness must also iterate only that supported-domain set, so
-  Substrate-family diagnostic records cannot satisfy or block production launch
-  checks while they remain out of scope.
+  until that launch scope is explicitly re-opened, and the direct Torii runtime
+  SCALE export path must reject unsupported launch domains even when the cached
+  SORA-origin bundle carries valid Nexus finality. Core SCCP local-admission
+  submission packaging must also require the same supported-domain inventory, so
+  complete Substrate-family source material and source-adapter deployment
+  evidence cannot emit a SORA `local_admission` package while the lane is
+  unsupported. Torii typed proof artifact, normalized proof job, and bridge proof
+  conversion surfaces must also reject unsupported launch domains even when
+  allow-unready diagnostics are enabled, so diagnostic Substrate-family bundles
+  cannot be repackaged as production proof outputs. Core source-chain proof
+  production verifier APIs must also require a supported launch remote domain, so
+  complete Substrate-family source material and matching source-adapter
+  deployment evidence remains diagnostic-only and cannot be extracted through a
+  direct `*_production*` verifier while the launch scope is closed. Those
+  generic production source-proof verifier APIs must also remain inbound-only:
+  remote -> remote source-adapter proofs may stay structurally inspectable for
+  future target-specific profiles, but they cannot be extracted as production
+  proofs unless the target is SORA. Torii configured all-lanes launch readiness
+  must also iterate only that supported-domain set, so Substrate-family
+  diagnostic records cannot satisfy or block production launch checks while they
+  remain out of scope.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
@@ -641,8 +660,9 @@ and completed history lives in [`status.md`](./status.md).
   states. Proof-token minting now also reports token-id RNG failures through a
   labelled `MintError::RandomBytes` before blinded digest or signature material
   is produced. Proof-token base64 header encoding/decoding now uses the `base64`
-  crate's checked no-alloc slice helpers instead of manual capacity arithmetic
-  and panic-only buffer assertions. The SoraFS paid-pin validation corridor is
+  crate's checked no-alloc slice helpers with invariant-sized buffers, and the
+  encoder no longer falls back to an empty header on internal encode or UTF-8
+  conversion failures. The SoraFS paid-pin validation corridor is
   green across data-model SoraFS/DA-pin, Core pin-registry, Torii
   storage-pin/discovery, and gateway conformance filters as of 2026-06-04;
   Torii DA commitment proof/verify routes are now also pinned with committed
@@ -669,9 +689,11 @@ and completed history lives in [`status.md`](./status.md).
   nonce offset conversion using the same `Error::KeyGen` route, and GOST
   deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
-  components while preserving the previous contiguous seed transcript;
+  components while preserving the previous contiguous seed transcript, and
+  digest-length mismatches return `Error::Signing` instead of panicking;
   Ed25519 and secp256k1 now expose checked `try_keypair` paths, and top-level
-  `KeyPair::try_random_with_algorithm` routes OS-backed Ed25519 seed bytes and
+  `KeyPair::try_from_seed` routes their seeded branches through those helpers
+  while `KeyPair::try_random_with_algorithm` routes OS-backed Ed25519 seed bytes and
   secp256k1 candidate scalar bytes through `OsRng::try_fill_bytes` so
   entropy-source failures or bounded scalar-sampling exhaustion surface as
   `Error::KeyGen` instead of the infallible compatibility RNG adapter;
@@ -681,7 +703,44 @@ and completed history lives in [`status.md`](./status.md).
   fallible error surfaces instead of the infallible compatibility adapter;
   Connect Norito bridge C/Java keypair-from-seed helpers and the Swift parity
   regeneration utility now use `KeyPair::try_from_seed`, returning existing
-  bridge/key-derivation errors instead of panic-only seed expansion;
+  bridge/key-derivation errors instead of panic-only seed expansion, while the
+  bridge's generic C/JNI detached-signing helpers route through
+  `Signature::try_new` and the secp256k1 signing entrypoint calls `try_sign` so
+  backend signing failures return existing bridge errors without first
+  collapsing to an empty signature; Torii DA ingest receipt construction now
+  encodes unsigned receipts and signs them through fallible routes so receipt
+  encoding/signing failures return HTTP errors instead of unwinding; Torii
+  operator signed-header generation now uses `Signature::try_new` and returns
+  the operator-signature HTTP error shape on signing backend failures; SoraFS
+  gateway PoR proof signing now uses `Signature::try_new` and propagates
+  backend failures through the gateway proof-builder error path; DA SDK/CLI
+  ingest request builders now return errors from `Signature::try_new` instead
+  of panicking on payload-signing backend failures; Iroha client account and
+  operator signed-request builders now propagate `Signature::try_new` failures
+  through their existing `eyre` result paths; JS host crypto, Soracloud
+  provenance, and alias-proof fixture signers now propagate `Signature::try_new`
+  failures through N-API errors; the Connect Soracloud upload request signer
+  now returns command errors from `Signature::try_new` for init/finalize
+  provenance signatures; SoraFS Taikai cache admission envelopes and gossip
+  wrappers now return `CacheAdmissionError::Signing` from `Signature::try_new`
+  instead of unwinding on backend signing failures; the SoraFS fixture manifest
+  exporter, CLI domain-endorsement preparation, and SoraFS repair worker
+  claim/complete/fail payload signing now also propagate
+  `Signature::try_new`/`SignatureOf::try_new` failures through command errors;
+  transaction submission receipts now expose
+  `TransactionSubmissionReceipt::try_sign` and Torii submission responses use it
+  to return formatted internal errors on receipt-signing backend failures;
+  the wired Torii Offline Notes issuer now signs JSON payloads and
+  key-certificate material through `Signature::try_new`, returning contextual
+  internal query errors on backend signing failures while the currently unwired
+  v2 issuer source mirrors the same helper shape; streaming `KeyUpdate` frame
+  construction now maps `Signature::try_new` failures into
+  `HandshakeError::Signing` instead of unwinding during local control-plane
+  signing; P2P versioned handshake hello signing now uses
+  `Signature::try_new` and propagates backend failures through the existing
+  handshake `Result` path; embedded `irohad` Soracloud runtime model-host
+  heartbeat and Inrou host advert provenance signing now shares a fallible
+  `Signature::try_new` helper with contextual `eyre` errors;
   GOST random scalar sampling and per-signature extra entropy now also use
   checked OS fills, while both BLS backends derive random keys from checked OS
   seed material and the default w3f backend seeds its key-splitting/signing RNGs
@@ -762,7 +821,11 @@ and completed history lives in [`status.md`](./status.md).
   reconstruction from secret material. SoraNet PQ labeled-HKDF derivation now
   streams the namespace, separator, label, separator, and context components
   through `expand_multi_info`, preserving the previous contiguous info layout
-  without manual capacity arithmetic.
+  without manual capacity arithmetic. Session-key zeroization debug telemetry
+  now recovers poisoned mutex state before recording or reading scrubbed bytes,
+  and Torii identifier RAM-LFE receipt/output-opening signing uses
+  `SignatureOf::try_new` so attestation signing failures surface as
+  `IdentifierResolutionError::Signing` instead of unwinding.
   BLS same-message aggregate and preaggregated verification now reject
   duplicate public keys and public-key aggregates that cancel to the identity
   before verification, and the public PoP-gated same-message wrappers reject
@@ -2065,7 +2128,11 @@ and completed history lives in [`status.md`](./status.md).
 - Keep Ethereum mainnet source-adapter transition chains period-contiguous:
   sync-committee updates now advance exactly one mainnet period at a time, using
   the consensus `32 * 256` slot period geometry, so skipped-period transition
-  evidence cannot satisfy the ETH source proof verifier. The Rust helper API now
+  evidence cannot satisfy the ETH source proof verifier. The source-adapter
+  shape gate also requires non-empty transition chains to be internally
+  adjacent by committee hash and sync period, no later than the adapter beacon
+  slot, and terminal at the adapter's active sync-committee root and sync
+  period before BLS transition-chain verification runs. The Rust helper API now
   exposes Ethereum-mainnet-specific source-adapter deployment and
   deployment-bound source-proof verification helpers so the first-lane
   ETH -> SORA path does not rely on generic EVM-family plumbing.
@@ -2367,6 +2434,8 @@ and completed history lives in [`status.md`](./status.md).
 	  Byzantine commit-vote pending-branch missing-evidence matching,
 	  Byzantine commit-vote pending-step commit-artifact preservation,
 	  Byzantine commit-vote pending-step commit-vote handoff preservation,
+	  pending protocol GST preservation,
+	  delivered RBC progress-gate closure,
 	  complete-only commit evidence,
   pre-commit stale commit-vote reset across view changes,
   pre-prepare stale prepare-vote reset across view changes,
@@ -2385,6 +2454,8 @@ and completed history lives in [`status.md`](./status.md).
   finality-source commit-artifact change matching,
   finality-source live commit-gate crossing,
   finality-source post-commit progress quiescence,
+  finality-source GST preservation,
+  finality-source GST-only remaining gate,
   finality-source commit-certificate witness installation,
   finality-source commit-certificate witness-change matching,
   finality-source commit-view witness-change matching,
@@ -2392,11 +2463,18 @@ and completed history lives in [`status.md`](./status.md).
   finality-source NewView handoff isolation,
   finality-source current-view commit witness exactness,
   committed-phase current-view commit witness exactness,
+  committed-phase GST preservation,
+  committed-phase GST-only remaining gate,
   commit-artifact exact-source committed-delivery completion,
   commit-artifact current-view witness exactness,
+  commit-artifact GST preservation,
   commit-certificate exact-source committed-delivery completion,
+  commit-certificate GST preservation,
   commit-view exact-source committed-delivery completion,
+  commit-view GST preservation,
   finality-latch exact-source committed-delivery completion,
+  finality-latch GST preservation,
+  finality-latch GST-only remaining gate,
   committed-phase exact-source committed-delivery completion,
   live commit-vote prepare-quorum gating,
   commit-evidence roster-budget boundedness,
@@ -2410,22 +2488,55 @@ and completed history lives in [`status.md`](./status.md).
   post-finality progress-action quiescence,
   honest/fault roster-budgeted vote counters, RBC delivery stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
+  frontier committed source future-stage isolation,
+  frontier view-bound drop future-stage isolation,
+  frontier zero-evidence drop future-stage isolation,
+  frontier zero-evidence staged-future expected-failure mutation,
+  frontier zero-evidence drop consensus-evidence absence,
   frontier future-promotion fresh second-slot installation,
   frontier terminal outcome exclusivity,
+  frontier rotated source future-stage isolation,
+  frontier promotion-ready rotation isolation,
+  frontier promotion-ready active-marker cleanup,
+  frontier promotion-ready active-marker expected-failure mutation,
+  frontier promotion-ready rotated-marker expected-failure mutation,
+  frontier rotated terminal retransmit evidence,
   frontier promotion-ready wrapper cleanup,
+  frontier quorum-retransmit window cleanup,
+  frontier quorum-retransmit window cleanup expected-failure mutation,
+  frontier payload recovery ownership,
+  frontier payload recovery ownership expected-failure mutation,
+  frontier stale-recovery unlock owner cleanup,
+  frontier stale-recovery unlock owner cleanup expected-failure mutation,
+  frontier view-bound drop retransmit evidence,
+  frontier view-bound drop retransmit evidence expected-failure mutation,
   validation redrive labels, raw QC signer-bitmap population counting, and
-  signer-index normalization, precommit vote-progress counting, commit-QC
+  signer-index normalization, precommit vote-progress counting, precommit
+  locked-payload vote gating, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record
   admission, validation ownership cleanup, stable worker-loop stage helpers,
   worker tick-gap scheduling, vNext performance config conversion,
   pending-block validation worker config derivation, commit-worker channel
   capacity normalization, slow commit-stage timing threshold detection,
-  commit-inflight timeout reporting, post-commit pacemaker kickstart gating,
-  idle-view proposal budget preservation, cached-slot timeout selection,
-  pending fast-path timeout derivation, stalled pending-block timeout
-  decisions, stalled pending-frontier timeout derivation, exact-frontier
-  proposal grace derivation, exact-frontier slot helper semantics,
-  exact-frontier slot tracker FSM behavior, slot tracker state map semantics,
+  commit-inflight timeout reporting, commit-inflight timeout mark persistence
+  expected-failure mutation, post-commit pacemaker kickstart gating,
+  post-commit no-queue hard-stop expected-failure mutation, idle-view proposal
+  budget preservation, idle-view no-queue hard-stop expected-failure mutation,
+  cached-slot timeout selection, cached-slot streak saturation
+  expected-failure mutation,
+  pending fast-path timeout derivation, pending fast-path DA-floor cap
+  expected-failure mutation, stalled pending-block timeout
+  decisions, stalled pending commit-pipeline evidence expected-failure
+  mutations, stalled pending-frontier timeout derivation, exact-frontier
+  proposal grace derivation, frontier proposal full-grace transaction-budget
+  expected-failure mutations, exact-frontier slot helper semantics,
+  frontier slot body-available helper expected-failure mutations,
+  frontier slot same-candidate peer-evidence expected-failure mutations,
+  exact-frontier slot tracker FSM behavior, exact-frontier apply-wrapper
+  slot lifecycle expected-failure mutations, code-level exact-frontier slot
+  single-source state cleanup, formal nested slot-state consistency alignment,
+  slot tracker state map semantics, proposal-seen horizon expected-failure
+  mutations,
   timeout/cooldown derivation semantics, round/view helper semantics,
   PhaseTracker mutable state semantics, failed-commit/block-sync helper
   semantics, missing-QC timing derivation, idle backlog signal derivation,
@@ -2433,7 +2544,8 @@ and completed history lives in [`status.md`](./status.md).
   evidence admission, slot proposal evidence lookup and fall-through,
   round-liveness evidence aggregation, roster-unavailability recovery FSM
   transitions, consensus-recovery clear/prune retention semantics,
-  frontier live-owner work preservation semantics, keep-frontier pending-active
+  frontier live-owner work preservation semantics, frontier live-owner
+  conflict-adapter expected-failure mutations, keep-frontier pending-active
   preservation semantics, stale-view pending prune cleanup semantics,
   superseded frontier payload retention semantics, stale missing-block request
   prune semantics, stale missing commit-QC request prune semantics,
@@ -5142,14 +5254,19 @@ operator-provided rollout bundles.
   canonical validator-set payload, so portal/mobile provers cannot treat an
   arbitrary config leaf, abstract branch, or independently supplied roster as
   the active validator set. The Rust, web, Python, Swift, Kotlin, and Java
-  Android transcript builders now also reject config-proof and transition inputs
-  with wrong versions/domains, zero masterchain/config/validator hashes,
-  mismatched config-34 BoC payload/leaf/validator-set hashes, non-adjacent
-  validator-set sequence numbers, or signature proofs signed over a different
-  transition message. This removes the remaining zero-file-hash, generic-shard,
-  generic-config-leaf, placeholder config-branch, config-roster, and
-  transition-message transcript gaps in the current TON UI/mobile
-  proof-generation surface. TON source-adapter admission now also requires the
+	  Android transcript builders now also reject config-proof and transition inputs
+	  with wrong versions/domains, zero masterchain/config/validator hashes,
+	  mismatched config-34 BoC payload/leaf/validator-set hashes, non-adjacent
+	  validator-set sequence numbers, or signature proofs signed over a different
+	  transition message. TON transition structural preflight now also decodes the
+	  next validator-set payload, binds payload/next-set/parent-roster hashes,
+	  recomputes the transition and nested validator-signature messages, checks the
+	  transition signature transcript, and rejects non-adjacent or non-monotonic
+	  transition chains that do not end at the adapter's active validator set before
+	  Ed25519 verifier work. This removes the remaining zero-file-hash,
+	  generic-shard, generic-config-leaf, placeholder config-branch, config-roster,
+	  and transition-message transcript gaps in the current TON UI/mobile
+	  proof-generation surface. TON source-adapter admission now also requires the
   governed full-light-client audit bundle to be present as role-separated
   OpenVerify/FastPQ proof capsules for masterchain config, validator-set
   transition, and shard-accounts dictionary verifiers, so the remaining TON
@@ -5772,12 +5889,17 @@ operator-provided rollout bundles.
   also verifies an embedded beacon sync-committee certificate by deriving the
   ordered BLS committee trust-anchor hash, checking proof-of-possession values,
   recomputing the signed sync-committee message hash, verifying the aggregate BLS
-  signature, and enforcing strict `> 2/3` signed committee weight. ETH adapter
-  proofs now also carry raw execution-header RLP; the verifier Keccak-hashes it
-  to the claimed execution block hash, parses the RLP header fields, and checks
-  the block-number and receipts-root fields against the SCCP finality height and
-  adapter execution receipts root. The BSC source adapter also verifies an
-  embedded secp256k1 validator-set commit-seal certificate by deriving the
+	  signature, and enforcing strict `> 2/3` signed committee weight. ETH adapter
+	  proofs now also carry raw execution-header RLP; the verifier Keccak-hashes it
+	  to the claimed execution block hash, parses the RLP header fields, and checks
+	  the block-number and receipts-root fields against the SCCP finality height and
+	  adapter execution receipts root. ETH sync-committee transition structural
+	  admission now also decodes the next-committee payload, requires parent-roster,
+	  next-committee, and payload-hash agreement, recomputes the transition message
+	  hash, checks the nested sync-committee message hash, and checks the
+	  transition signature-hash transcript before BLS transition-chain work. The BSC
+	  source adapter also verifies an embedded secp256k1 validator-set commit-seal
+	  certificate by deriving the
   validator-set trust-anchor hash from validator addresses and powers,
   recovering signed validators from 65-byte seals over the BSC commit-message
   hash, binding the seal hash into the adapter transcript, and enforcing strict
@@ -5791,6 +5913,22 @@ operator-provided rollout bundles.
   canonical next-set payload, hash it under
   `sccp:bsc:validator-set-payload:v1`, decode the address/power list, and
   require the decoded payload to derive the advertised next validator-set hash.
+  BSC transition structural admission now also rejects malformed transition
+  envelopes before verifier work when the transition is not V1/BSC, does not
+  advance exactly one validator epoch, does not use the Parlia epoch-start block
+  for `to_validator_epoch`, carries empty header/payload material, carries zero
+  transition hashes, or embeds a seal commit-message hash that does not match
+  the transition message hash. The same BSC adapter preflight now also
+  recomputes the next-validator payload hash, payload-derived next-set hash,
+  transition-header payload binding, ValidatorSet metadata proof hash,
+  transition message hash, and transition seal hash, then requires non-empty
+  transition chains to be internally adjacent and terminate at the adapter's
+  declared active epoch and validator-set hash.
+  The nested ValidatorSet metadata/storage proof preflight now also rejects
+  non-V1 metadata, non-mainnet ValidatorSet contracts, wrong length slots, zero
+  storage roots or value/metadata hashes, empty length/storage proof material,
+  non-canonical per-validator storage slots, and storage-value hash drift before
+  MPT metadata verification runs.
   BSC transitions now also prove mainnet ValidatorSet storage parity by opening
   the `0x0000000000000000000000000000000000001000` account under the transition
   header state root, verifying its storage root, and opening
@@ -6116,11 +6254,16 @@ operator-provided rollout bundles.
   transcript/evidence hashing, so oversized or mixed legacy branches, MPT nodes,
   wrong adapter domains, zero block/root/seal/proof hashes, empty witness
   rosters, non-canonical signer bitmaps, mismatched witness weights/signature
-  counts, insufficient signed witness weight, all-zero TRON witness addresses,
-  truncated or non-canonical header/witness signatures, stale
-  transition-domain/message/seal metadata, transition chains, or transition
-  payloads fail before canonical adapter bytes are serialized.
-  The generic TRON source-adapter binding path now also recomputes the witness
+	  counts, insufficient signed witness weight, all-zero TRON witness addresses,
+	  truncated or non-canonical header/witness signatures, stale
+	  transition-domain/message/seal metadata, transition chains, or transition
+	  payloads fail before canonical adapter bytes are serialized. Transition
+	  preflight now decodes the next witness-schedule payload as the canonical
+	  `sccp:tron:witness-schedule:v1` address/weight roster, binds the
+	  parent-schedule hash, payload hash, payload-derived next-schedule hash, and
+	  transition message hash, and rejects non-contiguous, non-monotonic, or
+	  wrong-final-schedule transition chains before transition-step verifier work.
+	  The generic TRON source-adapter binding path now also recomputes the witness
   schedule hash, solid-block message hash, and witness seal hash, so swapped
   schedule/seal transcripts fail before recursive verifier material is
   evaluated.
@@ -6222,7 +6365,9 @@ operator-provided rollout bundles.
   fail-closed coverage for wrong OpenVerify circuit ids, backend tags, schema
   descriptors, auxiliary data, public-input columns, backend proof bytes, and
   oversized source-adapter OpenVerify envelopes or source-state proof labels
-  before decode;
+  before decode, plus adapter verifier-commitment helper coverage for malformed
+  outer wrappers, opaque proof bytes, zero verifier keys, auxiliary envelope
+  data, and empty STARK public-input columns before metadata extraction;
   deployment-backed TON source-adapter readiness can now open when exact
   non-placeholder source verifier material, matching source-state verifier
   deployment fields, adapter verifier commitment, and deployment receipt hashes
@@ -6255,15 +6400,47 @@ operator-provided rollout bundles.
 **Next checkpoints:** continue replacing remaining SCCP source-chain verifier
 placeholders behind the typed adapter variants so ETH/BSC/Solana/TON/TRON
 consensus/finality and receipt/message inclusion are checked against external
-chain rules. Substrate/Polkadot-family SCCP lanes are not part of the current
-supported launch scope; keep existing Substrate, Kusama, Polkadot, and SORA2
-evidence helpers gated as diagnostic/backlog-only surfaces, with production
+chain rules. Shared source-state proof admission now rejects opaque nonzero
+bytes and requires canonical STARK OpenVerify/FastPQ capsules before lane-local
+verification work, and the Solana/TON source-state transcript hash helpers now
+reuse the same canonical-envelope gate before audit-statement binding.
+Transparent OpenVerify summary helpers now apply the same production-shaped
+wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
+envelopes cannot be normalized into release/readiness summaries. The
+artifact-level summary entry point now also validates the typed transparent
+proof artifact wrapper first, so manifest, public-input, or submission-package
+metadata drift cannot be hidden behind otherwise valid OpenVerify proof bytes,
+and Torii/CLI artifact renderers omit OpenVerify summaries for wrappers that
+fail that typed gate.
+Substrate/Polkadot-family SCCP lanes are not part of the current supported
+launch scope; keep existing Substrate, Kusama, Polkadot, and SORA2 evidence
+helpers gated as diagnostic/backlog-only surfaces, with production
 readiness and release-evidence summaries refusing to mark those lanes ready
-until support is explicitly re-opened. For BSC, use the new offline source-bridge evidence
-renderer, which now rejects BSC EVM-family template component hashes before
-rendering governance TOML and also rejects non-canonical BSC source-adapter
-OpenVerify VK hashes, plus the EVM live source and destination evidence
-collectors to query deployed source emitter, bridge, and verifier views, verify
+until support is explicitly re-opened. BSC and Substrate-family source
+transition verifiers now also require the ordered transition chain to terminate
+at the adapter's declared active epoch/set id, so stale chains cannot pass by
+replaying the same final validator or authority-set hash. ETH, BSC, Solana,
+TON, and Substrate-family signer-certificate preflight now also rejects
+non-canonical signer bitmap width/padding, empty signer sets, signature-count
+drift, claimed stake/weight drift, and sub-quorum certificates before
+transcript hashing. Solana source-adapter preflight also recomputes the
+vote-message hash from the adapter fields and finality-context hash before
+deeper account/finality verification. For BSC, use the new offline
+source-bridge evidence renderer, which now rejects BSC EVM-family template
+component hashes before rendering governance TOML and also rejects
+non-canonical BSC source-adapter
+OpenVerify VK hashes, while BSC adapter structural admission rejects wrong
+version/domain envelopes and zero block, receipt-root, validator-set,
+commit-seal, or receipt-proof hashes before deeper verifier work. TON adapter
+structural admission likewise rejects wrong version/domain envelopes, wrong
+masterchain/basechain identifiers, zero chain sequence numbers, and zero
+masterchain, shard, config, validator-set, transaction, signature, or proof
+roots before BOC/config/signature verifiers run. TON and TRON transition-chain
+preflight now also rejects disconnected internal parent hashes between
+self-consistent transition steps before deeper Ed25519 or secp256k1 verifier
+work. Use the EVM live source and
+destination evidence collectors to query deployed source emitter, bridge, and
+verifier views, verify
 runtime code/key hashes, require the canonical RPC chain id, governed bridge
 `networkId()`, reject verifier/bridge address aliasing, and require audited
 source-emitter and bridge-wrapper code-hash pins before live TOML rendering,
@@ -6670,14 +6847,21 @@ transcript.
 Solana source-adapter structural admission also requires the signer bitmap to
 use the exact byte width implied by the validator roster and to keep unused
 padding bits zero before vote-proof verification or transcript hashing. The
-same structural preflight now rejects present source-state proof capsules unless
-they are version `1`, use `stark-fri-v1`, carry a non-empty circuit id, and
-contain non-empty/non-all-zero proof bytes before Norito/OpenVerify decoding,
-covering nested AccountsLtHash material, full-light-client audit role proofs,
-TON source-state capsules, and Substrate-family runtime-storage capsules. The
-Solana AccountsLtHash verifier and role-separated full-light-client audit
-verifier now apply the same all-zero capsule guard before decoding, so direct
-verifier calls cannot bind placeholder proof bytes outside structural admission.
+same adapter-envelope preflight now also rejects non-V1/non-Solana source
+proofs, zero finalized slots, zero blockhash/bank/status/message roots,
+malformed or zero transaction identities, finality contexts whose epoch or
+parent/finalized slots do not match the finalized slot, zero finality-context
+roots, zero bank-signature counts, zero vote-message hashes, empty StakeHistory
+sysvar data, and malformed or all-zero AccountsLtHash bytes before
+source-adapter transcript hashing. The structural preflight now also rejects
+present source-state proof capsules unless they are version `1`, use
+`stark-fri-v1`, carry a non-empty circuit id, and contain non-empty/non-all-zero
+proof bytes before Norito/OpenVerify decoding, covering nested AccountsLtHash
+material, full-light-client audit role proofs, TON source-state capsules, and
+Substrate-family runtime-storage capsules. The Solana AccountsLtHash verifier
+and role-separated full-light-client audit verifier now apply the same all-zero
+capsule guard before decoding, so direct verifier calls cannot bind placeholder
+proof bytes outside structural admission.
 For the web/mobile portal path, the
 remaining Solana blocker is governed all-lanes rollout with live
 full-light-client verifier deployments, not request derivation or the
@@ -7367,17 +7551,20 @@ or ABI behavior.
   capacities above the canonical profile slot count. BFV now also has a registered RAM-LFE
   v1 RNS coefficient-modulus chain descriptor whose validation requires
   bounded, strictly increasing odd-prime, NTT-friendly, pairwise-coprime limbs,
-  a checked product that covers the active ciphertext modulus, a stable
+  bound primitive `2n`-th negacyclic NTT roots for the registered profile, a
+  checked product that covers the active ciphertext modulus, a stable
   domain-separated chain digest, and a separate exact-lift compatibility bound
   while the full BFV-RNS arithmetic engine is still pending. The shared RNS
   validator now also validates BFV parameters directly, so exact-lift and exact
   `Z_q` coverage helpers reject malformed parameter profiles before inspecting
-  chain arithmetic bounds. The descriptor now also supports checked limb-major
+  chain arithmetic bounds, and validated limbs must have bounded concrete
+  negacyclic NTT root support. The descriptor now also supports checked limb-major
   polynomial decomposition and CRT
   reconstruction, with malformed residue-shape and unreduced-residue rejection
   before arithmetic code can consume those residues, plus deterministic scalar
-  residue addition and per-limb NTT-backed negacyclic multiplication with a
-  scalar fallback in the RNS chain product ring, and the shared Soracloud
+  residue addition and per-limb NTT-backed negacyclic multiplication with
+  bounded primitive-root discovery and a scalar fallback in the RNS chain
+  product ring, and the shared Soracloud
   operation fixture now binds that descriptor, digest,
   decomposition/reconstruction corridor, and residue addition/multiplication
   hashes across Rust plus lightweight JavaScript, Swift, Kotlin/JVM, and Java
@@ -7464,18 +7651,77 @@ or ABI behavior.
   preverified proof cache entry. The verifier registry now rejects canonical
   Soracloud bootstrap verifier records whose registry id, namespace, circuit
   version, public-input schema hash, gas schedule, or active inline key
-  material drift from the governed v1 profile, moving those rollout failures
-  to `RegisterVerifyingKey`/`UpdateVerifyingKey` admission. BFV bootstrap keys
-  now carry an explicit `RefreshOnlyV1` mode, and reserved full-bootstrap mode
-  fails closed until real bootstrapping circuit material exists, so the current
-  refresh bridge cannot be mislabeled as full bootstrapping. Bundle
-  validation/digesting applies the same mode gate before transcript-bound
-  bootstrap proof statements can be produced. Remaining work is the full BFV
-  bootstrapping path. Soracloud transcript digesting
-  now preflights the advertised BFV
-  public-key shape before evaluation-key bundle validation, so malformed
-  transcript key material is reported at the public-key boundary instead of
-  being masked by unrelated bundle-shape errors. The crypto bundle validator
+	  material drift from the governed v1 profile, moving those rollout failures
+	  to `RegisterVerifyingKey`/`UpdateVerifyingKey` admission. BFV bootstrap keys
+	  now carry an explicit `RefreshOnlyV1` mode, and `FullBootstrapV1` keys carry
+	  versioned circuit/key-material commitments that bind the canonical circuit id,
+	  registered BFV parameter digest, RNS modulus-chain digest, key-switch
+	  decomposition-chain digest, bootstrap artifact digests, and proof
+	  public-input schema/prover-key/verifier-key digests. The material validator
+	  rejects zero commitments, duplicate artifact/proof commitments, and artifact
+	  or proof commitments that reuse registered profile digests, keeping each
+	  governed digest role partitioned at admission. Bundle admission
+	  and digesting bind that material, while refresh/proof/execution paths still
+	  fail closed because the full BFV bootstrap evaluator is not implemented, so
+	  the current refresh bridge cannot be mislabeled as full bootstrapping. Direct
+	  key-authorized refresh execution, bootstrap output-bound helpers, and
+	  Soracloud exact/bounded bootstrap execution now use the same mode-aware
+	  request preflight, so reserved full-bootstrap keys are rejected before
+	  round-count, bound-capacity, ciphertext-shape, or refresh-key entry errors.
+	  Bundle validation/digesting applies the same public metadata preflight before
+	  the mode/material gate and before transcript-bound bootstrap proof statements
+	  can be produced. The crypto layer also exposes a domain-separated
+	  full-bootstrap material proof-statement digest that binds the parameter set,
+	  public key, evaluation-key bundle digest, bootstrap-key metadata, and
+	  material digest for governed prover inventories. The data-model refresh
+	  transcript wrapper can derive the same full-bootstrap material statement for
+	  manifest callers, and execution policies now require bootstrap-capable
+	  bundles to bind exactly one bootstrap statement class: zero-refresh for
+	  `RefreshOnlyV1`, or full material for `FullBootstrapV1`. Full-bootstrap
+	  refresh transcript digesting omits deterministic zero-refresh bootstrap
+	  transcript seeds, and Core rejects missing, mismatched, stale, or cross-mode
+	  policy statement bindings before execution. The data model now also exposes a
+	  distinct full-bootstrap material proof attachment with canonical
+	  STARK/`OpenVerifyEnvelope` circuit id, public-input schema, byte bounds,
+	  verifier-key commitment, statement public input, and envelope-hash checks, so
+	  governed material proofs no longer reuse the zero-refresh bootstrap proof
+	  envelope. `RunSoracloudFheJob` and Torii signed FHE job requests now carry
+	  an optional distinct full-bootstrap material proof attachment, provenance
+	  signs it, and Core requires it for policy-bound full-bootstrap jobs before
+	  dispatching through the active Soracloud verifier record or preverified-proof
+	  cache path. Runtime admission rejects absent, mismatched, non-bootstrap, and
+	  unverified fake full-material proofs, and
+	  `RegisterVerifyingKey`/`UpdateVerifyingKey` admission rejects canonical
+	  full-material verifier-profile drift before job execution. Job admission now
+	  also requires the material proof schema digest and verifier-key digest to
+	  match the canonical Soracloud proof schema and proof attachment verifier
+	  commitment through the BFV crypto proof-profile validator, and rejects
+	  supplied full-material proof attachments that omit `vk_commitment` at the
+	  material/profile gate before backend verifier lookup. The Rust, Swift,
+	  Kotlin/JVM, and Java Android shared Soracloud BFV operation-fixture validators
+	  now pin the full-bootstrap material/profile digest, verifier-key commitment,
+	  and statement vector so SDK/release validation can reject fixture drift before
+		  the executable evaluator lands. Full-mode exact
+		  and bounded runtime bootstrap paths now use dedicated crypto preflight
+		  helpers that validate governed material commitments, registered profile
+		  digests, ciphertext shape, and exact/bounded metadata before returning the
+				  current unavailable-evaluator error. Crypto now also exposes a typed
+				  full-bootstrap artifact bundle validator/digest and artifact-aware execution
+				  preflight that bind concrete evaluator/proof-profile bytes to those governed
+				  commitments. Each artifact byte field is now a Norito role/profile envelope
+				  that declares the canonical circuit id, registered parameter/RNS/decomposition
+				  digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
+				  and empty-payload artifact attachments fail before the unavailable evaluator
+				  boundary. `RunSoracloudFheJob` now carries optional full-bootstrap artifacts,
+				  provenance signs them, and Core routes exact/bounded full-mode jobs through
+				  artifact-aware preflight before the current unavailable-evaluator error.
+				  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
+				  Remaining work is the executable full BFV bootstrapping evaluator and the
+				  real prover/verifier artifacts and implementation.
+	  Soracloud transcript digesting now preflights the advertised BFV public-key
+	  shape before evaluation-key bundle validation, so malformed transcript key
+	  material is reported at the public-key boundary instead of being masked by
+	  unrelated bundle-shape errors. The crypto bundle validator
   applies the same public metadata
   preflight for direct callers. Standalone refresh-key transcript
   generators/validators also reject empty or oversized public seeds before
@@ -7547,16 +7793,22 @@ or ABI behavior.
   that decomposes ciphertext components as centered residues, reconstructs
   signed negacyclic products before `t/q` scale-and-rounding, and relinearizes
   the scaled quadratic component through the RNS digit/key-switch path while
-  matching the scalar bounded-noise multiplication output. Rounded Galois key
+  matching the scalar bounded-noise multiplication output. The RNS chain now
+  also exposes an explicit exact scale-round helper for centered RNS product
+  polynomials at the rounded BFV `t/q` boundary, and rounded RNS ciphertext
+  multiplication uses that helper for direct product components plus a centered
+  two-product sum helper for `c1` cross terms, with exact product-sum coverage
+  rejecting aliasing before scale-and-rounding. Rounded Galois key
   switching and packed `RotateLeft` now also have RNS exact bridge entry points
   that match the scalar bounded-noise schedule and reject too-narrow chains.
   Outer-slot rotation and bootstrap refresh material can now also be generated
   and publicly transcript-validated with rounded bounded-noise encrypted-zero
-  ciphertexts, refreshed through scalar or exact RNS addition, and propagated
-  with centered-noise output bounds. Evaluation-key bundles can now validate and
-  digest the bounded-noise rotation/bootstrap transcript inventory under a
-  separate domain from the exact-lift refresh path, and owner diagnostics can
-  validate bounded relin/Galois key-switch residuals with bundle-owned
+  ciphertexts, refreshed through scalar or exact RNS addition, routed through
+  registered target-limb RNS basis-extension wrappers for bounded production
+  Bootstrap execution, and propagated with centered-noise output bounds.
+  Evaluation-key bundles can now validate and digest the bounded-noise
+  rotation/bootstrap transcript inventory under a separate domain from the
+  exact-lift refresh path, and owner diagnostics can validate bounded relin/Galois key-switch residuals with bundle-owned
   relinearization labels and bundle-indexed Galois diagnostics plus every
   bounded refresh mask in one bundle check.
   Soracloud FHE execution policies now bind the
@@ -7831,8 +8083,8 @@ or ABI behavior.
   so inconsistent existing-item accounting and `u64` total overflows fail
   closed before max-total admission checks. The production bounded-noise
   admission circuit/prover rollout,
-  broader target-limb BFV-RNS evaluator hardening, and full bootstrapping
-  circuit/key material remain pending.
+  broader target-limb BFV-RNS evaluator hardening, and executable
+  full-bootstrap evaluator plus verifier/prover implementation remain pending.
   Owner-side
   evaluated-output diagnostics can now validate ciphertexts against
   caller-declared exact residual-multiple bounds and reject plaintext-preserving
@@ -7938,8 +8190,10 @@ or ABI behavior.
   advertised multiplication/bootstrap budgets above the exact evaluator budget
   before governance admission.
   Bootstrap fixtures now pin both the zero refresh and each round-indexed
-  public refresh ciphertext, while full bootstrapping circuit/key-material
-  vectors remain an open release item.
+  public refresh ciphertext. Full bootstrapping circuit/key-material
+  commitments now have a Rust admission/digest/proof-statement surface plus a
+  data-model material proof envelope, while executable full-bootstrap evaluator
+  and verifier/prover vectors remain an open release item.
 - Keep Soracloud FHE governance parameter fixtures runtime-bound instead of
   descriptor-only. The canonical parameter-set, execution-policy, governance
   bundle, and job-spec fixtures now target the registered `bfv-default`
@@ -7949,15 +8203,20 @@ or ABI behavior.
   domain-separated registered BFV RNS modulus-chain digest, and core admission
   rejects RNS descriptor drift before FHE jobs can run. The registered RNS
   chain selector now preflights exact-addition and exact negacyclic-product
-  coverage before returning the production chain or digest, and the RNS
-  key-switch bridge applies the same exact-evaluator chain preflight before
-  consuming key-switch material. Public RNS exact evaluator entry points now
-  also preflight their required chain coverage before invalid refresh rounds,
-  no-op packed rotations, or key-switch schedules can short-circuit validation,
-  and indexed Bootstrap refresh helpers preflight requested round capacity
-  before malformed ciphertext shapes enter the addition path.
+  coverage plus the concrete negacyclic NTT root table before returning the
+  production chain or digest, and the RNS key-switch bridge applies the same
+  exact-evaluator chain preflight before consuming key-switch material. Public
+  RNS exact evaluator entry points now also preflight their required chain
+  coverage before invalid refresh rounds, no-op packed rotations, or
+  key-switch schedules can short-circuit validation, and indexed Bootstrap
+  refresh helpers preflight requested round capacity before malformed
+  ciphertext shapes enter the addition path.
   Bounded exact-RNS ciphertext multiplication now uses the same exact
   evaluator-chain preflight before operand or relinearization-key shape checks.
+  Bounded target-limb basis-extension execution wrappers now share one
+  rounded-capacity plus decomposition/evaluator prefix corridor, and Bootstrap
+  refresh rejects structurally valid non-prefix decomposition chains before
+  malformed refresh-key or ciphertext shapes.
   Refresh transcript digest assembly now returns structured shape errors for
   missing or unmatched rotation transcript seeds instead of relying on a
   post-validation panic invariant.
@@ -8009,9 +8268,9 @@ or ABI behavior.
   corridor.
 
 **Next checkpoints:** extend the fixture-bound RNS descriptor/residue corridor
-into the full BFV-RNS evaluator, add full bootstrapping circuit/key-material
-vectors beyond encrypted-zero refresh, and fold the focused ZK/FHE fixture
-corridor into broader release validation.
+into the full BFV-RNS evaluator, add executable full-bootstrap evaluator and
+verifier/prover vectors beyond encrypted-zero refresh, and fold the focused
+ZK/FHE fixture corridor into broader release validation.
 
 ## Consensus, Performance, and Operations
 
@@ -8523,7 +8782,15 @@ commit-anchor QC promotion helper gate (`commit-anchor-qc`),
 committed-height QC admission helper gate (`committed-height-qc`),
 TLC-cross-checked proposal assembly gate, TLC-cross-checked Kura durability
 commit retry gate, TLC-cross-checked Kura persistence status counter/snapshot helper gate
-(`kura-store-status`), TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
+(`kura-store-status`), Kura writer wake coalescing gate, Kura writer periodic
+fsync fault regression gate, State DA cursor apply fault regression gate, Kura
+pipeline sidecar queue cap gate, Kura durable budget metadata snapshot gate,
+Kura pending-budget scan guardrail/benchmark gate, Kura eviction block-store lock split
+gate, Kura background budget eviction gate, IVM WSV admin syscall permission gate,
+IVM WSV checkpoint durable-state dedupe/benchmark gate,
+State view generation retry gate, WSV state write lock separation gate,
+WSV state write lock telemetry alias gate,
+TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
 realignment gate, frontier block-sync hint/direct-response permit gate,
 TLC-cross-checked same-height vote conflict helper gate, aggregate same-height vote-lock helper gate,
 TLC-cross-checked proposal stale same-height vote helper gate,

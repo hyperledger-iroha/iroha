@@ -42,6 +42,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let caller = literal_account();
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -71,6 +72,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

@@ -39,6 +39,14 @@ Cases == {
   "no_queue_healthy",
   "no_queue_queue_saturated",
   "no_queue_consensus_pacing",
+  "no_queue_combined_pacing",
+  "no_queue_active_pending",
+  "no_queue_rbc_backlog",
+  "no_queue_relay_backpressure",
+  "no_queue_active_pending_with_queue_saturated",
+  "no_queue_rbc_backlog_with_consensus",
+  "no_queue_relay_with_queue_saturated",
+  "no_queue_all_backpressure",
   "queued_healthy_callback_true",
   "queued_healthy_callback_false",
   "queued_queue_saturated",
@@ -56,7 +64,15 @@ Cases == {
 NoQueueCases == {
   "no_queue_healthy",
   "no_queue_queue_saturated",
-  "no_queue_consensus_pacing"
+  "no_queue_consensus_pacing",
+  "no_queue_combined_pacing",
+  "no_queue_active_pending",
+  "no_queue_rbc_backlog",
+  "no_queue_relay_backpressure",
+  "no_queue_active_pending_with_queue_saturated",
+  "no_queue_rbc_backlog_with_consensus",
+  "no_queue_relay_with_queue_saturated",
+  "no_queue_all_backpressure"
 }
 QueuedCases == Cases \ NoQueueCases
 HealthyQueuedCases == {
@@ -69,16 +85,25 @@ CombinedPacingOnlyCases == {"queued_combined_pacing"}
 PacingOnlyQueuedCases ==
   QueueSaturatedOnlyCases \union ConsensusPacingOnlyCases \union CombinedPacingOnlyCases
 ActivePendingCases == {
+  "no_queue_active_pending",
+  "no_queue_active_pending_with_queue_saturated",
+  "no_queue_all_backpressure",
   "queued_active_pending",
   "queued_active_pending_with_queue_saturated",
   "queued_all_backpressure"
 }
 RbcBacklogCases == {
+  "no_queue_rbc_backlog",
+  "no_queue_rbc_backlog_with_consensus",
+  "no_queue_all_backpressure",
   "queued_rbc_backlog",
   "queued_rbc_backlog_with_consensus",
   "queued_all_backpressure"
 }
 RelayBackpressureCases == {
+  "no_queue_relay_backpressure",
+  "no_queue_relay_with_queue_saturated",
+  "no_queue_all_backpressure",
   "queued_relay_backpressure",
   "queued_relay_with_queue_saturated",
   "queued_all_backpressure"
@@ -109,6 +134,8 @@ ActualTriggerCalled(c) ==
      /\ ~(Bug = "use_callback_result_false" /\ c \in CallbackFalseCases)
   \/ /\ c \in NoQueueCases
      /\ Bug = "trigger_without_queue"
+  \/ /\ c \in {"no_queue_all_backpressure"}
+     /\ Bug = "trigger_no_queue_hard_stop"
   \/ /\ c \in {"queued_active_pending"}
      /\ Bug = "trigger_active_pending"
   \/ /\ c \in {"queued_rbc_backlog"}
@@ -128,6 +155,8 @@ ActualTimestampCaptured(c) ==
   \/ /\ SpecTimestampCaptured(c)
      /\ Bug # "skip_time_when_triggered"
      /\ ActualTriggerCalled(c)
+  \/ /\ c \in {"no_queue_all_backpressure"}
+     /\ Bug = "trigger_no_queue_hard_stop"
   \/ /\ ~SpecTimestampCaptured(c)
      /\ Bug = "capture_time_when_suppressed"
 
@@ -146,6 +175,8 @@ ActualReturnedTrue(c) ==
      /\ Bug # "trigger_without_return_true"
   \/ /\ c \in NoQueueCases
      /\ Bug = "trigger_without_queue"
+  \/ /\ c \in {"no_queue_all_backpressure"}
+     /\ Bug = "trigger_no_queue_hard_stop"
   \/ /\ c \in {"queued_active_pending"}
      /\ Bug = "trigger_active_pending"
   \/ /\ c \in {"queued_rbc_backlog"}

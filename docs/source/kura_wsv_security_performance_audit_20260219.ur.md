@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### پروڈکشن WSV
 
 - موجودہ کوریج:
-  - تنازعہ کا فال بیک رویہ: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - ٹائرڈ بیک اینڈ کے ارد گرد لاک آرڈر کی حفاظت: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - تنازعہ کا فال بیک رویہ: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - ٹائرڈ بیک اینڈ کے ارد گرد لاک آرڈر کی حفاظت: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - خلا:
   - بھاری عالمی کمٹ کے تحت زیادہ سے زیادہ قابل قبول کمٹ ہولڈ ٹائم کا دعوی کرنے والا کوئی مقداری تنازعہ ٹیسٹ نہیں۔
   - اگر DA کرسر ایڈوانسمنٹ انویرینٹس غیر متوقع طور پر ٹوٹ جاتے ہیں تو گھبراہٹ سے پاک ہینڈلنگ کے لیے کوئی ریگریشن ٹیسٹ نہیں
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## تجویز کردہ ٹیسٹ کے اضافے1. `kura_writer_io_failures_do_not_panic` (یونٹ، فالٹ انجیکشن)
 2. `kura_budget_check_scales_with_pending_depth` (کارکردگی ریگریشن)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (انضمام/perf)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (تنازعہ رجعت)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (تنازعہ رجعت)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (لچک)
 6. `mock_wsv_admin_alias_requires_permissions` (سیکیورٹی ریگریشن)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS گارڈ)

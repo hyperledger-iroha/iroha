@@ -280,7 +280,11 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             heartbeat_expires_at_ms,
             provenance: ManifestProvenance {
                 signer: self.key_pair.public_key().clone(),
-                signature: iroha_crypto::Signature::new(self.key_pair.private_key(), &payload),
+                signature: sign_soracloud_runtime_provenance(
+                    &self.key_pair,
+                    &payload,
+                    "sign runtime model-host heartbeat provenance",
+                )?,
             },
         });
         self.submit_instruction(
@@ -306,11 +310,23 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             capability: capability.clone(),
             provenance: ManifestProvenance {
                 signer: self.key_pair.public_key().clone(),
-                signature: iroha_crypto::Signature::new(self.key_pair.private_key(), &payload),
+                signature: sign_soracloud_runtime_provenance(
+                    &self.key_pair,
+                    &payload,
+                    "sign runtime Inrou host advert provenance",
+                )?,
             },
         });
         self.submit_instruction(instruction, "/internal/soracloud/runtime/inrou-host-advert")
     }
+}
+
+fn sign_soracloud_runtime_provenance(
+    key_pair: &KeyPair,
+    payload: &[u8],
+    context: &'static str,
+) -> eyre::Result<iroha_crypto::Signature> {
+    iroha_crypto::Signature::try_new(key_pair.private_key(), payload).wrap_err(context)
 }
 
 fn soracloud_runtime_submission_metadata(state: &State, gas_asset_id: Option<&str>) -> Metadata {
@@ -13980,6 +13996,19 @@ mod tests {
         assert!(summary.contains("start inrou Soracloud service"));
         assert!(summary.contains("Inrou PortableVm failed healthcheck during startup"));
         assert!(summary.contains("serial console: missing python3"));
+    }
+
+    #[test]
+    fn runtime_provenance_signature_verifies() -> Result<()> {
+        let payload = encode_model_host_heartbeat_provenance_payload(&ALICE_ID, 123)?;
+        let signature = sign_soracloud_runtime_provenance(
+            &ALICE_KEYPAIR,
+            &payload,
+            "sign test Soracloud runtime provenance",
+        )?;
+
+        signature.verify(ALICE_KEYPAIR.public_key(), &payload)?;
+        Ok(())
     }
 
     struct FailingUploadedModelRng;

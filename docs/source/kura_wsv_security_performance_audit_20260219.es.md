@@ -160,8 +160,8 @@ Fuera de alcance: cajas no relacionadas y reposiciones de pruebas comparativas d
 ### Producción WSV
 
 - Coberturas existentes:
-  - comportamiento de reserva de contención: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - seguridad de orden de bloqueo alrededor del backend escalonado: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - comportamiento de reserva de contención: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - seguridad de orden de bloqueo alrededor del backend escalonado: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Brechas:
   - no hay prueba de contención cuantitativa que afirme el tiempo de espera de compromiso máximo aceptable bajo compromisos mundiales intensos
   - no hay prueba de regresión para un manejo sin pánico si las invariantes de avance del cursor DA se rompen inesperadamente
@@ -222,7 +222,7 @@ Fuera de alcance: cajas no relacionadas y reposiciones de pruebas comparativas d
 ## Adiciones de prueba sugeridas1. `kura_writer_io_failures_do_not_panic` (unidad, inyección de falla)
 2. `kura_budget_check_scales_with_pending_depth` (regresión de rendimiento)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (integración/rendimiento)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (regresión de contención)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (regresión de contención)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (resiliencia)
 6. `mock_wsv_admin_alias_requires_permissions` (regresión de seguridad)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (protección DoS)

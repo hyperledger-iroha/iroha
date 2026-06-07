@@ -31,7 +31,7 @@ public enum IdentifierNormalization {
   public String normalize(final String value, final String field) {
     Objects.requireNonNull(field, "field");
     final String trimmed =
-        Objects.requireNonNull(value, field + " must not be null").trim();
+        trimWhitespace(Objects.requireNonNull(value, field + " must not be null"));
     if (trimmed.isEmpty()) {
       throw new IllegalArgumentException(field + " must not be blank");
     }
@@ -47,13 +47,25 @@ public enum IdentifierNormalization {
   /** Parses the Torii JSON wire value into an SDK enum. */
   public static IdentifierNormalization fromWireValue(final String wireValue) {
     final String normalized =
-        Objects.requireNonNull(wireValue, "wireValue").trim().toLowerCase(Locale.ROOT);
+        trimWhitespace(Objects.requireNonNull(wireValue, "wireValue")).toLowerCase(Locale.ROOT);
     for (final IdentifierNormalization candidate : values()) {
       if (candidate.wireValue.equals(normalized)) {
         return candidate;
       }
     }
     throw new IllegalArgumentException("Unsupported identifier normalization: " + wireValue);
+  }
+
+  private static String trimWhitespace(final String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end && Character.isWhitespace(value.charAt(start))) {
+      start++;
+    }
+    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+      end--;
+    }
+    return value.substring(start, end);
   }
 
   private static String normalizePhone(final String value, final String field) {

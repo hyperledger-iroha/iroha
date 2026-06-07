@@ -1191,7 +1191,7 @@ pub fn crypto_sign(
     let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
     let private_key =
         PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
-    let signature = Signature::new(&private_key, message.as_ref());
+    let signature = Signature::try_new(&private_key, message.as_ref()).map_err(norito_to_napi)?;
     Ok(Buffer::from(signature.payload().to_vec()))
 }
 
@@ -1306,11 +1306,11 @@ fn parse_ed25519_keypair_hex(private_key_hex: &str) -> napi::Result<KeyPair> {
     KeyPair::from_private_key(private_key).map_err(norito_to_napi)
 }
 
-fn sign_soracloud_payload(keypair: &KeyPair, payload: &[u8]) -> ManifestProvenance {
-    ManifestProvenance {
+fn sign_soracloud_payload(keypair: &KeyPair, payload: &[u8]) -> napi::Result<ManifestProvenance> {
+    Ok(ManifestProvenance {
         signer: keypair.public_key().clone(),
-        signature: Signature::new(keypair.private_key(), payload),
-    }
+        signature: Signature::try_new(keypair.private_key(), payload).map_err(norito_to_napi)?,
+    })
 }
 
 fn soracloud_source_hash(repo_id: &str, resolved_revision: &str) -> napi::Result<Hash> {
@@ -1403,7 +1403,7 @@ pub fn soracloud_build_hf_deploy_request_json(
         base_fee_nanos,
     )
     .map_err(norito_to_napi)?;
-    let provenance = sign_soracloud_payload(&keypair, &deploy_payload);
+    let provenance = sign_soracloud_payload(&keypair, &deploy_payload)?;
 
     let service_name_typed = service_name.parse::<Name>().map_err(|err| {
         napi::Error::new(
@@ -1425,7 +1425,7 @@ pub fn soracloud_build_hf_deploy_request_json(
         encode_bundle_with_materials_provenance_payload(&generated_bundle, &configs, &secrets)
             .map_err(norito_to_napi)?;
     let generated_service_provenance =
-        sign_soracloud_payload(&keypair, &service_provenance_payload);
+        sign_soracloud_payload(&keypair, &service_provenance_payload)?;
 
     let generated_apartment_provenance = apartment_name
         .as_deref()
@@ -1444,7 +1444,7 @@ pub fn soracloud_build_hf_deploy_request_json(
                 Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
             )
             .map_err(norito_to_napi)?;
-            Ok::<ManifestProvenance, napi::Error>(sign_soracloud_payload(&keypair, &payload))
+            sign_soracloud_payload(&keypair, &payload)
         })
         .transpose()?;
 
@@ -3347,7 +3347,8 @@ fn sign_bundle_with_council(bundle: &mut AliasProofBundleV1) -> napi::Result<()>
         PrivateKey::from_bytes(Algorithm::Ed25519, &[0x55; 32]).expect("seeded key"),
     )
     .expect("derive keypair");
-    let signature = Signature::new(keypair.private_key(), digest.as_ref());
+    let signature =
+        Signature::try_new(keypair.private_key(), digest.as_ref()).map_err(norito_to_napi)?;
     let signer_bytes = checked_public_key_payload(keypair.public_key())?;
     let signer: [u8; 32] = signer_bytes
         .try_into()
@@ -15525,6 +15526,34 @@ mod tests {
         .expect("derive public key");
 
         assert_eq!(public_key.as_ref(), expected_public_key);
+    }
+
+    #[test]
+    fn crypto_sign_exports_verifiable_signature() {
+        let seed = vec![0x33; 32];
+        let message = b"js-host-crypto-sign";
+        let keypair =
+            KeyPair::try_from_seed(seed.clone(), Algorithm::Ed25519).expect("checked seed keypair");
+        let (_, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public-key payload");
+
+        let signature = crypto_sign(
+            "ed25519".to_owned(),
+            Uint8Array::from(seed),
+            Uint8Array::from(message.to_vec()),
+        )
+        .expect("crypto sign");
+
+        let verified = crypto_verify(
+            "ed25519".to_owned(),
+            Uint8Array::from(public_key.to_vec()),
+            Uint8Array::from(message.to_vec()),
+            Uint8Array::from(signature.as_ref().to_vec()),
+        )
+        .expect("crypto verify");
+        assert!(verified);
     }
 
     #[test]

@@ -903,7 +903,10 @@ use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
     da::proof_policy_bundle_hash,
     executor::{charge_fees_for_applied_overlay_with_encoded_len, configure_executor_fuel_budget},
-    kura::{PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
+    kura::{
+        PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
+        PipelineTxSnapshot,
+    },
     pipeline::{
         gpu::{self, AccessTriplet},
         overlay::TxOverlay,
@@ -8662,7 +8665,16 @@ pub(crate) mod valid {
                         sidecar.proofs = proofs;
                     }
                 }
-                state_block.kura().enqueue_pipeline_metadata(sidecar);
+                match state_block.kura().enqueue_pipeline_metadata(sidecar) {
+                    PipelineSidecarEnqueueResult::Enqueued { .. } => {}
+                    PipelineSidecarEnqueueResult::RejectedQueueFull { cap } => {
+                        iroha_logger::warn!(
+                            height,
+                            cap,
+                            "pipeline recovery sidecar queue is full; skipping best-effort sidecar"
+                        );
+                    }
+                }
             }
 
             // DSF prepass: union adjacent conflicting read/write relations to find independent components

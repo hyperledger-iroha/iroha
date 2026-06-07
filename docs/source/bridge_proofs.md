@@ -17,11 +17,29 @@ production network support until that launch scope is explicitly re-opened.
 Torii public SCCP discovery follows the same rule: `/v1/sccp/capabilities`,
 `/v1/sccp/manifests`, and configured wallet route manifests advertise only the
 supported launch remote domains (`eth`, `bsc`, `sol`, `ton`, and `tron`).
-Substrate-family route configuration and runtime SCALE helper endpoints may
-remain in diagnostic evidence, but Substrate routes and the optional
+Substrate-family route configuration and runtime SCALE helper code may remain
+as diagnostic/future evidence, but Substrate routes and the optional
 `runtime_proof_family`, `runtime_verifier_backend`, and
 `message_runtime_bundle_path` capability fields are filtered out of public
-wallet/prover discovery while that launch scope is closed.
+wallet/prover discovery while that launch scope is closed. Torii's direct
+runtime SCALE export path also fails closed for unsupported launch domains, so
+a signed SORA-origin SORA2 bundle cannot become a hidden production relay path.
+Torii's typed proof artifact, normalized proof job, and bridge-proof conversion
+surfaces use the same launch-scope gate, including when unready diagnostic
+proofs are explicitly allowed, so diagnostic Substrate-family bundles cannot be
+repackaged as production proof outputs.
+Core source-chain proof production verifier APIs also enforce the supported
+launch remote-domain set and are limited to inbound remote -> SORA source
+proofs. Structurally valid future-target or Substrate-family source proofs with
+complete governed material and matching source-adapter deployment remain
+inspectable for diagnostics, but direct `*_production*` source-proof
+verification and bundle-level production extraction return false/none while the
+target is not SORA or the launch scope is closed.
+Core local-admission submission packaging follows the same launch-scope gate:
+complete Substrate-family diagnostic source material and source-adapter
+deployment evidence may still be inspected with explicit diagnostic tooling, but
+it cannot emit a SORA `local_admission` submission package while the lane is
+unsupported.
 Configured all-lanes launch readiness uses the same supported-domain inventory:
 complete or malformed Substrate-family diagnostic records cannot open a
 production lane and cannot block supported-domain launch checks.
@@ -1073,11 +1091,16 @@ source-adapter preflight
 applies the same fail-closed
 posture to non-empty source-state proof capsules by requiring version `1`, proof
 family `stark-fri-v1`, a non-empty circuit id, and non-empty/non-all-zero proof
-bytes before Norito/OpenVerify decoding. The Solana full-light-client audit proof
-builders also re-check the nested AccountsLtHash OpenVerify/FastPQ proof before
-deriving Tower replay, full AccountsDB lattice, or bank/fork-choice audit role
-proofs, so a shaped but invalid nested capsule cannot be cascaded into
-second-stage proof material.
+bytes that decode as a canonical STARK `OpenVerifyEnvelope` with matching
+outer/inner circuit id, non-zero verifier-key hash, non-empty schema and
+public-input columns, no auxiliary bytes, and non-empty backend FastPQ proof
+material. The Solana full-light-client audit proof builders also re-check the
+nested AccountsLtHash OpenVerify/FastPQ proof before deriving Tower replay, full
+AccountsDB lattice, or bank/fork-choice audit role proofs, so a shaped but
+invalid nested capsule cannot be cascaded into second-stage proof material.
+Solana AccountsLtHash and TON shard-state source-state transcript hash helpers
+reuse that same canonical-envelope gate, so opaque nonzero proof bytes cannot be
+committed into audit statements before lane-local verifier work.
 The same SDK source-material helpers reject every deterministic Solana template
 component hash: source trust anchor, consensus verifier, message-inclusion
 verifier, AccountsDB source-state verifier, and finality policy. A browser,
@@ -1736,8 +1759,23 @@ source-verifier material and source-adapter deployment evidence.
   backend proof bytes are re-encoded and byte-compared before verification, so
   compressed or otherwise alternate Norito framings are rejected even if they
   decode to the same fields.
+- Transparent OpenVerify summary helpers use the same production-shaped wrapper
+  policy before reporting metadata: exact transparent circuit id, non-zero
+  verifier-key hash, non-empty schema and public-input columns, no auxiliary
+  envelope bytes, and non-empty nonzero backend proof bytes are all required.
+- Artifact-level transparent summary helpers also validate the full typed SCCP
+  message proof artifact wrapper before reading proof metadata, so manifest
+  field drift, public-input drift, or tampered submission packages cannot be
+  summarized from otherwise well-shaped OpenVerify proof bytes. Torii and CLI
+  artifact JSON/summary renderers consume this gated helper and omit the
+  OpenVerify summary when the typed artifact wrapper is inconsistent.
 - Source-adapter OpenVerify proof envelopes are capped at 2 MiB before decode or
   FastPQ replay, matching the bound used for source-state proof capsules.
+- Source-adapter verifier-commitment metadata helpers apply the same outer
+  `SccpSourceAdapterVerificationProofV1` and inner OpenVerify/STARK shape gate
+  before returning an embedded verifier-key hash, so malformed proof wrappers,
+  opaque proof bytes, zero verifier keys, auxiliary envelope bytes, or empty
+  STARK public-input columns cannot be reported as deployment commitments.
 - SCCP transparent-proof verification reconstructs the canonical SCCP statement
   batch from the embedded bundle plus the shared manifest table, checks the
   `OpenVerifyEnvelope` metadata (`circuit_id`, schema descriptor, verifier
@@ -2864,8 +2902,10 @@ mixed transaction-source proofs with legacy receipt-root branches, receipt MPT
 nodes, receipt-root indexes, wrong adapter domains, zero block/root/seal/proof
 hashes, non-canonical witness bitmaps, all-zero TRON witness addresses,
 insufficient signed witness weight, truncated/non-canonical header and witness
-signatures, or stale witness-schedule transition metadata fail before
-witness-seal acceptance.
+signatures, stale witness-schedule transition metadata, or malformed
+next-witness-schedule payload bytes that do not decode as the canonical
+`sccp:tron:witness-schedule:v1` address/weight roster fail before witness-seal
+acceptance.
 This TRON source plan is intentionally source-message-call-only. Current TRON
 `accountStateRoot` is authenticated by the signed header proof, but it is not
 treated as an Ethereum-style world-state root that opens TVM contract
@@ -3256,11 +3296,14 @@ match the signed next set, and then requires the parent authority set to justify
 that transition with strict `> 2/3` weight before the next set becomes eligible.
 Substrate GRANDPA source proofs are preflight-bounded to at most 2,048
 authorities, 64 authority-set transitions, canonical authority payloads no
-larger than `1 + 4 + 2,048 * 40` bytes, signer bitmaps no larger than 256
-bytes, and 64-byte Ed25519 signatures. The web, Python, Swift, Kotlin, and Java
-Android UI prover helpers enforce the same bounds before deriving authority-set
-or transition transcript hashes, and reject all-zero authority keys both from
-canonical inputs and raw authority-set payloads.
+larger than `1 + 4 + 2,048 * 40` bytes, exact-width signer bitmaps with no
+padding/out-of-roster bits, non-empty signer sets, signature counts that match
+selected signers, claimed total/signed weights that match the authority roster
+and selected signers, strict `> 2/3` signed-weight quorum, and 64-byte Ed25519
+signatures. The web, Python, Swift, Kotlin, and Java Android UI prover helpers
+enforce the same bounds before deriving authority-set or transition transcript
+hashes, and reject all-zero authority keys both from canonical inputs and raw
+authority-set payloads.
 `iroha_sccp` also exposes explicit-material production helpers:
 `build_sccp_source_verifier_evidence_with_material(...)`,
 `build_sccp_source_adapter_verification_proof_with_material(...)`,
@@ -5371,20 +5414,33 @@ validator signatures rather than supplying opaque placeholders. TON
 validator-set payload and signature helpers are resource-bounded to at most
 1024 validators, and source-adapter validation caps ordered validator-set
 transition chains plus shard-state/config source Merkle branches at 64 entries
-before evidence hashing. SDK proof builders enforce the same branch cap before
-serializing portal/mobile witness transcripts. The config-proof helpers now
-require a bounded TON `HashmapE 32 ^Cell` proof BoC that opens config parameter
-`34`, bind the 32-bit key width and opened value hash into the transcript,
+before evidence hashing. Adapter-level preflight also rejects non-V1/non-TON
+envelopes, wrong masterchain/basechain identifiers, zero masterchain/shard
+sequence numbers, zero masterchain/shard file or block hashes, and zero
+validator-set, config, shard-state, transaction, signature, or shard-proof roots
+before shard-state, config, or validator-signature verification runs. SDK proof
+builders enforce the same branch cap before serializing portal/mobile witness
+transcripts. The config-proof helpers now require a bounded TON
+`HashmapE 32 ^Cell` proof BoC that opens config parameter `34`, bind the
+32-bit key width and opened value hash into the transcript,
 decode the opened `ValidatorSet` cell into SCCP's canonical payload, and
 require the decoded payload hash to match the supplied validator-set payload hash; the legacy
 abstract config inclusion branch must be empty for SDK-generated proofs. The
 TON validator-set helpers also reject all-zero Ed25519 validator keys on both
 structured input and raw validator-set payloads, and TON signature-proof helpers
-require the signer bitmap, signature count, claimed total/signed weights, and
-strict `> 2/3` signed-weight threshold to agree before serializing a transcript.
+require the signer bitmap to have the exact validator-set width with no
+padding/out-of-roster bits, a non-empty selected signer set, signature count,
+claimed total/signed weights, and strict `> 2/3` signed-weight threshold to
+agree before serializing a transcript.
 Transition-signature helpers additionally require the outer parent validator-set
 hash and transition-message hash to match the validator proof and transition
-fields.
+fields. TON validator-set transition structural preflight now applies the same
+canonical payload decode, payload-hash, next-set hash, parent-roster hash,
+transition message, nested validator-message, and transition-signature transcript
+checks before Ed25519 validator verification. Non-empty transition chains must
+also be internally adjacent by validator-set hash and seqno, use strictly
+increasing masterchain seqnos, and end at the adapter's declared active
+validator-set hash.
 TON shard-proof transcripts can optionally bind a bounded selected-account
 opening by including a `ShardStateUnsplit` proof BoC, the `ShardAccounts` root,
 selected key bit length, canonical account key bytes, and dictionary proof BoC
@@ -5744,6 +5800,12 @@ next_sync_committee_payload)`, and the verifier separately derives
 the raw next sync-committee payload, its payload hash, parent committee, signer
 bitmap, and aggregate BLS signature under
 `sccp:eth:sync-committee-transition-signature:v1`.
+The adapter-level preflight requires non-empty transition chains to be
+internally adjacent by parent committee hash and sync period, keeps transition
+slots no later than the adapter beacon slot, rejects transitions beyond the
+adapter sync period, and requires the final transition to terminate at the
+adapter's active sync-committee root and sync period before BLS transition-chain
+verification runs.
 The verifier additionally requires `keccak256(execution_header_rlp)` to equal
 `execution_block_hash`, parses `execution_header_rlp` as an Ethereum RLP header
 list, and checks the canonical receipts-root field at index 5 plus the
@@ -5797,6 +5859,9 @@ canonical message is defined only for the BSC source domain, adjacent validator
 epochs, and the Parlia epoch-start transition block
 `transition_block_number = to_validator_epoch * 200`; Rust and SDK helpers
 reject any other transition before hashing or proof packaging. The
+deployment verifier also requires the ordered transition chain to terminate at
+the adapter's declared `validator_epoch`; a chain that derives the same active
+validator-set hash at an earlier epoch is rejected as stale. The
 transition-seal hash then binds that message, the raw transition header RLP,
 the raw next-validator-set payload, the BSC ValidatorSet metadata proof, the
 parent validator set, signer bitmap, and recoverable secp256k1 signatures under
@@ -5815,6 +5880,43 @@ SDK helper extracts the same payload from Parlia header `extraData`, supporting
 the legacy address-only epoch layout and the post-Luban count/address/BLS-key
 layout, while the verifier accepts only a transition whose extracted payload
 matches the signed next-set transcript and the proven ValidatorSet storage.
+BSC source-adapter structural preflight applies the same signer certificate
+shape to final and transition seals before transcript hashing: the signer
+bitmap must have the exact roster width with no padding/out-of-roster bits, the
+signer set must be non-empty, the signature count must match the selected
+signers, claimed total/signed powers must equal the roster and selected signer
+powers, and the selected power must satisfy a strict `> 2/3` quorum. The
+adapter-level preflight also rejects non-V1/non-BSC envelopes and zero
+block/receipt/validator-set/commit-seal roots before receipt MPT, Parlia seal,
+or transition-chain verification runs.
+BSC transition structural preflight now also rejects non-V1/non-BSC transition
+envelopes, non-adjacent validator epochs, transition blocks that are not the
+Parlia epoch-start block for `to_validator_epoch`, empty transition
+header/payload material, zero transition hashes, and transition seals whose
+commit-message hash does not match the transition message hash before
+transition-step verification runs. That preflight also decodes the advertised
+next-validator payload, requires the payload hash and payload-derived next-set
+hash to match the transition fields, parses the transition header RLP to prove
+the same Parlia payload was advertised on-chain, recomputes the nested
+ValidatorSet metadata proof hash from the transition state root, recomputes the
+transition message hash, and recomputes the transition seal hash before deeper
+MPT or secp256k1 signature verification. At the adapter level, non-empty
+transition chains must be internally adjacent, strictly increasing by
+transition block, no later than the adapter block, and terminate at the
+adapter's declared active validator epoch and validator-set hash.
+The nested BSC ValidatorSet metadata preflight similarly requires the V1
+mainnet ValidatorSet contract address, canonical length slot, non-zero storage
+root and metadata/value hashes, non-empty bounded length and per-validator
+storage proofs, canonical per-validator storage slots, and storage-value hash
+agreement before MPT metadata verification runs.
+ETH sync-committee transition structural preflight now also decodes the
+advertised next-committee payload, requires parent-roster, next-committee, and
+payload-hash agreement, recomputes the transition message hash, checks the
+nested sync-committee message hash, and checks the transition signature-hash
+transcript before BLS transition verification runs. Non-empty ETH transition
+chains must also remain period-contiguous, internally adjacent by committee
+hash, no later than the adapter beacon slot, and terminal at the adapter's
+active sync-committee root and sync period.
 
 JavaScript, Python, Swift, Kotlin, and Java Android SDKs expose matching
 user-side helpers for these adapter-bound proof hashes: EVM and BSC
@@ -5829,17 +5931,32 @@ TRON witness-schedule transition payload transcripts, and Substrate
 storage-proof/authority-set transcripts. The ETH sync-committee and BSC
 validator-set helper surfaces enforce the same Rust verifier bounds before
 hashing UI witness material, so browser and mobile proof generators reject
-oversized committee payloads, signer bitmaps, signatures, and transition inputs
-before invoking an app-linked prover. Solana Rust adapter preflight now applies
+oversized committee payloads, non-canonical signer bitmaps, claimed quorum
+weight drift, sub-quorum certificates, signatures, and transition inputs before
+invoking an app-linked prover. Solana Rust adapter preflight now applies
 the same bounded-shape gate before source-adapter transcript hashing, so
 oversized UI-collected finalized-vote, finality-context, account raw-data,
 inclusion-branch, AccountsLtHash, or source-state proof material is rejected
-before canonical adapter bytes are serialized. Substrate storage-proof helpers
-require the canonical `frame_system::Events` storage key and the source-event
-leaf index as first-class UI witness material, so the same runtime storage item
-and path bits used to reconstruct the events root are also signed by the
-GRANDPA precommit transcript. When deployed Substrate-family source-state
-material is configured, the adapter must additionally carry the
+before canonical adapter bytes are serialized. Adapter-envelope preflight also
+requires V1 Solana source proofs, the Solana domain, non-zero finalized slot,
+blockhash, bank hash, transaction-status root, message-proof hash, exact
+non-zero transaction signature and emitter program id widths, a mainnet epoch
+matching the finalized slot, adjacent parent/finalized slots, non-zero
+finality-context roots, and a positive bank-signature count. The Solana
+vote-certificate preflight also requires the vote-message hash to match the
+Solana domain, finalized slot, blockhash, bank hash, transaction-status root,
+message-proof hash, and finality-context hash, an exact-width signer bitmap
+with no padding/out-of-roster bits, a non-empty selected signer set, signature
+count equal to selected signers, claimed total/signed stake equal to the
+validator roster and selected signers, strict `> 2/3` signed-stake quorum,
+non-empty StakeHistory sysvar data, and the exact 2,048-byte non-zero
+AccountsLtHash before deeper account/finality checks run.
+Substrate storage-proof helpers require the
+canonical `frame_system::Events` storage key and the source-event leaf index as
+first-class UI witness material, so the same runtime storage item and path bits
+used to reconstruct the events root are also signed by the GRANDPA precommit
+transcript. When deployed Substrate-family source-state material is configured,
+the adapter must additionally carry the
 `sccp-substrate-runtime-storage-v1` OpenVerify/FastPQ capsule that binds those
 public inputs to the governed runtime storage-proof verifier hash. The
 portal, operator tooling, and mobile apps should derive these hashes and the
@@ -6054,10 +6171,10 @@ next witness-schedule payload, the parent witness schedule, signer bitmap, and
 recoverable witness signatures under
 `sccp:tron:witness-schedule-transition-seal:v1`; stale next-schedule payloads,
 payload-hash mismatches, message/seal mismatches, and under-quorum transition
-seals fail before hashing. Ordered transition chains reject transition block
-hashes that are not anchored to the supplied solid, parent, or signed ancestor
-header evidence, epoch gaps, epoch overlaps, and non-increasing transition
-block numbers.
+seals fail before hashing. Ordered transition chains reject disconnected parent
+witness-schedule hashes, transition block hashes that are not anchored to the
+supplied solid, parent, or signed ancestor header evidence, epoch gaps, epoch
+overlaps, and non-increasing transition block numbers.
 The TRON solid-block header proof hash is
 `blake2b256("sccp:tron:solid-block-header-proof:v1" || canonical_header_proof)`,
 where `canonical_header_proof` includes raw header bytes, the witness header
@@ -6100,7 +6217,12 @@ Those same SDK surfaces also expose the TRON solid-block message, witness seal,
 and witness-schedule transition message/seal builders; they verify
 payload/hash consistency, signer recovery, bitmap weight, parent-schedule
 binding, and strict `> 2/3` signed witness weight before returning transcript
-hashes.
+hashes. Rust adapter preflight now mirrors the deterministic parts of that
+binding before verifier work by requiring parent-schedule hash agreement,
+payload-hash agreement, payload-derived next-schedule agreement, transition
+message-hash agreement, epoch-contiguous transition chains, strictly increasing
+transition block numbers, and final next-schedule hash equality with the
+adapter's active witness schedule.
 The TRON mainnet source-material template binds all eleven transcript families:
 `sccp:tron:receipt-proof:v1`,
 `sccp:tron:receipt-state-proof:v1`,
@@ -6145,7 +6267,19 @@ GRANDPA set-id range, transition block number/hash, parent authority-set hash,
 next authority-set hash, and the next authority-set payload hash. Transition
 justification hashes bind that message, the parent authority set, signer bitmap,
 and Ed25519 signatures under
-`sccp:substrate:authority-set-transition-justification:v1`.
+`sccp:substrate:authority-set-transition-justification:v1`. The verifier
+preflights each diagnostic transition by decoding the next authority-set
+payload, recomputing the payload hash, payload-derived next-set hash,
+parent-set hash, transition message hash, nested GRANDPA precommit hash, and
+transition justification hash before Ed25519 signature verification. It also
+requires the ordered authority-set transition chain to terminate at the
+adapter's declared `grandpa_set_id`; deriving the active authority-set hash at a
+stale GRANDPA set id remains diagnostic-only and is rejected by configured
+source verification.
+Launch-scope note: these Substrate-family transcript and adapter checks remain
+diagnostic/backlog material only. SCCP will not support Substrate/Polkadot
+production networks for now, including Kusama, Polkadot, SORA Kusama,
+SORA Polkadot, and SORA2, until that scope is explicitly re-opened.
 The JavaScript, Python, Swift, Kotlin, and Java Android SDK helpers expose the
 same authority-set payload, transition-message, and transition-justification
 transcript hashes so UI/mobile provers can derive the exact Substrate GRANDPA

@@ -61,7 +61,7 @@ Candidates == {
   "olderConflictCompletesQuorum",
   "lockedSameHeightConflict",
   "missingLockedPayloadOldView",
-  "missingLockedPayloadNewerView",
+  "missingLockedPayloadSameHeightNewerView",
   "nonExtendingLockedChain",
   "extendsLockedChain"
 }
@@ -71,7 +71,6 @@ SpecMayEmit(candidate) ==
     "safe",
     "supersededConflict",
     "candidateCompletesNewerQuorum",
-    "missingLockedPayloadNewerView",
     "extendsLockedChain"
   }
 
@@ -88,7 +87,7 @@ BugAllowsUnsafe(candidate) ==
      /\ BugEmitOlderQuorumCompletion
   \/ /\ candidate = "lockedSameHeightConflict"
      /\ BugEmitLockedConflict
-  \/ /\ candidate = "missingLockedPayloadOldView"
+  \/ /\ candidate \in {"missingLockedPayloadOldView", "missingLockedPayloadSameHeightNewerView"}
      /\ BugEmitMissingLockedPayload
   \/ /\ candidate = "nonExtendingLockedChain"
      /\ BugEmitNonExtendingLock
@@ -170,7 +169,12 @@ OlderConflictCannotUseQuorumCompletion ==
 LockedConflictsNeverEmit ==
   /\ "lockedSameHeightConflict" \notin emitted
   /\ "missingLockedPayloadOldView" \notin emitted
+  /\ "missingLockedPayloadSameHeightNewerView" \notin emitted
   /\ "nonExtendingLockedChain" \notin emitted
+
+MissingLockedPayloadNeverEmits ==
+  /\ "missingLockedPayloadOldView" \notin emitted
+  /\ "missingLockedPayloadSameHeightNewerView" \notin emitted
 
 PermittedConflictCasesCanEmit ==
   /\ "supersededConflict" \in tried => "supersededConflict" \in emitted
@@ -178,8 +182,6 @@ PermittedConflictCasesCanEmit ==
        "candidateCompletesNewerQuorum" \in emitted
 
 PermittedLockCasesCanEmit ==
-  /\ "missingLockedPayloadNewerView" \in tried =>
-       "missingLockedPayloadNewerView" \in emitted
-  /\ "extendsLockedChain" \in tried => "extendsLockedChain" \in emitted
+  "extendsLockedChain" \in tried => "extendsLockedChain" \in emitted
 
 ====

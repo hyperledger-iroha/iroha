@@ -12224,8 +12224,22 @@ fn transaction_submission_response(
             submitted_at_height,
             signer: app.da_receipt_signer.public_key().clone(),
         };
-        let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
-        utils::respond_with_status_and_format(StatusCode::ACCEPTED, receipt, format)
+        match TransactionSubmissionReceipt::try_sign(payload, &app.da_receipt_signer) {
+            Ok(receipt) => {
+                utils::respond_with_status_and_format(StatusCode::ACCEPTED, receipt, format)
+            }
+            Err(err) => {
+                let envelope = ErrorEnvelope::new(
+                    "transaction_submission_receipt_signing_failed",
+                    format!("failed to sign transaction submission receipt: {err}"),
+                );
+                utils::respond_with_status_and_format(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    envelope,
+                    format,
+                )
+            }
+        }
     };
     if let Ok(header) = HeaderValue::from_str(&tx_hash_header) {
         response.headers_mut().insert(
@@ -49553,17 +49567,28 @@ pub(crate) mod tests_runtime_handlers {
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
-        let runtime_err = routing::handle_v1_sccp_message_runtime_envelope(
+        let runtime_response = routing::handle_v1_sccp_message_runtime_envelope(
             app.state.as_ref(),
             hex::encode(bundle.commitment.message_id),
         )
         .await
-        .expect_err("unsigned SORA-origin runtime export must require signed Nexus finality");
-        assert!(query_conversion_message(&runtime_err).is_some_and(|message| {
-            message.contains(
-                "SCCP SORA-origin message bundle Nexus finality proof failed cryptographic verification",
-            )
-        }));
+        .expect("runtime response");
+        assert_eq!(
+            runtime_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/octet-stream".as_slice())
+        );
+        let runtime_bytes = axum::body::to_bytes(runtime_response.into_body(), usize::MAX)
+            .await
+            .expect("runtime body");
+        assert_eq!(
+            runtime_bytes.as_ref(),
+            iroha_sccp::sccp_runtime_envelope_bytes_from_message_bundle(&bundle)
+                .expect("runtime envelope")
+                .as_slice()
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -49645,12 +49670,15 @@ pub(crate) mod tests_runtime_handlers {
             hex::encode(message_id),
         )
         .await
-        .expect_err("unsigned SORA-origin runtime export must require signed Nexus finality");
-        assert!(query_conversion_message(&runtime_err).is_some_and(|message| {
-            message.contains(
-                "SCCP SORA-origin message bundle Nexus finality proof failed cryptographic verification",
-            )
-        }));
+        .expect_err("SORA2 runtime export must fail while Substrate is out of launch scope");
+        assert!(
+            query_conversion_message(&runtime_err).is_some_and(|message| {
+                message.contains("runtime SCALE envelope export is not supported")
+                    && message.contains("domain 8")
+                    && message
+                        .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
+            })
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }

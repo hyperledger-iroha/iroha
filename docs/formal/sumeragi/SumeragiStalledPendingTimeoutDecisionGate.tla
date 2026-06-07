@@ -8,8 +8,11 @@ This slice pins `stalled_pending_timeout_decision(...)`. The helper derives a
 base timeout from the commit quorum timeout with a one-millisecond floor, caps
 the near-quorum payload timeout by that base timeout, classifies near-quorum
 missing-payload repair before active recovery backlog, and otherwise falls back
-to the base quorum timeout. The decision also returns the observed vote count,
-minimum commit votes, missing-local-data flag, and same-block recovery flag.
+to the base quorum timeout. Commit-pipeline backlog requires valid pending work
+plus recovery evidence from an observed commit QC, a validated commit artifact,
+near-quorum votes, or active commit-QC repair. The decision also returns the
+observed vote count, minimum commit votes, missing-local-data flag, and
+same-block recovery flag.
 ***************************************************************************)
 
 CONSTANT
@@ -46,6 +49,8 @@ Cases == {
   "validation_inflight_not_pending",
   "commit_qc_repair",
   "commit_pipeline_queue",
+  "commit_pipeline_commit_qc_observed",
+  "commit_pipeline_validated_artifact",
   "invalid_commit_pipeline",
   "queue_without_evidence"
 }
@@ -134,13 +139,29 @@ CommitQcRepairActive(c) == c = "commit_qc_repair"
 
 \* @type: Str => Bool;
 QueueActiveBacklog(c) ==
-  c \in {"commit_pipeline_queue", "invalid_commit_pipeline", "queue_without_evidence"}
+  c \in {
+    "commit_pipeline_queue",
+    "commit_pipeline_commit_qc_observed",
+    "commit_pipeline_validated_artifact",
+    "invalid_commit_pipeline",
+    "queue_without_evidence"
+  }
 
 \* @type: Str => Bool;
 PendingInvalid(c) == c = "invalid_commit_pipeline"
 
 \* @type: Str => Bool;
-CommitPipelineEvidence(c) == c \in {"commit_pipeline_queue", "invalid_commit_pipeline"}
+CommitQcObserved(c) ==
+  c \in {"commit_pipeline_queue", "commit_pipeline_commit_qc_observed"}
+
+\* @type: Str => Bool;
+ValidatedCommitArtifact(c) == c = "commit_pipeline_validated_artifact"
+
+\* @type: Str => Bool;
+CommitPipelineEvidence(c) ==
+  \/ c = "invalid_commit_pipeline"
+  \/ CommitQcObserved(c)
+  \/ ValidatedCommitArtifact(c)
 
 \* @type: Str => Bool;
 SpecValidationRecoveryActive(c) ==
@@ -235,6 +256,10 @@ ActualCommitPipelineBacklogActive(c) ==
           QueueActiveBacklog(c) /\ CommitPipelineEvidence(c)
     [] Bug = "queue_without_evidence_active"
        /\ c = "queue_without_evidence" -> QueueActiveBacklog(c)
+    [] Bug = "skip_commit_qc_observed_backlog"
+       /\ c = "commit_pipeline_commit_qc_observed" -> FALSE
+    [] Bug = "skip_validated_artifact_backlog"
+       /\ c = "commit_pipeline_validated_artifact" -> FALSE
     [] OTHER -> SpecCommitPipelineBacklogActive(c)
 
 \* @type: Str => Bool;
@@ -324,7 +349,9 @@ TypeInvariant ==
        "skip_commit_qc_repair",
        "invalid_commit_pipeline_backlog",
        "queue_without_evidence_active",
-       "validation_inflight_without_pending"
+       "validation_inflight_without_pending",
+       "skip_commit_qc_observed_backlog",
+       "skip_validated_artifact_backlog"
      }
   /\ checked = 0
 
@@ -401,6 +428,8 @@ RecoveryBacklogAnchors ==
   /\ SpecRecoveryBacklogActive("validation_inflight_not_pending") = FALSE
   /\ SpecRecoveryBacklogActive("commit_qc_repair") = TRUE
   /\ SpecRecoveryBacklogActive("commit_pipeline_queue") = TRUE
+  /\ SpecRecoveryBacklogActive("commit_pipeline_commit_qc_observed") = TRUE
+  /\ SpecRecoveryBacklogActive("commit_pipeline_validated_artifact") = TRUE
   /\ SpecRecoveryBacklogActive("invalid_commit_pipeline") = FALSE
   /\ SpecRecoveryBacklogActive("queue_without_evidence") = FALSE
   /\ SpecRecoveryBacklogActive("same_block_recovery") = TRUE
@@ -411,6 +440,8 @@ ClassPriorityAnchors ==
   /\ SpecClass("same_block_recovery") = ActiveClass
   /\ SpecClass("near_gate_closed_no_recovery") = BaseClass
   /\ SpecClass("worker_recovery") = ActiveClass
+  /\ SpecClass("commit_pipeline_commit_qc_observed") = ActiveClass
+  /\ SpecClass("commit_pipeline_validated_artifact") = ActiveClass
   /\ SpecClass("invalid_commit_pipeline") = BaseClass
   /\ SpecClass("queue_without_evidence") = BaseClass
 
@@ -419,6 +450,8 @@ TimeoutAnchors ==
   /\ SpecTimeout("near_capped_by_base") = SpecBaseTimeout("near_capped_by_base")
   /\ SpecTimeout("near_fast") = 200
   /\ SpecTimeout("worker_recovery") = 2500
+  /\ SpecTimeout("commit_pipeline_commit_qc_observed") = 2500
+  /\ SpecTimeout("commit_pipeline_validated_artifact") = 2500
   /\ SpecTimeout("near_with_worker_recovery") = 200
 
 DecisionProjectionAnchors ==
@@ -508,5 +541,13 @@ BugQueueWithoutEvidenceActive ==
 BugValidationInflightWithoutPending ==
   ActualDecision("validation_inflight_not_pending") =
     SpecDecision("validation_inflight_not_pending")
+
+BugSkipCommitQcObservedBacklog ==
+  ActualDecision("commit_pipeline_commit_qc_observed") =
+    SpecDecision("commit_pipeline_commit_qc_observed")
+
+BugSkipValidatedArtifactBacklog ==
+  ActualDecision("commit_pipeline_validated_artifact") =
+    SpecDecision("commit_pipeline_validated_artifact")
 
 ====

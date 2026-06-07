@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### プロダクション WSV
 
 - 既存の補償範囲:
-  - 競合フォールバック動作: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - 階層型バックエンドに関するロック順序の安全性: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - 競合フォールバック動作: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - 階層型バックエンドに関するロック順序の安全性: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - ギャップ:
   - 大量のワールドコミットの下で許容可能な最大コミット保持時間を主張する定量的競合テストはありません
   - DA カーソル進行不変条件が予期せず壊れた場合にパニックを起こさずに処理するための回帰テストはありません
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## 推奨されるテストの追加1. `kura_writer_io_failures_do_not_panic` (ユニット、フォールト挿入)
 2. `kura_budget_check_scales_with_pending_depth` (パフォーマンスの低下)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (統合/パフォーマンス)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (競合回帰)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (競合回帰)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (回復力)
 6. `mock_wsv_admin_alias_requires_permissions` (セキュリティの後退)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS ガード)

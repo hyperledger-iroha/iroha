@@ -33,6 +33,8 @@ use iroha_config::{
         },
     },
 };
+#[cfg(any(test, feature = "bench"))]
+use iroha_crypto::KeyPair;
 use iroha_crypto::{Hash, HashOf};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
@@ -84,6 +86,7 @@ const PIPELINE_INDEX_ENTRY_SIZE: usize = core::mem::size_of::<u64>() * 2;
 const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
 const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const BLOCK_REPLICA_ADVERT_TTL: Duration = Duration::from_secs(60 * 60);
+const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
 
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
@@ -131,6 +134,10 @@ fn default_fastpq_proof_sidecar_queue_cap() -> usize {
     FASTPQ_DEFAULTS::PROOF_SIDECAR_QUEUE_CAP.get()
 }
 
+fn default_pipeline_sidecar_queue_cap() -> usize {
+    BLOCKS_IN_MEMORY.get()
+}
+
 fn default_fastpq_proof_sidecar_max_bytes() -> usize {
     usize::try_from(FASTPQ_DEFAULTS::PROOF_SIDECAR_MAX_BYTES.get())
         .unwrap_or(usize::MAX)
@@ -150,6 +157,8 @@ fn default_fastpq_proof_sidecar_max_retries() -> usize {
 pub struct Kura {
     /// The block storage
     block_store: Mutex<BlockStore>,
+    /// Serializes block-store writes while allowing reads during long eviction compaction.
+    block_store_write_lock: Mutex<()>,
     /// The array of block hashes and a slot for an arc of the block. This is normally recovered from the index file.
     block_data: Mutex<BlockData>,
     /// Number of pre-fork blocks whose body schema is intentionally not decoded in bootstrap mode.
@@ -159,7 +168,7 @@ pub struct Kura {
     /// Reverse lookup for committed transaction entrypoint hash to containing block heights.
     transaction_entrypoint_index: Mutex<TransactionEntrypointIndex>,
     /// Channel for waking the writer thread when sidecars need flushing or shutdown is signalled.
-    block_notify_tx: mpsc::Sender<BlockNotify>,
+    block_notify_tx: mpsc::SyncSender<BlockNotify>,
     block_notify_rx: Mutex<Option<mpsc::Receiver<BlockNotify>>>,
     /// Path to newline-delimited JSON (JSONL) block dump.
     block_plain_text_path: Mutex<Option<PathBuf>>,
@@ -167,6 +176,8 @@ pub struct Kura {
     sidecar_lock: Mutex<()>,
     /// Queue of pipeline sidecar writes flushed by the Kura writer thread.
     pipeline_sidecar_queue: Mutex<VecDeque<PipelineRecoverySidecar>>,
+    /// Maximum queued pipeline sidecar writes.
+    pipeline_sidecar_queue_cap: AtomicUsize,
     /// Queue of FASTPQ proof attachments merged into existing pipeline sidecars.
     fastpq_proof_queue: Mutex<VecDeque<QueuedFastpqProofSnapshot>>,
     /// Maximum queued FASTPQ proof sidecar attachments.
@@ -195,6 +206,17 @@ pub struct Kura {
     pending_budget_bytes: AtomicU64,
     /// Marks whether `pending_budget_bytes` currently reflects in-memory block state.
     pending_budget_bytes_valid: AtomicBool,
+    /// Counts raw pending-budget scans for focused cache tests.
+    #[cfg(test)]
+    pending_budget_raw_scans: AtomicUsize,
+    /// Coalesced reclaim request for the writer thread's storage-budget maintenance pass.
+    pending_budget_eviction_bytes: AtomicU64,
+    /// Cached durable block count for budget accounting.
+    durable_budget_persisted_count: AtomicUsize,
+    /// Cached unindexed block-store bytes for budget accounting.
+    durable_budget_unindexed_bytes: AtomicU64,
+    /// Marks whether the durable budget metadata cache is usable.
+    durable_budget_snapshot_valid: AtomicBool,
     /// Indicates whether the budget usage cache was initialized successfully.
     disk_usage_initialized: AtomicBool,
     /// Indicates whether the total usage cache was initialized successfully.
@@ -226,6 +248,15 @@ pub struct Kura {
     /// Test hook for forcing the next commit manifest sidecar write to fail.
     #[cfg(test)]
     fail_next_commit_manifest_write: AtomicBool,
+    /// Counts raw durable-budget metadata reads for focused cache tests.
+    #[cfg(test)]
+    durable_budget_metadata_reads: AtomicUsize,
+    /// Test hook that pauses eviction after the block-store snapshot is captured.
+    #[cfg(test)]
+    pause_eviction_after_snapshot: AtomicBool,
+    /// Test hook indicating eviction is paused after releasing the block-store lock.
+    #[cfg(test)]
+    eviction_paused_after_snapshot: AtomicBool,
     /// Retains the temporary storage directory used by test-only Kura instances.
     _temp_store_dir: Option<tempfile::TempDir>,
 }
@@ -243,6 +274,22 @@ type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockRepl
 struct QueuedFastpqProofSnapshot {
     snapshot: FastpqProofSnapshot,
     retries: usize,
+}
+
+/// Result of enqueueing pipeline recovery metadata for sidecar persistence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum PipelineSidecarEnqueueResult {
+    /// The sidecar was accepted.
+    Enqueued {
+        /// Queue depth after the sidecar was accepted.
+        queue_depth: usize,
+    },
+    /// The queue is already at the configured capacity.
+    RejectedQueueFull {
+        /// Configured queue capacity.
+        cap: usize,
+    },
 }
 
 /// Result of enqueueing a FASTPQ proof snapshot for sidecar persistence.
@@ -733,10 +780,37 @@ impl MergeLedgerLog {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BlockNotify {
     NewBlock,
+    StorageBudgetEviction,
     Shutdown,
 }
 
 impl Kura {
+    fn notify_block_writer_sender(
+        sender: &mpsc::SyncSender<BlockNotify>,
+        notification: BlockNotify,
+        context: &'static str,
+    ) {
+        match sender.try_send(notification) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(_)) => {
+                debug!(
+                    ?notification,
+                    context, "coalesced redundant Kura writer notification"
+                );
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                warn!(
+                    ?notification,
+                    context, "failed to notify Kura writer because channel is closed"
+                );
+            }
+        }
+    }
+
+    fn notify_block_writer(&self, notification: BlockNotify, context: &'static str) {
+        Self::notify_block_writer_sender(&self.block_notify_tx, notification, context);
+    }
+
     fn build_block_height_index(block_data: &BlockData) -> BlockHeightIndex {
         block_data
             .iter()
@@ -1062,7 +1136,7 @@ impl Kura {
             BlockStore::with_fsync(&blocks_root, config.fsync_mode, config.fsync_interval);
         block_store.create_files_if_they_do_not_exist()?;
 
-        let (block_notify_tx, block_notify_rx) = mpsc::channel();
+        let (block_notify_tx, block_notify_rx) = mpsc::sync_channel(BLOCK_NOTIFY_CHANNEL_CAPACITY);
 
         let block_plain_text_path = config
             .debug_output_new_blocks
@@ -1150,6 +1224,7 @@ impl Kura {
 
         let kura = Arc::new(Self {
             block_store: Mutex::new(block_store),
+            block_store_write_lock: Mutex::new(()),
             block_data: Mutex::new(block_data),
             hard_fork_hash_only_block_count: AtomicUsize::new(hard_fork_hash_only_block_count),
             block_height_index: Mutex::new(block_height_index),
@@ -1159,6 +1234,7 @@ impl Kura {
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
+            pipeline_sidecar_queue_cap: AtomicUsize::new(config.blocks_in_memory.get()),
             fastpq_proof_queue: Mutex::new(VecDeque::new()),
             fastpq_proof_sidecar_queue_cap: AtomicUsize::new(
                 default_fastpq_proof_sidecar_queue_cap(),
@@ -1179,6 +1255,12 @@ impl Kura {
             disk_usage_total: AtomicU64::new(0),
             pending_budget_bytes: AtomicU64::new(0),
             pending_budget_bytes_valid: AtomicBool::new(false),
+            #[cfg(test)]
+            pending_budget_raw_scans: AtomicUsize::new(0),
+            pending_budget_eviction_bytes: AtomicU64::new(0),
+            durable_budget_persisted_count: AtomicUsize::new(block_count),
+            durable_budget_unindexed_bytes: AtomicU64::new(0),
+            durable_budget_snapshot_valid: AtomicBool::new(true),
             disk_usage_initialized: AtomicBool::new(false),
             disk_usage_total_initialized: AtomicBool::new(false),
             disk_usage_total_last_refresh: AtomicU64::new(0),
@@ -1195,6 +1277,12 @@ impl Kura {
             fail_next_wsv_checkpoint_write: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_commit_manifest_write: AtomicBool::new(false),
+            #[cfg(test)]
+            durable_budget_metadata_reads: AtomicUsize::new(0),
+            #[cfg(test)]
+            pause_eviction_after_snapshot: AtomicBool::new(false),
+            #[cfg(test)]
+            eviction_paused_after_snapshot: AtomicBool::new(false),
             _temp_store_dir: None,
         });
 
@@ -1236,7 +1324,7 @@ impl Kura {
     /// The instance keeps blocks in memory for normal test access, while any background writer
     /// activity is redirected into a per-instance temporary directory instead of the crate root.
     pub fn blank_kura_for_testing() -> Arc<Kura> {
-        let (block_notify_tx, block_notify_rx) = mpsc::channel();
+        let (block_notify_tx, block_notify_rx) = mpsc::sync_channel(BLOCK_NOTIFY_CHANNEL_CAPACITY);
         let temp_store_dir = tempfile::Builder::new()
             .prefix("iroha-blank-kura-")
             .tempdir()
@@ -1252,6 +1340,7 @@ impl Kura {
                 FsyncMode::Off,
                 FSYNC_INTERVAL,
             )),
+            block_store_write_lock: Mutex::new(()),
             block_data: Mutex::new(Vec::new()),
             hard_fork_hash_only_block_count: AtomicUsize::new(0),
             block_height_index: Mutex::new(BTreeMap::new()),
@@ -1261,6 +1350,7 @@ impl Kura {
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
             pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
+            pipeline_sidecar_queue_cap: AtomicUsize::new(default_pipeline_sidecar_queue_cap()),
             fastpq_proof_queue: Mutex::new(VecDeque::new()),
             fastpq_proof_sidecar_queue_cap: AtomicUsize::new(
                 default_fastpq_proof_sidecar_queue_cap(),
@@ -1281,6 +1371,12 @@ impl Kura {
             disk_usage_total: AtomicU64::new(0),
             pending_budget_bytes: AtomicU64::new(0),
             pending_budget_bytes_valid: AtomicBool::new(false),
+            #[cfg(test)]
+            pending_budget_raw_scans: AtomicUsize::new(0),
+            pending_budget_eviction_bytes: AtomicU64::new(0),
+            durable_budget_persisted_count: AtomicUsize::new(0),
+            durable_budget_unindexed_bytes: AtomicU64::new(0),
+            durable_budget_snapshot_valid: AtomicBool::new(true),
             disk_usage_initialized: AtomicBool::new(true),
             disk_usage_total_initialized: AtomicBool::new(true),
             disk_usage_total_last_refresh: AtomicU64::new(0),
@@ -1300,6 +1396,12 @@ impl Kura {
             fail_next_wsv_checkpoint_write: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_commit_manifest_write: AtomicBool::new(false),
+            #[cfg(test)]
+            durable_budget_metadata_reads: AtomicUsize::new(0),
+            #[cfg(test)]
+            pause_eviction_after_snapshot: AtomicBool::new(false),
+            #[cfg(test)]
+            eviction_paused_after_snapshot: AtomicBool::new(false),
             _temp_store_dir: Some(temp_store_dir),
         })
     }
@@ -1352,6 +1454,12 @@ impl Kura {
         self.set_fastpq_proof_sidecar_limits(queue_cap, max_bytes, max_retries);
     }
 
+    #[cfg(test)]
+    fn set_pipeline_sidecar_queue_cap_for_testing(&self, queue_cap: usize) {
+        self.pipeline_sidecar_queue_cap
+            .store(queue_cap.max(1), Ordering::Relaxed);
+    }
+
     /// Root directory used by this Kura instance.
     #[must_use]
     pub fn store_root(&self) -> PathBuf {
@@ -1373,6 +1481,15 @@ impl Kura {
         let usage = self.kura_disk_usage_bytes()?;
         self.disk_usage.store(usage, Ordering::Relaxed);
         self.disk_usage_initialized.store(true, Ordering::Relaxed);
+        match self.persisted_count_and_unindexed_bytes_raw() {
+            Ok((persisted_count, unindexed_bytes)) => {
+                self.publish_durable_budget_snapshot(persisted_count, unindexed_bytes);
+            }
+            Err(err) => {
+                warn!(?err, "failed to refresh Kura durable budget metadata");
+                self.invalidate_durable_budget_snapshot();
+            }
+        }
         let _ = self.refresh_total_disk_usage_bytes();
         Ok(usage)
     }
@@ -1488,6 +1605,96 @@ impl Kura {
             .store(false, Ordering::Relaxed);
     }
 
+    fn request_background_budget_eviction(&self, bytes_needed: u64) {
+        if bytes_needed == 0 || self.store_root.as_os_str().is_empty() {
+            return;
+        }
+
+        let mut current = self.pending_budget_eviction_bytes.load(Ordering::Relaxed);
+        while bytes_needed > current {
+            match self.pending_budget_eviction_bytes.compare_exchange_weak(
+                current,
+                bytes_needed,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+
+        self.notify_block_writer(
+            BlockNotify::StorageBudgetEviction,
+            "storage budget eviction",
+        );
+    }
+
+    fn flush_pending_budget_eviction(&self) -> u64 {
+        let bytes_needed = self.pending_budget_eviction_bytes.swap(0, Ordering::AcqRel);
+        if bytes_needed == 0 {
+            return 0;
+        }
+
+        match self.evict_block_bodies(bytes_needed) {
+            Ok(freed) => {
+                if freed < bytes_needed {
+                    debug!(
+                        bytes_needed,
+                        freed,
+                        "background Kura storage-budget eviction reclaimed less than requested"
+                    );
+                }
+                freed
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    bytes_needed, "failed background Kura storage-budget eviction"
+                );
+                self.record_writer_fault("background budget eviction", &err);
+                0
+            }
+        }
+    }
+
+    fn durable_budget_snapshot(&self) -> Option<(usize, u64)> {
+        if !self.durable_budget_snapshot_valid.load(Ordering::Acquire) {
+            return None;
+        }
+        Some((
+            self.durable_budget_persisted_count.load(Ordering::Relaxed),
+            self.durable_budget_unindexed_bytes.load(Ordering::Relaxed),
+        ))
+    }
+
+    fn publish_durable_budget_snapshot(&self, persisted_count: usize, unindexed_bytes: u64) {
+        self.durable_budget_persisted_count
+            .store(persisted_count, Ordering::Relaxed);
+        self.durable_budget_unindexed_bytes
+            .store(unindexed_bytes, Ordering::Relaxed);
+        self.durable_budget_snapshot_valid
+            .store(true, Ordering::Release);
+    }
+
+    fn invalidate_durable_budget_snapshot(&self) {
+        self.durable_budget_snapshot_valid
+            .store(false, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    fn maybe_pause_eviction_after_snapshot_for_tests(&self) {
+        if self
+            .pause_eviction_after_snapshot
+            .swap(false, Ordering::AcqRel)
+        {
+            self.eviction_paused_after_snapshot
+                .store(true, Ordering::Release);
+            while self.eviction_paused_after_snapshot.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+        }
+    }
+
     fn record_writer_fault(&self, context: &'static str, error: &Error) {
         {
             let mut fault = self.writer_fault.lock();
@@ -1507,59 +1714,103 @@ impl Kura {
             return Ok(0);
         }
 
-        let mut block_store = self.block_store.lock();
-        if let Err(err) = block_store.flush_pending_fsync(true) {
-            warn!(?err, "failed to flush pending Kura writes before eviction");
-        }
-
-        let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
-        if persisted <= 1 {
-            return Ok(0);
-        }
-        let retain_tail = self.blocks_in_memory.get().max(1);
-        let evict_limit = persisted.saturating_sub(retain_tail);
-        if evict_limit <= 1 {
-            return Ok(0);
-        }
-
-        let mut indices = vec![BlockIndex::default(); persisted];
-        block_store.read_block_indices(0, &mut indices)?;
-        let hashes = block_store.read_block_hashes(0, persisted)?;
-
-        let mut evict_mask = vec![false; persisted];
-        let mut freed = 0u64;
-        for idx in 1..evict_limit {
-            let entry = indices[idx];
-            if entry.is_evicted() {
-                continue;
+        let _write_guard = self.block_store_write_lock.lock();
+        let (
+            persisted,
+            evict_limit,
+            indices,
+            evict_mask,
+            freed,
+            before_bytes,
+            data_path,
+            data_tmp,
+            index_path,
+            index_tmp,
+            da_blocks_dir,
+        ) = {
+            let mut block_store = self.block_store.lock();
+            if let Err(err) = block_store.flush_pending_fsync(true) {
+                warn!(?err, "failed to flush pending Kura writes before eviction");
             }
-            let height = idx.saturating_add(1) as u64;
-            let hash = hashes[idx];
-            if !self.has_required_remote_replicas(height, hash, entry.length) {
-                debug!(
-                    height,
-                    block = %hash,
-                    required_replicas = self.eviction_required_replicas.get(),
-                    payload_len = entry.length,
-                    "skipping Kura body eviction without enough remote replicas"
-                );
-                continue;
-            }
-            freed = freed.saturating_add(entry.length);
-            evict_mask[idx] = true;
-            if freed >= bytes_needed {
-                break;
-            }
-        }
 
-        if freed == 0 {
-            return Ok(0);
-        }
+            let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
+            if persisted <= 1 {
+                return Ok(0);
+            }
+            let retain_tail = self.blocks_in_memory.get().max(1);
+            let evict_limit = persisted.saturating_sub(retain_tail);
+            if evict_limit <= 1 {
+                return Ok(0);
+            }
 
-        let before_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
+            let mut indices = vec![BlockIndex::default(); persisted];
+            block_store.read_block_indices(0, &mut indices)?;
+            let hashes = block_store.read_block_hashes(0, persisted)?;
+
+            let mut evict_mask = vec![false; persisted];
+            let mut freed = 0u64;
+            for idx in 1..evict_limit {
+                let entry = indices[idx];
+                if entry.is_evicted() {
+                    continue;
+                }
+                let height = idx.saturating_add(1) as u64;
+                let hash = hashes[idx];
+                if !self.has_required_remote_replicas(height, hash, entry.length) {
+                    debug!(
+                        height,
+                        block = %hash,
+                        required_replicas = self.eviction_required_replicas.get(),
+                        payload_len = entry.length,
+                        "skipping Kura body eviction without enough remote replicas"
+                    );
+                    continue;
+                }
+                freed = freed.saturating_add(entry.length);
+                evict_mask[idx] = true;
+                if freed >= bytes_needed {
+                    break;
+                }
+            }
+
+            if freed == 0 {
+                return Ok(0);
+            }
+
+            let before_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
+            block_store.ensure_da_blocks_dir()?;
+            let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
+            let data_tmp = block_store
+                .path_to_blockchain
+                .join(format!("{DATA_FILE_NAME}.tmp"));
+            let index_path = block_store.path_to_blockchain.join(INDEX_FILE_NAME);
+            let index_tmp = block_store
+                .path_to_blockchain
+                .join(format!("{INDEX_FILE_NAME}.tmp"));
+            let da_blocks_dir = block_store.da_blocks_dir.clone();
+
+            (
+                persisted,
+                evict_limit,
+                indices,
+                evict_mask,
+                freed,
+                before_bytes,
+                data_path,
+                data_tmp,
+                index_path,
+                index_tmp,
+                da_blocks_dir,
+            )
+        };
+
+        #[cfg(test)]
+        self.maybe_pause_eviction_after_snapshot_for_tests();
+
         let mut da_added = 0u64;
-
-        block_store.ensure_da_blocks_dir()?;
+        let mut data_source = FileWrap::open_with(data_path.clone(), |opts| {
+            opts.read(true);
+        })?;
         let mut buffer = Vec::new();
         for idx in 1..evict_limit {
             if !evict_mask[idx] {
@@ -1570,39 +1821,18 @@ impl Kura {
                 continue;
             }
             let height = idx.saturating_add(1) as u64;
-            let path = block_store.da_block_path(height);
+            let path = da_blocks_dir.join(format!("{height:020}.norito"));
             let da_before = Self::file_len_or_zero(&path)?;
             if da_before == entry.length {
                 continue;
             }
             let length: usize = entry.length.try_into()?;
             buffer.resize(length, 0);
-            block_store.read_block_data(entry.start, &mut buffer)?;
-            let tmp_path = path.with_extension("norito.tmp");
-            let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
-                opts.write(true).create(true).truncate(true);
-            })?;
-            tmp_file.try_io(|file| {
-                file.write_all(&buffer)?;
-                file.flush()?;
-                file.sync_data()
-            })?;
-            std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-            if let Some(parent) = path.parent() {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
+            Self::read_block_data_from_file(&mut data_source, entry.start, &mut buffer)?;
+            Self::write_atomic_synced(&path, &buffer)?;
             let da_after = Self::file_len_or_zero(&path)?;
             da_added = da_added.saturating_add(da_after.saturating_sub(da_before));
         }
-
-        let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
-        let data_tmp = block_store
-            .path_to_blockchain
-            .join(format!("{DATA_FILE_NAME}.tmp"));
-        let index_path = block_store.path_to_blockchain.join(INDEX_FILE_NAME);
-        let index_tmp = block_store
-            .path_to_blockchain
-            .join(format!("{INDEX_FILE_NAME}.tmp"));
 
         let mut new_indices = indices.clone();
         let mut cursor = 0u64;
@@ -1616,7 +1846,7 @@ impl Kura {
             }
             let length: usize = entry.length.try_into()?;
             buffer.resize(length, 0);
-            block_store.read_block_data(entry.start, &mut buffer)?;
+            Self::read_block_data_from_file(&mut data_source, entry.start, &mut buffer)?;
             data_tmp_file.try_io(|file| {
                 file.seek(SeekFrom::Start(cursor))?;
                 file.write_all(&buffer)
@@ -1643,19 +1873,41 @@ impl Kura {
             file.set_len(index_len)?;
             file.sync_data()
         })?;
+        drop(index_tmp_file);
+        drop(data_tmp_file);
+        drop(data_source);
 
-        std::fs::rename(&data_tmp, &data_path).map_err(|err| Error::IO(err, data_path.clone()))?;
-        std::fs::rename(&index_tmp, &index_path)
-            .map_err(|err| Error::IO(err, index_path.clone()))?;
-        if let Some(parent) = data_path.parent() {
-            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        {
+            let mut block_store = self.block_store.lock();
+            let current_persisted = usize::try_from(block_store.read_durable_index_count()?)?;
+            if current_persisted != persisted {
+                warn!(
+                    current_persisted,
+                    persisted,
+                    "Kura block store changed during eviction compaction; discarding temp files"
+                );
+                let _ = std::fs::remove_file(&data_tmp);
+                let _ = std::fs::remove_file(&index_tmp);
+                self.invalidate_durable_budget_snapshot();
+                return Ok(0);
+            }
+
+            block_store.drop_cached_handles();
+            std::fs::rename(&data_tmp, &data_path)
+                .map_err(|err| Error::IO(err, data_path.clone()))?;
+            std::fs::rename(&index_tmp, &index_path)
+                .map_err(|err| Error::IO(err, index_path.clone()))?;
+            if let Some(parent) = data_path.parent() {
+                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            }
+
+            block_store.fsync.clear();
+            block_store.drop_cached_handles();
+            let after_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
+            self.update_disk_usage_delta(before_bytes, after_bytes);
+            self.add_total_disk_usage_bytes(da_added);
+            self.publish_durable_budget_snapshot(persisted, 0);
         }
-
-        block_store.fsync.clear();
-        block_store.drop_cached_handles();
-        let after_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
-        self.update_disk_usage_delta(before_bytes, after_bytes);
-        self.add_total_disk_usage_bytes(da_added);
 
         if freed > 0 {
             if let Some(telemetry) = self.telemetry.get() {
@@ -1828,7 +2080,9 @@ impl Kura {
                 let mut active_dir = self.active_blocks_dir.lock();
                 if *active_dir == old_dir {
                     active_dir.clone_from(&new_dir);
+                    let _write_guard = self.block_store_write_lock.lock();
                     self.block_store.lock().retarget_path(new_dir.clone())?;
+                    self.invalidate_durable_budget_snapshot();
                 }
             }
 
@@ -2082,7 +2336,11 @@ impl Kura {
         let shutdown_signal_clone = shutdown_signal.clone();
         tokio::spawn(async move {
             shutdown_signal_clone.receive().await;
-            let _ = shutdown_notify_tx.send(BlockNotify::Shutdown);
+            Self::notify_block_writer_sender(
+                &shutdown_notify_tx,
+                BlockNotify::Shutdown,
+                "shutdown",
+            );
         });
 
         Child::new(
@@ -2520,6 +2778,7 @@ impl Kura {
 
             kura.flush_pipeline_sidecars();
             kura.flush_fastpq_proof_snapshots();
+            kura.flush_pending_budget_eviction();
 
             if should_exit {
                 if let Err(error) = kura.block_store.lock().flush_pending_fsync(true) {
@@ -2539,6 +2798,9 @@ impl Kura {
                 Some(wait) => match block_rx.recv_timeout(wait) {
                     Ok(BlockNotify::NewBlock) => {
                         debug!("kura writer received sidecar flush signal");
+                    }
+                    Ok(BlockNotify::StorageBudgetEviction) => {
+                        debug!("kura writer received storage-budget eviction signal");
                     }
                     Ok(BlockNotify::Shutdown) => {
                         should_exit = true;
@@ -2560,6 +2822,9 @@ impl Kura {
                 None => match block_rx.recv() {
                     Ok(BlockNotify::NewBlock) => {
                         debug!("kura writer received sidecar flush signal");
+                    }
+                    Ok(BlockNotify::StorageBudgetEviction) => {
+                        debug!("kura writer received storage-budget eviction signal");
                     }
                     Ok(BlockNotify::Shutdown) => {
                         should_exit = true;
@@ -2720,6 +2985,7 @@ impl Kura {
     /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
     /// are left untouched.
     pub(crate) fn cache_block_body(&self, block: &SignedBlock) -> Result<()> {
+        let _write_guard = self.block_store_write_lock.lock();
         let height = block.header().height().get();
         let hash = block.hash();
         self.ensure_durable_block_at_height(height, hash)?;
@@ -3543,6 +3809,7 @@ impl Kura {
         }
 
         let start_height = height.saturating_sub(1);
+        let _write_guard = self.block_store_write_lock.lock();
         let mut block_store = self.block_store.lock();
         let block_store_before = match Self::block_store_tracked_bytes(&mut block_store) {
             Ok(bytes) => Some(bytes),
@@ -3579,6 +3846,13 @@ impl Kura {
             match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
                 Ok(da_after) => self.update_total_disk_usage_delta(da_before, da_after),
                 Err(err) => warn!(?err, "failed to measure DA payload bytes after append"),
+            }
+        }
+        match usize::try_from(height) {
+            Ok(persisted_count) => self.publish_durable_budget_snapshot(persisted_count, 0),
+            Err(err) => {
+                warn!(?err, height, "failed to cache Kura durable budget metadata");
+                self.invalidate_durable_budget_snapshot();
             }
         }
         Ok(())
@@ -3734,6 +4008,34 @@ impl Kura {
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(0),
             Err(err) => Err(Error::IO(err, path.to_path_buf())),
         }
+    }
+
+    fn read_block_data_from_file(
+        file: &mut FileWrap,
+        start_location_in_data_file: u64,
+        dest_buffer: &mut [u8],
+    ) -> Result<()> {
+        file.try_io(|file| {
+            file.seek(SeekFrom::Start(start_location_in_data_file))?;
+            file.read_exact(dest_buffer)
+        })
+    }
+
+    fn write_atomic_synced(path: &Path, bytes: &[u8]) -> Result<()> {
+        let tmp_path = path.with_extension("norito.tmp");
+        let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
+            opts.write(true).create(true).truncate(true);
+        })?;
+        tmp_file.try_io(|file| {
+            file.write_all(bytes)?;
+            file.flush()?;
+            file.sync_data()
+        })?;
+        std::fs::rename(&tmp_path, path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        }
+        Ok(())
     }
 
     fn block_store_tracked_bytes(block_store: &mut BlockStore) -> Result<u64> {
@@ -4129,6 +4431,10 @@ impl Kura {
     }
 
     fn pending_block_bytes_raw(&self, persisted_count: usize) -> Result<u64> {
+        #[cfg(test)]
+        self.pending_budget_raw_scans
+            .fetch_add(1, Ordering::Relaxed);
+
         let pending_blocks = {
             let data = self.block_data.lock();
             let start = persisted_count.min(data.len());
@@ -4165,7 +4471,10 @@ impl Kura {
         Ok(pending_bytes.saturating_sub(unindexed_bytes))
     }
 
-    fn persisted_count_and_unindexed_bytes(&self) -> Result<(usize, u64)> {
+    fn persisted_count_and_unindexed_bytes_raw(&self) -> Result<(usize, u64)> {
+        #[cfg(test)]
+        self.durable_budget_metadata_reads
+            .fetch_add(1, Ordering::Relaxed);
         let mut block_store = self.block_store.lock();
         let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
         let persisted_u64 = persisted as u64;
@@ -4185,6 +4494,15 @@ impl Kura {
             .saturating_add(index_file_len.saturating_sub(indexed_index_len))
             .saturating_add(hashes_file_len.saturating_sub(indexed_hash_len));
         Ok((persisted, unindexed_bytes))
+    }
+
+    fn persisted_count_and_unindexed_bytes(&self) -> Result<(usize, u64)> {
+        if let Some(snapshot) = self.durable_budget_snapshot() {
+            return Ok(snapshot);
+        }
+        let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes_raw()?;
+        self.publish_durable_budget_snapshot(persisted_count, unindexed_bytes);
+        Ok((persisted_count, unindexed_bytes))
     }
 
     fn check_storage_budget(
@@ -4230,26 +4548,7 @@ impl Kura {
             }
             let evict_needed = required.saturating_sub(limit);
             if evict_needed > 0 {
-                match self.evict_block_bodies(evict_needed) {
-                    Ok(freed) if freed > 0 => {
-                        used = self.disk_usage.load(Ordering::Relaxed);
-                        budget_used = used.saturating_add(pending_bytes);
-                        required = used
-                            .saturating_add(pending_bytes)
-                            .saturating_add(block_required)
-                            .saturating_add(merge_entry_bytes);
-                        if required <= limit {
-                            if let Some(telemetry) = self.telemetry.get() {
-                                telemetry.record_storage_budget_usage("kura", required, limit);
-                            }
-                            return Ok(());
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        warn!(?err, "failed to evict Kura block bodies for budget");
-                    }
-                }
+                self.request_background_budget_eviction(evict_needed);
             }
             if let Some(telemetry) = self.telemetry.get() {
                 telemetry.record_storage_budget_usage("kura", budget_used, limit);
@@ -4347,31 +4646,7 @@ impl Kura {
             }
             let evict_needed = required.saturating_sub(limit);
             if evict_needed > 0 {
-                match self.evict_block_bodies(evict_needed) {
-                    Ok(freed) if freed > 0 => {
-                        used = self.disk_usage.load(Ordering::Relaxed);
-                        budget_used = used.saturating_add(pending_current);
-                        required = {
-                            let used_after = if top_is_pending {
-                                used
-                            } else {
-                                used.saturating_sub(old_bytes)
-                            };
-                            let pending_after = pending_raw_after.saturating_sub(unindexed_bytes);
-                            used_after.saturating_add(pending_after)
-                        };
-                        if required <= limit {
-                            if let Some(telemetry) = self.telemetry.get() {
-                                telemetry.record_storage_budget_usage("kura", required, limit);
-                            }
-                            return Ok(());
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        warn!(?err, "failed to evict Kura block bodies for budget");
-                    }
-                }
+                self.request_background_budget_eviction(evict_needed);
             }
             if let Some(telemetry) = self.telemetry.get() {
                 telemetry.record_storage_budget_usage("kura", budget_used, limit);
@@ -4548,6 +4823,7 @@ impl Kura {
         self.invalidate_pending_budget_cache();
 
         if !self.store_root.as_os_str().is_empty() {
+            let _write_guard = self.block_store_write_lock.lock();
             let mut store = self.block_store.lock();
             let before_bytes = match Self::block_store_tracked_bytes(&mut store) {
                 Ok(bytes) => Some(bytes),
@@ -4563,6 +4839,7 @@ impl Kura {
                     Err(err) => warn!(?err, "failed to measure block store bytes after prune"),
                 }
             }
+            self.publish_durable_budget_snapshot(keep, 0);
         }
 
         self.truncate_merge_log_to_len(keep)?;
@@ -4634,9 +4911,76 @@ impl Kura {
     }
 }
 
+#[cfg(any(test, feature = "bench"))]
+impl Kura {
+    /// Persist a benchmark block directly into the canonical block store.
+    ///
+    /// # Errors
+    /// Returns an error if the block cannot be appended or the tracked block-store byte usage
+    /// cannot be measured.
+    pub fn persist_block_immediate_for_bench(&self, block: &Arc<SignedBlock>) -> Result<()> {
+        let _write_guard = self.block_store_write_lock.lock();
+        let mut store = self.block_store.lock();
+        let before_bytes = Self::block_store_tracked_bytes(&mut store)?;
+        store.append_block_to_chain(block.as_ref())?;
+        let after_bytes = Self::block_store_tracked_bytes(&mut store)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        let persisted_count = usize::try_from(block.header().height().get())?;
+        self.publish_durable_budget_snapshot(persisted_count, 0);
+        Ok(())
+    }
+
+    /// Append an in-memory pending block for storage-budget benchmark scenarios.
+    pub fn append_pending_block_for_bench(&self, block: Arc<SignedBlock>) {
+        let hash = block.hash();
+        self.block_data.lock().push((hash, Some(block)));
+        self.invalidate_pending_budget_cache();
+    }
+
+    /// Run storage-budget accounting without storing a block.
+    pub fn check_storage_budget_for_bench(&self, block: &SignedBlock) -> Result<()> {
+        self.check_storage_budget(block, None)
+    }
+
+    /// Advertise enough matching remote replicas for the block at `height`.
+    #[must_use]
+    pub fn advertise_required_replicas_for_bench(&self, height: NonZeroUsize) -> Option<u64> {
+        let (block_hash, payload_len) = {
+            let index = u64::try_from(height.get().saturating_sub(1)).ok()?;
+            let mut store = self.block_store.lock();
+            let payload_len = store.read_block_index(index).ok()?.length;
+            let block_hash = store.read_block_hashes(index, 1).ok()?.first().copied()?;
+            (block_hash, payload_len)
+        };
+        if payload_len == 0 {
+            return None;
+        }
+
+        for _ in 0..self.eviction_required_replicas.get() {
+            let peer = PeerId::new(KeyPair::random().public_key().clone());
+            self.record_block_replica_advert(
+                peer,
+                u64::try_from(height.get()).ok()?,
+                block_hash,
+                payload_len,
+            );
+        }
+        Some(payload_len)
+    }
+
+    /// Evict persisted block bodies for benchmark scenarios.
+    ///
+    /// # Errors
+    /// Returns an error if Kura cannot read, rewrite, or atomically replace block-store files.
+    pub fn evict_block_bodies_for_bench(&self, bytes_needed: u64) -> Result<u64> {
+        self.evict_block_bodies(bytes_needed)
+    }
+}
+
 #[cfg(test)]
 impl Kura {
     pub(crate) fn persist_block_immediate_for_tests(&self, block: &Arc<SignedBlock>) {
+        let _write_guard = self.block_store_write_lock.lock();
         let mut store = self.block_store.lock();
         let before_bytes = Self::block_store_tracked_bytes(&mut store)
             .expect("measure block store bytes before test append");
@@ -4646,6 +4990,26 @@ impl Kura {
         let after_bytes = Self::block_store_tracked_bytes(&mut store)
             .expect("measure block store bytes after test append");
         self.update_disk_usage_delta(before_bytes, after_bytes);
+        match usize::try_from(block.header().height().get()) {
+            Ok(persisted_count) => self.publish_durable_budget_snapshot(persisted_count, 0),
+            Err(_) => self.invalidate_durable_budget_snapshot(),
+        }
+    }
+
+    fn pause_next_eviction_after_snapshot_for_tests(&self) {
+        self.eviction_paused_after_snapshot
+            .store(false, Ordering::Release);
+        self.pause_eviction_after_snapshot
+            .store(true, Ordering::Release);
+    }
+
+    fn eviction_paused_after_snapshot_for_tests(&self) -> bool {
+        self.eviction_paused_after_snapshot.load(Ordering::Acquire)
+    }
+
+    fn resume_eviction_after_snapshot_for_tests(&self) {
+        self.eviction_paused_after_snapshot
+            .store(false, Ordering::Release);
     }
 
     pub(crate) fn fail_next_store_for_tests(&self) {
@@ -5405,14 +5769,29 @@ impl Kura {
     /// Enqueue pipeline recovery metadata for asynchronous persistence.
     ///
     /// This avoids consensus-path I/O; the Kura writer thread flushes the queue.
-    pub fn enqueue_pipeline_metadata(&self, sidecar: PipelineRecoverySidecar) {
-        {
+    /// If the queue is full, the sidecar is rejected because pipeline recovery
+    /// metadata is best-effort diagnostic state.
+    pub fn enqueue_pipeline_metadata(
+        &self,
+        sidecar: PipelineRecoverySidecar,
+    ) -> PipelineSidecarEnqueueResult {
+        let cap = self
+            .pipeline_sidecar_queue_cap
+            .load(Ordering::Relaxed)
+            .max(1);
+        let (should_notify, queue_depth) = {
             let mut queue = self.pipeline_sidecar_queue.lock();
+            if queue.len() >= cap {
+                return PipelineSidecarEnqueueResult::RejectedQueueFull { cap };
+            }
+            let should_notify = queue.is_empty();
             queue.push_back(sidecar);
+            (should_notify, queue.len())
+        };
+        if should_notify {
+            self.notify_block_writer(BlockNotify::NewBlock, "pipeline sidecar");
         }
-        if let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
-            iroha_logger::warn!(?err, "failed to notify block writer about pipeline sidecar");
-        }
+        PipelineSidecarEnqueueResult::Enqueued { queue_depth }
     }
 
     fn flush_pipeline_sidecars(&self) -> usize {
@@ -5482,11 +5861,8 @@ impl Kura {
         };
         telemetry.record_event("enqueued");
         telemetry.set_queue_depth(queue_depth);
-        if should_notify && let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
-            iroha_logger::warn!(
-                ?err,
-                "failed to notify block writer about FASTPQ proof sidecar"
-            );
+        if should_notify {
+            self.notify_block_writer(BlockNotify::NewBlock, "FASTPQ proof sidecar");
         }
         FastpqProofEnqueueResult::Enqueued { queue_depth }
     }
@@ -9758,6 +10134,99 @@ mod tests {
     }
 
     #[test]
+    fn durable_budget_snapshot_avoids_repeated_metadata_reads() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.invalidate_durable_budget_snapshot();
+        assert_eq!(
+            kura.durable_budget_metadata_reads.load(Ordering::Relaxed),
+            0
+        );
+
+        assert_eq!(
+            kura.persisted_count_and_unindexed_bytes()
+                .expect("cold durable budget snapshot"),
+            (0, 0)
+        );
+        assert_eq!(
+            kura.durable_budget_metadata_reads.load(Ordering::Relaxed),
+            1,
+            "cold snapshot should use one raw metadata read"
+        );
+        assert_eq!(
+            kura.persisted_count_and_unindexed_bytes()
+                .expect("cached durable budget snapshot"),
+            (0, 0)
+        );
+        assert_eq!(
+            kura.durable_budget_metadata_reads.load(Ordering::Relaxed),
+            1,
+            "cached snapshot should avoid repeated raw metadata reads"
+        );
+
+        let block = DummyBlocks::new().next();
+        kura.persist_block_immediate_for_tests(&block);
+        assert_eq!(
+            kura.persisted_count_and_unindexed_bytes()
+                .expect("published durable budget snapshot"),
+            (1, 0)
+        );
+        assert_eq!(
+            kura.durable_budget_metadata_reads.load(Ordering::Relaxed),
+            1,
+            "successful append should publish durable budget metadata directly"
+        );
+    }
+
+    #[test]
+    fn kura_budget_check_scales_with_pending_depth() {
+        const PENDING_DEPTH: usize = 128;
+
+        let mut kura = Kura::blank_kura_for_testing();
+        Arc::get_mut(&mut kura)
+            .expect("exclusive test Kura")
+            .max_disk_usage_bytes = u64::MAX / 4;
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..PENDING_DEPTH {
+            kura.append_pending_block_for_bench(blocks.next());
+        }
+
+        assert_eq!(kura.pending_budget_raw_scans.load(Ordering::Relaxed), 0);
+
+        let candidate = blocks.next();
+        for _ in 0..16 {
+            kura.check_storage_budget_for_bench(candidate.as_ref())
+                .expect("budget check should fit within the large test limit");
+        }
+        assert_eq!(
+            kura.pending_budget_raw_scans.load(Ordering::Relaxed),
+            1,
+            "cached pending bytes should avoid repeated raw pending-queue scans"
+        );
+        let cached_pending_bytes = kura.pending_budget_bytes.load(Ordering::Relaxed);
+        assert!(
+            cached_pending_bytes > 0,
+            "pending budget cache should include queued blocks"
+        );
+
+        let extra_pending = blocks.next();
+        kura.append_pending_block_for_bench(extra_pending);
+
+        let replacement_candidate = blocks.next();
+        kura.check_storage_budget_for_bench(replacement_candidate.as_ref())
+            .expect("budget check should still fit after adding one pending block");
+        assert_eq!(
+            kura.pending_budget_raw_scans.load(Ordering::Relaxed),
+            2,
+            "cache invalidation should force exactly one fresh raw pending scan"
+        );
+        assert!(
+            kura.pending_budget_bytes.load(Ordering::Relaxed) > cached_pending_bytes,
+            "fresh pending cache should include the additional pending block"
+        );
+    }
+
+    #[test]
     fn store_block_with_merge_entry_counts_budget() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let block = DummyBlocks::new().next();
@@ -9927,7 +10396,7 @@ mod tests {
     }
 
     #[test]
-    fn store_block_evicts_old_replicated_body_when_budget_exceeded() {
+    fn store_block_schedules_background_eviction_when_budget_exceeded() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -9970,8 +10439,49 @@ mod tests {
             .saturating_sub(block2_len)
             .saturating_add(block4_required);
 
+        let err = kura
+            .store_block(Arc::clone(&block4))
+            .expect_err("over-budget store should schedule eviction and fail fast");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+        assert!(
+            kura.pending_budget_eviction_bytes.load(Ordering::Acquire) > 0,
+            "budget check should request background eviction"
+        );
+        {
+            let rx_guard = kura.block_notify_rx.lock();
+            let rx = rx_guard
+                .as_ref()
+                .expect("writer receiver should be available before Kura::start");
+            assert_eq!(
+                rx.try_recv(),
+                Ok(BlockNotify::StorageBudgetEviction),
+                "budget eviction should wake the Kura writer"
+            );
+        }
+        let (index_before, da_path_before) = {
+            let mut store = kura.block_store.lock();
+            (
+                store.read_block_index(1).expect("block2 index"),
+                store.da_block_path(2),
+            )
+        };
+        assert!(
+            !index_before.is_evicted(),
+            "budget checks must not compact block storage inline"
+        );
+        assert!(
+            !da_path_before.exists(),
+            "foreground budget check should not create DA sidecars inline"
+        );
+
+        let freed = kura.flush_pending_budget_eviction();
+        assert!(
+            freed >= block2_len,
+            "background maintenance should reclaim the replicated block body"
+        );
+
         kura.store_block(Arc::clone(&block4))
-            .expect("store block4 after evicting block2");
+            .expect("retry should store block4 after background eviction");
         wait_for_block_hash(&kura, 4, block4.hash());
 
         let (index, da_path) = {
@@ -11547,6 +12057,28 @@ mod tests {
     }
 
     #[test]
+    fn bench_eviction_helpers_seed_remote_eviction() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..3 {
+            let block = blocks.next();
+            kura.persist_block_immediate_for_bench(&block)
+                .expect("persist benchmark block");
+        }
+
+        let payload_len = kura
+            .advertise_required_replicas_for_bench(nonzero!(2_usize))
+            .expect("advertise benchmark replicas");
+        let freed = kura
+            .evict_block_bodies_for_bench(payload_len)
+            .expect("evict benchmark block body");
+
+        assert_eq!(freed, payload_len);
+    }
+
+    #[test]
     fn eviction_flushes_pending_fsync_before_rewrite() {
         let temp_dir = TempDir::new().unwrap();
         let config = KuraConfig {
@@ -11615,6 +12147,47 @@ mod tests {
             index_after, 4,
             "eviction should not truncate pending index entries"
         );
+    }
+
+    #[test]
+    fn evict_block_bodies_releases_block_store_lock_while_compacting() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (_block_hash, evict_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        kura.pause_next_eviction_after_snapshot_for_tests();
+
+        let evict_kura = Arc::clone(&kura);
+        let handle = thread::spawn(move || {
+            evict_kura
+                .evict_block_bodies(evict_len)
+                .expect("evict block bodies")
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !kura.eviction_paused_after_snapshot_for_tests() {
+            assert!(
+                !handle.is_finished(),
+                "eviction completed before reaching snapshot pause"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "eviction did not reach snapshot pause"
+            );
+            thread::yield_now();
+        }
+
+        let block_store_available = kura.block_store.try_lock().is_some();
+        kura.resume_eviction_after_snapshot_for_tests();
+        let freed = handle.join().expect("eviction thread");
+
+        assert!(
+            block_store_available,
+            "block_store lock should be released during eviction temp-file compaction"
+        );
+        assert!(freed >= evict_len, "eviction should still reclaim the body");
     }
 
     #[test]
@@ -13050,13 +13623,78 @@ mod tests {
             },
             Vec::new(),
         );
-        kura.enqueue_pipeline_metadata(sidecar);
+        assert_eq!(
+            kura.enqueue_pipeline_metadata(sidecar),
+            PipelineSidecarEnqueueResult::Enqueued { queue_depth: 1 }
+        );
         assert!(kura.read_pipeline_metadata(1).is_none());
 
         kura.flush_pipeline_sidecars();
         let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
         assert_eq!(got.height, 1);
         assert_eq!(got.block_hash, block_hash);
+    }
+
+    #[test]
+    fn pipeline_sidecar_enqueue_coalesces_writer_notifications() {
+        let kura = Kura::blank_kura_for_testing();
+        let first_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pipeline-sidecar-first"));
+        let second_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pipeline-sidecar-second"));
+        let snapshot = PipelineDagSnapshot {
+            fingerprint: [0u8; 32],
+            key_count: 0,
+        };
+        let first = PipelineRecoverySidecar::new(1, first_hash, snapshot.clone(), Vec::new());
+        let second = PipelineRecoverySidecar::new(2, second_hash, snapshot, Vec::new());
+
+        assert_eq!(
+            kura.enqueue_pipeline_metadata(first),
+            PipelineSidecarEnqueueResult::Enqueued { queue_depth: 1 }
+        );
+        assert_eq!(
+            kura.enqueue_pipeline_metadata(second),
+            PipelineSidecarEnqueueResult::Enqueued { queue_depth: 2 }
+        );
+
+        assert_eq!(kura.pipeline_sidecar_queue.lock().len(), 2);
+        let rx_guard = kura.block_notify_rx.lock();
+        let rx = rx_guard
+            .as_ref()
+            .expect("writer receiver should be present");
+        assert_eq!(rx.try_recv(), Ok(BlockNotify::NewBlock));
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn pipeline_sidecar_enqueue_rejects_queue_overflow() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.set_pipeline_sidecar_queue_cap_for_testing(1);
+        let first_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pipeline-sidecar-cap-first"));
+        let second_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"pipeline-sidecar-cap-second",
+        ));
+        let snapshot = PipelineDagSnapshot {
+            fingerprint: [0u8; 32],
+            key_count: 0,
+        };
+        let first = PipelineRecoverySidecar::new(1, first_hash, snapshot.clone(), Vec::new());
+        let second = PipelineRecoverySidecar::new(2, second_hash, snapshot, Vec::new());
+
+        assert_eq!(
+            kura.enqueue_pipeline_metadata(first),
+            PipelineSidecarEnqueueResult::Enqueued { queue_depth: 1 }
+        );
+        assert_eq!(
+            kura.enqueue_pipeline_metadata(second),
+            PipelineSidecarEnqueueResult::RejectedQueueFull { cap: 1 }
+        );
+
+        let queue = kura.pipeline_sidecar_queue.lock();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].height, 1);
     }
 
     fn sample_fastpq_snapshot(
@@ -16099,6 +16737,51 @@ mod tests {
         assert!(
             store.fsync_pending_for_tests(),
             "fsync should remain pending after commit marker failure"
+        );
+    }
+
+    #[test]
+    fn writer_loop_records_periodic_fsync_failure_without_panic() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_interval = Duration::from_millis(1);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+
+        let block = DummyBlocks::new().next();
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .append_block_to_chain(block.as_ref())
+                .expect("append block");
+            assert!(
+                store.fsync_pending_for_tests(),
+                "batched append should leave pending fsync work"
+            );
+        }
+
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let tmp_marker = blocks_dir
+            .join(COUNT_FILE_NAME)
+            .with_extension("norito.tmp");
+        std::fs::create_dir_all(&tmp_marker).expect("create tmp marker directory");
+
+        let shutdown_signal = ShutdownSignal::new();
+        let writer_kura = Arc::clone(&kura);
+        let writer = thread::spawn(move || {
+            writer_kura.receive_blocks_loop(&shutdown_signal);
+        });
+
+        writer.join().expect("writer loop should not panic");
+        let fault = kura.writer_fault.lock().clone();
+        assert!(
+            fault
+                .as_deref()
+                .is_some_and(|fault| fault.contains("periodic fsync")),
+            "writer should record periodic fsync failure, got {fault:?}"
+        );
+        assert!(
+            kura.block_store.lock().fsync_pending_for_tests(),
+            "failed writer fsync should leave pending work for retry/restart"
         );
     }
 }
