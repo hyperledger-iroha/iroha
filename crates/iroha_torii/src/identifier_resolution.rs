@@ -104,8 +104,19 @@ pub enum IdentifierResolutionError {
     Evaluation(#[from] RamLfeError),
     #[error("identifier policy transcript encoding failed: {0}")]
     Encoding(String),
+    #[error("RAM-LFE attestation signing failed: {0}")]
+    Signing(String),
     #[error("Torii cannot issue proof-mode RAM-LFE receipts without prover runtime support")]
     ProofModeUnsupported,
+}
+
+fn sign_attestation_payload<T: norito::codec::Encode>(
+    private_key: &iroha_crypto::PrivateKey,
+    payload: &T,
+) -> Result<Signature, IdentifierResolutionError> {
+    SignatureOf::try_new(private_key, payload)
+        .map(Into::into)
+        .map_err(|err| IdentifierResolutionError::Signing(err.to_string()))
 }
 
 impl IdentifierResolutionService {
@@ -296,7 +307,7 @@ impl IdentifierResolutionService {
             executed_at_ms: draft.executed_at_ms,
             expires_at_ms: draft.expires_at_ms,
         };
-        let signature: Signature = SignatureOf::new(runtime.signer.private_key(), &payload).into();
+        let signature = sign_attestation_payload(runtime.signer.private_key(), &payload)?;
         Ok(iroha_data_model::ram_lfe::RamLfeExecutionReceipt {
             payload,
             attestation: RamLfeReceiptAttestation::Signed(signature),
@@ -324,7 +335,7 @@ impl IdentifierResolutionService {
             opened_at_ms: draft.executed_at_ms,
             expires_at_ms: draft.expires_at_ms,
         };
-        let signature: Signature = SignatureOf::new(runtime.signer.private_key(), &payload).into();
+        let signature = sign_attestation_payload(runtime.signer.private_key(), &payload)?;
         Ok(RamLfeOutputOpening { payload, signature })
     }
 
@@ -367,7 +378,7 @@ impl IdentifierResolutionService {
             uaid,
             account_id,
         };
-        let signature: Signature = SignatureOf::new(runtime.signer.private_key(), &payload).into();
+        let signature = sign_attestation_payload(runtime.signer.private_key(), &payload)?;
 
         Ok(IdentifierResolutionReceipt {
             payload,
@@ -1349,6 +1360,49 @@ mod tests {
             err,
             IdentifierResolutionError::UnsupportedBackend(RamLfeBackend::BfvAffineSha3_256V1)
         ));
+    }
+
+    #[test]
+    fn issue_execution_receipt_and_output_opening_signatures_verify() {
+        let service = IdentifierResolutionService::new();
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let signer = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let secret = b"hidden-phone-policy".to_vec();
+        let (_, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            default_bfv_programmed_hidden_program(),
+            signer,
+            Some(30_000),
+        );
+        let ciphertext = encrypted_identifier(
+            &program_policy,
+            b"+15551234567",
+            b"signed-execution-receipt-ciphertext",
+        );
+        let draft = service
+            .execute_encrypted(&program_policy, &ciphertext)
+            .expect("execute encrypted input");
+
+        let receipt = service
+            .issue_execution_receipt(&program_policy, &draft)
+            .expect("issue execution receipt");
+        receipt
+            .verify_signature(&program_policy.resolver_public_key)
+            .expect("execution receipt signature verifies");
+
+        let opening = service
+            .issue_output_opening(&program_policy, &draft)
+            .expect("issue output opening");
+        opening
+            .verify_signature(&program_policy.output_opening_public_key)
+            .expect("output opening signature verifies");
+        assert_eq!(
+            opening.payload.opened_output_hash,
+            ram_lfe_output_hash(&draft.output)
+        );
     }
 
     #[test]

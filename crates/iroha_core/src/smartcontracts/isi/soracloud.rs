@@ -8,19 +8,24 @@ use std::{
 use iroha_crypto::{
     Hash,
     fhe_bfv::{
-        BfvCiphertext, BfvEvaluationBudget, BfvEvaluationKeyBundle, BfvEvaluationPlan,
-        BfvIdentifierCiphertext, BfvParameters, RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT,
+        BfvBootstrapKeyMode, BfvCiphertext, BfvEvaluationBudget, BfvEvaluationKeyBundle,
+        BfvEvaluationPlan, BfvFullBootstrapCircuitArtifactBundleV1, BfvIdentifierCiphertext,
+        BfvParameters, RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT,
         add_ciphertexts_bounded_noise_registered_rns_exact, add_ciphertexts_registered_rns_exact,
         bfv_add_bounded_noise_output_bound, bfv_add_output_residual_multiple_bound,
         bfv_bootstrap_key_refresh_bounded_noise_output_bound,
         bfv_bootstrap_key_refresh_output_residual_multiple_bound,
+        bfv_full_bootstrap_bounded_noise_output_bound_v1,
+        bfv_full_bootstrap_output_residual_multiple_bound_v1,
         bfv_multiply_bounded_noise_output_bound, bfv_multiply_output_residual_multiple_bound,
         bfv_packed_rotate_left_bounded_noise_output_bound,
         bfv_packed_rotate_left_output_residual_multiple_bound,
         bfv_rotate_slots_left_bounded_noise_output_bounds,
         bfv_rotate_slots_left_output_residual_multiple_bounds,
-        bootstrap_ciphertext_bounded_noise_registered_rns_exact_rounds,
+        bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_rounds,
         bootstrap_ciphertext_registered_rns_exact_rounds,
+        full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1,
+        full_bootstrap_ciphertext_registered_rns_exact_v1,
         multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact,
         multiply_ciphertexts_registered_rns_exact, multiply_plain_scalar,
         ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
@@ -30,7 +35,8 @@ use iroha_crypto::{
         rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact,
         rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact,
         validate_bfv_bounded_noise_bound, validate_bfv_exact_residual_multiple_capacity,
-        validate_registered_bfv_parameters,
+        validate_bfv_full_bootstrap_execution_artifacts_preflight_v1,
+        validate_bfv_full_bootstrap_material_proof_profile_v1, validate_registered_bfv_parameters,
     },
 };
 use iroha_data_model::{
@@ -67,7 +73,12 @@ use iroha_data_model::{
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1, SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+        SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+        SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+        SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
+        SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
         SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
@@ -97,7 +108,8 @@ use iroha_data_model::{
         SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
         SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
         SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
-        SoracloudFheInputAdmissionProofV1, derive_agent_autonomy_request_commitment,
+        SoracloudFheFullBootstrapMaterialProofV1, SoracloudFheInputAdmissionProofV1,
+        derive_agent_autonomy_request_commitment,
         derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -129,6 +141,8 @@ use iroha_data_model::{
         encode_uploaded_model_finalize_provenance_payload,
         soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
         soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
+        soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds,
+        soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
         soracloud_fhe_input_admission_open_verify_bounds,
         soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
     },
@@ -1226,6 +1240,17 @@ fn validate_soracloud_fhe_bootstrap_key_proof_native_envelope_size(
     Ok(())
 }
 
+fn validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_size(
+    len: usize,
+) -> Result<(), InstructionExecutionError> {
+    if len > SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_NATIVE_ENVELOPE_BYTES {
+        return Err(invalid_parameter(format!(
+            "FHE full-bootstrap material proof STARK native envelope bytes length {len} exceeds maximum {SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_MAX_NATIVE_ENVELOPE_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_soracloud_fhe_bootstrap_key_proof_envelope(
     attachment: &ProofAttachment,
     envelope: &OpenVerifyEnvelope,
@@ -1296,6 +1321,84 @@ fn validate_soracloud_fhe_bootstrap_key_proof_envelope(
     if envelope_hash != expected {
         return Err(invalid_parameter(
             "FHE bootstrap-key proof envelope_hash mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_soracloud_fhe_full_bootstrap_material_proof_envelope(
+    attachment: &ProofAttachment,
+    envelope: &OpenVerifyEnvelope,
+    statement_hash: Hash,
+) -> Result<(), InstructionExecutionError> {
+    if envelope.backend != BackendTag::Stark {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof envelope must declare STARK backend",
+        ));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof envelope aux must be empty",
+        ));
+    }
+    envelope
+        .validate_with_bounds(soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE full-bootstrap material OpenVerifyEnvelope shape: {err}"
+            ))
+        })?;
+    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof circuit id must be canonical v1",
+        ));
+    }
+    if envelope.public_inputs != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
+    {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof public-input schema mismatch",
+        ));
+    }
+    let open =
+        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE full-bootstrap material STARK public-input wrapper: {err}"
+            ))
+        })?;
+    if open.version != 1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material STARK public-input wrapper version must be 1",
+        ));
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open.public_inputs != expected_public_inputs {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof public inputs do not match statement hash",
+        ));
+    }
+    if open.envelope_bytes.is_empty() {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material STARK native envelope bytes must be non-empty",
+        ));
+    }
+    validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_size(
+        open.envelope_bytes.len(),
+    )?;
+    let vk_commitment = attachment.vk_commitment.ok_or_else(|| {
+        invalid_parameter("FHE full-bootstrap material proof requires vk_commitment")
+    })?;
+    if vk_commitment != envelope.vk_hash {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof vk_commitment mismatch",
+        ));
+    }
+    let envelope_hash = attachment.envelope_hash.ok_or_else(|| {
+        invalid_parameter("FHE full-bootstrap material proof requires envelope_hash")
+    })?;
+    let expected = <[u8; Hash::LENGTH]>::from(Hash::new(&attachment.proof.bytes));
+    if envelope_hash != expected {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof envelope_hash mismatch",
         ));
     }
     Ok(())
@@ -1510,6 +1613,219 @@ fn verify_soracloud_fhe_bootstrap_key_proof_backend(
     Ok(())
 }
 
+fn verify_soracloud_fhe_full_bootstrap_material_proof_backend(
+    attachment: &ProofAttachment,
+    statement_hash: Hash,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    let attachment_vk_commitment = attachment.vk_commitment.ok_or_else(|| {
+        invalid_parameter("FHE full-bootstrap material proof requires vk_commitment")
+    })?;
+    let attachment_envelope_hash = attachment.envelope_hash.ok_or_else(|| {
+        invalid_parameter("FHE full-bootstrap material proof requires envelope_hash")
+    })?;
+    let expected_envelope_hash = <[u8; Hash::LENGTH]>::from(Hash::new(&attachment.proof.bytes));
+    if attachment_envelope_hash != expected_envelope_hash {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof envelope_hash mismatch",
+        ));
+    }
+    if attachment.vk_ref.name != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof vk_ref must use the canonical v1 circuit id",
+        ));
+    }
+    let envelope = bootstrap_key_proof_attachment_envelope(attachment)?;
+    if envelope.backend != BackendTag::Stark {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof envelope must declare STARK backend",
+        ));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof envelope aux must be empty",
+        ));
+    }
+    envelope
+        .validate_with_bounds(soracloud_fhe_full_bootstrap_material_proof_open_verify_bounds())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE full-bootstrap material OpenVerifyEnvelope shape: {err}"
+            ))
+        })?;
+    if envelope.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof circuit id must be canonical v1",
+        ));
+    }
+    if envelope.public_inputs != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1
+    {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof public-input schema mismatch",
+        ));
+    }
+    let open =
+        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE full-bootstrap material STARK public-input wrapper: {err}"
+            ))
+        })?;
+    if open.version != 1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material STARK public-input wrapper version must be 1",
+        ));
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open.public_inputs != expected_public_inputs {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof public inputs do not match statement hash",
+        ));
+    }
+    if open.envelope_bytes.is_empty() {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material STARK native envelope bytes must be non-empty",
+        ));
+    }
+    validate_soracloud_fhe_full_bootstrap_material_proof_native_envelope_size(
+        open.envelope_bytes.len(),
+    )?;
+    let record = state_transaction
+        .world
+        .verifying_keys
+        .get(&attachment.vk_ref)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "FHE full-bootstrap material verifying key not found".into(),
+            )
+        })?;
+    if record.status != ConfidentialStatus::Active {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key is not active".into(),
+        ));
+    }
+    if record.namespace != "soracloud" {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key must be in the soracloud namespace".into(),
+        ));
+    }
+    if record.backend != BackendTag::Stark {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key must use STARK backend".into(),
+        ));
+    }
+    if record.curve != "goldilocks" {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key must use goldilocks STARK field".into(),
+        ));
+    }
+    if record.public_inputs_schema_hash
+        != soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key public-input schema mismatch".into(),
+        ));
+    }
+    if record.circuit_id != SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key must use the canonical v1 circuit".into(),
+        ));
+    }
+    if record.version != u32::from(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key must use the canonical v1 circuit version"
+                .into(),
+        ));
+    }
+    if record.gas_schedule_id.is_none() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key missing gas_schedule_id".into(),
+        ));
+    }
+    let circuit_key = (record.circuit_id.clone(), record.version);
+    match state_transaction
+        .world
+        .verifying_keys_by_circuit
+        .get(&circuit_key)
+    {
+        Some(active_id) if active_id == &attachment.vk_ref => {}
+        _ => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "FHE full-bootstrap material verifying key circuit/version not active".into(),
+            ));
+        }
+    }
+    if envelope.circuit_id != record.circuit_id {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material proof circuit mismatch".into(),
+        ));
+    }
+    if envelope.vk_hash != record.commitment {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material proof verifying-key commitment mismatch".into(),
+        ));
+    }
+    if attachment_vk_commitment != record.commitment {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material attachment verifying-key commitment mismatch".into(),
+        ));
+    }
+    if record.max_proof_bytes > 0
+        && attachment.proof.bytes.len()
+            > usize::try_from(record.max_proof_bytes).unwrap_or(usize::MAX)
+    {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof exceeds verifying key max_proof_bytes",
+        ));
+    }
+    let vk_box = record.key.clone().ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key bytes missing".into(),
+        )
+    })?;
+    if u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key vk_len mismatch".into(),
+        ));
+    }
+    let actual_commitment = crate::zk::hash_vk(&vk_box);
+    if actual_commitment != record.commitment {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key commitment mismatch".into(),
+        ));
+    }
+    if vk_box.backend != attachment.backend {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE full-bootstrap material verifying key backend mismatch".into(),
+        ));
+    }
+
+    state_transaction
+        .register_confidential_proof(attachment.proof.bytes.len())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap material proof quota accounting failed: {err}"
+            ))
+        })?;
+    let ok = state_transaction
+        .lookup_preverified_proof(&attachment.proof, &attachment.vk_ref, record.commitment)
+        .unwrap_or_else(|| {
+            crate::zk::verify_backend_with_timing_checked(
+                attachment.backend.as_str(),
+                &attachment.proof,
+                Some(&vk_box),
+                &state_transaction.zk,
+            )
+            .ok
+        });
+    if !ok {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof verification failed",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_soracloud_fhe_bootstrap_key_proof(
     state_transaction: &mut StateTransaction<'_, '_>,
     policy: &FheExecutionPolicyV1,
@@ -1563,6 +1879,65 @@ fn verify_soracloud_fhe_bootstrap_key_proof(
         expected_statement_hash,
     )?;
     verify_soracloud_fhe_bootstrap_key_proof_backend(
+        &proof.proof,
+        expected_statement_hash,
+        state_transaction,
+    )
+}
+
+fn verify_soracloud_fhe_full_bootstrap_material_proof(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    policy: &FheExecutionPolicyV1,
+    expected_statement_hash: Option<Hash>,
+    proof: Option<&SoracloudFheFullBootstrapMaterialProofV1>,
+    require_proof: bool,
+) -> Result<(), InstructionExecutionError> {
+    if !require_proof && proof.is_some() {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof is only accepted for full-bootstrap operations",
+        ));
+    }
+    let Some(expected_statement_hash) = expected_statement_hash else {
+        if require_proof {
+            return Err(invalid_parameter(
+                "FHE full-bootstrap operation requires full-bootstrap material proof statement digest",
+            ));
+        }
+        if proof.is_some() {
+            return Err(invalid_parameter(
+                "FHE full-bootstrap material proof requires bootstrap-capable full-bootstrap policy",
+            ));
+        }
+        return Ok(());
+    };
+    if policy.max_bootstrap_count == 0 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof digest requires bootstrap-capable policy",
+        ));
+    }
+    let Some(proof) = proof else {
+        if require_proof {
+            return Err(invalid_parameter(
+                "FHE full-bootstrap operation requires full-bootstrap material proof",
+            ));
+        }
+        return Ok(());
+    };
+    proof.validate().map_err(|err| {
+        invalid_parameter(format!("invalid FHE full-bootstrap material proof: {err}"))
+    })?;
+    if proof.statement_hash != expected_statement_hash {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap material proof statement hash mismatch",
+        ));
+    }
+    let envelope = bootstrap_key_proof_attachment_envelope(&proof.proof)?;
+    validate_soracloud_fhe_full_bootstrap_material_proof_envelope(
+        &proof.proof,
+        &envelope,
+        expected_statement_hash,
+    )?;
+    verify_soracloud_fhe_full_bootstrap_material_proof_backend(
         &proof.proof,
         expected_statement_hash,
         state_transaction,
@@ -1692,6 +2067,8 @@ fn verify_fhe_job_run_provenance(
     evaluation_keys: BfvEvaluationKeyBundle,
     evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
+    full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
+    full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -1709,6 +2086,8 @@ fn verify_fhe_job_run_provenance(
         evaluation_keys,
         evaluation_key_refresh_transcript,
         bootstrap_key_zero_refresh_proof,
+        full_bootstrap_material_proof,
+        full_bootstrap_circuit_artifacts,
         governance_tx_hash,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode fhe job provenance: {err}")))?;
@@ -4192,7 +4571,7 @@ fn load_hf_placement_by_placement_id(
     state_transaction: &StateTransaction<'_, '_>,
     placement_id: &Hash,
 ) -> Result<SoraHfPlacementRecordV1, InstructionExecutionError> {
-    let mut matches = state_transaction
+    let matches = state_transaction
         .world
         .soracloud_hf_placements
         .iter()
@@ -4200,9 +4579,9 @@ fn load_hf_placement_by_placement_id(
             (placement.placement_id == *placement_id).then_some(placement.clone())
         })
         .collect::<Vec<_>>();
-    match matches.len() {
-        1 => Ok(matches.pop().expect("one placement match")),
-        0 => Err(InstructionExecutionError::InvariantViolation(
+    match matches.as_slice() {
+        [placement] => Ok(placement.clone()),
+        [] => Err(InstructionExecutionError::InvariantViolation(
             format!("hf placement `{placement_id}` not found").into(),
         )),
         _ => Err(InstructionExecutionError::InvariantViolation(
@@ -4967,12 +5346,9 @@ fn hf_ranked_validator_score(
         })?;
     let digest = Hash::new(payload);
     let digest_bytes = *digest.as_ref();
-    let entropy = u128::from_be_bytes(
-        digest_bytes[..16]
-            .try_into()
-            .expect("digest slice length is fixed"),
-    )
-    .saturating_add(1);
+    let mut entropy_bytes = [0_u8; 16];
+    entropy_bytes.copy_from_slice(&digest_bytes[..16]);
+    let entropy = u128::from_be_bytes(entropy_bytes).saturating_add(1);
     Ok((entropy.saturating_mul(stake_weight.max(1)), digest_bytes))
 }
 
@@ -5764,7 +6140,7 @@ fn binding_state_totals(
 const REGISTERED_SORACLOUD_BFV_BACKEND: &str = "fhe/bfv-rns/v1";
 
 fn u64_bit_width(value: u64) -> u16 {
-    u16::try_from(u64::BITS - value.leading_zeros()).expect("u64 bit width fits in u16")
+    (u64::BITS - value.leading_zeros()) as u16
 }
 
 fn validate_registered_soracloud_bfv_descriptor(
@@ -5801,7 +6177,11 @@ fn validate_registered_soracloud_bfv_descriptor(
     let largest_declared_limb = param_set
         .ciphertext_modulus_bits
         .first()
-        .expect("parameter-set validation requires a non-empty modulus chain")
+        .ok_or_else(|| {
+            invalid_parameter(
+                "fhe parameter-set ciphertext modulus bits must declare at least one limb",
+            )
+        })?
         .get();
     if largest_declared_limb > ciphertext_bits {
         return Err(invalid_parameter(
@@ -5983,13 +6363,13 @@ fn load_soracloud_fhe_inputs(
     Ok(inputs)
 }
 
-fn ensure_matching_fhe_slots(
+fn first_matching_fhe_slots(
     envelopes: &[BfvIdentifierCiphertext],
-) -> Result<usize, InstructionExecutionError> {
-    let first_slots = envelopes
+) -> Result<&[BfvCiphertext], InstructionExecutionError> {
+    let first = envelopes
         .first()
-        .map(|envelope| envelope.slots.len())
         .ok_or_else(|| invalid_parameter("fhe job requires at least one input envelope"))?;
+    let first_slots = first.slots.len();
     if first_slots == 0 {
         return Err(invalid_parameter(
             "fhe ciphertext envelope must contain at least one slot",
@@ -6003,7 +6383,13 @@ fn ensure_matching_fhe_slots(
             "fhe ciphertext envelopes must have matching slot counts",
         ));
     }
-    Ok(first_slots)
+    Ok(&first.slots)
+}
+
+fn ensure_matching_fhe_slots(
+    envelopes: &[BfvIdentifierCiphertext],
+) -> Result<usize, InstructionExecutionError> {
+    Ok(first_matching_fhe_slots(envelopes)?.len())
 }
 
 fn fold_fhe_slots(
@@ -6014,12 +6400,7 @@ fn fold_fhe_slots(
         &BfvCiphertext,
     ) -> Result<BfvCiphertext, InstructionExecutionError>,
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
-    ensure_matching_fhe_slots(inputs)?;
-    let mut slots = inputs
-        .first()
-        .expect("input presence checked above")
-        .slots
-        .clone();
+    let mut slots = first_matching_fhe_slots(inputs)?.to_vec();
     for envelope in &inputs[1..] {
         for (slot, rhs) in slots.iter_mut().zip(&envelope.slots) {
             *slot = combine(slot, rhs)?;
@@ -6065,7 +6446,9 @@ fn fold_fhe_slots_balanced(
             }
             level = next_level;
         }
-        output_slots.push(level.pop().expect("non-empty level is maintained"));
+        output_slots.push(level.pop().ok_or_else(|| {
+            invalid_parameter("fhe balanced fold produced no output for a non-empty slot")
+        })?);
     }
 
     for slot in &output_slots {
@@ -6211,11 +6594,10 @@ fn soracloud_fhe_job_output_residual_multiple_bound(
             Ok(level.pop())
         }
         FheJobOperationV1::RotateLeft => {
-            ensure_matching_fhe_slots(inputs)?;
             let input_bound = *input_residual_bounds
                 .first()
                 .ok_or_else(|| invalid_parameter("fhe rotate requires residual metadata"))?;
-            let slots = &inputs.first().expect("input presence checked above").slots;
+            let slots = first_matching_fhe_slots(inputs)?;
             if slots.len() == 1 {
                 return bfv_packed_rotate_left_output_residual_multiple_bound(
                     params,
@@ -6257,14 +6639,24 @@ fn soracloud_fhe_job_output_residual_multiple_bound(
             let bootstrap_key = evaluation_keys.bootstrap_key.as_ref().ok_or_else(|| {
                 invalid_parameter("missing BFV bootstrap key for bootstrap residual bound")
             })?;
-            bfv_bootstrap_key_refresh_output_residual_multiple_bound(
-                params,
-                bootstrap_key,
-                input_bound,
-                job.bootstrap_count,
-            )
-            .map(Some)
-            .map_err(|err| {
+            let result = match bootstrap_key.mode {
+                BfvBootstrapKeyMode::RefreshOnlyV1 => {
+                    bfv_bootstrap_key_refresh_output_residual_multiple_bound(
+                        params,
+                        bootstrap_key,
+                        input_bound,
+                        job.bootstrap_count,
+                    )
+                }
+                BfvBootstrapKeyMode::FullBootstrapV1 => {
+                    bfv_full_bootstrap_output_residual_multiple_bound_v1(
+                        params,
+                        bootstrap_key,
+                        input_bound,
+                    )
+                }
+            };
+            result.map(Some).map_err(|err| {
                 invalid_parameter(format!("FHE bootstrap residual bound exceeded: {err}"))
             })
         }
@@ -6332,11 +6724,10 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
             Ok(level.pop())
         }
         FheJobOperationV1::RotateLeft => {
-            ensure_matching_fhe_slots(inputs)?;
             let input_bound = *input_noise_bounds
                 .first()
                 .ok_or_else(|| invalid_parameter("fhe rotate requires bounded-noise metadata"))?;
-            let slots = &inputs.first().expect("input presence checked above").slots;
+            let slots = first_matching_fhe_slots(inputs)?;
             if slots.len() == 1 {
                 return bfv_packed_rotate_left_bounded_noise_output_bound(
                     params,
@@ -6380,14 +6771,24 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
             let bootstrap_key = evaluation_keys.bootstrap_key.as_ref().ok_or_else(|| {
                 invalid_parameter("missing BFV bootstrap key for bootstrap bounded-noise bound")
             })?;
-            bfv_bootstrap_key_refresh_bounded_noise_output_bound(
-                params,
-                bootstrap_key,
-                input_bound,
-                job.bootstrap_count,
-            )
-            .map(Some)
-            .map_err(|err| {
+            let result = match bootstrap_key.mode {
+                BfvBootstrapKeyMode::RefreshOnlyV1 => {
+                    bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+                        params,
+                        bootstrap_key,
+                        input_bound,
+                        job.bootstrap_count,
+                    )
+                }
+                BfvBootstrapKeyMode::FullBootstrapV1 => {
+                    bfv_full_bootstrap_bounded_noise_output_bound_v1(
+                        params,
+                        bootstrap_key,
+                        input_bound,
+                    )
+                }
+            };
+            result.map(Some).map_err(|err| {
                 invalid_parameter(format!("FHE bootstrap bounded-noise bound exceeded: {err}"))
             })
         }
@@ -6414,6 +6815,76 @@ fn execute_soracloud_fhe_job_with_residual_bounds(
     Ok((output, output_residual_bound))
 }
 
+fn validate_soracloud_fhe_full_bootstrap_circuit_artifacts_for_job(
+    params: &BfvParameters,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    job: &FheJobSpecV1,
+    inputs: &[BfvIdentifierCiphertext],
+    full_bootstrap_circuit_artifacts: Option<&BfvFullBootstrapCircuitArtifactBundleV1>,
+) -> Result<(), InstructionExecutionError> {
+    let is_bootstrap_job = job.operation == FheJobOperationV1::Bootstrap && job.bootstrap_count > 0;
+    let Some(bootstrap_key) = evaluation_keys.bootstrap_key.as_ref() else {
+        if full_bootstrap_circuit_artifacts.is_some() {
+            return Err(invalid_parameter(
+                "FHE full-bootstrap circuit artifacts are only accepted for full-bootstrap operations",
+            ));
+        }
+        return Ok(());
+    };
+    if !is_bootstrap_job || bootstrap_key.mode != BfvBootstrapKeyMode::FullBootstrapV1 {
+        if full_bootstrap_circuit_artifacts.is_some() {
+            return Err(invalid_parameter(
+                "FHE full-bootstrap circuit artifacts are only accepted for full-bootstrap operations",
+            ));
+        }
+        return Ok(());
+    }
+
+    let artifacts = full_bootstrap_circuit_artifacts.ok_or_else(|| {
+        invalid_parameter("FHE full-bootstrap operation requires full-bootstrap circuit artifacts")
+    })?;
+    for slot in first_matching_fhe_slots(inputs)? {
+        validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
+            params,
+            bootstrap_key,
+            slot,
+            artifacts,
+        )
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap circuit artifact preflight failed: {err}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+    params: &BfvParameters,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    job: &FheJobSpecV1,
+    inputs: &[BfvIdentifierCiphertext],
+    input_residual_bounds: &[u128],
+    full_bootstrap_circuit_artifacts: Option<&BfvFullBootstrapCircuitArtifactBundleV1>,
+) -> Result<(BfvIdentifierCiphertext, Option<u128>), InstructionExecutionError> {
+    ensure_matching_fhe_slots(inputs)?;
+    validate_soracloud_fhe_evaluation_budget(job, inputs)?;
+    validate_soracloud_fhe_full_bootstrap_circuit_artifacts_for_job(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        full_bootstrap_circuit_artifacts,
+    )?;
+    execute_soracloud_fhe_job_with_residual_bounds(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        input_residual_bounds,
+    )
+}
+
 fn execute_soracloud_fhe_job_with_bounded_noise_bounds(
     params: &BfvParameters,
     evaluation_keys: &BfvEvaluationKeyBundle,
@@ -6432,6 +6903,32 @@ fn execute_soracloud_fhe_job_with_bounded_noise_bounds(
     )?;
     let output = execute_soracloud_fhe_job_bounded_noise(params, evaluation_keys, job, inputs)?;
     Ok((output, output_noise_bound))
+}
+
+fn execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+    params: &BfvParameters,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    job: &FheJobSpecV1,
+    inputs: &[BfvIdentifierCiphertext],
+    input_noise_bounds: &[u128],
+    full_bootstrap_circuit_artifacts: Option<&BfvFullBootstrapCircuitArtifactBundleV1>,
+) -> Result<(BfvIdentifierCiphertext, Option<u128>), InstructionExecutionError> {
+    ensure_matching_fhe_slots(inputs)?;
+    validate_soracloud_fhe_evaluation_budget(job, inputs)?;
+    validate_soracloud_fhe_full_bootstrap_circuit_artifacts_for_job(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        full_bootstrap_circuit_artifacts,
+    )?;
+    execute_soracloud_fhe_job_with_bounded_noise_bounds(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        input_noise_bounds,
+    )
 }
 
 fn execute_soracloud_fhe_job(
@@ -6457,8 +6954,7 @@ fn execute_soracloud_fhe_job(
             .map_err(|err| invalid_parameter(format!("FHE multiply failed: {err}")))
         }),
         FheJobOperationV1::RotateLeft => {
-            ensure_matching_fhe_slots(inputs)?;
-            let slots = &inputs.first().expect("input presence checked above").slots;
+            let slots = first_matching_fhe_slots(inputs)?;
             if slots.len() == 1 {
                 let rotated =
                     rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact(
@@ -6488,29 +6984,30 @@ fn execute_soracloud_fhe_job(
             Ok(BfvIdentifierCiphertext { slots })
         }
         FheJobOperationV1::Bootstrap => {
-            ensure_matching_fhe_slots(inputs)?;
             let bootstrap_key = evaluation_keys.bootstrap_key.as_ref().ok_or_else(|| {
                 invalid_parameter("missing BFV bootstrap key for bootstrap operation")
             })?;
-            if job.bootstrap_count > bootstrap_key.max_refresh_rounds {
-                return Err(invalid_parameter(format!(
-                    "bootstrap_count {} exceeds BFV bootstrap key max_refresh_rounds {}",
-                    job.bootstrap_count, bootstrap_key.max_refresh_rounds
-                )));
-            }
-            let slots = inputs
-                .first()
-                .expect("input presence checked above")
-                .slots
+            let slots = first_matching_fhe_slots(inputs)?
                 .iter()
                 .map(|slot| {
-                    bootstrap_ciphertext_registered_rns_exact_rounds(
-                        params,
-                        bootstrap_key,
-                        slot,
-                        job.bootstrap_count,
-                    )
-                    .map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))
+                    let result = match bootstrap_key.mode {
+                        BfvBootstrapKeyMode::RefreshOnlyV1 => {
+                            bootstrap_ciphertext_registered_rns_exact_rounds(
+                                params,
+                                bootstrap_key,
+                                slot,
+                                job.bootstrap_count,
+                            )
+                        }
+                        BfvBootstrapKeyMode::FullBootstrapV1 => {
+                            full_bootstrap_ciphertext_registered_rns_exact_v1(
+                                params,
+                                bootstrap_key,
+                                slot,
+                            )
+                        }
+                    };
+                    result.map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BfvIdentifierCiphertext { slots })
@@ -6541,8 +7038,7 @@ fn execute_soracloud_fhe_job_bounded_noise(
             .map_err(|err| invalid_parameter(format!("FHE bounded-noise multiply failed: {err}")))
         }),
         FheJobOperationV1::RotateLeft => {
-            ensure_matching_fhe_slots(inputs)?;
-            let slots = &inputs.first().expect("input presence checked above").slots;
+            let slots = first_matching_fhe_slots(inputs)?;
             if slots.len() == 1 {
                 let rotated =
                     rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact(
@@ -6577,28 +7073,30 @@ fn execute_soracloud_fhe_job_bounded_noise(
             Ok(BfvIdentifierCiphertext { slots })
         }
         FheJobOperationV1::Bootstrap => {
-            ensure_matching_fhe_slots(inputs)?;
             let bootstrap_key = evaluation_keys.bootstrap_key.as_ref().ok_or_else(|| {
                 invalid_parameter("missing BFV bootstrap key for bounded-noise bootstrap operation")
             })?;
-            if job.bootstrap_count > bootstrap_key.max_refresh_rounds {
-                return Err(invalid_parameter(format!(
-                    "bootstrap_count {} exceeds BFV bootstrap key max_refresh_rounds {}",
-                    job.bootstrap_count, bootstrap_key.max_refresh_rounds
-                )));
-            }
-            let slots = inputs
-                .first()
-                .expect("input presence checked above")
-                .slots
+            let slots = first_matching_fhe_slots(inputs)?
                 .iter()
                 .map(|slot| {
-                    bootstrap_ciphertext_bounded_noise_registered_rns_exact_rounds(
-                        params,
-                        bootstrap_key,
-                        slot,
-                        job.bootstrap_count,
-                    )
+                    let result = match bootstrap_key.mode {
+                        BfvBootstrapKeyMode::RefreshOnlyV1 => {
+                            bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_rounds(
+                                params,
+                                bootstrap_key,
+                                slot,
+                                job.bootstrap_count,
+                            )
+                        }
+                        BfvBootstrapKeyMode::FullBootstrapV1 => {
+                            full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
+                                params,
+                                bootstrap_key,
+                                slot,
+                            )
+                        }
+                    };
+                    result
                     .map_err(|err| {
                         invalid_parameter(format!("FHE bounded-noise bootstrap failed: {err}"))
                     })
@@ -6631,6 +7129,15 @@ fn verify_soracloud_fhe_refresh_transcript_digest(
     evaluation_keys: &BfvEvaluationKeyBundle,
     transcript: &BfvEvaluationKeyRefreshTranscriptV1,
 ) -> Result<(), InstructionExecutionError> {
+    if policy.max_bootstrap_count == 0
+        && policy
+            .full_bootstrap_material_proof_statement_digest
+            .is_some()
+    {
+        return Err(invalid_parameter(
+            "fhe full-bootstrap material proof statement digest requires bootstrap-capable policy",
+        ));
+    }
     let actual = transcript
         .digest_for_evaluation_keys_with_mode(
             params,
@@ -6643,30 +7150,118 @@ fn verify_soracloud_fhe_refresh_transcript_digest(
             "fhe evaluation-key refresh transcript digest does not match the execution policy",
         ));
     }
-    if let Some(expected) = policy.bootstrap_key_zero_refresh_proof_statement_digest {
-        let actual = transcript
-            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
-                params,
-                evaluation_keys,
-                policy.refresh_transcript_mode,
-            )
-            .map_err(|err| invalid_parameter(err.to_string()))?
-            .ok_or_else(|| {
-                invalid_parameter(
-                    "fhe bootstrap-key proof statement digest requires bootstrap key material",
-                )
-            })?;
-        if actual != expected {
-            return Err(invalid_parameter(
-                "fhe bootstrap-key proof statement digest does not match the execution policy",
-            ));
+    let actual_full_bootstrap_statement = transcript
+        .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(params, evaluation_keys)
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    match actual_full_bootstrap_statement {
+        Some(actual_full_bootstrap_statement) => {
+            if policy.max_bootstrap_count == 0 {
+                return Err(invalid_parameter(
+                    "fhe full-bootstrap material proof statement digest requires bootstrap-capable policy",
+                ));
+            }
+            let Some(expected_full_bootstrap_statement) =
+                policy.full_bootstrap_material_proof_statement_digest
+            else {
+                return Err(invalid_parameter(
+                    "fhe full-bootstrap policy must bind full-bootstrap material proof statement digest",
+                ));
+            };
+            if policy
+                .bootstrap_key_zero_refresh_proof_statement_digest
+                .is_some()
+            {
+                return Err(invalid_parameter(
+                    "fhe full-bootstrap policy must not bind bootstrap-key zero-refresh proof statement digest",
+                ));
+            }
+            if actual_full_bootstrap_statement != expected_full_bootstrap_statement {
+                return Err(invalid_parameter(
+                    "fhe full-bootstrap material proof statement digest does not match the execution policy",
+                ));
+            }
         }
-    } else if policy.max_bootstrap_count > 0 {
-        return Err(invalid_parameter(
-            "fhe bootstrap-capable policy must bind bootstrap-key proof statement digest",
-        ));
+        None => {
+            if policy
+                .full_bootstrap_material_proof_statement_digest
+                .is_some()
+            {
+                if policy.max_bootstrap_count == 0 {
+                    return Err(invalid_parameter(
+                        "fhe full-bootstrap material proof statement digest requires bootstrap-capable policy",
+                    ));
+                }
+                return Err(invalid_parameter(
+                    "fhe full-bootstrap material proof statement digest requires full-bootstrap key material",
+                ));
+            }
+            if let Some(expected) = policy.bootstrap_key_zero_refresh_proof_statement_digest {
+                if policy.max_bootstrap_count == 0 {
+                    return Err(invalid_parameter(
+                        "fhe bootstrap-key proof statement digest requires bootstrap-capable policy",
+                    ));
+                }
+                let actual = transcript
+                    .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                        params,
+                        evaluation_keys,
+                        policy.refresh_transcript_mode,
+                    )
+                    .map_err(|err| invalid_parameter(err.to_string()))?
+                    .ok_or_else(|| {
+                        invalid_parameter(
+                            "fhe bootstrap-key proof statement digest requires bootstrap key material",
+                        )
+                    })?;
+                if actual != expected {
+                    return Err(invalid_parameter(
+                        "fhe bootstrap-key proof statement digest does not match the execution policy",
+                    ));
+                }
+            } else if policy.max_bootstrap_count > 0 {
+                return Err(invalid_parameter(
+                    "fhe bootstrap-capable policy must bind bootstrap-key proof statement digest",
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+fn verify_soracloud_fhe_full_bootstrap_material_proof_profile(
+    params: &BfvParameters,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    proof: Option<&SoracloudFheFullBootstrapMaterialProofV1>,
+) -> Result<(), InstructionExecutionError> {
+    let Some(bootstrap_key) = evaluation_keys.bootstrap_key.as_ref() else {
+        return Ok(());
+    };
+    if bootstrap_key.mode != BfvBootstrapKeyMode::FullBootstrapV1 {
+        return Ok(());
+    }
+    let Some(material) = bootstrap_key.full_bootstrap_material.as_ref() else {
+        return Ok(());
+    };
+    let expected_schema_digest =
+        Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1);
+    let expected_verifier_digest = proof
+        .map(|proof| {
+            proof
+                .proof
+                .vk_commitment
+                .map(Hash::prehashed)
+                .ok_or_else(|| {
+                    invalid_parameter("fhe full-bootstrap material proof requires vk_commitment")
+                })
+        })
+        .transpose()?;
+    validate_bfv_full_bootstrap_material_proof_profile_v1(
+        params,
+        material,
+        &expected_schema_digest,
+        expected_verifier_digest.as_ref(),
+    )
+    .map_err(|err| invalid_parameter(err.to_string()))
 }
 
 fn soracloud_fhe_ciphertext_bound_mode(policy: &FheExecutionPolicyV1) -> BfvCiphertextBoundModeV1 {
@@ -7558,6 +8153,8 @@ impl Execute for isi::RunSoracloudFheJob {
             self.evaluation_keys.clone(),
             self.evaluation_key_refresh_transcript.clone(),
             self.bootstrap_key_zero_refresh_proof.clone(),
+            self.full_bootstrap_material_proof.clone(),
+            self.full_bootstrap_circuit_artifacts.clone(),
             self.governance_tx_hash,
             &self.provenance,
         )?;
@@ -7586,13 +8183,33 @@ impl Execute for isi::RunSoracloudFheJob {
             &self.evaluation_keys,
             &self.evaluation_key_refresh_transcript,
         )?;
+        verify_soracloud_fhe_full_bootstrap_material_proof_profile(
+            &bfv_params,
+            &self.evaluation_keys,
+            self.full_bootstrap_material_proof.as_ref(),
+        )?;
         verify_soracloud_fhe_bootstrap_key_proof(
             state_transaction,
             &self.policy,
             self.policy
                 .bootstrap_key_zero_refresh_proof_statement_digest,
             self.bootstrap_key_zero_refresh_proof.as_ref(),
-            self.job.bootstrap_count > 0,
+            self.job.bootstrap_count > 0
+                && self
+                    .policy
+                    .bootstrap_key_zero_refresh_proof_statement_digest
+                    .is_some(),
+        )?;
+        verify_soracloud_fhe_full_bootstrap_material_proof(
+            state_transaction,
+            &self.policy,
+            self.policy.full_bootstrap_material_proof_statement_digest,
+            self.full_bootstrap_material_proof.as_ref(),
+            self.job.bootstrap_count > 0
+                && self
+                    .policy
+                    .full_bootstrap_material_proof_statement_digest
+                    .is_some(),
         )?;
         let loaded_inputs = load_soracloud_fhe_inputs(
             &bfv_params,
@@ -7608,21 +8225,23 @@ impl Execute for isi::RunSoracloudFheJob {
             .unzip();
         let (output_envelope, output_bound) = match ciphertext_bound_mode {
             BfvCiphertextBoundModeV1::ExactResidualMultiple => {
-                execute_soracloud_fhe_job_with_residual_bounds(
+                execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
                     &bfv_params,
                     &self.evaluation_keys,
                     &self.job,
                     &input_envelopes,
                     &input_bounds,
+                    self.full_bootstrap_circuit_artifacts.as_ref(),
                 )?
             }
             BfvCiphertextBoundModeV1::BoundedNoise => {
-                execute_soracloud_fhe_job_with_bounded_noise_bounds(
+                execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
                     &bfv_params,
                     &self.evaluation_keys,
                     &self.job,
                     &input_envelopes,
                     &input_bounds,
+                    self.full_bootstrap_circuit_artifacts.as_ref(),
                 )?
             }
         };
@@ -12316,22 +12935,41 @@ mod tests {
     use iroha_crypto::{
         Hash, KeyPair,
         fhe_bfv::{
-            BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1, BfvBootstrapKeyMode, BfvCiphertext,
+            BfvEvaluationKeyBundle, BfvFullBootstrapAccumulatorV1,
+            BfvFullBootstrapCircuitArtifactBundleV1, BfvFullBootstrapCircuitArtifactRoleV1,
+            BfvFullBootstrapCircuitMaterialV1, BfvFullBootstrapLinearTransformDiagonalV1,
+            BfvFullBootstrapLinearTransformV1, BfvFullBootstrapProofKeyV1,
+            BfvFullBootstrapSampleExtractionV1, BfvIdentifierCiphertext,
             BfvIdentifierPublicParameters, BfvParameters, BfvPublicKey, BfvSecretKey,
             apply_galois_automorphism_ciphertext, bfv_add_bounded_noise_output_bound,
             bfv_balanced_multiplication_depth, bfv_encrypted_zero_refresh_residual_multiple_bound,
-            bfv_fresh_bounded_noise_ciphertext_bound, bootstrap_ciphertext_rns_exact_round,
+            bfv_fresh_bounded_noise_ciphertext_bound,
+            bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1,
+            bfv_full_bootstrap_circuit_material_digest,
+            bfv_full_bootstrap_proof_public_input_schema_v1, bootstrap_ciphertext_rns_exact_round,
             bootstrap_ciphertext_rns_exact_rounds,
             bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed, bootstrap_key_from_seed,
             bootstrap_key_with_max_refresh_rounds_from_seed, decode_packed_plaintext_slots,
-            decrypt, decrypt_bounded_noise, decrypt_identifier, encode_packed_plaintext_slots,
+            decrypt, decrypt_bounded_noise, decrypt_identifier,
+            encode_bfv_full_bootstrap_accumulator_artifact_v1,
+            encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
+            encode_bfv_full_bootstrap_circuit_artifact_payload_v1,
+            encode_bfv_full_bootstrap_linear_transform_artifact_v1,
+            encode_bfv_full_bootstrap_proof_key_artifact_v1,
+            encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1,
+            encode_bfv_full_bootstrap_sample_extraction_artifact_v1, encode_packed_plaintext_slots,
             encrypt_bounded_noise_from_seed, encrypt_from_seed, encrypt_identifier_from_seed,
             galois_key_bounded_noise_from_seed, galois_key_from_seed,
             keygen_bounded_noise_with_relinearization_from_seed, keygen_from_seed,
             packed_galois_slot_permutation, packed_left_rotation_galois_automorphism_power,
             packed_left_rotation_galois_automorphism_powers,
-            registered_bfv_key_switch_decomposition_chain, registered_bfv_rns_modulus_chain,
+            registered_bfv_key_switch_decomposition_chain,
+            registered_bfv_key_switch_decomposition_chain_digest, registered_bfv_parameter_digest,
+            registered_bfv_rns_modulus_chain, registered_bfv_rns_modulus_chain_digest,
             rotation_key_bounded_noise_from_seed, rotation_key_from_seed,
+            validate_bfv_full_bootstrap_material_proof_profile_v1,
         },
     };
     use iroha_data_model::{
@@ -12355,6 +12993,8 @@ mod tests {
             SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
             SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
             SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES, SecretEnvelopeEncryptionV1,
             SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCapabilityPolicyV1,
             SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
@@ -12999,6 +13639,164 @@ mod tests {
         }
     }
 
+    fn sample_full_bootstrap_material(params: &BfvParameters) -> BfvFullBootstrapCircuitMaterialV1 {
+        sample_full_bootstrap_material_and_artifacts(params).0
+    }
+
+    fn sample_full_bootstrap_linear_transform_artifact_payload(
+        params: &BfvParameters,
+        role: BfvFullBootstrapCircuitArtifactRoleV1,
+    ) -> Vec<u8> {
+        let transform = BfvFullBootstrapLinearTransformV1 {
+            input_slot_count: params.polynomial_degree,
+            output_slot_count: params.polynomial_degree,
+            diagonals: vec![BfvFullBootstrapLinearTransformDiagonalV1 {
+                rotation_steps: 0,
+                plaintext: encode_packed_plaintext_slots(
+                    params,
+                    &vec![1; usize::from(params.polynomial_degree)],
+                )
+                .expect("encode identity packed-slot mask"),
+            }],
+        };
+        encode_bfv_full_bootstrap_linear_transform_artifact_v1(params, 1, role, &transform)
+            .expect("encode sample full-bootstrap linear transform artifact")
+    }
+
+    fn sample_full_bootstrap_accumulator_artifact_payload(params: &BfvParameters) -> Vec<u8> {
+        let accumulator = BfvFullBootstrapAccumulatorV1 {
+            slot_count: params.polynomial_degree,
+            test_vector: encode_packed_plaintext_slots(
+                params,
+                &vec![1; usize::from(params.polynomial_degree)],
+            )
+            .expect("encode sample full-bootstrap accumulator test vector"),
+        };
+        encode_bfv_full_bootstrap_accumulator_artifact_v1(params, 1, &accumulator)
+            .expect("encode sample full-bootstrap accumulator artifact")
+    }
+
+    fn sample_full_bootstrap_sample_extraction_artifact_payload(params: &BfvParameters) -> Vec<u8> {
+        let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
+            source_slot_count: params.polynomial_degree,
+            source_ciphertext_component_count: 2,
+            extracted_coefficient_index: 0,
+            output_ciphertext_component_count: 2,
+        };
+        encode_bfv_full_bootstrap_sample_extraction_artifact_v1(params, 1, sample_extraction)
+            .expect("encode sample full-bootstrap sample-extraction artifact")
+    }
+
+    fn sample_full_bootstrap_blind_rotation_artifact_payload(
+        params: &BfvParameters,
+        accumulator_digest: Hash,
+    ) -> Vec<u8> {
+        let blind_rotation_key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+            params,
+            accumulator_digest,
+            1,
+        )
+        .expect("build sample full-bootstrap blind-rotation key");
+        encode_bfv_full_bootstrap_blind_rotation_artifact_v1(params, 1, &blind_rotation_key)
+            .expect("encode sample full-bootstrap blind-rotation artifact")
+    }
+
+    fn sample_full_bootstrap_proof_public_input_schema_artifact_payload(
+        params: &BfvParameters,
+    ) -> Vec<u8> {
+        encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+            params,
+            1,
+            &bfv_full_bootstrap_proof_public_input_schema_v1(),
+        )
+        .expect("encode sample full-bootstrap proof public-input schema artifact")
+    }
+
+    fn sample_full_bootstrap_proof_key_artifact_payload(
+        params: &BfvParameters,
+        role: BfvFullBootstrapCircuitArtifactRoleV1,
+        public_input_schema_digest: Hash,
+        key_material: &[u8],
+    ) -> Vec<u8> {
+        let key = BfvFullBootstrapProofKeyV1 {
+            backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
+            key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            public_input_schema_digest,
+            key_material: key_material.to_vec(),
+        };
+        encode_bfv_full_bootstrap_proof_key_artifact_v1(params, 1, role, &key)
+            .expect("encode sample full-bootstrap proof key artifact")
+    }
+
+    fn sample_full_bootstrap_circuit_artifacts(
+        params: &BfvParameters,
+    ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+        let accumulator = sample_full_bootstrap_accumulator_artifact_payload(params);
+        let accumulator_digest = Hash::new(&accumulator);
+        let proof_public_input_schema =
+            sample_full_bootstrap_proof_public_input_schema_artifact_payload(params);
+        let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
+        BfvFullBootstrapCircuitArtifactBundleV1 {
+            coefficient_to_slot_key: sample_full_bootstrap_linear_transform_artifact_payload(
+                params,
+                BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+            ),
+            slot_to_coefficient_key: sample_full_bootstrap_linear_transform_artifact_payload(
+                params,
+                BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
+            ),
+            blind_rotation_key: sample_full_bootstrap_blind_rotation_artifact_payload(
+                params,
+                accumulator_digest,
+            ),
+            sample_extraction_key: sample_full_bootstrap_sample_extraction_artifact_payload(params),
+            accumulator,
+            proof_public_input_schema,
+            prover_key: sample_full_bootstrap_proof_key_artifact_payload(
+                params,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                proof_public_input_schema_digest,
+                b"soracloud-full-bootstrap-prover-key",
+            ),
+            verifier_key: sample_full_bootstrap_proof_key_artifact_payload(
+                params,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                proof_public_input_schema_digest,
+                b"soracloud-full-bootstrap-verifier-key",
+            ),
+        }
+    }
+
+    fn sample_full_bootstrap_material_and_artifacts(
+        params: &BfvParameters,
+    ) -> (
+        BfvFullBootstrapCircuitMaterialV1,
+        BfvFullBootstrapCircuitArtifactBundleV1,
+    ) {
+        let artifacts = sample_full_bootstrap_circuit_artifacts(params);
+        let material = BfvFullBootstrapCircuitMaterialV1 {
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_string(),
+            parameter_digest: registered_bfv_parameter_digest(params)
+                .expect("registered parameter digest"),
+            rns_modulus_chain_digest: registered_bfv_rns_modulus_chain_digest(params)
+                .expect("registered RNS digest"),
+            key_switch_decomposition_chain_digest:
+                registered_bfv_key_switch_decomposition_chain_digest(params)
+                    .expect("registered decomposition digest"),
+            coefficient_to_slot_key_digest: Hash::new(&artifacts.coefficient_to_slot_key),
+            slot_to_coefficient_key_digest: Hash::new(&artifacts.slot_to_coefficient_key),
+            blind_rotation_key_digest: Hash::new(&artifacts.blind_rotation_key),
+            sample_extraction_key_digest: Hash::new(&artifacts.sample_extraction_key),
+            accumulator_digest: Hash::new(&artifacts.accumulator),
+            proof_public_input_schema_digest: Hash::new(&artifacts.proof_public_input_schema),
+            prover_key_digest: Hash::new(&artifacts.prover_key),
+            verifier_key_digest: Hash::new(&artifacts.verifier_key),
+            max_bootstrap_depth: 1,
+        };
+        (material, artifacts)
+    }
+
     fn sample_bfv_evaluation_key_digest() -> Hash {
         let params = ram_lfe_bfv_parameters_v1();
         sample_bfv_evaluation_key_bundle()
@@ -13312,6 +14110,102 @@ mod tests {
             .verifying_keys_by_circuit
             .insert((record.circuit_id, record.version), vk_id.clone());
         (vk_id, commitment)
+    }
+
+    fn sample_fhe_full_bootstrap_material_proof(
+        statement_hash: Hash,
+        vk_commitment: [u8; Hash::LENGTH],
+    ) -> SoracloudFheFullBootstrapMaterialProofV1 {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+            envelope_bytes: vec![0xC5; 32],
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            vk_commitment,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+            norito::to_bytes(&open).expect("encode full-bootstrap material STARK wrapper"),
+        );
+        let proof_box = iroha_data_model::proof::ProofBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            norito::to_bytes(&envelope).expect("encode full-bootstrap material OpenVerifyEnvelope"),
+        );
+        let mut proof = iroha_data_model::proof::ProofAttachment::new_ref(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            proof_box,
+            iroha_data_model::proof::VerifyingKeyId::new(
+                FHE_INPUT_ADMISSION_BACKEND,
+                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            ),
+        );
+        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
+        proof.vk_commitment = Some(vk_commitment);
+        SoracloudFheFullBootstrapMaterialProofV1 {
+            schema_version: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
+            statement_hash,
+            proof,
+        }
+    }
+
+    fn sample_fhe_full_bootstrap_material_vk_box() -> iroha_data_model::proof::VerifyingKeyBox {
+        iroha_data_model::proof::VerifyingKeyBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            b"sample-soracloud-full-bootstrap-material-proof-vk".to_vec(),
+        )
+    }
+
+    fn install_fhe_full_bootstrap_material_verifier_record(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        vk_box: iroha_data_model::proof::VerifyingKeyBox,
+    ) -> (iroha_data_model::proof::VerifyingKeyId, [u8; Hash::LENGTH]) {
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new(
+            FHE_INPUT_ADMISSION_BACKEND,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+        );
+        let commitment = crate::zk::hash_vk(&vk_box);
+        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
+            u32::from(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1),
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            None,
+            "soracloud",
+            BackendTag::Stark,
+            "goldilocks",
+            soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1(),
+            commitment,
+        );
+        record.vk_len = u32::try_from(vk_box.bytes.len()).expect("VK length fits u32");
+        record.status = ConfidentialStatus::Active;
+        record.key = Some(vk_box);
+        record.gas_schedule_id =
+            Some(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1.into());
+        state_transaction
+            .world
+            .verifying_keys
+            .insert(vk_id.clone(), record.clone());
+        state_transaction
+            .world
+            .verifying_keys_by_circuit
+            .insert((record.circuit_id, record.version), vk_id.clone());
+        (vk_id, commitment)
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    fn preverified_full_bootstrap_material_proof_map(
+        proof: &SoracloudFheFullBootstrapMaterialProofV1,
+        vk_commitment: [u8; Hash::LENGTH],
+    ) -> Arc<crate::zk::PreverifiedProofMap> {
+        let mut map = BTreeMap::new();
+        map.insert(
+            crate::zk::PreverifiedProofKey::new(
+                &proof.proof.proof,
+                &proof.proof.vk_ref,
+                vk_commitment,
+            ),
+            true,
+        );
+        Arc::new(crate::zk::PreverifiedProofMap::from(map))
     }
 
     #[cfg(feature = "zk-preverify")]
@@ -14082,6 +14976,7 @@ mod tests {
             bootstrap_key_zero_refresh_proof_statement_digest: Some(
                 sample_bfv_bootstrap_key_proof_statement_digest(),
             ),
+            full_bootstrap_material_proof_statement_digest: None,
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
@@ -14678,6 +15573,127 @@ mod tests {
         }
     }
 
+    fn operation_fixture_full_bootstrap_material(
+        params: &BfvParameters,
+    ) -> BfvFullBootstrapCircuitMaterialV1 {
+        let mut material = sample_full_bootstrap_material(params);
+        material.proof_public_input_schema_digest =
+            Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1);
+        material.verifier_key_digest = Hash::new(b"soracloud-full-bootstrap-verifier-key");
+        material
+    }
+
+    fn assert_bfv_full_bootstrap_material_fixture(
+        operation_vectors: &norito::json::Value,
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) {
+        let fixture = fixture_get(operation_vectors, "full_bootstrap_material");
+        let material = operation_fixture_full_bootstrap_material(params);
+        assert_eq!(
+            fixture_str(fixture, "circuit_id"),
+            material.circuit_id,
+            "full-bootstrap material circuit id"
+        );
+        assert_eq!(
+            fixture_u64(fixture, "max_bootstrap_depth"),
+            u64::from(material.max_bootstrap_depth),
+            "full-bootstrap material max bootstrap depth"
+        );
+        assert_eq!(
+            fixture_str(fixture, "parameter_digest_hex"),
+            material.parameter_digest.to_string(),
+            "full-bootstrap material parameter digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "rns_modulus_chain_digest_hex"),
+            material.rns_modulus_chain_digest.to_string(),
+            "full-bootstrap material RNS modulus-chain digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "key_switch_decomposition_chain_digest_hex"),
+            material.key_switch_decomposition_chain_digest.to_string(),
+            "full-bootstrap material key-switch decomposition-chain digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "coefficient_to_slot_key_digest_hex"),
+            material.coefficient_to_slot_key_digest.to_string(),
+            "full-bootstrap material coefficient-to-slot digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "slot_to_coefficient_key_digest_hex"),
+            material.slot_to_coefficient_key_digest.to_string(),
+            "full-bootstrap material slot-to-coefficient digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "blind_rotation_key_digest_hex"),
+            material.blind_rotation_key_digest.to_string(),
+            "full-bootstrap material blind-rotation digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "sample_extraction_key_digest_hex"),
+            material.sample_extraction_key_digest.to_string(),
+            "full-bootstrap material sample-extraction digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "accumulator_digest_hex"),
+            material.accumulator_digest.to_string(),
+            "full-bootstrap material accumulator digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "proof_public_input_schema_digest_hex"),
+            material.proof_public_input_schema_digest.to_string(),
+            "full-bootstrap material proof schema digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "prover_key_digest_hex"),
+            material.prover_key_digest.to_string(),
+            "full-bootstrap material prover-key digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "verifier_key_digest_hex"),
+            material.verifier_key_digest.to_string(),
+            "full-bootstrap material verifier-key digest"
+        );
+        assert_eq!(
+            fixture_str(fixture, "vk_commitment_hex"),
+            material.verifier_key_digest.to_string(),
+            "full-bootstrap material proof vk commitment"
+        );
+        let material_digest = bfv_full_bootstrap_circuit_material_digest(params, &material)
+            .expect("fixture full-bootstrap material digest");
+        assert_eq!(
+            fixture_str(fixture, "expected_material_digest_hex"),
+            material_digest.to_string(),
+            "full-bootstrap material digest"
+        );
+        validate_bfv_full_bootstrap_material_proof_profile_v1(
+            params,
+            &material,
+            &material.proof_public_input_schema_digest,
+            Some(&material.verifier_key_digest),
+        )
+        .expect("fixture full-bootstrap proof profile validates");
+
+        let mut full_bundle = evaluation_keys.clone();
+        let full_bootstrap_key = full_bundle
+            .bootstrap_key
+            .as_mut()
+            .expect("fixture evaluation keys carry bootstrap key");
+        full_bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        full_bootstrap_key.full_bootstrap_material = Some(material);
+        let statement_digest = full_bundle
+            .full_bootstrap_material_proof_statement_digest(params, public_key)
+            .expect("fixture full-bootstrap statement digest")
+            .expect("full-bootstrap statement is present");
+        assert_eq!(
+            fixture_str(fixture, "expected_statement_digest_hex"),
+            statement_digest.to_string(),
+            "full-bootstrap material proof statement digest"
+        );
+    }
+
     fn assert_bfv_galois_switch_vectors(
         operation_vectors: &norito::json::Value,
         params: &BfvParameters,
@@ -15017,6 +16033,12 @@ mod tests {
             .validate(&params)
             .expect("fixture evaluation keys must validate");
         assert_bfv_evaluation_key_fixture(operation_vectors, &params, &evaluation_keys);
+        assert_bfv_full_bootstrap_material_fixture(
+            operation_vectors,
+            &params,
+            &public_key,
+            &evaluation_keys,
+        );
         assert_bfv_galois_switch_vectors(
             operation_vectors,
             &params,
@@ -15313,6 +16335,65 @@ mod tests {
             rns_polynomial_fixture_json(params, &rhs, &reconstructed_rhs),
             rns_polynomial_fixture_json(params, &sum, &reconstructed_sum),
             rns_polynomial_fixture_json(params, &product, &reconstructed_product)
+        )
+    }
+
+    fn full_bootstrap_material_fixture_json(
+        params: &BfvParameters,
+        public_key: &BfvPublicKey,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) -> String {
+        let material = operation_fixture_full_bootstrap_material(params);
+        let material_digest = bfv_full_bootstrap_circuit_material_digest(params, &material)
+            .expect("full-bootstrap material digest");
+        let mut full_bundle = evaluation_keys.clone();
+        let full_bootstrap_key = full_bundle
+            .bootstrap_key
+            .as_mut()
+            .expect("fixture evaluation keys carry bootstrap key");
+        full_bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        full_bootstrap_key.full_bootstrap_material = Some(material.clone());
+        let statement_digest = full_bundle
+            .full_bootstrap_material_proof_statement_digest(params, public_key)
+            .expect("full-bootstrap statement digest")
+            .expect("full-bootstrap statement is present");
+        format!(
+            concat!(
+                "{{",
+                "\"circuit_id\":\"{}\",",
+                "\"max_bootstrap_depth\":{},",
+                "\"parameter_digest_hex\":\"{}\",",
+                "\"rns_modulus_chain_digest_hex\":\"{}\",",
+                "\"key_switch_decomposition_chain_digest_hex\":\"{}\",",
+                "\"coefficient_to_slot_key_digest_hex\":\"{}\",",
+                "\"slot_to_coefficient_key_digest_hex\":\"{}\",",
+                "\"blind_rotation_key_digest_hex\":\"{}\",",
+                "\"sample_extraction_key_digest_hex\":\"{}\",",
+                "\"accumulator_digest_hex\":\"{}\",",
+                "\"proof_public_input_schema_digest_hex\":\"{}\",",
+                "\"prover_key_digest_hex\":\"{}\",",
+                "\"verifier_key_digest_hex\":\"{}\",",
+                "\"vk_commitment_hex\":\"{}\",",
+                "\"expected_material_digest_hex\":\"{}\",",
+                "\"expected_statement_digest_hex\":\"{}\"",
+                "}}"
+            ),
+            material.circuit_id,
+            material.max_bootstrap_depth,
+            material.parameter_digest,
+            material.rns_modulus_chain_digest,
+            material.key_switch_decomposition_chain_digest,
+            material.coefficient_to_slot_key_digest,
+            material.slot_to_coefficient_key_digest,
+            material.blind_rotation_key_digest,
+            material.sample_extraction_key_digest,
+            material.accumulator_digest,
+            material.proof_public_input_schema_digest,
+            material.prover_key_digest,
+            material.verifier_key_digest,
+            material.verifier_key_digest,
+            material_digest,
+            statement_digest
         )
     }
 
@@ -15637,6 +16718,51 @@ mod tests {
         )
         .expect("sample policy must pin the sample refresh transcript");
 
+        let mut missing_bootstrap_statement = policy.clone();
+        missing_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &missing_bootstrap_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("exact bootstrap-capable policy must bind bootstrap proof statement digest");
+        assert_invalid_parameter_contains(err, "bootstrap-capable policy");
+
+        let mut stale_bootstrap_statement = policy.clone();
+        stale_bootstrap_statement.max_bootstrap_count = 0;
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &stale_bootstrap_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("zero-bootstrap policy must reject stale bootstrap proof statements");
+        assert_invalid_parameter_contains(err, "requires bootstrap-capable policy");
+
+        let mut wrong_bootstrap_statement = policy.clone();
+        wrong_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest =
+            Some(Hash::new(b"wrong-exact-bootstrap-proof-statement"));
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &wrong_bootstrap_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("wrong exact bootstrap proof statement digest must fail runtime admission");
+        assert_invalid_parameter_contains(err, "bootstrap-key proof statement digest");
+
+        let mut non_bootstrap_policy = policy.clone();
+        non_bootstrap_policy.max_bootstrap_count = 0;
+        non_bootstrap_policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &non_bootstrap_policy,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect("zero-bootstrap policy may omit bootstrap proof statement digest");
+
         let mut wrong_transcript = transcript.clone();
         wrong_transcript.rotation_transcripts[0]
             .seed
@@ -15720,6 +16846,180 @@ mod tests {
         )
         .expect_err("wrong policy digest must reject the correct refresh transcript");
         assert_invalid_parameter_contains(err, "refresh transcript digest");
+    }
+
+    #[test]
+    fn soracloud_fhe_policy_binds_full_bootstrap_material_statement() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-full-bootstrap-policy-keygen")
+                .expect("keygen");
+        let mut bootstrap_key = bootstrap_key_with_max_refresh_rounds_from_seed(
+            &params,
+            &public_key,
+            "soracloud-full-bootstrap-policy-key",
+            1,
+            b"soracloud-fhe-full-bootstrap-policy-refresh",
+        )
+        .expect("bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(sample_full_bootstrap_material(&params));
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
+            bootstrap_key: Some(bootstrap_key),
+        };
+        let transcript = BfvEvaluationKeyRefreshTranscriptV1 {
+            public_key,
+            rotation_transcripts: Vec::new(),
+            bootstrap_transcript: None,
+        };
+        let mut policy = sample_fhe_policy();
+        policy.evaluation_key_digest = evaluation_keys
+            .digest(&params)
+            .expect("full-bootstrap evaluation-key digest");
+        policy.evaluation_key_refresh_transcript_digest = transcript
+            .digest_for_evaluation_keys_with_mode(
+                &params,
+                &evaluation_keys,
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect("full-bootstrap refresh transcript digest");
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest = Some(
+            transcript
+                .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
+                    &params,
+                    &evaluation_keys,
+                )
+                .expect("full-bootstrap material statement digest")
+                .expect("full-bootstrap statement is present"),
+        );
+        verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &policy,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect("full-bootstrap policy must bind governed material statement");
+
+        let mut missing_statement = policy.clone();
+        missing_statement.full_bootstrap_material_proof_statement_digest = None;
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &missing_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("full-bootstrap policies must bind material statement digest");
+        assert_invalid_parameter_contains(err, "full-bootstrap policy must bind");
+
+        let mut wrong_statement = policy.clone();
+        wrong_statement.full_bootstrap_material_proof_statement_digest =
+            Some(Hash::new(b"wrong-full-bootstrap-material-statement"));
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &wrong_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("wrong full-bootstrap material statement digest must fail");
+        assert_invalid_parameter_contains(err, "full-bootstrap material proof statement digest");
+
+        let mut cross_mode_statement = policy.clone();
+        cross_mode_statement.bootstrap_key_zero_refresh_proof_statement_digest =
+            Some(sample_bfv_bootstrap_key_proof_statement_digest());
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &cross_mode_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("full-bootstrap policies must not bind zero-refresh proof statements");
+        assert_invalid_parameter_contains(err, "must not bind bootstrap-key zero-refresh");
+
+        let mut stale_statement = policy;
+        stale_statement.max_bootstrap_count = 0;
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &stale_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("zero-bootstrap policies must reject stale full-bootstrap statements");
+        assert_invalid_parameter_contains(err, "requires bootstrap-capable policy");
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_profile_binds_proof_schema_and_verifier_commitment() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let statement_hash = Hash::new(b"soracloud-full-bootstrap-profile-statement");
+        let vk_commitment = [0x62; Hash::LENGTH];
+        let proof = sample_fhe_full_bootstrap_material_proof(statement_hash, vk_commitment);
+        let mut material = sample_full_bootstrap_material(&params);
+        material.proof_public_input_schema_digest =
+            Hash::new(SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1);
+        material.verifier_key_digest = Hash::prehashed(vk_commitment);
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(material);
+
+        verify_soracloud_fhe_full_bootstrap_material_proof_profile(
+            &params,
+            &evaluation_keys,
+            Some(&proof),
+        )
+        .expect("canonical full-bootstrap material proof profile must validate");
+
+        let mut missing_vk_commitment_proof = proof.clone();
+        missing_vk_commitment_proof.proof.vk_commitment = None;
+        let err = verify_soracloud_fhe_full_bootstrap_material_proof_profile(
+            &params,
+            &evaluation_keys,
+            Some(&missing_vk_commitment_proof),
+        )
+        .expect_err("profile gate must reject full-bootstrap proofs without vk_commitment");
+        assert_invalid_parameter_contains(err, "requires vk_commitment");
+
+        let mut wrong_schema_keys = evaluation_keys.clone();
+        wrong_schema_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("full-bootstrap material")
+            .proof_public_input_schema_digest =
+            Hash::new(b"wrong-soracloud-full-bootstrap-proof-schema");
+        let err = verify_soracloud_fhe_full_bootstrap_material_proof_profile(
+            &params,
+            &wrong_schema_keys,
+            Some(&proof),
+        )
+        .expect_err("schema digest drift must fail before proof verification");
+        assert_invalid_parameter_contains(err, "proof public-input schema digest");
+
+        let mut wrong_verifier_keys = evaluation_keys;
+        wrong_verifier_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("full-bootstrap material")
+            .verifier_key_digest = Hash::new(b"wrong-soracloud-full-bootstrap-verifier-key");
+        let err = verify_soracloud_fhe_full_bootstrap_material_proof_profile(
+            &params,
+            &wrong_verifier_keys,
+            Some(&proof),
+        )
+        .expect_err("verifier digest drift must fail before proof verification");
+        assert_invalid_parameter_contains(err, "verifier-key digest");
     }
 
     #[test]
@@ -15914,6 +17214,186 @@ mod tests {
         )
         .expect_err("statement hash mismatch must reject before verifier lookup");
         assert_invalid_parameter_contains(err, "statement hash mismatch");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_proof_is_required_for_full_bootstrap_jobs()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest =
+            Some(Hash::new(b"full-bootstrap-material-statement"));
+        let statement_hash = policy
+            .full_bootstrap_material_proof_statement_digest
+            .expect("policy binds full-bootstrap material proof statement");
+
+        let err = verify_soracloud_fhe_full_bootstrap_material_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            None,
+            true,
+        )
+        .expect_err("full-bootstrap operation without material proof must be rejected");
+        assert_invalid_parameter_contains(err, "requires full-bootstrap material proof");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_proof_rejects_non_bootstrap_jobs_before_decoding()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest =
+            Some(Hash::new(b"full-bootstrap-material-statement"));
+        let statement_hash = policy
+            .full_bootstrap_material_proof_statement_digest
+            .expect("policy binds full-bootstrap material proof statement");
+        let mut proof =
+            sample_fhe_full_bootstrap_material_proof(statement_hash, [0x62; Hash::LENGTH]);
+        proof.proof.proof.bytes = vec![0xA5];
+        proof.proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &proof.proof.proof.bytes,
+        )));
+
+        let err = verify_soracloud_fhe_full_bootstrap_material_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            false,
+        )
+        .expect_err(
+            "non-bootstrap jobs must reject full-bootstrap material proofs before decoding",
+        );
+        assert_invalid_parameter_contains(err, "only accepted for full-bootstrap operations");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_proof_rejects_statement_hash_mismatch()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest =
+            Some(Hash::new(b"expected-full-bootstrap-material-statement"));
+        let expected_statement_hash = policy
+            .full_bootstrap_material_proof_statement_digest
+            .expect("policy binds full-bootstrap material proof statement");
+        let proof = sample_fhe_full_bootstrap_material_proof(
+            Hash::new(b"wrong-full-bootstrap-material-proof-statement"),
+            [0x62; Hash::LENGTH],
+        );
+
+        let err = verify_soracloud_fhe_full_bootstrap_material_proof(
+            &mut stx,
+            &policy,
+            Some(expected_statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect_err(
+            "full-bootstrap material proof statement mismatch must fail before verifier lookup",
+        );
+        assert_invalid_parameter_contains(err, "statement hash mismatch");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_proof_rejects_unverified_fake_proof()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest =
+            Some(Hash::new(b"full-bootstrap-material-statement"));
+        let statement_hash = policy
+            .full_bootstrap_material_proof_statement_digest
+            .expect("policy binds full-bootstrap material proof statement");
+        let (_vk_id, vk_commitment) = install_fhe_full_bootstrap_material_verifier_record(
+            &mut stx,
+            sample_fhe_full_bootstrap_material_vk_box(),
+        );
+        let proof = sample_fhe_full_bootstrap_material_proof(statement_hash, vk_commitment);
+
+        let err = verify_soracloud_fhe_full_bootstrap_material_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect_err("active full-bootstrap verifier must still reject an unverified fake proof");
+        assert_invalid_parameter_contains(err, "proof verification failed");
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_proof_accepts_preverified_active_verifier()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest =
+            Some(Hash::new(b"full-bootstrap-material-statement"));
+        let statement_hash = policy
+            .full_bootstrap_material_proof_statement_digest
+            .expect("policy binds full-bootstrap material proof statement");
+        let (_vk_id, vk_commitment) = install_fhe_full_bootstrap_material_verifier_record(
+            &mut stx,
+            sample_fhe_full_bootstrap_material_vk_box(),
+        );
+        let proof = sample_fhe_full_bootstrap_material_proof(statement_hash, vk_commitment);
+        stx.apply();
+        state_block.set_preverified_batch(preverified_full_bootstrap_material_proof_map(
+            &proof,
+            vk_commitment,
+        ));
+        let mut stx = state_block.transaction();
+
+        verify_soracloud_fhe_full_bootstrap_material_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect("active verifier and preverified full-bootstrap material proof must be accepted");
         Ok(())
     }
 
@@ -16374,6 +17854,10 @@ mod tests {
                 .as_ref()
                 .expect("bootstrap key")
                 .max_refresh_rounds
+        );
+        println!(
+            "full-bootstrap-material-json: {}",
+            full_bootstrap_material_fixture_json(&params, &public_key, &evaluation_keys)
         );
         for (index, entry) in evaluation_keys
             .relinearization_key
@@ -17047,7 +18531,7 @@ mod tests {
     }
 
     #[test]
-    fn soracloud_bounded_noise_bootstrap_uses_registered_rns_refresh_bridge() {
+    fn soracloud_bounded_noise_bootstrap_uses_registered_rns_basis_extension_refresh_bridge() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, evaluation_keys, _transcript, _digest) =
             sample_registered_bounded_noise_bfv_material();
@@ -17095,7 +18579,7 @@ mod tests {
             std::slice::from_ref(&input),
             &[input_bound],
         )
-        .expect("execute bounded-noise bootstrap through registered RNS bridge");
+        .expect("execute bounded-noise bootstrap through registered basis-extension RNS bridge");
 
         assert_eq!(output.slots.len(), 2);
         assert_ne!(output.slots, input.slots);
@@ -17106,6 +18590,177 @@ mod tests {
         assert_eq!(&slot_0[..2], &[9, 4]);
         assert_eq!(slot_1[0], 7);
         assert_eq!(output_bound, Some(expected_output_bound));
+    }
+
+    #[test]
+    fn soracloud_bounded_noise_bootstrap_full_mode_preflights_before_refresh_count_capacity() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, mut evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[11, 5],
+                    b"soracloud-bounded-bootstrap-full-mode-input",
+                )
+                .expect("encrypt bounded-noise bootstrap input"),
+            ],
+        };
+        let max_refresh_rounds = {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            bootstrap_key.max_refresh_rounds
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/bounded-bootstrap-full-mode-input",
+            &norito::to_bytes(&input).expect("encode bounded bootstrap input"),
+        )]);
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = max_refresh_rounds.saturating_add(1);
+
+        let err =
+            execute_soracloud_fhe_job_bounded_noise(&params, &evaluation_keys, &job, &[input])
+                .expect_err("bounded bootstrap full mode must fail before capacity checks");
+        assert_invalid_parameter_contains(
+            err,
+            "full BFV bootstrap key mode requires bootstrapping circuit material",
+        );
+    }
+
+    #[test]
+    fn soracloud_bounded_noise_bootstrap_full_material_stays_execution_unavailable() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, mut evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[13, 8],
+                    b"soracloud-bounded-bootstrap-full-material-input",
+                )
+                .expect("encrypt bounded-noise bootstrap input"),
+            ],
+        };
+        let max_refresh_rounds = {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            bootstrap_key.full_bootstrap_material = Some(sample_full_bootstrap_material(&params));
+            bootstrap_key.max_refresh_rounds
+        };
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/bounded-bootstrap-full-material-input",
+            &norito::to_bytes(&input).expect("encode bounded bootstrap input"),
+        )]);
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = max_refresh_rounds.saturating_add(1);
+
+        let err =
+            execute_soracloud_fhe_job_bounded_noise(&params, &evaluation_keys, &job, &[input])
+                .expect_err("bounded bootstrap full material must not execute as refresh");
+        assert_invalid_parameter_contains(err, "full BFV bootstrap execution is not implemented");
+    }
+
+    #[test]
+    fn soracloud_bounded_noise_bootstrap_full_material_preflight_rejects_drift_and_bad_ciphertext()
+    {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, mut evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[21],
+                    b"soracloud-bounded-bootstrap-full-material-drift-input",
+                )
+                .expect("encrypt bounded-noise bootstrap input"),
+            ],
+        };
+        {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            let mut material = sample_full_bootstrap_material(&params);
+            material.parameter_digest = Hash::new(b"wrong-soracloud-bounded-bootstrap-parameter");
+            bootstrap_key.full_bootstrap_material = Some(material);
+        }
+        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(
+            "/state/private/bounded-bootstrap-full-material-drift-input",
+            &norito::to_bytes(&input).expect("encode bounded bootstrap input"),
+        )]);
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+
+        let err = execute_soracloud_fhe_job_bounded_noise(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+        )
+        .expect_err("bounded full-bootstrap material drift must fail before unavailable evaluator");
+        assert_invalid_parameter_contains(err, "parameter digest");
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+        )
+        .expect_err("bounded-noise metadata full-bootstrap material drift must fail before unavailable evaluator");
+        assert_invalid_parameter_contains(err, "parameter digest");
+
+        evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key")
+            .full_bootstrap_material = Some(sample_full_bootstrap_material(&params));
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+        )
+        .expect_err("bounded-noise metadata full-bootstrap execution must remain unavailable");
+        assert_invalid_parameter_contains(err, "full BFV bootstrap execution is not implemented");
+        let malformed_input = BfvIdentifierCiphertext {
+            slots: vec![BfvCiphertext {
+                c0: Vec::new(),
+                c1: Vec::new(),
+            }],
+        };
+        let err = execute_soracloud_fhe_job_bounded_noise(
+            &params,
+            &evaluation_keys,
+            &job,
+            &[malformed_input],
+        )
+        .expect_err("bounded full-bootstrap malformed ciphertext must fail at preflight");
+        assert_invalid_parameter_contains(err, "ciphertext c0 length");
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[u128::MAX],
+        )
+        .expect_err("oversized full-bootstrap bounded-noise metadata must fail before unavailable evaluator");
+        assert_invalid_parameter_contains(err, "input bounded-noise bound");
     }
 
     #[test]
@@ -17621,6 +19276,236 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_bootstrap_full_mode_preflights_before_refresh_count_capacity() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let max_refresh_rounds = {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            bootstrap_key.max_refresh_rounds
+        };
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = max_refresh_rounds.saturating_add(1);
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-full-mode");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("bootstrap full mode must fail before capacity checks");
+        assert_invalid_parameter_contains(
+            err,
+            "full BFV bootstrap key mode requires bootstrapping circuit material",
+        );
+    }
+
+    #[test]
+    fn soracloud_bootstrap_full_material_stays_execution_unavailable() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let max_refresh_rounds = {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            bootstrap_key.full_bootstrap_material = Some(sample_full_bootstrap_material(&params));
+            bootstrap_key.max_refresh_rounds
+        };
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = max_refresh_rounds.saturating_add(1);
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-full-material");
+
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[input])
+            .expect_err("bootstrap full material must not execute as refresh");
+        assert_invalid_parameter_contains(err, "full BFV bootstrap execution is not implemented");
+    }
+
+    #[test]
+    fn soracloud_bootstrap_full_material_preflight_rejects_drift_and_bad_ciphertext() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            let mut material = sample_full_bootstrap_material(&params);
+            material.parameter_digest = Hash::new(b"wrong-soracloud-bootstrap-parameter");
+            bootstrap_key.full_bootstrap_material = Some(material);
+        }
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-full-material-drift");
+
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+        )
+        .expect_err("full-bootstrap material drift must fail before unavailable evaluator");
+        assert_invalid_parameter_contains(err, "parameter digest");
+        let err = execute_soracloud_fhe_job_with_residual_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+        )
+        .expect_err(
+            "residual-bound full-bootstrap material drift must fail before unavailable evaluator",
+        );
+        assert_invalid_parameter_contains(err, "parameter digest");
+
+        evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key")
+            .full_bootstrap_material = Some(sample_full_bootstrap_material(&params));
+        let err = execute_soracloud_fhe_job_with_residual_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+        )
+        .expect_err("residual-bound full-bootstrap execution must remain unavailable");
+        assert_invalid_parameter_contains(err, "full BFV bootstrap execution is not implemented");
+        let malformed_input = BfvIdentifierCiphertext {
+            slots: vec![BfvCiphertext {
+                c0: Vec::new(),
+                c1: Vec::new(),
+            }],
+        };
+        let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[malformed_input])
+            .expect_err("full-bootstrap malformed ciphertext must fail at preflight");
+        assert_invalid_parameter_contains(err, "ciphertext c0 length");
+        let err = execute_soracloud_fhe_job_with_residual_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[u128::MAX],
+        )
+        .expect_err(
+            "oversized full-bootstrap residual metadata must fail before unavailable evaluator",
+        );
+        assert_invalid_parameter_contains(err, "input residual bound");
+    }
+
+    #[test]
+    fn soracloud_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            let (material, _) = sample_full_bootstrap_material_and_artifacts(&params);
+            bootstrap_key.full_bootstrap_material = Some(material);
+        }
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = sample_fhe_envelope(b"abc", b"soracloud-bootstrap-full-artifacts");
+
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            None,
+        )
+        .expect_err("full-bootstrap runtime path must require artifact attachment");
+        assert_invalid_parameter_contains(err, "requires full-bootstrap circuit artifacts");
+
+        let (_, artifacts) = sample_full_bootstrap_material_and_artifacts(&params);
+        let mut drifted_artifacts = artifacts.clone();
+        drifted_artifacts.accumulator = b"wrong-soracloud-full-bootstrap-accumulator".to_vec();
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&drifted_artifacts),
+        )
+        .expect_err("full-bootstrap runtime path must reject artifact drift");
+        assert_invalid_parameter_contains(err, "digest does not match");
+
+        let mut role_swapped_evaluation_keys = evaluation_keys.clone();
+        let mut role_swapped_artifacts = artifacts.clone();
+        role_swapped_artifacts.sample_extraction_key =
+            encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+                &params,
+                1,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                b"role-swapped-soracloud-full-bootstrap-sample-extraction",
+            )
+            .expect("encode role-swapped full-bootstrap artifact");
+        role_swapped_evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("full-bootstrap material")
+            .sample_extraction_key_digest =
+            Hash::new(&role_swapped_artifacts.sample_extraction_key);
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &role_swapped_evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&role_swapped_artifacts),
+        )
+        .expect_err("full-bootstrap runtime path must reject role-swapped artifact envelopes");
+        assert_invalid_parameter_contains(err, "role");
+
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+        )
+        .expect_err("valid artifacts still fail closed until the evaluator lands");
+        assert_invalid_parameter_contains(err, "full BFV bootstrap execution is not implemented");
+    }
+
+    #[test]
+    fn soracloud_refresh_only_runtime_rejects_full_bootstrap_artifact_attachment() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = sample_fhe_envelope(b"abc", b"soracloud-refresh-artifact-drift");
+        let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
+
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+        )
+        .expect_err("refresh-only jobs must reject full-bootstrap artifact attachments");
+        assert_invalid_parameter_contains(err, "only accepted for full-bootstrap operations");
+    }
+
+    #[test]
     fn soracloud_rotate_left_uses_rotation_key_refresh() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, relinearization_key) =
@@ -17929,6 +19814,30 @@ mod tests {
         let err = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[])
             .expect_err("FHE jobs must reject missing input envelopes");
         assert_invalid_parameter_contains(err, "at least one input envelope");
+
+        let err = execute_soracloud_fhe_job_bounded_noise(&params, &evaluation_keys, &job, &[])
+            .expect_err("bounded FHE jobs must reject missing input envelopes");
+        assert_invalid_parameter_contains(err, "at least one input envelope");
+
+        let err = execute_soracloud_fhe_job_with_residual_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            &[],
+            &[],
+        )
+        .expect_err("residual-bound FHE jobs must reject missing input envelopes");
+        assert_invalid_parameter_contains(err, "at least one input envelope");
+
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            &[],
+            &[],
+        )
+        .expect_err("bounded-noise FHE jobs must reject missing input envelopes");
+        assert_invalid_parameter_contains(err, "at least one input envelope");
     }
 
     #[test]
@@ -18159,6 +20068,15 @@ mod tests {
             .expect_err("wrong plaintext modulus width must be rejected");
         assert_invalid_parameter_contains(err, "plaintext modulus bits");
 
+        let mut empty_ciphertext_chain = bundle.param_set.clone();
+        empty_ciphertext_chain.ciphertext_modulus_bits.clear();
+        let err = validate_registered_soracloud_bfv_descriptor(
+            &empty_ciphertext_chain,
+            &ram_lfe_bfv_parameters_v1(),
+        )
+        .expect_err("empty ciphertext modulus chain must be rejected");
+        assert_invalid_parameter_contains(err, "ciphertext modulus bits");
+
         let mut wrong_rns_digest = bundle.param_set.clone();
         wrong_rns_digest.rns_modulus_chain_digest = Hash::new(b"wrong-bfv-rns-chain");
         let err = registered_soracloud_bfv_parameters(&wrong_rns_digest)
@@ -18200,6 +20118,7 @@ mod tests {
         evaluation_keys: BfvEvaluationKeyBundle,
         evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
         bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
+        full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
         governance_tx_hash: Hash,
     ) -> ManifestProvenance {
         let payload = encode_fhe_job_run_provenance_payload(
@@ -18211,6 +20130,8 @@ mod tests {
             evaluation_keys,
             evaluation_key_refresh_transcript,
             bootstrap_key_zero_refresh_proof,
+            full_bootstrap_material_proof,
+            None,
             governance_tx_hash,
         )
         .expect("fhe job payload");
@@ -18249,6 +20170,7 @@ mod tests {
             evaluation_keys.clone(),
             evaluation_key_refresh_transcript.clone(),
             Some(proof.clone()),
+            None,
             governance_tx_hash,
         );
         let err = verify_fhe_job_run_provenance(
@@ -18260,6 +20182,8 @@ mod tests {
             param_set.clone(),
             evaluation_keys.clone(),
             evaluation_key_refresh_transcript.clone(),
+            None,
+            None,
             None,
             governance_tx_hash,
             &signed_with_proof,
@@ -18276,6 +20200,7 @@ mod tests {
             evaluation_keys.clone(),
             evaluation_key_refresh_transcript.clone(),
             None,
+            None,
             governance_tx_hash,
         );
         let err = verify_fhe_job_run_provenance(
@@ -18288,10 +20213,186 @@ mod tests {
             evaluation_keys,
             evaluation_key_refresh_transcript,
             Some(proof),
+            None,
+            None,
             governance_tx_hash,
             &signed_without_proof,
         )
         .expect_err("injecting an unsigned bootstrap-key proof must break provenance");
+        assert_invalid_parameter_contains(err, "signature verification failed");
+    }
+
+    #[test]
+    fn fhe_job_provenance_binds_full_bootstrap_material_proof_option() {
+        let service_name: Name = "portal".parse().expect("valid");
+        let binding_name: Name = "vault".parse().expect("valid");
+        let input_1_payload = b"input-1";
+        let input_2_payload = b"input-2";
+        let job = sample_fhe_job(vec![
+            sample_fhe_input_ref("/state/private/input-1", input_1_payload),
+            sample_fhe_input_ref("/state/private/input-2", input_2_payload),
+        ]);
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest = Some(Hash::new(
+            b"full-bootstrap-material-proof-provenance-statement",
+        ));
+        let param_set = sample_fhe_param_set();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
+        let governance_tx_hash = Hash::new(b"gov-fhe-full-bootstrap-proof-provenance");
+        let proof = sample_fhe_full_bootstrap_material_proof(
+            policy
+                .full_bootstrap_material_proof_statement_digest
+                .expect("sample policy binds full-bootstrap statement"),
+            [0x62; Hash::LENGTH],
+        );
+
+        let signed_with_proof = fhe_job_provenance(
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            Some(proof.clone()),
+            governance_tx_hash,
+        );
+        let err = verify_fhe_job_run_provenance(
+            &ALICE_ID,
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            None,
+            None,
+            governance_tx_hash,
+            &signed_with_proof,
+        )
+        .expect_err("stripping a signed full-bootstrap material proof must break provenance");
+        assert_invalid_parameter_contains(err, "signature verification failed");
+
+        let signed_without_proof = fhe_job_provenance(
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            None,
+            governance_tx_hash,
+        );
+        let err = verify_fhe_job_run_provenance(
+            &ALICE_ID,
+            &service_name,
+            &binding_name,
+            job,
+            policy,
+            param_set,
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            None,
+            Some(proof),
+            None,
+            governance_tx_hash,
+            &signed_without_proof,
+        )
+        .expect_err("injecting an unsigned full-bootstrap material proof must break provenance");
+        assert_invalid_parameter_contains(err, "signature verification failed");
+    }
+
+    #[test]
+    fn fhe_job_provenance_binds_full_bootstrap_artifact_bundle_option() {
+        let service_name: Name = "portal".parse().expect("valid");
+        let binding_name: Name = "vault".parse().expect("valid");
+        let input_1_payload = b"input-1";
+        let input_2_payload = b"input-2";
+        let job = sample_fhe_job(vec![
+            sample_fhe_input_ref("/state/private/input-1", input_1_payload),
+            sample_fhe_input_ref("/state/private/input-2", input_2_payload),
+        ]);
+        let policy = sample_fhe_policy();
+        let param_set = sample_fhe_param_set();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
+        let artifacts = sample_full_bootstrap_circuit_artifacts(&ram_lfe_bfv_parameters_v1());
+        let governance_tx_hash = Hash::new(b"gov-fhe-full-bootstrap-artifact-provenance");
+
+        let payload_with_artifacts = encode_fhe_job_run_provenance_payload(
+            service_name.as_ref(),
+            binding_name.as_ref(),
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            None,
+            Some(artifacts.clone()),
+            governance_tx_hash,
+        )
+        .expect("artifact-bearing fhe job payload");
+        let signed_with_artifacts = ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: iroha_crypto::Signature::new(
+                ALICE_KEYPAIR.private_key(),
+                &payload_with_artifacts,
+            ),
+        };
+        let err = verify_fhe_job_run_provenance(
+            &ALICE_ID,
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            None,
+            None,
+            governance_tx_hash,
+            &signed_with_artifacts,
+        )
+        .expect_err("stripping signed full-bootstrap artifacts must break provenance");
+        assert_invalid_parameter_contains(err, "signature verification failed");
+
+        let signed_without_artifacts = fhe_job_provenance(
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            None,
+            governance_tx_hash,
+        );
+        let err = verify_fhe_job_run_provenance(
+            &ALICE_ID,
+            &service_name,
+            &binding_name,
+            job,
+            policy,
+            param_set,
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            None,
+            None,
+            Some(artifacts),
+            governance_tx_hash,
+            &signed_without_artifacts,
+        )
+        .expect_err("injecting unsigned full-bootstrap artifacts must break provenance");
         assert_invalid_parameter_contains(err, "signature verification failed");
     }
 
@@ -18952,6 +21053,30 @@ mod tests {
         }
     }
 
+    fn sample_hf_placement_record(pool_id: Hash, placement_id: Hash) -> SoraHfPlacementRecordV1 {
+        SoraHfPlacementRecordV1 {
+            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+            placement_id,
+            source_id: Hash::new(b"sample-placement-source"),
+            pool_id,
+            status: SoraHfPlacementStatusV1::Ready,
+            selection_seed_hash: Hash::new(b"sample-placement-seed"),
+            resource_profile: sample_hf_resource_profile(),
+            eligible_validator_count: 1,
+            adaptive_target_host_count: 1,
+            assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                validator_account_id: ALICE_ID.clone(),
+                peer_id: "12D3KooWPlacementTestPeer".to_string(),
+                role: SoraHfPlacementHostRoleV1::Primary,
+                status: SoraHfPlacementHostStatusV1::Warm,
+                host_class: "cpu.large".to_string(),
+            }],
+            total_reservation_fee_nanos: 1_000,
+            last_rebalance_at_ms: 100,
+            last_error: None,
+        }
+    }
+
     fn sample_model_host_capability(
         validator_account_id: AccountId,
         advertised_at_ms: u64,
@@ -19098,6 +21223,60 @@ mod tests {
                 .is_none()
         );
         Ok(())
+    }
+
+    #[test]
+    fn load_hf_placement_by_placement_id_rejects_duplicate_authoritative_state()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+
+        let header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(header);
+        let mut state_transaction = state_block.transaction();
+        let placement_id = Hash::new(b"duplicate-placement");
+        let first = sample_hf_placement_record(Hash::new(b"duplicate-pool-a"), placement_id);
+        let second = sample_hf_placement_record(Hash::new(b"duplicate-pool-b"), placement_id);
+        state_transaction
+            .world
+            .soracloud_hf_placements
+            .insert(first.pool_id, first);
+        state_transaction
+            .world
+            .soracloud_hf_placements
+            .insert(second.pool_id, second);
+
+        let err = load_hf_placement_by_placement_id(&state_transaction, &placement_id)
+            .expect_err("duplicate placement id must be rejected");
+        assert_invariant_contains(err, "duplicated in authoritative state");
+        Ok(())
+    }
+
+    #[test]
+    fn hf_ranked_validator_score_uses_digest_prefix_entropy() -> Result<(), eyre::Report> {
+        let seed_hash = Hash::new(b"placement-ranking-seed");
+        let stake_weight = 7_u128;
+        let payload = norito::to_bytes(&(seed_hash, ALICE_ID.clone()))?;
+        let expected_digest = *Hash::new(payload).as_ref();
+        let mut expected_entropy_bytes = [0_u8; 16];
+        expected_entropy_bytes.copy_from_slice(&expected_digest[..16]);
+        let expected_entropy = u128::from_be_bytes(expected_entropy_bytes).saturating_add(1);
+
+        let (score, digest) = hf_ranked_validator_score(&seed_hash, &ALICE_ID, stake_weight)?;
+
+        assert_eq!(digest, expected_digest);
+        assert_eq!(score, expected_entropy.saturating_mul(stake_weight));
+        Ok(())
+    }
+
+    #[test]
+    fn u64_bit_width_reports_zero_and_boundary_widths() {
+        assert_eq!(u64_bit_width(0), 0);
+        assert_eq!(u64_bit_width(1), 1);
+        assert_eq!(u64_bit_width(0xff), 8);
+        assert_eq!(u64_bit_width(u64::MAX), 64);
     }
 
     #[test]
@@ -21813,6 +23992,8 @@ mod tests {
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             bootstrap_key_zero_refresh_proof: Some(out_of_scope_proof.clone()),
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -21823,6 +24004,7 @@ mod tests {
                 evaluation_keys.clone(),
                 evaluation_key_refresh_transcript.clone(),
                 Some(out_of_scope_proof),
+                None,
                 governance_tx_hash,
             ),
         })
@@ -21839,6 +24021,8 @@ mod tests {
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -21848,6 +24032,7 @@ mod tests {
                 param_set.clone(),
                 evaluation_keys,
                 evaluation_key_refresh_transcript,
+                None,
                 None,
                 governance_tx_hash,
             ),
@@ -22002,6 +24187,8 @@ mod tests {
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -22011,6 +24198,7 @@ mod tests {
                 param_set,
                 evaluation_keys,
                 evaluation_key_refresh_transcript,
+                None,
                 None,
                 governance_tx_hash,
             ),
@@ -22311,6 +24499,8 @@ mod tests {
                 evaluation_keys: evaluation_keys.clone(),
                 evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
                 bootstrap_key_zero_refresh_proof: bootstrap_key_zero_refresh_proof.clone(),
+                full_bootstrap_material_proof: None,
+                full_bootstrap_circuit_artifacts: None,
                 governance_tx_hash,
                 provenance: fhe_job_provenance(
                     &service_name,
@@ -22321,6 +24511,7 @@ mod tests {
                     evaluation_keys.clone(),
                     evaluation_key_refresh_transcript.clone(),
                     bootstrap_key_zero_refresh_proof,
+                    None,
                     governance_tx_hash,
                 ),
             })
@@ -22585,6 +24776,8 @@ mod tests {
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -22594,6 +24787,7 @@ mod tests {
                 param_set.clone(),
                 evaluation_keys.clone(),
                 evaluation_key_refresh_transcript.clone(),
+                None,
                 None,
                 governance_tx_hash,
             ),
@@ -22706,6 +24900,8 @@ mod tests {
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -22715,6 +24911,7 @@ mod tests {
                 param_set.clone(),
                 evaluation_keys.clone(),
                 evaluation_key_refresh_transcript.clone(),
+                None,
                 None,
                 governance_tx_hash,
             ),
@@ -22802,6 +24999,8 @@ mod tests {
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -22811,6 +25010,7 @@ mod tests {
                 param_set.clone(),
                 evaluation_keys.clone(),
                 evaluation_key_refresh_transcript.clone(),
+                None,
                 None,
                 governance_tx_hash,
             ),
@@ -22858,6 +25058,8 @@ mod tests {
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
             bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
             governance_tx_hash: add_governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -22867,6 +25069,7 @@ mod tests {
                 param_set,
                 evaluation_keys,
                 evaluation_key_refresh_transcript,
+                None,
                 None,
                 add_governance_tx_hash,
             ),

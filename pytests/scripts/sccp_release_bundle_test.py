@@ -29,10 +29,6 @@ PHASES = (
     "contract-smoke",
     "core-admission",
 )
-SUBSTRATE_DIAGNOSTIC_DOMAINS = (6, 7, 8)
-UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (
-    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
-)
 EVM_EVIDENCE_SCRIPT_FRAGMENTS = (
     "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
     "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
@@ -398,6 +394,19 @@ def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
         assert module.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
+def test_release_bundle_verifier_submission_helper_lanes_match_supported_scope() -> None:
+    """The strict verifier must require only supported public helper rows."""
+
+    verifier = load_verify_helpers()
+
+    assert set(verifier.USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK) == {
+        "eth,bsc",
+        "tron",
+        "sol",
+        "ton",
+    }
+
+
 def test_release_bundle_verifier_guards_launch_scope_constant_inventory(
     tmp_path: Path,
 ) -> None:
@@ -446,12 +455,7 @@ def test_release_bundle_verifier_guards_launch_scope_constant_inventory(
     )
     assert any(
         "SCCP launch-scope constants source inventory" in error
-        and "SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1" in error
-        for error in errors
-    )
-    assert any(
-        "SCCP launch-scope constants source inventory" in error
-        and "SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(" in error
+        and "SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (" in error
         for error in errors
     )
     assert any(
@@ -2047,13 +2051,6 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     summary = json.loads(summary_json.read_text(encoding="utf-8"))
     assert summary["production_ready"] is True
     assert summary["release_checklist"]["ready"] is True
-    for payload in (report["evidence"], summary):
-        lanes_by_domain = {lane["domain"]: lane for lane in payload["lanes"]}
-        for domain in SUBSTRATE_DIAGNOSTIC_DOMAINS:
-            lane = lanes_by_domain[domain]
-            assert lane["production_ready"] is False
-            assert UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER in lane["blockers"]
-
     notes = notes_md.read_text(encoding="utf-8")
     assert "Status: READY" in notes
     assert "`manifest.json` is the verifier root" in notes
@@ -7159,96 +7156,6 @@ def test_release_bundle_verifier_rejects_ton_route_canary_hash_role_reuse(
         ) in verified.stdout
 
 
-def test_release_bundle_keeps_substrate_route_canaries_diagnostic_only(
-    tmp_path: Path,
-) -> None:
-    """Substrate-family route canaries remain visible but non-launching."""
-
-    output_dir = build_ready_bundle(tmp_path)
-    report = json.loads(
-        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
-    )
-    summary = json.loads(
-        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
-    )
-
-    for payload in (report["evidence"], summary):
-        lanes_by_domain = {lane["domain"]: lane for lane in payload["lanes"]}
-        for domain in SUBSTRATE_DIAGNOSTIC_DOMAINS:
-            lane = lanes_by_domain[domain]
-            canary = lane["route_allowlist"]["route_canary"]
-            assert canary["evidence_bound"] is True
-            assert canary["evidence_source"] == "substrate_finalized_runtime_snapshot"
-            assert lane["production_ready"] is False
-            assert UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER in lane["blockers"]
-
-
-def test_release_bundle_verifier_checks_complete_substrate_diagnostic_schema(
-    tmp_path: Path,
-) -> None:
-    """Complete unsupported diagnostic lanes must still be schema-checked."""
-
-    def mutate_lanes(lanes: list[dict]) -> None:
-        lane = next(lane for lane in lanes if lane["domain"] == 6)
-        assert all(lane["records"].values())
-        lane["blockers"] = ["operator override"]
-        lane["source_record_hashes"]["source_verifier_material_hash"] = (
-            "0X" + "aa" * 32
-        )
-        lane["source_adapter_gate"]["audit_hashes"]["operator_note"] = (
-            "0x" + "bb" * 32
-        )
-
-    output_dir = build_ready_bundle(tmp_path)
-    report_path = output_dir / "sccp-release-readiness.json"
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    mutate_lanes(report["evidence"]["lanes"])
-    report_path.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    summary_path = output_dir / "sccp-all-lanes-summary.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    mutate_lanes(summary["lanes"])
-    summary_path.write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
-    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
-    rewrite_canonical_report_and_notes(output_dir)
-
-    verified = subprocess.run(
-        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    assert verified.returncode == 1
-    for label in (
-        "readiness report embedded evidence lane domain 6",
-        "all-lanes summary lane domain 6",
-    ):
-        assert (
-            f"{label} blockers must include the unsupported launch-scope blocker"
-        ) in verified.stdout
-        assert (
-            f"{label} blockers must contain only the unsupported launch-scope "
-            "blocker when diagnostic evidence is complete"
-        ) in verified.stdout
-        assert (
-            f"{label} source_record_hashes source_verifier_material_hash must "
-            "be a canonical bytes32 hex string"
-        ) in verified.stdout
-        assert (
-            f"{label} source_adapter_gate audit_hashes contains unexpected "
-            "field: operator_note"
-        ) in verified.stdout
-
 
 def test_release_bundle_verifier_rejects_tron_route_canary_transcript_hash_reuse(
     tmp_path: Path,
@@ -9144,44 +9051,6 @@ def test_release_bundle_verifier_rejects_submission_surface_unknown_lanes(
     ) in verified.stdout
 
 
-def test_release_bundle_verifier_rejects_unsupported_substrate_submission_surface(
-    tmp_path: Path,
-) -> None:
-    """Public submission rows must not re-advertise unsupported Substrate lanes."""
-
-    output_dir = build_ready_bundle(tmp_path)
-    report_path = output_dir / "sccp-release-readiness.json"
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    substrate_row = dict(report["user_prover_submission_surfaces"][0])
-    substrate_row["lanes"] = "substrate"
-    substrate_row["proof_backend"] = "substrate-runtime-v1"
-    substrate_row["on_chain_submission"] = "Substrate runtime call envelope"
-    report["user_prover_submission_surfaces"].append(substrate_row)
-    report_path.write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
-    rewrite_canonical_report_and_notes(output_dir)
-
-    verified = subprocess.run(
-        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    assert verified.returncode == 1
-    assert (
-        "readiness report user_prover_submission_surfaces contains unknown "
-        "lanes row: substrate"
-    ) in verified.stdout
-    assert (
-        "readiness report user_prover_submission_surfaces does not match "
-        "corridor phases"
-    ) in verified.stdout
-
 
 def test_release_bundle_verifier_rejects_submission_surface_backend_mismatch(
     tmp_path: Path,
@@ -10275,6 +10144,39 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
         )
         in error
         for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_public_discovery_documentation(
+    tmp_path: Path,
+) -> None:
+    """Public SCCP discovery docs must advertise the supported launch lanes."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_public_discovery_documentation_inventory_errors() == []
+
+    sparse_docs = tmp_path / "bridge_proofs.md"
+    sparse_docs.write_text(
+        "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`\n",
+        encoding="utf-8",
+    )
+    inventory = (
+        (
+            sparse_docs,
+            (
+                "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`",
+                "the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`)",
+            ),
+        ),
+    )
+
+    errors = verifier._sccp_public_discovery_documentation_inventory_errors(inventory)
+
+    assert any(
+        "SCCP public discovery documentation source inventory" in error
+        and "missing marker: the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`)"
+        in error
+        for error in errors
     )
 
 

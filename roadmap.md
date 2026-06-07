@@ -19,29 +19,12 @@ and completed history lives in [`status.md`](./status.md).
   suite labels/IDs are intentionally rejected. Keep future fixture and SDK work
   aligned with the regenerated `snnet-interop-nk{2,3}-v1.json` contents rather
   than adding compatibility aliases.
-- SCCP launch scope is intentionally limited to non-Substrate families for now:
-  do not advertise support for Substrate/Polkadot-family networks, including
-  Kusama, Polkadot, SORA Kusama, SORA Polkadot, or SORA2, until governance
-  explicitly re-opens that scope. Existing Substrate/SORA2 notes and evidence
-  helpers are diagnostic/backlog material only. Complete unsupported diagnostic
-  rows in public release bundles still have to pass canonical summary-schema
-  checks and carry only the explicit unsupported launch-scope blocker. The
-  strict release verifier now also scans the Rust SCCP constants, all-lanes
-  evidence generator, and readiness reporter for the same supported-domain set,
-  unsupported blocker text, and active Ethereum launch policy. Public
-  user-prover submission surfaces are likewise limited to supported launch
-  lanes (`eth,bsc`, `tron`, `sol`, and `ton`); a reintroduced `substrate`
-  production submission row is rejected until that support scope re-opens.
-  Torii public SCCP discovery must use the same supported-domain set:
-  `/v1/sccp/capabilities`, `/v1/sccp/manifests`, and wallet route manifests
-  must not advertise SORA2, SORA Kusama, SORA Polkadot, or generic
-  Substrate/Polkadot lanes while they remain outside launch scope. Optional
-  runtime SCALE capability fields must also stay absent from public discovery
-  until that launch scope is explicitly re-opened. Torii configured-launch
-  gates must use the supported launch-domain set instead of the full diagnostic
-  domain list, and configured all-lanes launch readiness must also iterate only
-  that supported-domain set, so Substrate-family diagnostic records cannot
-  satisfy or block production launch checks while they remain out of scope.
+- SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
+  manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
+  helpers, and production readiness surfaces must stay limited to those lanes.
+  Reintroducing retired network families requires a new design pass, fresh
+  fixtures, and explicit governance approval rather than reviving diagnostic
+  code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
@@ -843,8 +826,9 @@ and completed history lives in [`status.md`](./status.md).
   states. Proof-token minting now also reports token-id RNG failures through a
   labelled `MintError::RandomBytes` before blinded digest or signature material
   is produced. Proof-token base64 header encoding/decoding now uses the `base64`
-  crate's checked no-alloc slice helpers instead of manual capacity arithmetic
-  and panic-only buffer assertions. The SoraFS paid-pin validation corridor is
+  crate's checked no-alloc slice helpers with invariant-sized buffers, and the
+  encoder no longer falls back to an empty header on internal encode or UTF-8
+  conversion failures. The SoraFS paid-pin validation corridor is
   green across data-model SoraFS/DA-pin, Core pin-registry, Torii
   storage-pin/discovery, and gateway conformance filters as of 2026-06-04;
   Torii DA commitment proof/verify routes are now also pinned with committed
@@ -871,9 +855,11 @@ and completed history lives in [`status.md`](./status.md).
   nonce offset conversion using the same `Error::KeyGen` route, and GOST
   deterministic nonce generation now feeds the domain tag, private scalar,
   message scalar, and optional extra entropy into HMAC-Streebog as separate
-  components while preserving the previous contiguous seed transcript;
+  components while preserving the previous contiguous seed transcript, and
+  digest-length mismatches return `Error::Signing` instead of panicking;
   Ed25519 and secp256k1 now expose checked `try_keypair` paths, and top-level
-  `KeyPair::try_random_with_algorithm` routes OS-backed Ed25519 seed bytes and
+  `KeyPair::try_from_seed` routes their seeded branches through those helpers
+  while `KeyPair::try_random_with_algorithm` routes OS-backed Ed25519 seed bytes and
   secp256k1 candidate scalar bytes through `OsRng::try_fill_bytes` so
   entropy-source failures or bounded scalar-sampling exhaustion surface as
   `Error::KeyGen` instead of the infallible compatibility RNG adapter;
@@ -883,7 +869,54 @@ and completed history lives in [`status.md`](./status.md).
   fallible error surfaces instead of the infallible compatibility adapter;
   Connect Norito bridge C/Java keypair-from-seed helpers and the Swift parity
   regeneration utility now use `KeyPair::try_from_seed`, returning existing
-  bridge/key-derivation errors instead of panic-only seed expansion;
+  bridge/key-derivation errors instead of panic-only seed expansion, while the
+  bridge's generic C/JNI detached-signing helpers route through
+  `Signature::try_new` and the secp256k1 signing entrypoint calls `try_sign` so
+  backend signing failures return existing bridge errors without first
+  collapsing to an empty signature; Torii DA ingest receipt construction now
+  encodes unsigned receipts and signs them through fallible routes so receipt
+  encoding/signing failures return HTTP errors instead of unwinding; Torii
+  operator signed-header generation now uses `Signature::try_new` and returns
+  the operator-signature HTTP error shape on signing backend failures; SoraFS
+  gateway PoR proof signing now uses `Signature::try_new` and propagates
+  backend failures through the gateway proof-builder error path; DA SDK/CLI
+  ingest request builders now return errors from `Signature::try_new` instead
+  of panicking on payload-signing backend failures; Iroha client account and
+  operator signed-request builders now propagate `Signature::try_new` failures
+  through their existing `eyre` result paths; JS host crypto, Soracloud
+  provenance, and alias-proof fixture signers now propagate `Signature::try_new`
+  failures through N-API errors; the Connect Soracloud upload request signer
+  now returns command errors from `Signature::try_new` for init/finalize
+  provenance signatures; SoraFS Taikai cache admission envelopes and gossip
+  wrappers now return `CacheAdmissionError::Signing` from `Signature::try_new`
+  instead of unwinding on backend signing failures; the SoraFS fixture manifest
+  exporter, CLI domain-endorsement preparation, and SoraFS repair worker
+  claim/complete/fail payload signing now also propagate
+  `Signature::try_new`/`SignatureOf::try_new` failures through command errors;
+  transaction submission receipts now expose
+  `TransactionSubmissionReceipt::try_sign` and Torii submission responses use it
+  to return formatted internal errors on receipt-signing backend failures;
+  the wired Torii Offline Notes issuer now signs JSON payloads and
+  key-certificate material through `Signature::try_new`, returning contextual
+  internal query errors on backend signing failures while the currently unwired
+  v2 issuer source mirrors the same helper shape; streaming `KeyUpdate` frame
+  construction now maps `Signature::try_new` failures into
+  `HandshakeError::Signing` instead of unwinding during local control-plane
+  signing; P2P versioned handshake hello signing now uses
+  `Signature::try_new` and propagates backend failures through the existing
+  handshake `Result` path; embedded `irohad` Soracloud runtime model-host
+  heartbeat and Inrou host advert provenance signing now shares a fallible
+  `Signature::try_new` helper with contextual `eyre` errors;
+  `QueryRequestWithAuthority` now exposes `try_sign` for
+  `SignatureOf::try_new` failures, and the CLI JSON-stdin and
+  cursor-continuation query paths use it to return contextual command errors
+  instead of relying on the infallible compatibility wrapper;
+  transaction builders, multisig signature bundles, and sealed transaction
+  commitments now route through fallible `SignatureOf::try_new` APIs while
+  retaining compatibility wrappers for existing callers;
+  local Sumeragi VRF material derivation plus local VRF commit/reveal metadata
+  signing now use `Signature::try_new` and propagate contextual `eyre` errors
+  through the emission `Result` path;
   GOST random scalar sampling and per-signature extra entropy now also use
   checked OS fills, while both BLS backends derive random keys from checked OS
   seed material and the default w3f backend seeds its key-splitting/signing RNGs
@@ -964,7 +997,11 @@ and completed history lives in [`status.md`](./status.md).
   reconstruction from secret material. SoraNet PQ labeled-HKDF derivation now
   streams the namespace, separator, label, separator, and context components
   through `expand_multi_info`, preserving the previous contiguous info layout
-  without manual capacity arithmetic.
+  without manual capacity arithmetic. Session-key zeroization debug telemetry
+  now recovers poisoned mutex state before recording or reading scrubbed bytes,
+  and Torii identifier RAM-LFE receipt/output-opening signing uses
+  `SignatureOf::try_new` so attestation signing failures surface as
+  `IdentifierResolutionError::Signing` instead of unwinding.
   BLS same-message aggregate and preaggregated verification now reject
   duplicate public keys and public-key aggregates that cancel to the identity
   before verification, and the public PoP-gated same-message wrappers reject
@@ -2239,7 +2276,6 @@ and completed history lives in [`status.md`](./status.md).
   Python, Swift, Kotlin/JVM, and Java Android ETH/BSC receipt-proof transcript
   builders now reject zero source-event digests before deriving source witness
   hashes. The
-  same zero-digest guard now applies to TON shard-proof and Substrate-family
   storage-proof transcripts across Rust and the web/Python/native SDK surfaces.
   Strict release evidence plus published release-bundle verification must
   include the package-root SCCP export test transcript, the JavaScript
@@ -2267,7 +2303,11 @@ and completed history lives in [`status.md`](./status.md).
 - Keep Ethereum mainnet source-adapter transition chains period-contiguous:
   sync-committee updates now advance exactly one mainnet period at a time, using
   the consensus `32 * 256` slot period geometry, so skipped-period transition
-  evidence cannot satisfy the ETH source proof verifier. The Rust helper API now
+  evidence cannot satisfy the ETH source proof verifier. The source-adapter
+  shape gate also requires non-empty transition chains to be internally
+  adjacent by committee hash and sync period, no later than the adapter beacon
+  slot, and terminal at the adapter's active sync-committee root and sync
+  period before BLS transition-chain verification runs. The Rust helper API now
   exposes Ethereum-mainnet-specific source-adapter deployment and
   deployment-bound source-proof verification helpers so the first-lane
   ETH -> SORA path does not rely on generic EVM-family plumbing.
@@ -2297,7 +2337,6 @@ and completed history lives in [`status.md`](./status.md).
   destinations; JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET
   callback regressions now assert frozen request metadata where exposed and
   copy-backed bundle and source-proof bytes across EVM-family, TRON, TON, and
-  Substrate-family proof engines, including the Java Android and .NET
   Ethereum/BSC mainnet facade witness-provider paths. The .NET Ethereum/BSC
   inbound callback snapshots now also clone nested mutable dictionary and
   enumerable evidence values before app-linked callbacks return proof bytes.
@@ -2367,7 +2406,6 @@ and completed history lives in [`status.md`](./status.md).
 - Keep the public SCCP user-prover lane inventory fixed to production
   lane/backend pairs; strict bundle verification now rejects duplicate,
   unknown, or missing rows and backend-id drift for EVM/BSC, TRON, Solana, TON,
-  and Substrate submission surfaces.
 - Keep the public SCCP cryptographic evidence inventory fixed to production
   domains; strict bundle verification now rejects duplicate, unknown, or
   missing domain rows plus chain-label drift before comparing rows with
@@ -2569,6 +2607,8 @@ and completed history lives in [`status.md`](./status.md).
 	  Byzantine commit-vote pending-branch missing-evidence matching,
 	  Byzantine commit-vote pending-step commit-artifact preservation,
 	  Byzantine commit-vote pending-step commit-vote handoff preservation,
+	  pending protocol GST preservation,
+	  delivered RBC progress-gate closure,
 	  complete-only commit evidence,
   pre-commit stale commit-vote reset across view changes,
   pre-prepare stale prepare-vote reset across view changes,
@@ -2587,6 +2627,8 @@ and completed history lives in [`status.md`](./status.md).
   finality-source commit-artifact change matching,
   finality-source live commit-gate crossing,
   finality-source post-commit progress quiescence,
+  finality-source GST preservation,
+  finality-source GST-only remaining gate,
   finality-source commit-certificate witness installation,
   finality-source commit-certificate witness-change matching,
   finality-source commit-view witness-change matching,
@@ -2594,40 +2636,115 @@ and completed history lives in [`status.md`](./status.md).
   finality-source NewView handoff isolation,
   finality-source current-view commit witness exactness,
   committed-phase current-view commit witness exactness,
+  committed-phase GST preservation,
+  committed-phase GST-only remaining gate,
   commit-artifact exact-source committed-delivery completion,
   commit-artifact current-view witness exactness,
+  commit-artifact GST preservation,
+  commit-artifact GST-only remaining gate,
   commit-certificate exact-source committed-delivery completion,
+  commit-certificate GST preservation,
+  commit-certificate GST-only remaining gate,
   commit-view exact-source committed-delivery completion,
+  commit-view GST preservation,
+  commit-view GST-only remaining gate,
   finality-latch exact-source committed-delivery completion,
+  finality-latch GST preservation,
+  finality-latch GST-only remaining gate,
   committed-phase exact-source committed-delivery completion,
   live commit-vote prepare-quorum gating,
   commit-evidence roster-budget boundedness,
   run-level prepare-quorum commit gating, commit-certificate evidence stability,
   commit-certificate vote/stake traceability,
   live stake-accounting traceability,
+  live stake roster-budget boundedness,
   honest commit-support preservation,
   live vote/stake quorum preservation,
   RBC finality evidence preservation,
   RBC progress-state evidence causality,
+  RBC partial-progress counter causality,
+  RBC corrupted digest invalidation,
+  RBC ready-quorum deliver-gate availability,
+  RBC delivered-without-finality certificate absence,
+  RBC delivered finality commit-vote source,
+  RBC delivered finality committed-delivery completion,
+  RBC delivered finality current-view binding,
+  RBC delivered finality GST-only remaining gate,
+  RBC delivered finality commit-certificate witness installation,
+  RBC delivered finality commit-certificate witness-change matching,
+  RBC delivered finality commit-view witness-change matching,
+  RBC delivered finality live commit-gate crossing,
+  RBC delivered finality post-commit progress quiescence,
+  RBC delivered finality certified source-stack matching,
+  RBC delivered finality finality-certificate stack installation,
+  RBC delivered finality committed-phase entry matching,
+  RBC delivered finality commit-artifact change matching,
+  RBC delivered finality latch-artifact coupling,
+  RBC delivered finality exact commit-vote witnesses,
+  RBC delivered finality delivered-RBC evidence preservation,
+  RBC delivered finality view/prepare handoff evidence preservation,
+  RBC delivered finality exact protocol frame,
+  RBC delivered finality exact commit-vote action frame,
+  RBC delivered finality committed post-state safety bundle,
+  RBC delivered finality post-state gate split,
+  RBC delivered finality pre-GST post-state gate branch,
+  RBC delivered finality post-GST terminal branch,
+  post-finality pre-GST only-enabled gate invariant,
+  post-finality pre-GST GST-elapsed terminalization,
+  post-finality pre-GST Next/GST-elapsed exclusivity,
+  post-finality pre-GST spec-step stutter/GST split,
   post-finality progress-action quiescence,
   honest/fault roster-budgeted vote counters, RBC delivery stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
+  frontier committed source future-stage isolation,
+  frontier view-bound drop future-stage isolation,
+  frontier zero-evidence drop future-stage isolation,
+  frontier zero-evidence staged-future expected-failure mutation,
+  frontier zero-evidence drop consensus-evidence absence,
   frontier future-promotion fresh second-slot installation,
   frontier terminal outcome exclusivity,
+  frontier rotated source future-stage isolation,
+  frontier promotion-ready rotation isolation,
+  frontier promotion-ready active-marker cleanup,
+  frontier promotion-ready active-marker expected-failure mutation,
+  frontier promotion-ready rotated-marker expected-failure mutation,
+  frontier rotated terminal retransmit evidence,
   frontier promotion-ready wrapper cleanup,
+  frontier quorum-retransmit window cleanup,
+  frontier quorum-retransmit window cleanup expected-failure mutation,
+  frontier payload recovery ownership,
+  frontier payload recovery ownership expected-failure mutation,
+  frontier stale-recovery unlock owner cleanup,
+  frontier stale-recovery unlock owner cleanup expected-failure mutation,
+  frontier view-bound drop retransmit evidence,
+  frontier view-bound drop retransmit evidence expected-failure mutation,
   validation redrive labels, raw QC signer-bitmap population counting, and
-  signer-index normalization, precommit vote-progress counting, commit-QC
+  signer-index normalization, precommit vote-progress counting, precommit
+  locked-payload vote gating, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record
   admission, validation ownership cleanup, stable worker-loop stage helpers,
   worker tick-gap scheduling, vNext performance config conversion,
   pending-block validation worker config derivation, commit-worker channel
   capacity normalization, slow commit-stage timing threshold detection,
-  commit-inflight timeout reporting, post-commit pacemaker kickstart gating,
-  idle-view proposal budget preservation, cached-slot timeout selection,
-  pending fast-path timeout derivation, stalled pending-block timeout
-  decisions, stalled pending-frontier timeout derivation, exact-frontier
-  proposal grace derivation, exact-frontier slot helper semantics,
-  exact-frontier slot tracker FSM behavior, slot tracker state map semantics,
+  commit-inflight timeout reporting, commit-inflight timeout mark persistence
+  expected-failure mutation, post-commit pacemaker kickstart gating,
+  post-commit no-queue hard-stop expected-failure mutation, idle-view proposal
+  budget preservation, idle-view no-queue hard-stop expected-failure mutation,
+  cached-slot timeout selection, cached-slot streak saturation
+  expected-failure mutation,
+  pending fast-path timeout derivation, pending fast-path DA-floor cap
+  expected-failure mutation, stalled pending-block timeout
+  decisions, stalled pending commit-pipeline evidence expected-failure
+  mutations, stalled pending-frontier timeout derivation, exact-frontier
+  proposal grace derivation, frontier proposal full-grace transaction-budget
+  expected-failure mutations, exact-frontier slot helper semantics,
+  frontier slot body-available helper expected-failure mutations,
+  frontier slot same-candidate peer-evidence expected-failure mutations,
+  exact-frontier slot tracker FSM behavior, exact-frontier apply-wrapper
+  slot lifecycle expected-failure mutations, code-level exact-frontier slot
+  single-source state cleanup, formal nested slot-state consistency alignment,
+  slot tracker state map semantics, proposal-seen horizon expected-failure
+  mutations,
   timeout/cooldown derivation semantics, round/view helper semantics,
   PhaseTracker mutable state semantics, failed-commit/block-sync helper
   semantics, missing-QC timing derivation, idle backlog signal derivation,
@@ -2635,7 +2752,8 @@ and completed history lives in [`status.md`](./status.md).
   evidence admission, slot proposal evidence lookup and fall-through,
   round-liveness evidence aggregation, roster-unavailability recovery FSM
   transitions, consensus-recovery clear/prune retention semantics,
-  frontier live-owner work preservation semantics, keep-frontier pending-active
+  frontier live-owner work preservation semantics, frontier live-owner
+  conflict-adapter expected-failure mutations, keep-frontier pending-active
   preservation semantics, stale-view pending prune cleanup semantics,
   superseded frontier payload retention semantics, stale missing-block request
   prune semantics, stale missing commit-QC request prune semantics,
@@ -2717,9 +2835,6 @@ and completed history lives in [`status.md`](./status.md).
   applicable alongside the final proof request and submission helpers. Release
   bundles therefore cannot claim the portal/mobile native proof paths without
   explicitly carrying the UI proof-generation surfaces for each consumer SDK;
-  Substrate runtime-storage helper maps remain diagnostic/backlog-only while
-  Substrate/Polkadot networks are outside launch scope.
-- Solana, TON, and Substrate native submission helpers now apply the same native
   recursive payload corridor to verifier-program/message-body/runtime-call
   `bundleBytes` as they already apply to proof bytes: bundles must be non-empty,
   non-all-zero, and no larger than 2 MiB before JavaScript, Python, Swift,
@@ -2733,40 +2848,28 @@ and completed history lives in [`status.md`](./status.md).
   reject standalone `bundleBytes` or `sourceProofBytes` unless a wrapped
   `proofResult` is supplied, because raw Groth16 calldata cannot bind those
   request bytes back to the user-generated request hash. JavaScript and Python
-  EVM-family, TRON, and Substrate-family submission builders now also reject
   explicit `proofResult: null` / `proof_result=None` instead of treating it as
   an omitted proof result, keeping null/omitted semantics aligned with Solana
-  and TON before wallet or runtime-call packaging. Substrate-family submission
   builders across JavaScript, Python, Swift, Kotlin/JVM, and Java Android now
   also reject non-empty standalone `sourceProofBytes` unless a wrapped
   `proofResult` is supplied, because the final runtime-call payload carries the
   recursive bundle but not those request-bound source-proof bytes. The
   tracked JavaScript `dist/` package artifact is regenerated from that source
   and the package-dist suite now exercises the published `dist/index.js`
-  Solana, TON, EVM/TRON, and Substrate submission guards, keeping the web
   portal SDK artifact aligned with the source guard. Public readiness reports
   now also require the
   JS corridor transcript to include the source SCCP tests, `package_dist`, and
   package export tests in the claimed `js-sdk` phase, so a release bundle cannot
   prove only source-side helper tests while omitting the dist artifact surface
-  used by portal builds. The Rust `iroha_sccp` Solana, TON, and Substrate
   counterparty package builders now apply the same native recursive payload cap
   to canonical bundle bytes before emitting `SolanaProgramInstruction`,
-  `TonInternalMessage`, or `SubstrateRuntimeCall` artifacts, keeping release
   tooling and portal/mobile SDKs on the same submission corridor.
 - The all-lanes readiness and release-bundle verifier now derive a required
-  `substrate_runtime_storage_gate_hash` for SORA-Kusama, SORA-Polkadot, and
-  SORA2 from the governed Substrate source material plus source-adapter
   deployment records. Ready release bundles must carry that gate in the
-  source-adapter audit hash set, giving Substrate-family runtime-storage source
   proofs the same machine-audited gate surface as the Solana, TON, and TRON
-  source-adapter gates. The Substrate source-evidence renderer now also keeps
   JSON `toml_ready` false and refuses production TOML unless the governed
   runtime-storage gate hash is supplied and matches, so source material plus
-  deployment pins alone cannot open the Substrate source lane. The all-lanes
   preflight now imports that same
-  `sccp_substrate_runtime_storage_gate_hash` source-adapter audit comment and
-  rejects missing, zero, or drifted Substrate runtime-storage gate metadata
   instead of treating a locally recomputed value as sufficient release evidence.
   Direct ETH/BSC source-evidence renderers now apply the same preimage rule to
   production TOML: hash-only source bridge code metadata remains diagnostic
@@ -2814,7 +2917,6 @@ and completed history lives in [`status.md`](./status.md).
   passes end to end with Rust SCCP verification, operator evidence scripts,
   JS/Python/Swift/Kotlin/Java Android/.NET SDK prover surfaces, EVM/TRON
   contract smoke, and core bridge-proof admission.
-- Substrate route-canary evidence now publishes the finalized runtime code hash
   alongside the finalized head and runtime versions in public readiness JSON;
   release-bundle verification rejects zero or governed-hash-reused
   finalized-head/runtime-code canary fields before release notes can pass.
@@ -2935,7 +3037,6 @@ and completed history lives in [`status.md`](./status.md).
   reused route-canary hash roles, including finality-height replay,
   Solana route-canary zero or non-canonical ProgramData addresses,
   TON zero or governed-hash-reused live-account route-canary hashes,
-  Substrate-family route-canary zero or governed-hash-reused
   finalized-head/runtime-code hashes,
   TRON zero owner/recovered route-canary addresses, zero transcript words, zero
   route-canary binding hashes, reused canary hash roles including
@@ -2973,8 +3074,6 @@ and completed history lives in [`status.md`](./status.md).
   The report now also renders the user-prover SDK submission surfaces for each
   supported production lane, distinguishing EVM/TRON Torii bridge-proof submit
   payloads from native Solana instruction and TON BOC envelopes that
-  portal/mobile provers submit on-chain. Substrate runtime-call submission
-  helper material remains diagnostic/backlog-only while Substrate/Polkadot
   networks are outside launch scope. Each surface row uses the
   user-side proof backend labels consumed by the SDK request builders
   (`sccp-solana-recursive-mainnet-v1`, `ton-contract-v1`,
@@ -3969,9 +4068,7 @@ operator-provided rollout bundles.
   away from the canonical production lane, and Torii proof-material routing
   plus capability discovery now use that effective readiness check. Rust
   destination rollout readiness now also rejects padded EVM addresses, Solana
-  program ids, TON raw addresses, TRON Base58Check addresses, and Substrate
   runtime entrypoints instead of trimming them into production verifier
-  identities. The EVM, Solana, TON, and Substrate destination evidence
   renderers now mirror that exact-input posture for verifier identities,
   fixed-width hashes, lane selectors, and deployment metadata before they can
   emit production TOML, and the all-lanes preflight now requires the
@@ -4020,9 +4117,7 @@ operator-provided rollout bundles.
   also reject duplicate aliases for network ids, verifier addresses,
   verifier-code/key hashes, backend/proof-family selectors, binding hashes, and
   proof-context destination-binding fields before request hashing or app-linked
-	  prover invocation. Their EVM/TRON/Substrate-family proof request builders now
 	  apply the same top-level guard to `publicInputs`, `bundleBytes`,
-	  `sourceProofBytes`, `sourceDomain`, and `proofContext`, and Substrate proof
 	  contexts reject duplicate nested binding-hash aliases. The dynamic
 	  JavaScript and Python EVM/TRON proof-result wrappers and contract-call
 	  submission builders now also reject duplicate aliases for request hashes,
@@ -4033,9 +4128,7 @@ operator-provided rollout bundles.
 	  public inputs, public signal words, and proof contexts, so mutating a
 	  manually supplied request object after wrapping cannot change what the
 	  portal submits on-chain.
-	  Their Substrate-family proof-result wrappers and runtime-call submission
 	  builders now apply the same guard before packaging user-generated proofs into
-	  SCALE calls for Substrate destinations. The shared dynamic JavaScript and
 	  Python transparent public-input normalizers now also reject duplicate aliases
 	  inside message ids, payload hashes, target domains, commitment roots,
 	  finality heights, and finality block hashes before any request hash, public
@@ -4116,19 +4209,15 @@ operator-provided rollout bundles.
 	  epochs, transition block hashes, schedule hashes/payload hashes, nested
 	  seal proofs, and transition message hashes before deriving TRON
 	  source-finality evidence.
-	  JavaScript and Python Substrate storage-proof, runtime-storage request,
 	  authority-set payload, authority transition, GRANDPA justification, and
 	  transition-justification helpers now reject duplicate aliases for source
 	  domains, source event indexes, finalized block fields, GRANDPA set ids,
 	  storage roots, authority rosters/weights, payload hashes, transition
 	  hashes, signers bitmaps, nested verifier material, and runtime storage
-	  proof hashes before deriving Substrate source-proof or OpenVerify request
 	  material.
   JavaScript, Python, Kotlin, and Java Android prover callbacks now pass defensive
   request snapshots into app-linked proof engines, and the Kotlin/JVM plus Java
   Android final-proof regressions now pin actual snapshot delivery for Solana,
-  TON, EVM-family, TRON, and Substrate proof engines. Swift now mirrors that
-  defensive snapshot path for Solana, TON, EVM, TRON, and Substrate final-proof
 	  engines plus the Solana source-state proof engines. The Java Android
 	  Ethereum mainnet outbound wrapper now shares the same EVM callback-request
 	  snapshot path before invoking app-linked proof engines. Kotlin Solana final-proof
@@ -4141,9 +4230,7 @@ operator-provided rollout bundles.
 	  buffers before the canonical proof request is built; Java Android Solana
 	  now also passes a distinct defensive `WitnessInput` snapshot to witness
 	  providers. Kotlin/JVM and Java Android EVM-family, TON, TRON, and
-	  Substrate-family facades now pass copied bundle/source-proof byte arrays
 	  into app-controlled witness providers before canonical request construction.
-	  Swift/iOS now routes Solana, TON, EVM-family, TRON, and Substrate-family
 	  witness-provider calls through explicit input snapshot helpers as well.
 	  JavaScript and Python portal facades now apply the same mutable
 	  deep-snapshot boundary before invoking witness providers, so resolver-side
@@ -4220,8 +4307,6 @@ operator-provided rollout bundles.
   submission metadata canonicalizers now reject duplicate aliases across
   manifest fields, destination binding hashes, public inputs, and statement
   hashes before metadata bytes are hashed into those BOCs.
-  Swift Substrate now surfaces the same field-specific
-  base64 rejection. Web/Python and Swift/Kotlin/Java Android Substrate
   authority-transition builders also bind signer bitmaps to exact signer
   counts, signed and total weights, and a strict `> 2/3` quorum before hashing
   UI witness material, while web/mobile TON validator-signature transcripts
@@ -4332,9 +4417,7 @@ operator-provided rollout bundles.
   `target_domain = False` cannot stage SORA-bound source evidence. They also
   reject padded bridge addresses, component hashes, domains, and deployment
   block numbers before deriving source material or deployment-record hashes.
-  Solana, TON, and Substrate-family source-state evidence helpers now apply the
   same exact-input posture to fixed-width component hashes, source/target
-  domains, and Substrate runtime-lane selectors before rendering source
   material, source-adapter deployment records, or full-light-client gate hashes.
   The
   Source, destination, live, and all-lanes evidence helpers now also require
@@ -4345,17 +4428,13 @@ operator-provided rollout bundles.
   values, hex forms, or signed forms cannot drift from reviewed operator
   evidence. EVM live and source-live collectors now also reject whitespace-padded
   JSON-RPC quantities and hex byte strings before rendering runtime bytecode,
-  receipt, or rollout metadata. Solana/Substrate live collectors now also
-  reject padded ProgramData executable base64, Substrate `specName`, and
   finalized runtime `:code` hex before rendering production TOML metadata.
-  Solana, TON, and Substrate destination/live evidence helpers now also reject
   non-canonical base64 pad-bit aliases for verifier program bytes, Solana
   JSON-RPC account data, ProgramData metadata, TON code BoCs, and finalized
   runtime code before TOML rendering or all-lanes preflight can normalize
   copied evidence. TON code BoC text files now also reject internal whitespace
   instead of joining it into deployable code evidence, and the TON live
   collector returns accepted remote code BoCs as canonical standard base64.
-  EVM destination/source, Solana, TON, TRON, and Substrate-family live
   collectors now bound successful HTTP response bodies and HTTP error details
   before decoding, and reject duplicate keys in remote JSON objects so live
   evidence cannot depend on last-value-wins parsing. TON and TRON runtime API
@@ -4381,9 +4460,7 @@ operator-provided rollout bundles.
   `route_canary_*` config fields and imported canary metadata comments are
   present, the all-lanes gate now requires exact agreement so a direct
   `passed` value cannot override contradictory imported evidence.
-  Solana, TON, and Substrate live destination wrappers now also require literal
   boolean readiness from the canonical destination summaries, so truthy strings
-  cannot unlock offline TOML hashes. TON and Substrate live wrappers revalidate
   direct caller-supplied live metadata before deriving destination args, so
   forged account status, BoC hash-match flags, runtime-code metadata, verifier
   entrypoints, or hash algorithm labels fail before TOML readiness. EVM live
@@ -4451,7 +4528,6 @@ operator-provided rollout bundles.
   submission constructors, so portal/mobile proof UIs can submit externally
 	  generated proof packages without fabricated source-chain witness bytes.
 		  The JavaScript TON portal request builder now presence-checks
-		  `sourceProofBytes` like EVM, TRON, and Substrate, so falsey non-byte values
 		  cannot silently become an omitted source proof before request hashing, and
 		  TON submission metadata bytes use the same presence check before BOC
 		  packaging. The JavaScript TON and Solana submission builders now also
@@ -4463,7 +4539,6 @@ operator-provided rollout bundles.
 	  context, and local BOC cell serialization, rejecting explicit falsey
 	  values instead of falling through to defaults, nested proof context, or
 	  empty cell fields.
-	  Python EVM-family, TRON, and Substrate-family request builders plus
 	  EVM/TRON destination-binding helpers now apply the same rule to
 	  backend/proof-family/context inputs, and Solana/TON source-state verifier
 	  defaults plus Solana genesis defaults no longer mask explicit falsey UI
@@ -4481,7 +4556,6 @@ operator-provided rollout bundles.
   JavaScript web SDK now applies the same v1-only preflight before deriving
   source transcript bytes for portal-generated proofs. Swift, Kotlin, and Java
   Android now mirror that first-release policy for public source-state proof
-  capsules plus ETH/BSC/TRON/TON/Substrate-family transcript builders used by
   mobile prover UIs. JavaScript, Python, and Java Android Solana source-state
   proof capsules now also reject explicit null proof-version/proof-family
   metadata instead of promoting it to production defaults. JavaScript and
@@ -4523,16 +4597,12 @@ operator-provided rollout bundles.
   metadata, and they reject duplicate camelCase/snake_case proof-byte or
   proof-base64 aliases in dynamic result maps. Rust native recursive proof
   packaging and transparent-proof structure checks now also cap
-  Solana/TON/Substrate-family proof payloads at 2 MiB, and the JavaScript,
-  Python, Swift, Kotlin, and Java Android Solana, TON, and Substrate-family
   proof-result/submission wrappers mirror that bound before deriving envelope
   hashes, accepting app-linked prover output, or packaging wallet/RPC payloads.
   Their default destination rollout blockers now track only missing live native
   verifier deployment and trust-anchor evidence, not stale relayer-wiring
   blockers for the already-modeled program instruction, TON internal-message,
-  or Substrate runtime-call packages.
   JavaScript and Python EVM-family, TRON, and
-  Substrate-family local prover callbacks now apply the same exact canonical
   check to optional returned `proofBase64` / `proof_base64` metadata before
   proof-result wrapping, so a browser proof UI or portal backend cannot display
   or forward stale base64 while submitting different proof bytes. Swift, Kotlin,
@@ -4572,7 +4642,6 @@ operator-provided rollout bundles.
   and operator evidence scripts, giving web portals, relay backends, and mobile
   apps the same pre-submit rollout transcript checks before user-generated
   proofs are sent on-chain.
-  JavaScript and Python Substrate-family runtime prover callbacks now validate
   optional returned transparent public inputs, proof context, statement hash,
   and destination-binding hash before wrapping proof bytes. JavaScript, Python,
   Swift, Kotlin, and Java Android production proof wrappers preserve omitted
@@ -4581,7 +4650,6 @@ operator-provided rollout bundles.
 	  JavaScript and Python local-prover facades now also accept plain async
 	  witness-provider functions and `resolve_witness` objects in addition to
 	  `resolveWitness`, and tests pin that browser/backend relay providers resolve
-	  Solana, TON, TRON, Substrate-family, and EVM-family proof inputs from
 	  snapshots before linked prover callbacks receive canonical requests; package
 	  declaration tests pin the same witness-provider hooks for TypeScript portal
 	  consumers. JavaScript now rejects duplicate hook aliases
@@ -4647,7 +4715,6 @@ operator-provided rollout bundles.
   proof plan, finality model, message id, payload hash, commitment root, and
   source-event digest before public inputs are derived. Source consensus proof
   material now also carries a plan-specific adapter proof variant for
-  ETH/BSC/Solana/TON/TRON/Substrate-family lanes, so generic self-consistency
   blobs or stale witness substitutions cannot masquerade as another chain's
   proof shape. Each adapter statement is now additionally wrapped in a
   FastPQ/OpenVerify proof capsule so adapter metadata, public inputs, and proof
@@ -4667,7 +4734,6 @@ operator-provided rollout bundles.
   now verify source envelopes against caller-supplied material, but production
   readiness also requires an exact domain profile: today ETH mainnet, BSC
   mainnet, Solana mainnet-beta, TON mainnet masterchain/shard, TRON mainnet
-  DPoS solid-block/transaction-source, and Substrate-family GRANDPA/event-storage source
   profiles can satisfy the material gate only with deployment-supplied
   component hashes, while generic ids and hashes remain fail-closed unless they
   match an exact profile and avoid template-derived hashes. The TRON mainnet
@@ -4676,7 +4742,6 @@ operator-provided rollout bundles.
   keeping Rust, portal, mobile, and evidence vectors aligned with the
   production adapter proof shape. The offline
   source-evidence regression suite now exercises every template-derived
-  component field across ETH, BSC, Solana, TON, TRON, and Substrate-family direct
   record hashing plus governance TOML rendering, so one live component cannot
   hide another placeholder component in production material. The same direct
   evidence helpers reject all-zero production component, bridge, adapter
@@ -4702,7 +4767,6 @@ operator-provided rollout bundles.
   receipt hash, and an `adapter_verifier_vk_hash` equal to the canonical
   lane-specific source-adapter verifier commitment and the OpenVerify `vk_hash`
   embedded in the user-submitted source proof. The ETH/BSC, Solana, TON, TRON,
-  and Substrate-family source evidence hash helpers now apply the same
   source/deployment role-hash separation before returning canonical record
   hashes, keeping live collectors and programmatic governance tooling aligned
   with TOML rendering and all-lanes preflight.
@@ -4752,7 +4816,6 @@ operator-provided rollout bundles.
   Core and Torii configured runtime all-lanes admission mirror the same global
   replay checks, and the lane-aware Rust route-canary builder refuses source
   record hash replay before config objects are minted.
-	  EVM-family destination, ETH/BSC source, Solana, TON, and Substrate-family
 	  reusable render/summary evidence APIs now run the same deployed bytecode,
 	  program bytes, runtime code, or code BoC hash derivation as their CLI paths,
 	  so portal backends and SDK automation cannot bypass byte/hash mismatch checks
@@ -4760,19 +4823,16 @@ operator-provided rollout bundles.
 	  readiness now preserve that derivation as explicit code-BoC base64,
 	  root-hash, and match metadata, and the all-lanes gate decodes the staged BoC
 	  to recompute the TON representation root. A copied TON code hash without
-	  replayable BoC evidence remains diagnostic. Substrate-family live and direct
 	  destination evidence now preserves finalized runtime code as base64, and the
 	  all-lanes gate decodes it to recompute the BLAKE2b-256 runtime code hash
 	  before accepting SORA-family runtime rollouts.
   The EVM-family, Solana, TON, and
-  Substrate-family live/offline destination evidence renderers now require that
   metadata for production TOML via `--route-canary-evidence-hash`, keeping
   operator TOML generation aligned with the stricter all-lanes launch gate. The
   direct destination and TRON full-lane renderers also reject route canary
   hashes that reuse any governed source material record hash, source-adapter
   deployment record hash, route allowlist hash, or destination binding hash
   before JSON summaries or production TOML are emitted. Solana and
-  Substrate-family destination renderers now also recompute the supplied route
   canary hash from immutable ProgramData or finalized runtime metadata, and
   the all-lanes gate rejects generic non-zero canary hashes for those lanes.
   JavaScript, Python, Swift, Kotlin, and Java Android SDKs now expose the same
@@ -5026,7 +5086,6 @@ operator-provided rollout bundles.
 	  live-account metadata cannot open the SORA -> TON lane. Direct TON
 	  evidence and all-lanes validation also reject reuse between the live
 	  account-state hash and last-transaction hash snapshot roles.
-	  The offline `scripts/sccp_substrate_destination_evidence.py` helper now
 	  renders exact SORA -> SORA Kusama/SORA Polkadot/SORA2 runtime destination
 	  rollout plus route allowlist TOML with the fixed
 	  `SccpBridge.submit_message_proof` verifier entrypoint. Production TOML now
@@ -5039,12 +5098,10 @@ operator-provided rollout bundles.
 		  and revalidate the fixed entrypoint and deployment code hash, then require
 		  the route allowlist hash to bind the source material record hash,
 		  source-adapter deployment record hash, and selected SORA ->
-		  Substrate-family destination binding hash, with the three governed
 		  hash roles required to be non-zero and pairwise distinct before the
 		  transcript is accepted. Public release-bundle verification now
 		  recomputes that route-allowlist transcript from embedded all-lanes
 		  evidence instead of trusting the self-reported expected-hash match
-		  flag. Direct Substrate-family
 		  destination evidence can derive the runtime verifier code hash from supplied
 		  runtime bytes and rejects mismatches with an explicit
 		  `--verifier-code-hash`, matching the live finalized `:code` hash
@@ -5052,14 +5109,11 @@ operator-provided rollout bundles.
 		  `--runtime-code-hex` and `--runtime-code-base64` values now reject
 		  surrounding or embedded whitespace instead of normalizing padded
 		  runtime-code preimages.
-		  Direct Substrate-family
 		  destination TOML now also requires audited finalized head, runtime spec
 	  name/version, and transaction version metadata, rejects runtime `specName`
 	  values that do not match the selected destination lane, rejects boolean
 	  runtime version placeholders before readiness is derived, and emits the
 	  same runtime comments required by all-lanes. The live
-	  `scripts/sccp_substrate_live_evidence.py` helper now collects finalized
-	  runtime evidence from read-only Substrate JSON-RPC, pins the finalized
 	  head, runtime spec/version fields, and BLAKE2b-256 hash of finalized
 	  `:code`, requires the live `specName` to match the selected destination
 	  domain, requires the same route canary evidence before production TOML, and
@@ -5067,9 +5121,6 @@ operator-provided rollout bundles.
 	  non-lowercase or non-`0x` finalized-head hex, and runtime `:code` hex
 	  before emitting live metadata
 	  comments required by the all-lanes preflight before
-	  Substrate-family destination records can pass launch readiness. The all-lanes
-	  preflight also rejects Substrate runtime comments whose `specName` belongs
-	  to another runtime lane, and it now recomputes the Substrate-family route
 	  canary hash from the governed route tuple, runtime entrypoint/code hash,
 	  finalized head, runtime version metadata, and finalized runtime bytes
 	  before accepting SORA-family runtime readiness. It also rejects runtime code
@@ -5078,8 +5129,6 @@ operator-provided rollout bundles.
 	  Configured Rust readiness
 	  now carries the same finalized runtime fields in destination rollouts and
 	  rejects SORA-family launch without them. The offline
-  `scripts/sccp_substrate_source_evidence.py` helper now renders exact
-  Substrate-family source material and source-adapter deployment TOML for the
   same three runtime lanes from governed GRANDPA/event-storage component
   hashes, adapter verifier key hashes, and deployment receipt hashes, and it
   rejects padded runtime-lane selectors, component hashes, and target domains
@@ -5088,12 +5137,10 @@ operator-provided rollout bundles.
   to domain, chain,
   exact mainnet/runtime anchor id, chain-specific verifier identity format, and
   a non-zero Groth16 verifier-key hash for EVM-family/TRON lanes before they can
-  satisfy the production gate, while native Solana/TON/Substrate-family
   rollout records now reject any unexpected verifier-key hash. ETH/BSC require
   non-zero EVM contract addresses and reject verifier/bridge wrapper address
   aliasing across direct, live, and all-lanes evidence, Solana requires a
   non-zero program id, TON requires a non-zero raw contract address, TRON
-  requires a checksummed base58 contract address, and Substrate-family lanes
   require the exact SCCP runtime entrypoint.
   EVM and TRON Groth16 relay packages are
   signer-free: they carry the verifier proof ABI tuple directly and reject
@@ -5191,7 +5238,6 @@ operator-provided rollout bundles.
   Android Torii submit/query preflights now apply the same exactness to
   string-based TRON verifier addresses and deployment/proof hex before request
   serialization while still accepting already-byte proof tuples. Swift,
-  Kotlin, and Java Android EVM-family, TON, TRON, and Substrate-family mobile
   prover request builders also reject padded fixed-width
   payload/proof-context hashes before deriving proof transcripts. Their shared
   SCCP source-proof helpers apply the same exact hash rule to source-adapter
@@ -5259,7 +5305,6 @@ operator-provided rollout bundles.
   proof-result binding checks that revalidate proof context, request hashes, and
   envelope hashes before portal and mobile wallet submission.
   JavaScript, Python, Swift, Kotlin, and Java Android
-  SDKs now also expose `substrate-runtime-v1` proof-request/prover wrappers for
   SORA-Kusama, SORA-Polkadot, and SORA2 destination lanes, locked to SORA-origin
   source domains and binding the source domain, canonical transparent public
   inputs, length-prefixed SCCP bundle/source proof bytes, statement hash, and
@@ -5359,14 +5404,19 @@ operator-provided rollout bundles.
   canonical validator-set payload, so portal/mobile provers cannot treat an
   arbitrary config leaf, abstract branch, or independently supplied roster as
   the active validator set. The Rust, web, Python, Swift, Kotlin, and Java
-  Android transcript builders now also reject config-proof and transition inputs
-  with wrong versions/domains, zero masterchain/config/validator hashes,
-  mismatched config-34 BoC payload/leaf/validator-set hashes, non-adjacent
-  validator-set sequence numbers, or signature proofs signed over a different
-  transition message. This removes the remaining zero-file-hash, generic-shard,
-  generic-config-leaf, placeholder config-branch, config-roster, and
-  transition-message transcript gaps in the current TON UI/mobile
-  proof-generation surface. TON source-adapter admission now also requires the
+	  Android transcript builders now also reject config-proof and transition inputs
+	  with wrong versions/domains, zero masterchain/config/validator hashes,
+	  mismatched config-34 BoC payload/leaf/validator-set hashes, non-adjacent
+	  validator-set sequence numbers, or signature proofs signed over a different
+	  transition message. TON transition structural preflight now also decodes the
+	  next validator-set payload, binds payload/next-set/parent-roster hashes,
+	  recomputes the transition and nested validator-signature messages, checks the
+	  transition signature transcript, and rejects non-adjacent or non-monotonic
+	  transition chains that do not end at the adapter's active validator set before
+	  Ed25519 verifier work. This removes the remaining zero-file-hash,
+	  generic-shard, generic-config-leaf, placeholder config-branch, config-roster,
+	  and transition-message transcript gaps in the current TON UI/mobile
+	  proof-generation surface. TON source-adapter admission now also requires the
   governed full-light-client audit bundle to be present as role-separated
   OpenVerify/FastPQ proof capsules for masterchain config, validator-set
   transition, and shard-accounts dictionary verifiers, so the remaining TON
@@ -5407,11 +5457,9 @@ operator-provided rollout bundles.
   identities with the lane-specific address/program/runtime parsers, preserves
   helper-emitted destination binding metadata comments, stores explicit
   destination binding fields in rollout config, and recomputes or compares the
-  governed SORA -> ETH/BSC, Solana, TON, TRON, and Substrate-family destination
   binding hashes before accepting rollout records. EVM-family helpers now emit
   the canonical deployment binding key, and both the preflight and runtime
   readiness gates require that key to be present and match the deployment tuple.
-  Solana, TON, TRON, and Substrate-family records must also carry the canonical
   binding key, and runtime readiness rejects native records that include EVM/TRON
   network or bridge-wrapper fields.
   TRON rollout records also fail if their explicit `destination_network_id`
@@ -5428,7 +5476,6 @@ operator-provided rollout bundles.
   prover flows, with TRON wrappers locked to the SORA -> TRON lane, EVM-family
   wrappers locked to the governed SORA -> ETH/BSC destination lanes, and
   EVM-family, TON, and TRON wrappers rejecting empty SCCP bundle bytes before
-  local request-hash derivation. TON/Substrate proof-result wrappers now reject
   all-zero external proof bytes before deriving request-bound envelope hashes;
   EVM-family and TRON wrappers additionally enforce the canonical 384-byte
   Groth16 ABI length, and JavaScript/Python portal surfaces plus
@@ -5461,13 +5508,11 @@ operator-provided rollout bundles.
 	  prover facades now also hand app-linked proof engines request snapshots,
 	  including Solana AccountsLtHash and full-light OpenVerify/FastPQ
 	  source-state callbacks, across TON, Solana, EVM-family, TRON, and
-	  Substrate-family proof flows
 	  while wrapping returned bytes against the original canonical request,
 	  and JavaScript/Python source-state callback
 	  result metadata
 	  (`version`, proof family, circuit id, and exact canonical proof base64)
 	  must match the active request and returned proof bytes. The
-	  EVM-family/TRON/Substrate
 	  facades reject explicit callback result metadata that does not match the
 	  active request hash, envelope hash, backend, EVM-family/TRON transparent
 	  public inputs, EVM-family/TRON proof context, EVM-family/TRON public signal
@@ -5486,7 +5531,6 @@ operator-provided rollout bundles.
   strict when present, so `null`/`None` backend, request/envelope hash,
   public-input, proof-context, statement/destination-binding hash, or
   public-signal fields fail instead of collapsing to omitted metadata.
-  JavaScript and Python EVM-family, TRON, and Substrate-family local-prover
   surfaces now also rebuild the canonical production request before invoking
   app-linked callbacks and before deriving proof-result envelope hashes, so web
   portals and portal backends cannot wrap proof bytes around manually mutated
@@ -5499,13 +5543,11 @@ operator-provided rollout bundles.
   results now carry the original request bundle/source-proof bytes, and
   proof-result based submission builders rebuild the canonical request hash
   before emitting calldata, so stale UI/mobile proof results cannot be replayed
-  against a swapped SCCP bundle. Substrate-family proof results expose the same
   request bytes for runtime-proof chaining, and the JavaScript TypeScript
   declarations plus Python package `__all__` exports now publish those
   proof-result request-byte fields and wrapper helpers to portal/mobile
   integrators. The JavaScript TypeScript declarations also expose named
   local-prover callback result types for Solana, TON, EVM-family, TRON, and
-  Substrate-family facades so portal UIs can return the request/envelope hash,
   backend, binding-hash, proof-context, public-input, and public-signal
   metadata that the runtime already validates. TON TypeScript declarations now
   keep pre-proof request construction separate from post-proof message-body
@@ -5540,23 +5582,16 @@ operator-provided rollout bundles.
   defensive BOC/envelope byte getters; the same mobile SDKs can build the TON
   message-body submission input directly from a local `TonSccpProofResult`, so
   apps no longer need to manually copy proof-context hashes between proof
-  generation and wallet/liteserver packaging. JavaScript Substrate-family
-  runtime proof requests/results now use the same frozen envelope and defensive
-  byte getter contract, and the JavaScript package root now re-exports the
-  Substrate runtime proof backend id, request builder, and prover facade so
-  TypeScript portal imports match the packaged runtime surface. It now also
-  exposes Substrate-family `scale_call_v1` runtime-call
-  submission builders, and the Python, Swift, Kotlin, and Java Android SDKs
-  mirror the same `SccpBridge.submit_message_proof` argument order so
-  portal/mobile-generated proofs can be handed directly to chain submission
-  clients without node-side proof generation.
+  generation and wallet/liteserver packaging. Because SCCP launch support no
+  builders, prover facades, or SCALE runtime-call submission helpers. Torii and
+  the SDK release checks now keep the production SCCP surface limited to ETH,
+  explicitly.
   The package root also re-exports the SCCP source-adapter OpenVerify circuit id, FastPQ
   parameter-set id, and verifier VK hash helper used by portal evidence
   checks, keeping declared TypeScript imports runtime-available.
   Swift, Kotlin, and Java Android proof-result wrappers now rederive the
   canonical request before hashing the proof envelope, Java Android EVM-family,
   Solana, TON, and TRON proof/submission results return defensive byte copies,
-  and Kotlin EVM-family, Solana, TON, TRON, and Substrate-family
   request/result/submission objects now also return fresh copies for request
   byte fields and proof bytes, closing the mobile path where a manually
   constructed or mutated request object could otherwise supply stale envelope
@@ -5569,7 +5604,6 @@ operator-provided rollout bundles.
   invoking the app-linked proof engine and reapply that guard when wrapping
   proof bytes, matching the Solana SDK guard pattern across web portal,
   backend, and mobile UI proof generation. Swift EVM-family, TRON, TON, and
-  Substrate production wrappers now preserve omitted optional source-proof
   bytes through proof wrapping and submission packaging while still rejecting
   non-empty all-zero source-proof placeholders. Deployment-aware SCCP
   production source-proof extraction now enters through the deployment-aware
@@ -5651,7 +5685,6 @@ operator-provided rollout bundles.
   Python now also exposes the same canonical ETH/BSC receipt-proof, BSC
   validator-set payload, BSC ValidatorSet storage-value, metadata-proof, and
   transition-message, TON shard-proof, TON validator-set transition, TRON
-  receipt-proof, and Substrate-family storage-proof transcript hash helpers as
   the web and mobile SDKs, so backend portal tooling can derive adapter-bound
   source proof hashes from collected source-chain witness material instead of
   accepting opaque placeholders.
@@ -5963,7 +5996,6 @@ operator-provided rollout bundles.
   transition-message, ETH sync-committee transition payload, TON shard-proof,
   TON masterchain block-message/signature, TON validator-set transition payload,
   TRON receipt-proof, TRON transaction-source proof, TRON
-  witness-schedule transition payload, and Substrate-family storage-proof plus
   authority-set transition-message/justification transcript helpers, so web,
   operator, and mobile tooling can derive every adapter-bound source proof hash
   from collected witness material before invoking the linked prover. The ETH/BSC
@@ -5989,12 +6021,17 @@ operator-provided rollout bundles.
   also verifies an embedded beacon sync-committee certificate by deriving the
   ordered BLS committee trust-anchor hash, checking proof-of-possession values,
   recomputing the signed sync-committee message hash, verifying the aggregate BLS
-  signature, and enforcing strict `> 2/3` signed committee weight. ETH adapter
-  proofs now also carry raw execution-header RLP; the verifier Keccak-hashes it
-  to the claimed execution block hash, parses the RLP header fields, and checks
-  the block-number and receipts-root fields against the SCCP finality height and
-  adapter execution receipts root. The BSC source adapter also verifies an
-  embedded secp256k1 validator-set commit-seal certificate by deriving the
+	  signature, and enforcing strict `> 2/3` signed committee weight. ETH adapter
+	  proofs now also carry raw execution-header RLP; the verifier Keccak-hashes it
+	  to the claimed execution block hash, parses the RLP header fields, and checks
+	  the block-number and receipts-root fields against the SCCP finality height and
+	  adapter execution receipts root. ETH sync-committee transition structural
+	  admission now also decodes the next-committee payload, requires parent-roster,
+	  next-committee, and payload-hash agreement, recomputes the transition message
+	  hash, checks the nested sync-committee message hash, and checks the
+	  transition signature-hash transcript before BLS transition-chain work. The BSC
+	  source adapter also verifies an embedded secp256k1 validator-set commit-seal
+	  certificate by deriving the
   validator-set trust-anchor hash from validator addresses and powers,
   recovering signed validators from 65-byte seals over the BSC commit-message
   hash, binding the seal hash into the adapter transcript, and enforcing strict
@@ -6008,6 +6045,22 @@ operator-provided rollout bundles.
   canonical next-set payload, hash it under
   `sccp:bsc:validator-set-payload:v1`, decode the address/power list, and
   require the decoded payload to derive the advertised next validator-set hash.
+  BSC transition structural admission now also rejects malformed transition
+  envelopes before verifier work when the transition is not V1/BSC, does not
+  advance exactly one validator epoch, does not use the Parlia epoch-start block
+  for `to_validator_epoch`, carries empty header/payload material, carries zero
+  transition hashes, or embeds a seal commit-message hash that does not match
+  the transition message hash. The same BSC adapter preflight now also
+  recomputes the next-validator payload hash, payload-derived next-set hash,
+  transition-header payload binding, ValidatorSet metadata proof hash,
+  transition message hash, and transition seal hash, then requires non-empty
+  transition chains to be internally adjacent and terminate at the adapter's
+  declared active epoch and validator-set hash.
+  The nested ValidatorSet metadata/storage proof preflight now also rejects
+  non-V1 metadata, non-mainnet ValidatorSet contracts, wrong length slots, zero
+  storage roots or value/metadata hashes, empty length/storage proof material,
+  non-canonical per-validator storage slots, and storage-value hash drift before
+  MPT metadata verification runs.
   BSC transitions now also prove mainnet ValidatorSet storage parity by opening
   the `0x0000000000000000000000000000000000001000` account under the transition
   header state root, verifying its storage root, and opening
@@ -6031,7 +6084,6 @@ operator-provided rollout bundles.
   deployment and any production light-client update/state branches not
   discharged inside that deployed source-adapter circuit. The ETH/BSC,
   Solana, TON, TRON, and
-  Substrate-family source-material gates now accept only exact verifier profiles
   binding the planned backend, finality policy, and inclusion-proof layout, and
   the component hashes must be deployment-supplied rather than the built-in
   template hashes; generic source material remains rejected. Destination
@@ -6104,7 +6156,6 @@ operator-provided rollout bundles.
   context, and wrapped UI-prover results commit to that proof-context hash as
   well as the source witness hash. JavaScript, Python, and Swift now expose
   explicit proof-result wrappers for externally generated UI prover bytes
-  across Solana, TON, EVM-family, TRON, and Substrate-family lanes, while
   Kotlin and Java Android expose the same flow through public
   `wrapProofResult` helpers. Those direct wrappers bind proof bytes to the
   canonical request before deriving request-bound envelope hashes; Solana also
@@ -6333,15 +6384,19 @@ operator-provided rollout bundles.
   transcript/evidence hashing, so oversized or mixed legacy branches, MPT nodes,
   wrong adapter domains, zero block/root/seal/proof hashes, empty witness
   rosters, non-canonical signer bitmaps, mismatched witness weights/signature
-  counts, insufficient signed witness weight, all-zero TRON witness addresses,
-  truncated or non-canonical header/witness signatures, stale
-  transition-domain/message/seal metadata, transition chains, or transition
-  payloads fail before canonical adapter bytes are serialized.
-  The generic TRON source-adapter binding path now also recomputes the witness
+	  counts, insufficient signed witness weight, all-zero TRON witness addresses,
+	  truncated or non-canonical header/witness signatures, stale
+	  transition-domain/message/seal metadata, transition chains, or transition
+	  payloads fail before canonical adapter bytes are serialized. Transition
+	  preflight now decodes the next witness-schedule payload as the canonical
+	  `sccp:tron:witness-schedule:v1` address/weight roster, binds the
+	  parent-schedule hash, payload hash, payload-derived next-schedule hash, and
+	  transition message hash, and rejects non-contiguous, non-monotonic, or
+	  wrong-final-schedule transition chains before transition-step verifier work.
+	  The generic TRON source-adapter binding path now also recomputes the witness
   schedule hash, solid-block message hash, and witness seal hash, so swapped
   schedule/seal transcripts fail before recursive verifier material is
   evaluated.
-  Substrate-family adapters now
   derive `storage_proof_hash` from the source event digest, finalized block
   number, GRANDPA set id, authority set hash, events root, source-event leaf
   index, canonical `frame_system::Events` storage key, and inclusion branch
@@ -6349,12 +6404,10 @@ operator-provided rollout bundles.
   embedded GRANDPA authority certificate by deriving the ordered Ed25519
   authority-set trust-anchor hash, recomputing the finalized precommit-message
   hash, checking the justification hash, verifying Ed25519 signatures, and
-  enforcing strict `> 2/3` signed authority weight. Substrate authority-set
   transition proofs now derive the active authority set from a configured parent
   trust anchor by binding the parent set, canonical next authority-set payload
   hash, payload-derived next set, transition block, and GRANDPA set-id range,
   then requiring a strict `> 2/3` parent-set GRANDPA justification.
-  BSC, Solana, TRON, and Substrate-family production source-verifier material
   templates now bind
   those validator/vote/witness certificate transcript prefixes as well as their
   inclusion-proof and TRON receipt-state prefixes, closing the inclusion-only
@@ -6439,12 +6492,13 @@ operator-provided rollout bundles.
   fail-closed coverage for wrong OpenVerify circuit ids, backend tags, schema
   descriptors, auxiliary data, public-input columns, backend proof bytes, and
   oversized source-adapter OpenVerify envelopes or source-state proof labels
-  before decode;
+  before decode, plus adapter verifier-commitment helper coverage for malformed
+  outer wrappers, opaque proof bytes, zero verifier keys, auxiliary envelope
+  data, and empty STARK public-input columns before metadata extraction;
   deployment-backed TON source-adapter readiness can now open when exact
   non-placeholder source verifier material, matching source-state verifier
   deployment fields, adapter verifier commitment, and deployment receipt hashes
   are present;
-  Substrate-family source proofs now support an ordered authority-set transition
   chain from a configured parent set into the active set, with the next
   authority-set payload and transition transcript hashes now available through
   the web, Python, Swift, Kotlin, and Java Android SDK proof-generation helpers.
@@ -6472,15 +6526,53 @@ operator-provided rollout bundles.
 **Next checkpoints:** continue replacing remaining SCCP source-chain verifier
 placeholders behind the typed adapter variants so ETH/BSC/Solana/TON/TRON
 consensus/finality and receipt/message inclusion are checked against external
-chain rules. Substrate/Polkadot-family SCCP lanes are not part of the current
-supported launch scope; keep existing Substrate, Kusama, Polkadot, and SORA2
-evidence helpers gated as diagnostic/backlog-only surfaces, with production
+chain rules. Shared source-state proof admission now rejects opaque nonzero
+bytes and requires canonical STARK OpenVerify/FastPQ capsules before lane-local
+verification work, and the Solana/TON source-state transcript hash helpers now
+reuse the same canonical-envelope gate before audit-statement binding.
+Transparent OpenVerify summary helpers now apply the same production-shaped
+wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
+envelopes cannot be normalized into release/readiness summaries. The
+artifact-level summary entry point now also validates the typed transparent
+proof artifact wrapper first, so manifest, public-input, or submission-package
+metadata drift cannot be hidden behind otherwise valid OpenVerify proof bytes,
+and Torii/CLI artifact renderers omit OpenVerify summaries for wrappers that
+fail that typed gate.
+helpers gated as diagnostic/backlog-only surfaces, with production
 readiness and release-evidence summaries refusing to mark those lanes ready
-until support is explicitly re-opened. For BSC, use the new offline source-bridge evidence
-renderer, which now rejects BSC EVM-family template component hashes before
-rendering governance TOML and also rejects non-canonical BSC source-adapter
-OpenVerify VK hashes, plus the EVM live source and destination evidence
-collectors to query deployed source emitter, bridge, and verifier views, verify
+transition verifiers now also require the ordered transition chain to terminate
+at the adapter's declared active epoch/set id, so stale chains cannot pass by
+replaying the same final validator or authority-set hash. ETH, BSC, Solana,
+non-canonical signer bitmap width/padding, empty signer sets, signature-count
+drift, claimed stake/weight drift, and sub-quorum certificates before
+transcript hashing. ETH source-adapter preflight also recomputes the active
+sync-committee root, signed sync-committee message hash, and aggregate
+signature transcript hash before deeper BLS verification. Solana
+source-adapter preflight also recomputes the
+vote-message hash from the adapter fields and finality-context hash before
+deeper account/finality verification. For BSC, use the new offline
+source-bridge evidence renderer, which now rejects BSC EVM-family template
+component hashes before rendering governance TOML and also rejects
+non-canonical BSC source-adapter
+OpenVerify VK hashes, while BSC adapter structural admission rejects wrong
+version/domain envelopes and zero block, receipt-root, validator-set,
+commit-seal, or receipt-proof hashes, checks the Parlia epoch window, and
+recomputes the validator-set hash, commit-message hash, and commit-seal
+transcript hash before deeper verifier work. TON adapter
+structural admission likewise rejects wrong version/domain envelopes, wrong
+masterchain/basechain identifiers, zero chain sequence numbers, and zero
+masterchain, shard, config, validator-set, transaction, signature, or proof
+roots before BOC/config/signature verifiers run, and now recomputes the
+validator-set hash, masterchain block-message hash, and masterchain signatures
+transcript hash before deeper Ed25519 certificate verification. TON and TRON
+transition-chain preflight now also rejects disconnected internal parent hashes
+between self-consistent transition steps before deeper Ed25519 or secp256k1
+verifier work. TRON source-adapter preflight also recomputes the witness schedule hash
+from the declared witness roster, the solid-block message hash from adapter
+roots, and the witness-seal transcript hash before deeper witness-signature
+verification. Use the EVM live source and
+destination evidence collectors to query deployed source emitter, bridge, and
+verifier views, verify
 runtime code/key hashes, require the canonical RPC chain id, governed bridge
 `networkId()`, reject verifier/bridge address aliasing, and require audited
 source-emitter and bridge-wrapper code-hash pins before live TOML rendering,
@@ -6510,9 +6602,7 @@ circuit. The ETH/BSC adapter proof shapes are now preflight-bounded across Rust
 and the web/mobile SDK helper surfaces: ETH caps sync committees at 512
 authorities and 64 transition proofs, while BSC caps validator sets at 255
 validators and 64 transition proofs before transcript hashing. Backlog-only
-Substrate-family work remains out of the active supported launch scope; if
 support is re-opened, use the offline
-source evidence renderer, which now rejects Substrate-family template component
 hashes, including the runtime storage-proof verifier hash, and non-canonical
 source-adapter OpenVerify VK hashes before rendering governance TOML using the
 same runtime-storage template preimage as Rust. JavaScript, Python, Swift,
@@ -6530,20 +6620,14 @@ allowlist material, then extend the current GRANDPA
 authority-certificate and authority-set transition checks, which are now
 preflight-bounded to 2,048 authorities and 64 transition proofs and reject
 all-zero authority keys across Rust and the web/mobile SDK proof helpers. The
-Substrate-family production source-adapter gate now requires matching runtime
 storage-proof verifier material, matching source-adapter deployment evidence,
 and a submitted `SccpSourceStateVerificationProofV1` OpenVerify/FastPQ capsule
 whose circuit id, schema descriptor, public inputs, verifying-key hash, and
 FastPQ proof verify against the governed runtime-storage verifier hash. The
-all-lanes summary now derives the matching `substrate_runtime_storage_gate_hash`
-for each Substrate-family lane and the release-bundle verifier requires it in
-the source-adapter audit hash set, so ready bundles cannot publish Substrate
-source material without the runtime-storage proof gate. The Substrate
 source-evidence renderer now mirrors that requirement before production TOML:
 the expected source material, source-adapter deployment, and runtime-storage
 gate hashes must all be supplied and match before `toml_ready` can become true.
 The Rust admission path no longer has a metadata-only fail-closed sentinel for
-Substrate-family lanes; the remaining blocker is governed live runtime verifier
 deployment evidence plus lane rollout across the all-lanes launch policy.
 For
 Solana, use the offline
@@ -6587,7 +6671,6 @@ audit helpers and TON shard-state request builders, so app-side proof
 generation cannot promote profile-template material before on-chain
 submission. JavaScript, Python, Swift, Kotlin, and Java Android
 now also expose canonical source-adapter verifier-key commitment helpers for
-all ETH/BSC/Solana/TON/TRON/Substrate-family source lanes, so web portals and
 mobile apps can display or audit the exact `adapter_verifier_vk_hash` accepted
 by Rust admission and the offline governance evidence renderers. The Solana
   AccountsLtHash source-state request
@@ -6620,7 +6703,6 @@ by Rust admission and the offline governance evidence renderers. The Solana
   counterparty submission
   package builders and transparent-proof structure verification now enforce the
   same non-empty, non-all-zero proof-byte preflight for Solana, TON, and
-  Substrate-family native recursive payloads before wallet/RPC envelopes are
   emitted, and transparent inner-proof plus native recursive package builders
   reject any bundle whose transparent public-input target domain is outside the
   verifier manifest's local/counterparty lane endpoints. The offline Solana
@@ -6687,7 +6769,6 @@ full-light-client gate hash, so the governed audit suffix cannot be staged from
 template verifier material through core, CLI, web, Python, Swift, Kotlin, or
 Java Android callers. The ETH, BSC, Solana,
 TON, and
-Substrate-family source evidence renderers now also include the canonical
 `SccpSourceVerifierMaterialV1` and
 `SccpSourceAdapterEngineDeploymentV1` record hashes in compact JSON dry-runs
 and TOML audit comments, matching `iroha_sccp` helper vectors before governed
@@ -6697,8 +6778,6 @@ is emitted, so governance rollout scripts can fail on digest drift before
 configuration is staged. Their direct material and source-adapter deployment
 record hash helpers now apply the same template-hash rejection as the TOML
 renderers, so programmatic rollout tooling cannot derive production-looking
-ETH, BSC, Solana, TON, or Substrate-family evidence hashes from profile-template
-source components. The ETH, BSC, Solana, TON, and Substrate-family source evidence
 helpers now also require exact `u32` domain ids on their programmatic paths, so
 Python boolean placeholders cannot be staged as SORA target-domain evidence.
 The Solana submission helpers now require UI/mobile wrapped proof results to
@@ -6790,7 +6869,6 @@ the AccountsLtHash `stark-fri-v1` circuit, and explicit TON canonicalizers only
 accept the shard-state `stark-fri-v1` circuit before hashing completed proof
 capsules for UI prover output. JavaScript FastPQ source-state and
 full-light-client audit proof request builders for Solana, TON, and
-Substrate-family runtime-storage proofs now freeze the returned request objects,
 public-input columns, transition metadata, and aggregate request maps, and
 return canonical statement, context, schema, commitment, and witness byte fields
 through defensive-copy getters, preventing browser code from mutating a
@@ -6804,14 +6882,11 @@ properties.
 The TypeScript
 declarations mark those request objects, nested arrays, transition entries, and
 aggregate maps as readonly for portal compile-time checks. Python portal-backend
-builders now return the same Solana, TON, and Substrate-family FastPQ requests
 as read-only dict/list-compatible envelopes with immutable byte payloads,
 preserving normal inspection while preventing callback-side metadata rewrites.
 Kotlin mobile request models now also store defensive copies and return fresh
 byte arrays for Solana AccountsLtHash, Solana/TON full-light audit, and
-Substrate-family runtime-storage request bytes and FastPQ transition byte values,
 matching the Java Android record/accessor surface. Java Android also freezes the
-Substrate-family runtime-storage public-input and transition lists, and Swift
 tests now pin the same value-snapshot contract for mobile proof requests.
 The Swift, Kotlin, and Java Android direct audit-request inputs now also reject
 duplicate audit role verifier hashes and reuse of any source-adapter material
@@ -6887,14 +6962,20 @@ transcript.
 Solana source-adapter structural admission also requires the signer bitmap to
 use the exact byte width implied by the validator roster and to keep unused
 padding bits zero before vote-proof verification or transcript hashing. The
-same structural preflight now rejects present source-state proof capsules unless
-they are version `1`, use `stark-fri-v1`, carry a non-empty circuit id, and
-contain non-empty/non-all-zero proof bytes before Norito/OpenVerify decoding,
-covering nested AccountsLtHash material, full-light-client audit role proofs,
-TON source-state capsules, and Substrate-family runtime-storage capsules. The
-Solana AccountsLtHash verifier and role-separated full-light-client audit
-verifier now apply the same all-zero capsule guard before decoding, so direct
-verifier calls cannot bind placeholder proof bytes outside structural admission.
+same adapter-envelope preflight now also rejects non-V1/non-Solana source
+proofs, zero finalized slots, zero blockhash/bank/status/message roots,
+malformed or zero transaction identities, finality contexts whose epoch or
+parent/finalized slots do not match the finalized slot, zero finality-context
+roots, zero bank-signature counts, zero vote-message hashes, empty StakeHistory
+sysvar data, and malformed or all-zero AccountsLtHash bytes before
+source-adapter transcript hashing. The structural preflight now also rejects
+present source-state proof capsules unless they are version `1`, use
+`stark-fri-v1`, carry a non-empty circuit id, and contain non-empty/non-all-zero
+proof bytes before Norito/OpenVerify decoding, covering nested AccountsLtHash
+material, full-light-client audit role proofs, TON source-state capsules, and
+and role-separated full-light-client audit verifier now apply the same all-zero
+capsule guard before decoding, so direct verifier calls cannot bind placeholder
+proof bytes outside structural admission.
 For the web/mobile portal path, the
 remaining Solana blocker is governed all-lanes rollout with live
 full-light-client verifier deployments, not request derivation or the
@@ -7000,7 +7081,6 @@ replay the root-hash derivation. The offline
 `scripts/sccp_all_lanes_evidence.py` preflight consumes the rendered source,
 destination, and route TOML snippets and reports lane-specific blockers for any
 missing or non-production record across ETH, BSC, Solana, TON, TRON, and the
-	Substrate-family lanes before governance staging. It also rejects unsupported
 	domain records in the source-material, source-adapter deployment, destination
 	rollout, and route-allowlist sections instead of ignoring stray governance
 	records while declaring the advertised lanes ready. It also recomputes the
@@ -7009,7 +7089,6 @@ missing or non-production record across ETH, BSC, Solana, TON, TRON, and the
 	template-derived component hashes, non-canonical source-adapter verifier keys,
 	reused non-zero source/deployment/audit role digests, or malformed destination
 		verifier identities. Native Solana, TON, and
-		Substrate-family destination evidence JSON now stays binding-only until the
 	expected destination binding hash and route canary evidence are pinned; route
 	allowlist hashes and paired source record hashes are rejected before that
 	independent binding pin matches. TON
@@ -7024,20 +7103,14 @@ JavaScript, Python, Swift, Kotlin, and Java Android SDK proof-request builders
 apply the same rejection before UI/mobile prover invocation. For ready lanes
 the same JSON summary reports canonical source material and source-adapter
 deployment record hashes for governance comparison. For
-Substrate-family destination lanes,
 JavaScript, Python, Swift, Kotlin, and Java Android portal/mobile SDKs
-now build request-bound `substrate-runtime-v1` prover inputs and envelope
-hashes for SORA-Kusama, SORA-Polkadot, and SORA2, so the remaining Substrate
 release blockers are governed runtime verifier deployment evidence and lane
 rollout rather than SDK request derivation for either destination runtime
 proofs or source-state runtime-storage proofs. Release summaries now also carry
-the derived `substrate_runtime_storage_gate_hash` as a required source-adapter
-audit hash for those lanes. The direct Substrate-family
 destination helper and its importable render/summary APIs can now derive the
 runtime verifier code hash from supplied runtime bytes and reject explicit hash
 mismatches before producing JSON or TOML. Rust runtime-storage verification
 also rejects all-zero source-state proof capsules before OpenVerify/FastPQ
-decode, matching the Substrate source-adapter preflight. For TRON, extend the current
 signed ancestor-linked solid-block header proof,
   which now authenticates both `txTrieRoot` and TRON `accountStateRoot`, witness
   seal, witness-schedule transition certificates, and transaction-Merkle
@@ -7584,17 +7657,20 @@ or ABI behavior.
   capacities above the canonical profile slot count. BFV now also has a registered RAM-LFE
   v1 RNS coefficient-modulus chain descriptor whose validation requires
   bounded, strictly increasing odd-prime, NTT-friendly, pairwise-coprime limbs,
-  a checked product that covers the active ciphertext modulus, a stable
+  bound primitive `2n`-th negacyclic NTT roots for the registered profile, a
+  checked product that covers the active ciphertext modulus, a stable
   domain-separated chain digest, and a separate exact-lift compatibility bound
   while the full BFV-RNS arithmetic engine is still pending. The shared RNS
   validator now also validates BFV parameters directly, so exact-lift and exact
   `Z_q` coverage helpers reject malformed parameter profiles before inspecting
-  chain arithmetic bounds. The descriptor now also supports checked limb-major
+  chain arithmetic bounds, and validated limbs must have bounded concrete
+  negacyclic NTT root support. The descriptor now also supports checked limb-major
   polynomial decomposition and CRT
   reconstruction, with malformed residue-shape and unreduced-residue rejection
   before arithmetic code can consume those residues, plus deterministic scalar
-  residue addition and per-limb NTT-backed negacyclic multiplication with a
-  scalar fallback in the RNS chain product ring, and the shared Soracloud
+  residue addition and per-limb NTT-backed negacyclic multiplication with
+  bounded primitive-root discovery and a scalar fallback in the RNS chain
+  product ring, and the shared Soracloud
   operation fixture now binds that descriptor, digest,
   decomposition/reconstruction corridor, and residue addition/multiplication
   hashes across Rust plus lightweight JavaScript, Swift, Kotlin/JVM, and Java
@@ -7681,18 +7757,91 @@ or ABI behavior.
   preverified proof cache entry. The verifier registry now rejects canonical
   Soracloud bootstrap verifier records whose registry id, namespace, circuit
   version, public-input schema hash, gas schedule, or active inline key
-  material drift from the governed v1 profile, moving those rollout failures
-  to `RegisterVerifyingKey`/`UpdateVerifyingKey` admission. BFV bootstrap keys
-  now carry an explicit `RefreshOnlyV1` mode, and reserved full-bootstrap mode
-  fails closed until real bootstrapping circuit material exists, so the current
-  refresh bridge cannot be mislabeled as full bootstrapping. Bundle
-  validation/digesting applies the same mode gate before transcript-bound
-  bootstrap proof statements can be produced. Remaining work is the full BFV
-  bootstrapping path. Soracloud transcript digesting
-  now preflights the advertised BFV
-  public-key shape before evaluation-key bundle validation, so malformed
-  transcript key material is reported at the public-key boundary instead of
-  being masked by unrelated bundle-shape errors. The crypto bundle validator
+	  material drift from the governed v1 profile, moving those rollout failures
+	  to `RegisterVerifyingKey`/`UpdateVerifyingKey` admission. BFV bootstrap keys
+	  now carry an explicit `RefreshOnlyV1` mode, and `FullBootstrapV1` keys carry
+	  versioned circuit/key-material commitments that bind the canonical circuit id,
+	  registered BFV parameter digest, RNS modulus-chain digest, key-switch
+	  decomposition-chain digest, bootstrap artifact digests, and proof
+	  public-input schema/prover-key/verifier-key digests. The material validator
+	  rejects zero commitments, duplicate artifact/proof commitments, and artifact
+	  or proof commitments that reuse registered profile digests, keeping each
+	  governed digest role partitioned at admission. Bundle admission
+	  and digesting bind that material, while refresh/proof/execution paths still
+	  fail closed because the full BFV bootstrap evaluator is not implemented, so
+	  the current refresh bridge cannot be mislabeled as full bootstrapping. Direct
+	  key-authorized refresh execution, bootstrap output-bound helpers, and
+	  Soracloud exact/bounded bootstrap execution now use the same mode-aware
+	  request preflight, so reserved full-bootstrap keys are rejected before
+	  round-count, bound-capacity, ciphertext-shape, or refresh-key entry errors.
+	  Bundle validation/digesting applies the same public metadata preflight before
+	  the mode/material gate and before transcript-bound bootstrap proof statements
+	  can be produced. The crypto layer also exposes a domain-separated
+	  full-bootstrap material proof-statement digest that binds the parameter set,
+	  public key, evaluation-key bundle digest, bootstrap-key metadata, and
+	  material digest for governed prover inventories. The data-model refresh
+	  transcript wrapper can derive the same full-bootstrap material statement for
+	  manifest callers, and execution policies now require bootstrap-capable
+	  bundles to bind exactly one bootstrap statement class: zero-refresh for
+	  `RefreshOnlyV1`, or full material for `FullBootstrapV1`. Full-bootstrap
+	  refresh transcript digesting omits deterministic zero-refresh bootstrap
+	  transcript seeds, and Core rejects missing, mismatched, stale, or cross-mode
+	  policy statement bindings before execution. The data model now also exposes a
+	  distinct full-bootstrap material proof attachment with canonical
+	  STARK/`OpenVerifyEnvelope` circuit id, public-input schema, byte bounds,
+	  verifier-key commitment, statement public input, and envelope-hash checks, so
+	  governed material proofs no longer reuse the zero-refresh bootstrap proof
+	  envelope. `RunSoracloudFheJob` and Torii signed FHE job requests now carry
+	  an optional distinct full-bootstrap material proof attachment, provenance
+	  signs it, and Core requires it for policy-bound full-bootstrap jobs before
+	  dispatching through the active Soracloud verifier record or preverified-proof
+	  cache path. Runtime admission rejects absent, mismatched, non-bootstrap, and
+	  unverified fake full-material proofs, and
+	  `RegisterVerifyingKey`/`UpdateVerifyingKey` admission rejects canonical
+	  full-material verifier-profile drift before job execution. Job admission now
+	  also requires the material proof schema digest and verifier-key digest to
+	  match the canonical Soracloud proof schema and proof attachment verifier
+	  commitment through the BFV crypto proof-profile validator, and rejects
+	  supplied full-material proof attachments that omit `vk_commitment` at the
+	  material/profile gate before backend verifier lookup. The Rust, Swift,
+	  Kotlin/JVM, and Java Android shared Soracloud BFV operation-fixture validators
+	  now pin the full-bootstrap material/profile digest, verifier-key commitment,
+	  and statement vector so SDK/release validation can reject fixture drift before
+		  the executable evaluator lands. Full-mode exact
+		  and bounded runtime bootstrap paths now use dedicated crypto preflight
+		  helpers that validate governed material commitments, registered profile
+		  digests, ciphertext shape, and exact/bounded metadata before returning the
+				  current unavailable-evaluator error. Crypto now also exposes a typed
+				  full-bootstrap artifact bundle validator/digest and artifact-aware execution
+				  preflight that bind concrete evaluator/proof-profile bytes to those governed
+				  commitments. Each artifact byte field is now a Norito role/profile envelope
+				  that declares the canonical circuit id, registered parameter/RNS/decomposition
+				  digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
+				  and empty-payload artifact attachments fail before the unavailable evaluator
+					  boundary. Coefficient-to-slot and slot-to-coefficient artifacts now carry
+					  typed diagonal packed-slot linear transforms, and crypto exposes exact and
+					  bounded deterministic evaluators for those transforms through the registered
+							  RNS paths. The blind-rotation artifact now carries canonical packed-slot
+							  rotation schedules bound to the governed accumulator artifact. The
+							  sample-extraction artifact now carries typed source/output ciphertext shape
+							  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
+							  bad-component-count, or out-of-range payloads. The accumulator artifact now
+							  carries typed packed-slot test-vector material and rejects opaque,
+							  wrong-slot-count, malformed, or all-zero accumulator payloads. Crypto now
+							  also exposes a domain-separated full-bootstrap execution proof statement
+							  digest that validates and binds the public key, governed bootstrap
+							  key/material, concrete artifact bundle, input/output ciphertexts, exact or
+							  bounded proof mode, and input/output bound metadata for the future verifier.
+							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts,
+							  provenance signs them, and Core routes exact/bounded full-mode jobs through
+							  artifact-aware preflight before the current unavailable-evaluator error.
+						  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
+						  Remaining work is the executable full BFV bootstrapping evaluator and the real
+						  prover/verifier artifacts and implementation.
+	  Soracloud transcript digesting now preflights the advertised BFV public-key
+	  shape before evaluation-key bundle validation, so malformed transcript key
+	  material is reported at the public-key boundary instead of being masked by
+	  unrelated bundle-shape errors. The crypto bundle validator
   applies the same public metadata
   preflight for direct callers. Standalone refresh-key transcript
   generators/validators also reject empty or oversized public seeds before
@@ -7764,16 +7913,22 @@ or ABI behavior.
   that decomposes ciphertext components as centered residues, reconstructs
   signed negacyclic products before `t/q` scale-and-rounding, and relinearizes
   the scaled quadratic component through the RNS digit/key-switch path while
-  matching the scalar bounded-noise multiplication output. Rounded Galois key
+  matching the scalar bounded-noise multiplication output. The RNS chain now
+  also exposes an explicit exact scale-round helper for centered RNS product
+  polynomials at the rounded BFV `t/q` boundary, and rounded RNS ciphertext
+  multiplication uses that helper for direct product components plus a centered
+  two-product sum helper for `c1` cross terms, with exact product-sum coverage
+  rejecting aliasing before scale-and-rounding. Rounded Galois key
   switching and packed `RotateLeft` now also have RNS exact bridge entry points
   that match the scalar bounded-noise schedule and reject too-narrow chains.
   Outer-slot rotation and bootstrap refresh material can now also be generated
   and publicly transcript-validated with rounded bounded-noise encrypted-zero
-  ciphertexts, refreshed through scalar or exact RNS addition, and propagated
-  with centered-noise output bounds. Evaluation-key bundles can now validate and
-  digest the bounded-noise rotation/bootstrap transcript inventory under a
-  separate domain from the exact-lift refresh path, and owner diagnostics can
-  validate bounded relin/Galois key-switch residuals with bundle-owned
+  ciphertexts, refreshed through scalar or exact RNS addition, routed through
+  registered target-limb RNS basis-extension wrappers for bounded production
+  Bootstrap execution, and propagated with centered-noise output bounds.
+  Evaluation-key bundles can now validate and digest the bounded-noise
+  rotation/bootstrap transcript inventory under a separate domain from the
+  exact-lift refresh path, and owner diagnostics can validate bounded relin/Galois key-switch residuals with bundle-owned
   relinearization labels and bundle-indexed Galois diagnostics plus every
   bounded refresh mask in one bundle check.
   Soracloud FHE execution policies now bind the
@@ -8048,8 +8203,8 @@ or ABI behavior.
   so inconsistent existing-item accounting and `u64` total overflows fail
   closed before max-total admission checks. The production bounded-noise
   admission circuit/prover rollout,
-  broader target-limb BFV-RNS evaluator hardening, and full bootstrapping
-  circuit/key material remain pending.
+  broader target-limb BFV-RNS evaluator hardening, and executable
+  full-bootstrap evaluator plus verifier/prover implementation remain pending.
   Owner-side
   evaluated-output diagnostics can now validate ciphertexts against
   caller-declared exact residual-multiple bounds and reject plaintext-preserving
@@ -8155,8 +8310,10 @@ or ABI behavior.
   advertised multiplication/bootstrap budgets above the exact evaluator budget
   before governance admission.
   Bootstrap fixtures now pin both the zero refresh and each round-indexed
-  public refresh ciphertext, while full bootstrapping circuit/key-material
-  vectors remain an open release item.
+  public refresh ciphertext. Full bootstrapping circuit/key-material
+  commitments now have a Rust admission/digest/proof-statement surface plus a
+  data-model material proof envelope, while executable full-bootstrap evaluator
+  and verifier/prover vectors remain an open release item.
 - Keep Soracloud FHE governance parameter fixtures runtime-bound instead of
   descriptor-only. The canonical parameter-set, execution-policy, governance
   bundle, and job-spec fixtures now target the registered `bfv-default`
@@ -8166,15 +8323,20 @@ or ABI behavior.
   domain-separated registered BFV RNS modulus-chain digest, and core admission
   rejects RNS descriptor drift before FHE jobs can run. The registered RNS
   chain selector now preflights exact-addition and exact negacyclic-product
-  coverage before returning the production chain or digest, and the RNS
-  key-switch bridge applies the same exact-evaluator chain preflight before
-  consuming key-switch material. Public RNS exact evaluator entry points now
-  also preflight their required chain coverage before invalid refresh rounds,
-  no-op packed rotations, or key-switch schedules can short-circuit validation,
-  and indexed Bootstrap refresh helpers preflight requested round capacity
-  before malformed ciphertext shapes enter the addition path.
+  coverage plus the concrete negacyclic NTT root table before returning the
+  production chain or digest, and the RNS key-switch bridge applies the same
+  exact-evaluator chain preflight before consuming key-switch material. Public
+  RNS exact evaluator entry points now also preflight their required chain
+  coverage before invalid refresh rounds, no-op packed rotations, or
+  key-switch schedules can short-circuit validation, and indexed Bootstrap
+  refresh helpers preflight requested round capacity before malformed
+  ciphertext shapes enter the addition path.
   Bounded exact-RNS ciphertext multiplication now uses the same exact
   evaluator-chain preflight before operand or relinearization-key shape checks.
+  Bounded target-limb basis-extension execution wrappers now share one
+  rounded-capacity plus decomposition/evaluator prefix corridor, and Bootstrap
+  refresh rejects structurally valid non-prefix decomposition chains before
+  malformed refresh-key or ciphertext shapes.
   Refresh transcript digest assembly now returns structured shape errors for
   missing or unmatched rotation transcript seeds instead of relying on a
   post-validation panic invariant.
@@ -8226,9 +8388,9 @@ or ABI behavior.
   corridor.
 
 **Next checkpoints:** extend the fixture-bound RNS descriptor/residue corridor
-into the full BFV-RNS evaluator, add full bootstrapping circuit/key-material
-vectors beyond encrypted-zero refresh, and fold the focused ZK/FHE fixture
-corridor into broader release validation.
+into the full BFV-RNS evaluator, add executable full-bootstrap evaluator and
+verifier/prover vectors beyond encrypted-zero refresh, and fold the focused
+ZK/FHE fixture corridor into broader release validation.
 
 ## Consensus, Performance, and Operations
 
@@ -8740,7 +8902,17 @@ commit-anchor QC promotion helper gate (`commit-anchor-qc`),
 committed-height QC admission helper gate (`committed-height-qc`),
 TLC-cross-checked proposal assembly gate, TLC-cross-checked Kura durability
 commit retry gate, TLC-cross-checked Kura persistence status counter/snapshot helper gate
-(`kura-store-status`), TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
+(`kura-store-status`), Kura writer wake coalescing gate, Kura writer periodic
+fsync fault regression gate, State DA cursor apply fault regression gate, Kura
+pipeline sidecar queue cap gate, Kura durable budget metadata snapshot gate,
+Kura pending-budget scan guardrail/benchmark gate, Kura eviction block-store lock split
+gate, Kura background budget eviction gate, Kura background budget eviction retry-latency gate,
+Kura long-history eviction benchmark gate,
+IVM WSV admin syscall permission gate,
+IVM WSV checkpoint durable-state dedupe/benchmark gate,
+State view generation retry gate, WSV state write lock separation gate,
+WSV state write lock telemetry alias gate, WSV heavy-world state-write-lock benchmark gate,
+TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
 realignment gate, frontier block-sync hint/direct-response permit gate,
 TLC-cross-checked same-height vote conflict helper gate, aggregate same-height vote-lock helper gate,
 TLC-cross-checked proposal stale same-height vote helper gate,

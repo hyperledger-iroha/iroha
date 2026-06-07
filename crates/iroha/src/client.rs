@@ -249,15 +249,6 @@ pub struct SccpCapabilities {
     pub burn_bundle_path: String,
     /// Generic SCCP message-bundle fetch path.
     pub message_bundle_path: String,
-    /// Runtime SCALE proof family accepted by the SORA SCCP pallet.
-    #[norito(default)]
-    pub runtime_proof_family: Option<String>,
-    /// Runtime verifier backend label accepted by the SORA SCCP pallet.
-    #[norito(default)]
-    pub runtime_verifier_backend: Option<String>,
-    /// Optional runtime SCALE message-envelope fetch path.
-    #[norito(default)]
-    pub message_runtime_bundle_path: Option<String>,
     /// Generic SCCP typed proof-artifact fetch path.
     pub message_proof_path: String,
     /// Generic SCCP normalized proof-job fetch path.
@@ -9295,7 +9286,8 @@ impl Client {
             .unwrap_or(u64::MAX);
         let nonce = Self::signed_request_nonce()?;
         let message = Self::operator_request_message(&method, &url, &body, timestamp_ms, &nonce);
-        let signature = Signature::new(self.key_pair.private_key(), &message);
+        let signature = Signature::try_new(self.key_pair.private_key(), &message)
+            .wrap_err("failed to sign account request headers")?;
         let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
         let mut builder = self
             .default_request(method, url)
@@ -9327,7 +9319,8 @@ impl Client {
             let nonce = Self::signed_request_nonce()?;
             let message =
                 Self::operator_request_message(&method, &url, &body, timestamp_ms, nonce.as_str());
-            let signature = Signature::new(operator_key_pair.private_key(), &message);
+            let signature = Signature::try_new(operator_key_pair.private_key(), &message)
+                .wrap_err("failed to sign operator request headers")?;
             let public_key = operator_key_pair.public_key().to_string();
             let timestamp = timestamp_ms.to_string();
             let signature_b64 =
@@ -11479,13 +11472,17 @@ impl Client {
     ///
     /// This mirrors `iroha da submit --no-submit`, returning the Norito payload so callers can
     /// persist it to disk or inspect the JSON before publishing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if signing the DA ingest payload fails.
     pub fn build_da_ingest_request(
         &self,
         payload: impl Into<Vec<u8>>,
         params: &DaIngestParams,
         metadata: ExtraMetadata,
         manifest_bytes: Option<Vec<u8>>,
-    ) -> DaIngestRequest {
+    ) -> Result<DaIngestRequest> {
         build_da_request(
             payload.into(),
             params,
@@ -11509,7 +11506,7 @@ impl Client {
         metadata: ExtraMetadata,
         manifest_bytes: Option<Vec<u8>>,
     ) -> Result<DaIngestSubmitResult> {
-        let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes);
+        let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes)?;
         self.submit_prepared_da_request(&request)
     }
 
@@ -11520,7 +11517,8 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error if the request artefacts cannot be encoded or written to disk.
+    /// Returns an error if request signing fails or the request artefacts cannot
+    /// be encoded or written to disk.
     pub fn write_da_ingest_request(
         &self,
         payload: impl Into<Vec<u8>>,
@@ -11529,7 +11527,7 @@ impl Client {
         manifest_bytes: Option<Vec<u8>>,
         output_dir: impl AsRef<Path>,
     ) -> Result<DaIngestPersistedPaths> {
-        let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes);
+        let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes)?;
         Self::persist_da_ingest_artifacts(&request, None, None, output_dir)
     }
 
@@ -11540,7 +11538,8 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP submission fails or any artefact cannot be written to disk.
+    /// Returns an error if request signing fails, the HTTP submission fails, or
+    /// any artefact cannot be written to disk.
     pub fn submit_da_blob_to_dir(
         &self,
         payload: impl Into<Vec<u8>>,
@@ -11549,7 +11548,7 @@ impl Client {
         manifest_bytes: Option<Vec<u8>>,
         output_dir: impl AsRef<Path>,
     ) -> Result<(DaIngestSubmitResult, DaIngestPersistedPaths)> {
-        let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes);
+        let request = self.build_da_ingest_request(payload, params, metadata, manifest_bytes)?;
         // Persist the request up front so the caller retains the Norito bytes even if submit fails.
         Self::persist_da_ingest_artifacts(&request, None, None, &output_dir)?;
         let result = self.submit_prepared_da_request(&request)?;
@@ -18003,12 +18002,14 @@ mod tests {
         let metadata = ExtraMetadata::default();
         let manifest_bytes = Some(vec![0xAA, 0xBB]);
         let payload = vec![0x10, 0x20, 0x30, 0x40];
-        let request = client.build_da_ingest_request(
-            payload.clone(),
-            &params,
-            metadata.clone(),
-            manifest_bytes.clone(),
-        );
+        let request = client
+            .build_da_ingest_request(
+                payload.clone(),
+                &params,
+                metadata.clone(),
+                manifest_bytes.clone(),
+            )
+            .expect("build DA ingest request");
         assert_eq!(request.payload, payload);
         assert_eq!(request.metadata, metadata);
         assert_eq!(request.norito_manifest, manifest_bytes);
@@ -23536,11 +23537,6 @@ mod tests {
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
-            runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
-            runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
-            message_runtime_bundle_path: Some(
-                "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
-            ),
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),

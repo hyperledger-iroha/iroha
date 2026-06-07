@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### ထုတ်လုပ်မှု WSV
 
 - ရှိပြီးသား လွှမ်းခြုံမှု
-  - ပြိုင်ဆိုင်မှု ဆုတ်ယုတ်မှု အပြုအမူ- `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - အဆင့်တန်းနောက်ခံဘေးပတ်လည်တွင် လော့ခ်ချခြင်း လုံခြုံရေး- `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - ပြိုင်ဆိုင်မှု ဆုတ်ယုတ်မှု အပြုအမူ- `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - အဆင့်တန်းနောက်ခံဘေးပတ်လည်တွင် လော့ခ်ချခြင်း လုံခြုံရေး- `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - ကွာဟချက်-
   - လေးလံသောကမ္ဘာ့ကတိကဝတ်များအောက်တွင် အမြင့်ဆုံးလက်ခံနိုင်သော commit ကိုင်ထားချိန်ကိုအခိုင်အမာအခိုင်အမာအတည်ပြုထားသော quantitative ငြင်းခုံစစ်ဆေးမှုမရှိပါ။
   - DA cursor တိုးတက်မှုမျိုးကွဲများ မမျှော်လင့်ဘဲ ကွဲသွားပါက ထိတ်လန့်ခြင်းကင်းစွာ ကိုင်တွယ်မှုအတွက် ဆုတ်ယုတ်မှုစမ်းသပ်ခြင်း မရှိပါ။
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## အကြံပြုထားသော စမ်းသပ်မှု ထပ်လောင်းများ1. `kura_writer_io_failures_do_not_panic` (ယူနစ်၊ အမှားဆေးထိုးခြင်း)
 2. `kura_budget_check_scales_with_pending_depth` (စွမ်းဆောင်ရည် ဆုတ်ယုတ်မှု)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (ပေါင်းစပ်မှု/perf)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (ပြိုင်ဆိုင်မှု ဆုတ်ယုတ်မှု)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (ပြိုင်ဆိုင်မှု ဆုတ်ယုတ်မှု)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (ခံနိုင်ရည်အား)
 6. `mock_wsv_admin_alias_requires_permissions` (လုံခြုံရေးဆုတ်ယုတ်မှု)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS guard)

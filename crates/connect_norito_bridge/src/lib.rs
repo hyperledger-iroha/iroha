@@ -2915,7 +2915,8 @@ pub unsafe extern "C" fn connect_norito_sign_detached(
         let private_bytes = unsafe { slice::from_raw_parts(private_ptr, private_len as usize) };
         let message = unsafe { slice::from_raw_parts(message_ptr, message_len as usize) };
         let private_key = parse_private_key_with_algorithm(private_bytes, algorithm)?;
-        let signature = Signature::new(&private_key, message);
+        let signature =
+            Signature::try_new(&private_key, message).map_err(|_| BridgeError::SecpSign)?;
         unsafe { write_bytes_bridge(out_signature_ptr, out_signature_len, signature.payload()) }?;
         Ok(())
     })();
@@ -14527,7 +14528,10 @@ pub unsafe extern "C" fn connect_norito_secp256k1_sign(
         Ok(key) => key,
         Err(_) => return ERR_SECP_PARSE,
     };
-    let signature = EcdsaSecp256k1Sha256::sign(message, &private_key);
+    let signature = match EcdsaSecp256k1Sha256::try_sign(message, &private_key) {
+        Ok(signature) => signature,
+        Err(_) => return ERR_SECP_SIGN,
+    };
     if signature.len() != SECP256K1_SIGNATURE_LEN {
         return ERR_SECP_SIGN;
     }
@@ -17788,7 +17792,9 @@ fn java_sign_detached_bytes(
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let private_key = parse_private_key_with_algorithm(private_key, algorithm)
         .map_err(|_| "invalid private key bytes".to_string())?;
-    Ok(Signature::new(&private_key, message).payload().to_vec())
+    Signature::try_new(&private_key, message)
+        .map(|signature| signature.payload().to_vec())
+        .map_err(|err| format!("failed to sign message: {err}"))
 }
 
 #[cfg(any(
@@ -24443,6 +24449,25 @@ mod tests {
             sign_and_verify_roundtrip(Algorithm::MlDsa, &private_bytes, message);
         assert!(!public.is_empty(), "ML-DSA public key must not be empty");
         assert!(!signature.is_empty(), "ML-DSA signature must not be empty");
+    }
+
+    #[test]
+    fn java_detached_signing_helper_signs_and_verifies() {
+        let private = vec![0x21; 32];
+        let message = b"java-helper-detached-signing";
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+
+        let public = java_public_key_from_private_bytes(algorithm, &private)
+            .expect("Java public-key helper derives key");
+        let signature = java_sign_detached_bytes(algorithm, &private, message)
+            .expect("Java signing helper signs");
+
+        assert_eq!(signature.len(), 64);
+        assert!(
+            java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "Java helper signature must verify"
+        );
     }
 
     #[test]

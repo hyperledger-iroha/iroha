@@ -726,6 +726,23 @@ CommitViewDoesNotLeadCurrentView ==
 GstElapsedGateMatchesPreGst ==
   GstElapsedEnabled <=> ~gst
 
+CommittedPreGstOnlyEnablesGstElapsed ==
+  (committed /\ ~gst) =>
+    /\ GstElapsedEnabled
+    /\ CommitDisablesProgressActions
+    /\ ~HonestProposeEnabled
+    /\ ~HonestPrepareVoteEnabled
+    /\ ~HonestCommitVoteEnabled
+    /\ ~ByzantineCommitVoteEnabled
+    /\ ~HonestNewViewVoteEnabled
+    /\ ~RbcInitEnabled
+    /\ ~RbcChunkGoodEnabled
+    /\ ~RbcReadyGoodEnabled
+    /\ ~RbcDeliverGoodEnabled
+    /\ ~TimeoutTickEnabled
+    /\ ~ByzantineFaultEnabled
+    /\ ~PostGstProgressEnabled
+
 TimeoutTickGateMatchesStalledProgress ==
   TimeoutTickEnabled <=>
     /\ ~committed
@@ -1918,6 +1935,86 @@ CommittedGstDisablesEveryAction ==
     /\ ~GstElapsedEnabled
     /\ ~PostGstProgressEnabled
 
+CommittedPreGstOnlyGstElapsedCanMoveStep ==
+  (/\ committed
+   /\ ~gst
+   /\ vars' # vars) =>
+    /\ CommittedConsensusStateStableStep
+    /\ CommittedOnlyGstObservationCanMoveStep
+    /\ CommittedViewWitnessStaysAtCommittedViewStep
+    /\ GstElapsed
+    /\ GstElapsedStepOnlySetsGst
+    /\ committed'
+    /\ gst'
+    /\ phase' = "Committed"
+    /\ view' = view
+    /\ commitView' = commitView
+    /\ commitView' = view'
+    /\ FinalityCertificateStackPresent
+    /\ FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ CommittedPhaseMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ CommitViewMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ CommitImpliesLiveVoteQuorum'
+    /\ CommitImpliesLiveStakeQuorum'
+    /\ CommitImpliesHonestSupport'
+    /\ CommitImpliesDelivered'
+    /\ CommitImpliesRbcEvidence'
+    /\ FinalityClearsNewViewHandoff'
+    /\ CommitDisablesProgressActions'
+    /\ CommitDisablesByzantineCommitVote'
+    /\ CommitViewDoesNotLeadCurrentView'
+    /\ CommittedGstDisablesEveryAction'
+    /\ ~GstElapsedEnabled'
+    /\ ~HonestProposeEnabled'
+    /\ ~HonestPrepareVoteEnabled'
+    /\ ~HonestCommitVoteEnabled'
+    /\ ~ByzantineCommitVoteEnabled'
+    /\ ~HonestNewViewVoteEnabled'
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~TimeoutTickEnabled'
+    /\ ~ByzantineFaultEnabled'
+    /\ ~PostGstProgressEnabled'
+
+CommittedPreGstNextOnlyGstElapsedStep ==
+  (/\ committed
+   /\ ~gst) =>
+    /\ CommittedPreGstOnlyEnablesGstElapsed
+    /\ (Next <=> GstElapsed)
+    /\ (Next =>
+          /\ CommittedPreGstOnlyGstElapsedCanMoveStep
+          /\ committed'
+          /\ gst'
+          /\ phase' = "Committed"
+          /\ CommittedGstDisablesEveryAction')
+
+CommittedPreGstSpecStepStuttersOrObservesGstStep ==
+  (/\ committed
+   /\ ~gst
+   /\ [Next]_vars) =>
+    \/ /\ vars' = vars
+       /\ ~Next
+       /\ ~GstElapsed
+       /\ committed'
+       /\ ~gst'
+       /\ CommittedPreGstOnlyEnablesGstElapsed
+       /\ CommittedPreGstOnlyEnablesGstElapsed'
+    \/ /\ Next
+       /\ GstElapsed
+       /\ vars' # vars
+       /\ CommittedPreGstNextOnlyGstElapsedStep
+       /\ CommittedPreGstOnlyGstElapsedCanMoveStep
+       /\ committed'
+       /\ gst'
+       /\ CommittedGstDisablesEveryAction'
+
 CommittedGstRejectsNextStep ==
   (committed /\ gst) => ~Next
 
@@ -2079,6 +2176,11 @@ FinalityLatchSourceIsCommitOrDeliveryStep ==
     /\ ~ByzantineFault
     /\ ~GstElapsed
 
+FinalityLatchChangePreservesGstStep ==
+  (~committed /\ committed') =>
+    /\ gst' = gst
+    /\ FinalityLatchSourceIsCommitOrDeliveryStep
+
 FinalityLatchSourceEffectsAreExactStep ==
   (~committed /\ committed') =>
     /\ phase = "CommitVote"
@@ -2125,6 +2227,14 @@ FinalityLatchSourceEffectsAreExactStep ==
           /\ commitEvidenceVotes' = commitVotesHonest + commitVotesByz
           /\ commitEvidenceStake' = stakeSigned
           /\ rbcState = "ReadyQuorum"
+
+FinalityLatchChangeLeavesOnlyGstElapsedGateStep ==
+  (~committed /\ committed') =>
+    /\ CommitDisablesProgressActions'
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (gst' => CommittedGstDisablesEveryAction')
+    /\ FinalityLatchChangePreservesGstStep
+    /\ FinalityLatchSourceEffectsAreExactStep
 
 FinalityLatchSourceQuorumGatesHoldStep ==
   (~committed /\ committed') =>
@@ -2240,6 +2350,13 @@ CommitArtifactsChangeCommitsCurrentViewStep ==
     /\ CommitViewWitnessInstallsWithFinalityLatchStep
     /\ FinalityLatchNeverCarriesNewViewHandoffStep
 
+CommitArtifactsChangePreservesGstStep ==
+  (\/ commitView' # commitView
+   \/ commitEvidenceVotes' # commitEvidenceVotes
+   \/ commitEvidenceStake' # commitEvidenceStake) =>
+    /\ gst' = gst
+    /\ CommitArtifactsOnlyChangeByFinalitySourceStep
+
 CommitCertificateWitnessChangeMatchesCertifiedFinalityStackStep ==
   (\/ commitEvidenceVotes' # commitEvidenceVotes
    \/ commitEvidenceStake' # commitEvidenceStake) =>
@@ -2267,6 +2384,13 @@ CommitCertificateWitnessChangeInstallsCommitViewWitnessStep ==
     /\ CommitViewWitnessInstallsWithFinalityLatchStep
     /\ CommitCertificateWitnessChangeMatchesCertifiedFinalityStackStep
 
+CommitCertificateWitnessChangePreservesGstStep ==
+  (\/ commitEvidenceVotes' # commitEvidenceVotes
+   \/ commitEvidenceStake' # commitEvidenceStake) =>
+    /\ gst' = gst
+    /\ CommitCertificateWitnessChangeMatchesCertifiedFinalityStackStep
+    /\ CommitArtifactsChangePreservesGstStep
+
 CommitViewWitnessChangeMatchesCertifiedFinalityStackStep ==
   (commitView' # commitView) =>
     /\ view' # 0
@@ -2289,6 +2413,12 @@ CommitViewWitnessChangeInstallsCommitCertificateWitnessesStep ==
     /\ commitEvidenceStake' >= StakeQuorum
     /\ CommitCertificateWitnessesInstallWithFinalityLatchStep
     /\ CommitViewWitnessChangeMatchesCertifiedFinalityStackStep
+
+CommitViewWitnessChangePreservesGstStep ==
+  (commitView' # commitView) =>
+    /\ gst' = gst
+    /\ CommitViewWitnessChangeMatchesCertifiedFinalityStackStep
+    /\ CommitCertificateWitnessChangePreservesGstStep
 
 CommittedPhaseEntryMatchesCertifiedFinalityStackStep ==
   (/\ phase # "Committed"
@@ -2390,6 +2520,12 @@ CommittedPhaseEntryCommitsCurrentViewStep ==
     /\ CommittedPhaseEntryInstallsCommitViewWitnessStep
     /\ CommittedPhaseEntryNeverCarriesNewViewHandoffStep
 
+CommittedPhaseEntryPreservesGstStep ==
+  (/\ phase # "Committed"
+   /\ phase' = "Committed") =>
+    /\ gst' = gst
+    /\ CommittedPhaseEntryOnlyByFinalitySourceStep
+
 CommittedPhaseEntryDisablesProgressActionsStep ==
   (/\ phase # "Committed"
    /\ phase' = "Committed") =>
@@ -2405,6 +2541,13 @@ CommittedPhaseEntryDisablesProgressActionsStep ==
     /\ ~TimeoutTickEnabled'
     /\ ~ByzantineFaultEnabled'
     /\ ~PostGstProgressEnabled'
+
+CommittedPhaseEntryLeavesOnlyGstElapsedGateStep ==
+  (/\ phase # "Committed"
+   /\ phase' = "Committed") =>
+    /\ CommittedPhaseEntryDisablesProgressActionsStep
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (gst' => CommittedGstDisablesEveryAction')
 
 ViewEvidenceMatchesActiveView ==
   /\ (view = 0 => viewEvidenceVotes = 0)
@@ -3351,6 +3494,9 @@ StakeSignedMatchesVoteCounters ==
     (commitVotesHonest * StakePerHonestVote) +
     (commitVotesByz * StakePerByzVote)
 
+LiveStakeSignedIsBounded ==
+  stakeSigned \in 0..MaxCommitEvidenceStake
+
 NoCommitEvidenceBeforeCommit ==
   ~committed =>
     /\ commitEvidenceVotes = 0
@@ -3366,6 +3512,19 @@ DeliverImpliesEvidence ==
     /\ headerSeen
     /\ digestValid
 
+RbcDeliveredWithoutFinalityHasNoCommitCertificate ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed) =>
+    /\ readyVotes >= CommitQuorum
+    /\ chunkCount >= MaxChunks
+    /\ headerSeen
+    /\ digestValid
+    /\ commitEvidenceVotes = 0
+    /\ commitEvidenceStake = 0
+    /\ commitView = 0
+    /\ \/ commitVotesHonest + commitVotesByz < CommitQuorum
+       \/ stakeSigned < StakeQuorum
+
 RbcProgressEvidenceMatchesState ==
   /\ (rbcState \in RbcInitializedStates =>
         /\ headerSeen
@@ -3374,6 +3533,38 @@ RbcProgressEvidenceMatchesState ==
         chunkCount >= MaxChunks)
   /\ (rbcState \in RbcReadyQuorumStates =>
         readyVotes >= CommitQuorum)
+
+RbcPartialProgressEvidenceMatchesState ==
+  /\ (rbcState = "Idle" =>
+        /\ ~headerSeen
+        /\ ~digestValid
+        /\ chunkCount = 0
+        /\ readyVotes = 0)
+  /\ (rbcState = "Init" =>
+        /\ headerSeen
+        /\ digestValid
+        /\ chunkCount = 0
+        /\ readyVotes = 0)
+  /\ (rbcState = "Chunking" =>
+        /\ headerSeen
+        /\ digestValid
+        /\ chunkCount > 0
+        /\ chunkCount < MaxChunks
+        /\ readyVotes = 0)
+  /\ (rbcState = "ChunksComplete" =>
+        /\ headerSeen
+        /\ digestValid
+        /\ chunkCount >= MaxChunks
+        /\ readyVotes = 0)
+  /\ (rbcState = "ReadyPartial" =>
+        /\ headerSeen
+        /\ digestValid
+        /\ chunkCount >= MaxChunks
+        /\ readyVotes > 0
+        /\ readyVotes < CommitQuorum)
+
+RbcCorruptedNeverHasValidDigest ==
+  rbcState = "Corrupted" => ~digestValid
 
 ByzantineFaultGateMatchesCorruptibleRbc ==
   ByzantineFaultEnabled <=>
@@ -4168,6 +4359,9 @@ RbcDeliverGateMatchesCompleteEvidence ==
     /\ headerSeen
     /\ digestValid
 
+RbcReadyQuorumEnablesDeliverGate ==
+  rbcState = "ReadyQuorum" => RbcDeliverGoodEnabled
+
 RbcDeliverFinalityGateMatchesBufferedCommitEvidence ==
   (RbcDeliverGoodEnabled /\ CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, "Delivered")) <=>
     /\ rbcState = "ReadyQuorum"
@@ -4416,6 +4610,15 @@ CommitArtifactsChangeCompletesCommittedDeliveryFromExactSourceStep ==
     /\ FinalityCertificateStackPresent'
     /\ CommitDisablesProgressActions'
 
+CommitArtifactsChangeLeavesOnlyGstElapsedGateStep ==
+  (\/ commitView' # commitView
+   \/ commitEvidenceVotes' # commitEvidenceVotes
+   \/ commitEvidenceStake' # commitEvidenceStake) =>
+    /\ CommitArtifactsChangeCompletesCommittedDeliveryFromExactSourceStep
+    /\ CommitArtifactsChangePreservesGstStep
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (gst' => CommittedGstDisablesEveryAction')
+
 CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep ==
   (\/ commitEvidenceVotes' # commitEvidenceVotes
    \/ commitEvidenceStake' # commitEvidenceStake) =>
@@ -4447,6 +4650,15 @@ CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep ==
     /\ digestValid'
     /\ FinalityCertificateStackPresent'
     /\ CommitDisablesProgressActions'
+
+CommitCertificateWitnessChangeLeavesOnlyGstElapsedGateStep ==
+  (\/ commitEvidenceVotes' # commitEvidenceVotes
+   \/ commitEvidenceStake' # commitEvidenceStake) =>
+    /\ CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
+    /\ CommitCertificateWitnessChangePreservesGstStep
+    /\ CommitArtifactsChangeLeavesOnlyGstElapsedGateStep
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (gst' => CommittedGstDisablesEveryAction')
 
 CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep ==
   (commitView' # commitView) =>
@@ -4482,6 +4694,14 @@ CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep ==
     /\ digestValid'
     /\ FinalityCertificateStackPresent'
     /\ CommitDisablesProgressActions'
+
+CommitViewWitnessChangeLeavesOnlyGstElapsedGateStep ==
+  (commitView' # commitView) =>
+    /\ CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
+    /\ CommitViewWitnessChangePreservesGstStep
+    /\ CommitCertificateWitnessChangeLeavesOnlyGstElapsedGateStep
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (gst' => CommittedGstDisablesEveryAction')
 
 CommittedPhaseEntryMatchesCommitViewWitnessChangeStep ==
   (/\ phase # "Committed"
@@ -4572,6 +4792,18 @@ FinalitySourceActionDisablesProgressAfterCommittedDeliveryStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
    ~committed /\ committed') =>
     CommitDisablesProgressActions'
+
+FinalitySourceActionPreservesGstStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    gst' = gst
+
+FinalitySourceActionLeavesOnlyGstElapsedGateStep ==
+  ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
+   ~committed /\ committed') =>
+    /\ CommitDisablesProgressActions'
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (gst' => CommittedGstDisablesEveryAction')
 
 FinalitySourceActionInstallsCommitCertificateWitnessesStep ==
   ((HonestCommitVote \/ ByzantineEquivocateCommit \/ RbcDeliverGood) /\
@@ -4690,6 +4922,31 @@ RbcDeliverPendingStepKeepsDeliveredEvidenceWithoutFinality ==
     /\ ~RbcDeliverGoodEnabled'
     /\ ~ByzantineFaultEnabled'
 
+PendingProtocolStepsPreserveGst ==
+  /\ ((HonestNewViewVote /\ newViewVotes + 1 < ViewQuorum) => gst' = gst)
+  /\ ((HonestPrepareVote /\ prepareVotes + 1 < CommitQuorum) => gst' = gst)
+  /\ ((HonestCommitVote /\
+        ~CanCommit(
+          commitVotesHonest + 1,
+          commitVotesByz,
+          stakeSigned + StakePerHonestVote,
+          rbcState
+        )) => gst' = gst)
+  /\ ((ByzantineEquivocateCommit /\
+        ~CanCommit(
+          commitVotesHonest,
+          commitVotesByz + 1,
+          stakeSigned + StakePerByzVote,
+          rbcState
+        )) => gst' = gst)
+  /\ ((RbcDeliverGood /\
+        ~CanCommit(
+          commitVotesHonest,
+          commitVotesByz,
+          stakeSigned,
+          "Delivered"
+        )) => gst' = gst)
+
 RbcDeliverStepPreservesCompleteEvidence ==
   RbcDeliverGood =>
     /\ RbcDeliverGoodEnabled
@@ -4801,6 +5058,526 @@ RbcDeliveredEvidenceStableStep ==
     /\ headerSeen' = headerSeen
     /\ digestValid
     /\ digestValid' = digestValid
+
+RbcDeliveredFinalityOnlyByCommitVoteStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate
+    /\ FinalityLatchSourceIsCommitOrDeliveryStep
+    /\ RbcDeliveredEvidenceStableStep
+    /\ phase = "CommitVote"
+    /\ phase' = "Committed"
+    /\ ~RbcDeliverGood
+    /\ \/ /\ HonestCommitVote
+          /\ ~ByzantineEquivocateCommit
+       \/ /\ ~HonestCommitVote
+          /\ ByzantineEquivocateCommit
+
+RbcDeliveredFinalityStepCompletesCommittedDelivery ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityOnlyByCommitVoteStep
+    /\ FinalitySourceActionCompletesCommittedDeliveryFromExactSourceStep
+    /\ FinalityLatchChangeCompletesCommittedDeliveryFromExactSourceStep
+    /\ CommittedPhaseEntryCompletesCommittedDeliveryFromExactSourceStep
+    /\ FinalityCertificateStackPresent'
+    /\ CommitDisablesProgressActions'
+    /\ rbcState' = "Delivered"
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen'
+    /\ digestValid'
+
+RbcDeliveredFinalityCommitsCurrentViewStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityStepCompletesCommittedDelivery
+    /\ FinalitySourceActionCommitsCurrentViewStep
+    /\ FinalitySourceActionNeverCarriesNewViewHandoffStep
+    /\ view' = view
+    /\ commitView = 0
+    /\ commitView' = view
+    /\ commitView' = view'
+    /\ newViewVotes = 0
+    /\ newViewVotes' = 0
+    /\ viewEvidenceVotes' = viewEvidenceVotes
+    /\ (view = 0 \/ viewEvidenceVotes >= ViewQuorum)
+    /\ (commitView' = 0 \/ viewEvidenceVotes' >= ViewQuorum)
+
+RbcDeliveredFinalityLeavesOnlyGstElapsedGateStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityStepCompletesCommittedDelivery
+    /\ RbcDeliveredFinalityCommitsCurrentViewStep
+    /\ FinalitySourceActionPreservesGstStep
+    /\ FinalitySourceActionLeavesOnlyGstElapsedGateStep
+    /\ gst' = gst
+    /\ CommitDisablesProgressActions'
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (gst' => CommittedGstDisablesEveryAction')
+
+RbcDeliveredFinalityInstallsCommitCertificateWitnessesStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityStepCompletesCommittedDelivery
+    /\ RbcDeliveredFinalityOnlyByCommitVoteStep
+    /\ FinalitySourceActionInstallsCommitCertificateWitnessesStep
+    /\ CommitCertificateWitnessesInstallWithFinalityLatchStep
+    /\ commitEvidenceVotes = 0
+    /\ commitEvidenceStake = 0
+    /\ commitEvidenceVotes' = commitVotesHonest' + commitVotesByz'
+    /\ commitEvidenceStake' = stakeSigned'
+    /\ commitEvidenceVotes' >= CommitQuorum
+    /\ commitEvidenceStake' >= StakeQuorum
+
+RbcDeliveredFinalityMatchesCommitCertificateWitnessChangeStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityInstallsCommitCertificateWitnessesStep
+    /\ RbcDeliveredFinalityCommitsCurrentViewStep
+    /\ FinalitySourceActionMatchesCommitCertificateWitnessChangeStep
+    /\ CommittedPhaseEntryMatchesCommitCertificateWitnessChangeStep
+    /\ CommitCertificateWitnessChangeMatchesCertifiedFinalityStackStep
+    /\ CommitCertificateWitnessChangeInstallsCommitViewWitnessStep
+    /\ CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
+    /\ commitEvidenceVotes' # commitEvidenceVotes
+    /\ commitEvidenceStake' # commitEvidenceStake
+    /\ commitView' = view'
+    /\ (commitView' = 0 \/ viewEvidenceVotes' >= ViewQuorum)
+
+RbcDeliveredFinalityMatchesCommitViewWitnessChangeStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityMatchesCommitCertificateWitnessChangeStep
+    /\ RbcDeliveredFinalityCommitsCurrentViewStep
+    /\ FinalitySourceActionInstallsCommitViewWitnessStep
+    /\ CommitViewWitnessInstallsWithFinalityLatchStep
+    /\ commitView = 0
+    /\ commitView' = view'
+    /\ ((commitView' # commitView) <=> (view' # 0))
+    /\ ((commitView' # commitView) =>
+          /\ FinalitySourceActionMatchesCommitViewWitnessChangeStep
+          /\ CommitViewWitnessChangeMatchesCertifiedFinalityStackStep
+          /\ CommitViewWitnessChangeInstallsCommitCertificateWitnessesStep
+          /\ CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep
+          /\ CommitViewWitnessChangePreservesGstStep
+          /\ CommitViewWitnessChangeLeavesOnlyGstElapsedGateStep)
+    /\ (commitView' = commitView =>
+          /\ view' = 0
+          /\ commitView' = 0)
+
+RbcDeliveredFinalityMatchesLiveCommitGateCrossingStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityMatchesCommitViewWitnessChangeStep
+    /\ FinalitySourceActionMatchesLiveCommitGateCrossingStep
+    /\ FinalityLatchChangeMatchesLiveCommitGateCrossingStep
+    /\ CommittedPhaseEntryMatchesLiveCommitGateCrossingStep
+    /\ ~CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState)
+    /\ CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ rbcState' = "Delivered"
+    /\ commitVotesHonest' + commitVotesByz' >= CommitQuorum
+    /\ stakeSigned' >= StakeQuorum
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen'
+    /\ digestValid'
+
+RbcDeliveredFinalityDisablesProgressAfterCommittedDeliveryStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityMatchesLiveCommitGateCrossingStep
+    /\ FinalitySourceActionDisablesProgressAfterCommittedDeliveryStep
+    /\ CommittedPhaseEntryDisablesProgressActionsStep
+    /\ CommitDisablesProgressActions'
+    /\ ~HonestProposeEnabled'
+    /\ ~HonestPrepareVoteEnabled'
+    /\ ~HonestCommitVoteEnabled'
+    /\ ~ByzantineCommitVoteEnabled'
+    /\ ~HonestNewViewVoteEnabled'
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~TimeoutTickEnabled'
+    /\ ~ByzantineFaultEnabled'
+    /\ ~PostGstProgressEnabled'
+
+RbcDeliveredFinalityMatchesCertifiedSourceStackStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityDisablesProgressAfterCommittedDeliveryStep
+    /\ FinalitySourceActionMatchesCertifiedSourceStackStep
+    /\ FinalitySourceActionMatchesFinalityLatchChangeStep
+    /\ FinalitySourceActionSourceIsCommitOrDeliveryStep
+    /\ FinalitySourceActionSourceEffectsAreExactStep
+    /\ FinalitySourceActionQuorumGatesHoldStep
+    /\ FinalityLatchChangeMatchesCertifiedSourceStackStep
+    /\ FinalityLatchSourceIsCommitOrDeliveryStep
+    /\ FinalityLatchSourceEffectsAreExactStep
+    /\ FinalityLatchSourceQuorumGatesHoldStep
+    /\ ~RbcDeliverGood
+    /\ \/ /\ HonestCommitVote
+          /\ ~ByzantineEquivocateCommit
+       \/ /\ ~HonestCommitVote
+          /\ ByzantineEquivocateCommit
+    /\ rbcState = "Delivered"
+    /\ rbcState' = "Delivered"
+    /\ readyVotes' = readyVotes
+    /\ chunkCount' = chunkCount
+    /\ headerSeen' = headerSeen
+    /\ digestValid' = digestValid
+    /\ prepareVotes >= CommitQuorum
+    /\ prepareVotes' = prepareVotes
+    /\ commitVotesHonest' + commitVotesByz' >= CommitQuorum
+    /\ commitVotesHonest' >= HonestCommitSupportThreshold
+    /\ stakeSigned' >= StakeQuorum
+
+RbcDeliveredFinalityInstallsFinalityCertificateStackStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityMatchesCertifiedSourceStackStep
+    /\ FinalitySourceActionInstallsFinalityCertificateStackStep
+    /\ FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ CommittedPhaseMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ CommitViewMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ phase' = "Committed"
+    /\ commitEvidenceVotes' >= CommitQuorum
+    /\ commitEvidenceStake' >= StakeQuorum
+    /\ commitView' = view'
+
+RbcDeliveredFinalityMatchesCommittedPhaseEntryStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityInstallsFinalityCertificateStackStep
+    /\ FinalitySourceActionMatchesCommittedPhaseEntryStep
+    /\ FinalityLatchChangeEntersCommittedPhaseStep
+    /\ CommittedPhaseEntryMatchesFinalityLatchStep
+    /\ CommittedPhaseEntryInstallsCompleteStackStep
+    /\ CommittedPhaseEntryOnlyByFinalitySourceStep
+    /\ CommittedPhaseEntryMatchesCertifiedFinalityStackStep
+    /\ CommittedPhaseEntryMatchesExactFinalitySourceEffectsStep
+    /\ CommittedPhaseEntryNeverCarriesNewViewHandoffStep
+    /\ CommittedPhaseEntryCommitsCurrentViewStep
+    /\ CommittedPhaseEntryPreservesGstStep
+    /\ CommittedPhaseEntryLeavesOnlyGstElapsedGateStep
+    /\ CommittedPhaseEntryCompletesCommittedDeliveryFromExactSourceStep
+    /\ phase = "CommitVote"
+    /\ phase' = "Committed"
+    /\ committed' # committed
+    /\ view' = view
+    /\ commitView = 0
+    /\ commitView' = view'
+
+RbcDeliveredFinalityMatchesCommitArtifactsChangeStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityMatchesCommittedPhaseEntryStep
+    /\ FinalitySourceActionMatchesCommitArtifactsChangeStep
+    /\ CommittedPhaseEntryMatchesCommitArtifactsChangeStep
+    /\ CommitArtifactsChangeMatchesCertifiedFinalityStackStep
+    /\ CommitArtifactsChangeCompletesCommittedDeliveryFromExactSourceStep
+    /\ CommitArtifactsChangeCommitsCurrentViewStep
+    /\ CommitArtifactsChangePreservesGstStep
+    /\ CommitArtifactsChangeLeavesOnlyGstElapsedGateStep
+    /\ (\/ commitView' # commitView
+        \/ commitEvidenceVotes' # commitEvidenceVotes
+        \/ commitEvidenceStake' # commitEvidenceStake)
+    /\ commitEvidenceVotes' # commitEvidenceVotes
+    /\ commitEvidenceStake' # commitEvidenceStake
+    /\ commitEvidenceVotes' >= CommitQuorum
+    /\ commitEvidenceStake' >= StakeQuorum
+    /\ commitView' = view'
+
+RbcDeliveredFinalityCouplesLatchAndCommitArtifactsStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityMatchesCommitArtifactsChangeStep
+    /\ FinalityLatchSetInstallsCompleteStackStep
+    /\ FinalityLatchAndArtifactsCoupledStep
+    /\ CommitArtifactsInstallOnlyAtFinalityStep
+    /\ CommitArtifactsOnlyChangeByFinalitySourceStep
+    /\ committed' # committed
+    /\ (\/ commitView' # commitView
+        \/ commitEvidenceVotes' # commitEvidenceVotes
+        \/ commitEvidenceStake' # commitEvidenceStake)
+    /\ commitEvidenceVotes' # commitEvidenceVotes
+    /\ commitEvidenceStake' # commitEvidenceStake
+    /\ (\/ PhaseFinalizesByHonestCommitVoteStep
+        \/ PhaseFinalizesByByzantineCommitVoteStep)
+    /\ ~PhaseFinalizesByRbcDeliverStep
+
+RbcDeliveredFinalityRecordsExactCommitVoteWitnessesStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityCouplesLatchAndCommitArtifactsStep
+    /\ commitEvidenceVotes = 0
+    /\ commitEvidenceStake = 0
+    /\ commitView = 0
+    /\ commitEvidenceVotes' # commitEvidenceVotes
+    /\ commitEvidenceStake' # commitEvidenceStake
+    /\ commitEvidenceVotes' = commitVotesHonest' + commitVotesByz'
+    /\ commitEvidenceStake' = stakeSigned'
+    /\ commitEvidenceVotes' >= CommitQuorum
+    /\ commitEvidenceStake' >= StakeQuorum
+    /\ commitView' = view
+    /\ commitView' = view'
+    /\ view' = view
+    /\ prepareVotes >= CommitQuorum
+    /\ prepareVotes' = prepareVotes
+    /\ newViewVotes = 0
+    /\ newViewVotes' = 0
+    /\ (\/ /\ HonestCommitVote
+          /\ ~ByzantineEquivocateCommit
+          /\ PhaseFinalizesByHonestCommitVoteStep
+          /\ commitVotesHonest' = commitVotesHonest + 1
+          /\ commitVotesByz' = commitVotesByz
+          /\ stakeSigned' = stakeSigned + StakePerHonestVote
+          /\ commitEvidenceVotes' = commitVotesHonest + 1 + commitVotesByz
+          /\ commitEvidenceStake' = stakeSigned + StakePerHonestVote
+        \/ /\ ~HonestCommitVote
+          /\ ByzantineEquivocateCommit
+          /\ PhaseFinalizesByByzantineCommitVoteStep
+          /\ commitVotesHonest' = commitVotesHonest
+          /\ commitVotesByz' = commitVotesByz + 1
+          /\ stakeSigned' = stakeSigned + StakePerByzVote
+          /\ commitEvidenceVotes' = commitVotesHonest + commitVotesByz + 1
+          /\ commitEvidenceStake' = stakeSigned + StakePerByzVote)
+    /\ ~PhaseFinalizesByRbcDeliverStep
+
+RbcDeliveredFinalityPreservesDeliveredRbcEvidenceStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityRecordsExactCommitVoteWitnessesStep
+    /\ RbcDeliveredEvidenceStableStep
+    /\ LiveCommitGateRbcEvidenceMatches
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ ~CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState)
+    /\ CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+    /\ rbcState = "Delivered"
+    /\ rbcState' = "Delivered"
+    /\ readyVotes >= CommitQuorum
+    /\ readyVotes' = readyVotes
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount >= MaxChunks
+    /\ chunkCount' = chunkCount
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen
+    /\ headerSeen' = headerSeen
+    /\ headerSeen'
+    /\ digestValid
+    /\ digestValid' = digestValid
+    /\ digestValid'
+    /\ ~RbcDeliverGood
+
+RbcDeliveredFinalityPreservesViewPrepareHandoffEvidenceStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityPreservesDeliveredRbcEvidenceStep
+    /\ RbcDeliveredFinalityMatchesCommittedPhaseEntryStep
+    /\ CommittedPhaseEntryNeverCarriesNewViewHandoffStep
+    /\ CommittedPhaseEntryCommitsCurrentViewStep
+    /\ FinalityLatchNeverCarriesNewViewHandoffStep
+    /\ phase = "CommitVote"
+    /\ phase' = "Committed"
+    /\ phase # "NewView"
+    /\ phase' # "NewView"
+    /\ ~HonestNewViewVoteEnabled
+    /\ ~HonestNewViewVoteEnabled'
+    /\ view' = view
+    /\ viewEvidenceVotes' = viewEvidenceVotes
+    /\ (view = 0 \/ viewEvidenceVotes >= ViewQuorum)
+    /\ (commitView' = 0 \/ viewEvidenceVotes' >= ViewQuorum)
+    /\ prepareVotes >= CommitQuorum
+    /\ prepareVotes' = prepareVotes
+    /\ newViewVotes = 0
+    /\ newViewVotes' = 0
+    /\ commitView = 0
+    /\ commitView' = view'
+
+RbcDeliveredFinalityHasExactProtocolFrameStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityPreservesViewPrepareHandoffEvidenceStep
+    /\ RbcDeliveredFinalityLeavesOnlyGstElapsedGateStep
+    /\ RbcDeliveredFinalityDisablesProgressAfterCommittedDeliveryStep
+    /\ RbcDeliveredFinalityRecordsExactCommitVoteWitnessesStep
+    /\ phase = "CommitVote"
+    /\ phase' = "Committed"
+    /\ committed' # committed
+    /\ gst' = gst
+    /\ view' = view
+    /\ prepareVotes' = prepareVotes
+    /\ newViewVotes = 0
+    /\ newViewVotes' = 0
+    /\ viewEvidenceVotes' = viewEvidenceVotes
+    /\ rbcState' = rbcState
+    /\ readyVotes' = readyVotes
+    /\ chunkCount' = chunkCount
+    /\ headerSeen' = headerSeen
+    /\ digestValid' = digestValid
+    /\ commitView = 0
+    /\ commitView' = view'
+    /\ commitEvidenceVotes = 0
+    /\ commitEvidenceStake = 0
+    /\ commitEvidenceVotes' = commitVotesHonest' + commitVotesByz'
+    /\ commitEvidenceStake' = stakeSigned'
+    /\ CommitDisablesProgressActions'
+    /\ (GstElapsedEnabled' <=> ~gst')
+
+RbcDeliveredFinalityHasExactCommitVoteActionFrameStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityHasExactProtocolFrameStep
+    /\ RbcDeliveredFinalityOnlyByCommitVoteStep
+    /\ (\/ /\ HonestCommitVote
+          /\ ~ByzantineEquivocateCommit
+        \/ /\ ~HonestCommitVote
+          /\ ByzantineEquivocateCommit)
+    /\ ~HonestPropose
+    /\ ~HonestPrepareVote
+    /\ ~TimeoutTick
+    /\ ~HonestNewViewVote
+    /\ ~RbcInit
+    /\ ~RbcChunkGood
+    /\ ~RbcReadyGood
+    /\ ~RbcDeliverGood
+    /\ ~ByzantineFault
+    /\ ~GstElapsed
+
+RbcDeliveredFinalityInstallsCommittedPostStateInvariantsStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityHasExactCommitVoteActionFrameStep
+    /\ RbcDeliveredFinalityInstallsFinalityCertificateStackStep
+    /\ committed'
+    /\ CommittedPhaseMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ CommitImpliesLiveVoteQuorum'
+    /\ CommitImpliesLiveStakeQuorum'
+    /\ CommitImpliesHonestSupport'
+    /\ CommitImpliesDelivered'
+    /\ CommitImpliesRbcEvidence'
+    /\ FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ FinalityClearsNewViewHandoff'
+    /\ CommitDisablesProgressActions'
+    /\ CommitDisablesByzantineCommitVote'
+    /\ CommitViewMatchesFinality'
+    /\ CommitViewDoesNotLeadCurrentView'
+
+RbcDeliveredFinalityPostStateGateSplitStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed') =>
+    /\ RbcDeliveredFinalityInstallsCommittedPostStateInvariantsStep
+    /\ RbcDeliveredFinalityLeavesOnlyGstElapsedGateStep
+    /\ gst' = gst
+    /\ CommitDisablesProgressActions'
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (~gst =>
+          /\ ~gst'
+          /\ GstElapsedEnabled'
+          /\ ~HonestProposeEnabled'
+          /\ ~HonestPrepareVoteEnabled'
+          /\ ~HonestCommitVoteEnabled'
+          /\ ~ByzantineCommitVoteEnabled'
+          /\ ~HonestNewViewVoteEnabled'
+          /\ ~RbcInitEnabled'
+          /\ ~RbcChunkGoodEnabled'
+          /\ ~RbcReadyGoodEnabled'
+          /\ ~RbcDeliverGoodEnabled'
+          /\ ~TimeoutTickEnabled'
+          /\ ~ByzantineFaultEnabled'
+          /\ ~PostGstProgressEnabled')
+    /\ (gst =>
+          /\ gst'
+          /\ ~GstElapsedEnabled'
+          /\ CommittedGstDisablesEveryAction')
+
+RbcDeliveredFinalityPreGstPostStateLeavesOnlyGstElapsedStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed'
+   /\ ~gst) =>
+    /\ RbcDeliveredFinalityPostStateGateSplitStep
+    /\ committed'
+    /\ ~gst'
+    /\ GstElapsedEnabled'
+    /\ CommitDisablesProgressActions'
+    /\ ~HonestProposeEnabled'
+    /\ ~HonestPrepareVoteEnabled'
+    /\ ~HonestCommitVoteEnabled'
+    /\ ~ByzantineCommitVoteEnabled'
+    /\ ~HonestNewViewVoteEnabled'
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~TimeoutTickEnabled'
+    /\ ~ByzantineFaultEnabled'
+    /\ ~PostGstProgressEnabled'
+
+RbcDeliveredFinalityPostGstPostStateIsTerminalStep ==
+  (/\ rbcState = "Delivered"
+   /\ ~committed
+   /\ committed'
+   /\ gst) =>
+    /\ RbcDeliveredFinalityPostStateGateSplitStep
+    /\ committed'
+    /\ gst'
+    /\ ~GstElapsedEnabled'
+    /\ CommittedGstDisablesEveryAction'
+    /\ ~HonestProposeEnabled'
+    /\ ~HonestPrepareVoteEnabled'
+    /\ ~HonestCommitVoteEnabled'
+    /\ ~ByzantineCommitVoteEnabled'
+    /\ ~HonestNewViewVoteEnabled'
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~TimeoutTickEnabled'
+    /\ ~ByzantineFaultEnabled'
+    /\ ~PostGstProgressEnabled'
+
+RbcDeliveredDisablesRbcProgress ==
+  rbcState = "Delivered" =>
+    /\ ~RbcInitEnabled
+    /\ ~RbcChunkGoodEnabled
+    /\ ~RbcReadyGoodEnabled
+    /\ ~RbcDeliverGoodEnabled
+    /\ ~ByzantineFaultEnabled
 
 RbcStateChangeMatchesLocalExitClassificationStep ==
   (rbcState' # rbcState) =>
@@ -4914,6 +5691,15 @@ CommittedConsensusStateNeverChanges ==
 CommittedOnlyGstObservationCanChange ==
   [] [CommittedOnlyGstObservationCanMoveStep]_vars
 
+CommittedPreGstOnlyGstElapsedCanMove ==
+  [] [CommittedPreGstOnlyGstElapsedCanMoveStep]_vars
+
+CommittedPreGstNextOnlyGstElapsed ==
+  [] [CommittedPreGstNextOnlyGstElapsedStep]_vars
+
+CommittedPreGstSpecStepStuttersOrObservesGst ==
+  [] [CommittedPreGstSpecStepStuttersOrObservesGstStep]_vars
+
 CommittedGstStateNeverChanges ==
   [] [CommittedGstStateStableStep]_vars
 
@@ -4937,6 +5723,12 @@ CommitArtifactsChangeAlwaysCompletesCommittedDeliveryFromExactSource ==
 
 CommitArtifactsChangeAlwaysCommitsCurrentView ==
   [] [CommitArtifactsChangeCommitsCurrentViewStep]_vars
+
+CommitArtifactsChangeNeverChangesGst ==
+  [] [CommitArtifactsChangePreservesGstStep]_vars
+
+CommitArtifactsChangeOnlyLeavesGstElapsedGate ==
+  [] [CommitArtifactsChangeLeavesOnlyGstElapsedGateStep]_vars
 
 FinalityLatchOnlySetsCompleteStack ==
   [] [FinalityLatchSetInstallsCompleteStackStep]_vars
@@ -4971,6 +5763,12 @@ CommitCertificateWitnessChangeAlwaysInstallsCommitViewWitness ==
 CommitCertificateWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource ==
   [] [CommitCertificateWitnessChangeCompletesCommittedDeliveryFromExactSourceStep]_vars
 
+CommitCertificateWitnessChangeNeverChangesGst ==
+  [] [CommitCertificateWitnessChangePreservesGstStep]_vars
+
+CommitCertificateWitnessChangeOnlyLeavesGstElapsedGate ==
+  [] [CommitCertificateWitnessChangeLeavesOnlyGstElapsedGateStep]_vars
+
 CommitViewWitnessOnlyChangesOnNonzeroFinality ==
   [] [CommitViewWitnessChangesOnlyOnNonzeroFinalityStep]_vars
 
@@ -4986,11 +5784,23 @@ CommitViewWitnessChangeAlwaysInstallsCommitCertificateWitnesses ==
 CommitViewWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource ==
   [] [CommitViewWitnessChangeCompletesCommittedDeliveryFromExactSourceStep]_vars
 
+CommitViewWitnessChangeNeverChangesGst ==
+  [] [CommitViewWitnessChangePreservesGstStep]_vars
+
+CommitViewWitnessChangeOnlyLeavesGstElapsedGate ==
+  [] [CommitViewWitnessChangeLeavesOnlyGstElapsedGateStep]_vars
+
 FinalityLatchNeverCarriesNewViewHandoff ==
   [] [FinalityLatchNeverCarriesNewViewHandoffStep]_vars
 
 FinalityLatchOnlyComesFromCommitOrDelivery ==
   [] [FinalityLatchSourceIsCommitOrDeliveryStep]_vars
+
+FinalityLatchChangeNeverChangesGst ==
+  [] [FinalityLatchChangePreservesGstStep]_vars
+
+FinalityLatchChangeOnlyLeavesGstElapsedGate ==
+  [] [FinalityLatchChangeLeavesOnlyGstElapsedGateStep]_vars
 
 FinalityLatchSourceEffectsAlwaysExact ==
   [] [FinalityLatchSourceEffectsAreExactStep]_vars
@@ -5030,6 +5840,12 @@ FinalitySourceActionAlwaysMatchesLiveCommitGateCrossing ==
 
 FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery ==
   [] [FinalitySourceActionDisablesProgressAfterCommittedDeliveryStep]_vars
+
+FinalitySourceActionNeverChangesGst ==
+  [] [FinalitySourceActionPreservesGstStep]_vars
+
+FinalitySourceActionOnlyLeavesGstElapsedGate ==
+  [] [FinalitySourceActionLeavesOnlyGstElapsedGateStep]_vars
 
 FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses ==
   [] [FinalitySourceActionInstallsCommitCertificateWitnessesStep]_vars
@@ -5168,6 +5984,12 @@ CommittedPhaseEntryNeverCarriesNewViewHandoff ==
 
 CommittedPhaseEntryAlwaysCommitsCurrentView ==
   [] [CommittedPhaseEntryCommitsCurrentViewStep]_vars
+
+CommittedPhaseEntryNeverChangesGst ==
+  [] [CommittedPhaseEntryPreservesGstStep]_vars
+
+CommittedPhaseEntryOnlyLeavesGstElapsedGate ==
+  [] [CommittedPhaseEntryLeavesOnlyGstElapsedGateStep]_vars
 
 CommittedPhaseEntryAlwaysDisablesProgressActions ==
   [] [CommittedPhaseEntryDisablesProgressActionsStep]_vars
@@ -5348,6 +6170,9 @@ CommitEvidenceNeverDivergesFromVoteCounters ==
 StakeAccountingNeverDiverges ==
   [] StakeSignedMatchesVoteCounters
 
+LiveStakeNeverExceedsRosterBudget ==
+  [] LiveStakeSignedIsBounded
+
 CommitEvidenceNeverExceedsRosterBudget ==
   [] CommitEvidenceIsBounded
 
@@ -5365,6 +6190,81 @@ RbcDeliveryNeverLost ==
 RbcDeliveredEvidenceNeverRegresses ==
   [] [RbcDeliveredEvidenceStableStep]_vars
 
+RbcDeliveredWithoutFinalityNeverCarriesCommitCertificate ==
+  [] RbcDeliveredWithoutFinalityHasNoCommitCertificate
+
+RbcDeliveredFinalityOnlyComesFromCommitVote ==
+  [] [RbcDeliveredFinalityOnlyByCommitVoteStep]_vars
+
+RbcDeliveredFinalityAlwaysCompletesCommittedDelivery ==
+  [] [RbcDeliveredFinalityStepCompletesCommittedDelivery]_vars
+
+RbcDeliveredFinalityAlwaysCommitsCurrentView ==
+  [] [RbcDeliveredFinalityCommitsCurrentViewStep]_vars
+
+RbcDeliveredFinalityOnlyLeavesGstElapsedGate ==
+  [] [RbcDeliveredFinalityLeavesOnlyGstElapsedGateStep]_vars
+
+RbcDeliveredFinalityAlwaysInstallsCommitCertificateWitnesses ==
+  [] [RbcDeliveredFinalityInstallsCommitCertificateWitnessesStep]_vars
+
+RbcDeliveredFinalityAlwaysMatchesCommitCertificateWitnessChange ==
+  [] [RbcDeliveredFinalityMatchesCommitCertificateWitnessChangeStep]_vars
+
+RbcDeliveredFinalityAlwaysMatchesCommitViewWitnessChange ==
+  [] [RbcDeliveredFinalityMatchesCommitViewWitnessChangeStep]_vars
+
+RbcDeliveredFinalityAlwaysMatchesLiveCommitGateCrossing ==
+  [] [RbcDeliveredFinalityMatchesLiveCommitGateCrossingStep]_vars
+
+RbcDeliveredFinalityAlwaysDisablesProgressAfterCommittedDelivery ==
+  [] [RbcDeliveredFinalityDisablesProgressAfterCommittedDeliveryStep]_vars
+
+RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack ==
+  [] [RbcDeliveredFinalityMatchesCertifiedSourceStackStep]_vars
+
+RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack ==
+  [] [RbcDeliveredFinalityInstallsFinalityCertificateStackStep]_vars
+
+RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry ==
+  [] [RbcDeliveredFinalityMatchesCommittedPhaseEntryStep]_vars
+
+RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange ==
+  [] [RbcDeliveredFinalityMatchesCommitArtifactsChangeStep]_vars
+
+RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts ==
+  [] [RbcDeliveredFinalityCouplesLatchAndCommitArtifactsStep]_vars
+
+RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses ==
+  [] [RbcDeliveredFinalityRecordsExactCommitVoteWitnessesStep]_vars
+
+RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence ==
+  [] [RbcDeliveredFinalityPreservesDeliveredRbcEvidenceStep]_vars
+
+RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence ==
+  [] [RbcDeliveredFinalityPreservesViewPrepareHandoffEvidenceStep]_vars
+
+RbcDeliveredFinalityAlwaysHasExactProtocolFrame ==
+  [] [RbcDeliveredFinalityHasExactProtocolFrameStep]_vars
+
+RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame ==
+  [] [RbcDeliveredFinalityHasExactCommitVoteActionFrameStep]_vars
+
+RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants ==
+  [] [RbcDeliveredFinalityInstallsCommittedPostStateInvariantsStep]_vars
+
+RbcDeliveredFinalityAlwaysSplitsPostStateGate ==
+  [] [RbcDeliveredFinalityPostStateGateSplitStep]_vars
+
+RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed ==
+  [] [RbcDeliveredFinalityPreGstPostStateLeavesOnlyGstElapsedStep]_vars
+
+RbcDeliveredFinalityPostGstPostStateIsTerminal ==
+  [] [RbcDeliveredFinalityPostGstPostStateIsTerminalStep]_vars
+
+RbcDeliveredNeverEnablesRbcProgress ==
+  [] RbcDeliveredDisablesRbcProgress
+
 RbcDeliveryEntryOnlyByDeliver ==
   [] [RbcDeliveryEntryOnlyByDeliverStep]_vars
 
@@ -5373,6 +6273,12 @@ RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch ==
 
 RbcProgressEvidenceNeverDiverges ==
   [] RbcProgressEvidenceMatchesState
+
+RbcPartialProgressEvidenceNeverDiverges ==
+  [] RbcPartialProgressEvidenceMatchesState
+
+RbcCorruptedDigestNeverValid ==
+  [] RbcCorruptedNeverHasValidDigest
 
 RbcStateOnlyChangesByProtocolOrFault ==
   [] [RbcStateOnlyChangesByProtocolOrFaultStep]_vars
@@ -5485,6 +6391,9 @@ RbcReadyQuorumExitOnlyByDeliverOrFault ==
 RbcDeliverGateNeverBypassesCompleteEvidence ==
   [] RbcDeliverGateMatchesCompleteEvidence
 
+RbcReadyQuorumNeverLacksDeliverGate ==
+  [] RbcReadyQuorumEnablesDeliverGate
+
 RbcDeliverStepAlwaysPreservesCompleteEvidence ==
   [] [RbcDeliverStepPreservesCompleteEvidence]_vars
 
@@ -5505,6 +6414,9 @@ RbcDeliverPendingStepNeverMutatesCommitArtifacts ==
 
 RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality ==
   [] [RbcDeliverPendingStepKeepsDeliveredEvidenceWithoutFinality]_vars
+
+PendingProtocolStepsNeverChangeGst ==
+  [] [PendingProtocolStepsPreserveGst]_vars
 
 LiveHeaderDigestEvidenceNeverBypassRbcHandoff ==
   [] LiveHeaderDigestEvidenceStayInRbcHandoff

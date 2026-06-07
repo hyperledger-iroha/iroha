@@ -39,7 +39,6 @@ ardıcıl.
 ## NCC Group (APAC Kriptoqrafiya Xidmətləri)
 
 - Sənədləşdirilmiş tapşırıqlar: regional ödəniş üçün gm/T (SM) kodu imtahanları
-  şəbəkələr və HSM satıcıları; Parity Substrate, Polkadot üçün əvvəlki Rust rəyləri,
   və Tərəzi komponentləri.
 - Güclü tərəflər: ikidilli hesabatlı böyük APAC skamyası, birləşmək bacarığı
   dərin kodun nəzərdən keçirilməsi ilə uyğunluq tərzi proses yoxlamaları.

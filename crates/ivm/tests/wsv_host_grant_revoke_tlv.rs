@@ -4,7 +4,7 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 mod common;
@@ -57,10 +57,11 @@ fn grant_revoke_permission_with_tlv() {
         "asset".parse().unwrap(),
     );
 
-    let wsv = MockWorldStateView::with_balances(&[(
+    let mut wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), asset.clone()),
         Numeric::from(50_u64),
     )]);
+    wsv.grant_permission(&bob, PermissionToken::ManagePermissions);
     let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

@@ -5,13 +5,16 @@ EXTENDS FiniteSets, Naturals
 A bounded abstract model for the exact-frontier slot tracker FSM.
 
 This slice models the observable state/action contract of
-`FrontierSlot::new(...)` and `FrontierSlot::step(...)` in
-`main_loop/slot_tracker.rs`. Concrete hashes, peers, instants, and durations
-are collapsed into representative cases while preserving the safety-critical
-branches: constructor mode/phase selection, higher-view owner replacement,
+`FrontierSlot::new(...)`, `FrontierSlot::step(...)`, and the
+`apply_frontier_slot_event(...)` wrapper in `main_loop/slot_tracker.rs` and
+`main_loop.rs`. Concrete hashes, peers, instants, and durations are collapsed
+into representative cases while preserving the safety-critical branches:
+constructor mode/phase selection, higher-view owner replacement,
 same-candidate duplicate handling, exact body repair, vote/commit-QC evidence,
 bounded quorum-timeout rebroadcast before view rotation, deep/passive catch-up,
-explicit view advance, finalization, and compatibility-field synchronization.
+explicit view advance, finalization, nested slot-state consistency,
+absent-slot defaults, stale non-commit slot eviction, same-height reuse, and
+retire-vs-retain wrapper behavior.
 ***************************************************************************)
 
 CONSTANT
@@ -64,8 +67,20 @@ LagWindowExpiredDeepReenter == 36
 ViewAdvanceImmediate == 37
 CommitHeightAtOrAboveFinalizes == 38
 CommitHeightBelowNoRetire == 39
+SameBlockCreatedFreshBodyRecordsProgress == 40
+ApplyAbsentFetchRetryDefault == 41
+ApplyAbsentViewAdvanceRequestsFrontier == 42
+ApplyAbsentQuorumTimeoutRequestsFrontier == 43
+ApplyAbsentBlockCreatedCreatesSlot == 44
+ApplyStaleFetchRetryDropsThenDefault == 45
+ApplyStaleBlockCreatedDropsThenCreates == 46
+ApplySameHeightEventUsesExistingSlot == 47
+ApplyCommitRetireRemovesSlot == 48
+ApplyCommitBelowRetainsSlot == 49
 
-Candidates == 1..39
+Candidates == 1..49
+StepCandidates == 1..40
+WrapperCandidates == 41..49
 
 SetModeNormal == 1
 SetModeDeepCatchup == 2
@@ -118,12 +133,25 @@ RecordDeepReason == 48
 RecordLastReason == 49
 TrackRequester == 50
 UpdateActiveView == 51
-SyncCompatFields == 52
+NestedSlotStateConsistent == 52
 IgnoreMismatched == 53
 NoUrgentFetch == 54
 NoTrackRequester == 55
+MergeBlockCreatedHints == 56
+TrackBodySender == 57
+MergeFutureGapHints == 58
+DropStaleSlot == 59
+CreateSlot == 60
+PreserveSlot == 61
+NoCreateSlot == 62
+RunInnerStep == 63
+NoInnerStep == 64
+StoreSlotAfterEvent == 65
+RemoveSlotAfterRetire == 66
+ReturnDefaultActions == 67
+RequestViewChangeAtFrontier == 68
 
-Actions == 1..55
+Actions == 1..68
 
 NoExternalActions ==
   {NoCommitPipeline, NoFetchBody, NoUrgentFetch, NoDeepCatchup,
@@ -132,7 +160,7 @@ NoExternalActions ==
 NoTerminalActions == {NoViewChange, NoRetire}
 
 ConstructorCommon ==
-  {VoteNone, PreserveGeneration, ClearRebroadcastGuard, SyncCompatFields}
+  {VoteNone, PreserveGeneration, ClearRebroadcastGuard, NestedSlotStateConsistent}
 
 SpecActions(candidate) ==
   CASE candidate = NewMissingInert ->
@@ -157,99 +185,106 @@ SpecActions(candidate) ==
        ExactFetchArmed, RequestCommitPipeline, NoFetchBody, NoUrgentFetch,
        NoDeepCatchup, NoViewChange, NoRetire, IncrementGeneration,
        UnlockOwner, UpdateCandidate, ResetQuorumProgress, RecordBlockProgress,
-       ClearRebroadcastGuard, UpdateActiveView, SyncCompatFields}
+       ClearRebroadcastGuard, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = HigherBlockCreatedMissingBody ->
       NoExternalActions \cup {SetModeNormal, SetOwnerBlockCreatedLed,
         SetPhaseAwaitBody, BodyMissing, ValidationUnknown, VoteNone,
         BlockCreatedSeen, ExactFetchArmed, IncrementGeneration, UnlockOwner,
         UpdateCandidate, ResetQuorumProgress, RecordBlockProgress,
-        ClearRebroadcastGuard, NoteLag, UpdateActiveView, SyncCompatFields}
+        ClearRebroadcastGuard, NoteLag, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = SameBlockCreatedDuplicateBodyPreservesRebroadcast ->
       NoExternalActions \cup {PreserveMode, SetOwnerBlockCreatedLed,
         SetPhaseValidateBody, BodyAvailable, ValidationPending,
         BlockCreatedSeen, ExactFetchArmed, PreserveGeneration,
-        PreserveCandidate, PreserveRebroadcastGuard, SyncCompatFields}
+        PreserveCandidate, PreserveRebroadcastGuard, NestedSlotStateConsistent}
     [] candidate = SameBlockCreatedFreshMissingStartsLag ->
       NoExternalActions \cup {PreserveMode, SetOwnerBlockCreatedLed,
         SetPhaseAwaitBody, BodyMissing, ValidationUnknown, BlockCreatedSeen,
         ExactFetchArmed, PreserveGeneration, PreserveCandidate, NoteLag,
-        PreserveRebroadcastGuard, TrackRequester, SyncCompatFields}
+        PreserveRebroadcastGuard, TrackRequester, MergeBlockCreatedHints,
+        NestedSlotStateConsistent}
+    [] candidate = SameBlockCreatedFreshBodyRecordsProgress ->
+      NoExternalActions \cup {PreserveMode, SetOwnerBlockCreatedLed,
+        SetPhaseValidateBody, BodyAvailable, ValidationPending,
+        BlockCreatedSeen, ExactFetchArmed, PreserveGeneration,
+        PreserveCandidate, RecordBlockProgress, ClearRebroadcastGuard,
+        MergeBlockCreatedHints, NestedSlotStateConsistent}
     [] candidate = MismatchedLowerBlockCreatedIgnored ->
       NoExternalActions \cup {PreserveMode, PreserveGeneration,
         PreserveCandidate, PreserveRebroadcastGuard, IgnoreMismatched,
-        SyncCompatFields}
+        NestedSlotStateConsistent}
     [] candidate = BodyAvailableMissingRequestsCommit ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseValidateBody,
        BodyAvailable, ValidationPending, RequestCommitPipeline, NoFetchBody,
        NoUrgentFetch, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, RecordBodyProgress,
-       ClearRebroadcastGuard, SyncCompatFields}
+       ClearRebroadcastGuard, TrackBodySender, NestedSlotStateConsistent}
     [] candidate = BodyAvailableDuplicatePreservesRebroadcast ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseValidateBody,
        BodyAvailable, ValidationPending, NoCommitPipeline, NoFetchBody,
        NoUrgentFetch, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, PreserveRebroadcastGuard,
-       SyncCompatFields}
+       TrackBodySender, NestedSlotStateConsistent}
     [] candidate = BodyAvailablePassiveReturnsNormal ->
       {SetModeNormal, SetOwnerExactSlotRepair, SetPhaseValidateBody,
        BodyAvailable, ValidationPending, RequestCommitPipeline, NoFetchBody,
        NoUrgentFetch, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, RecordBodyProgress,
-       ClearRebroadcastGuard, SyncCompatFields}
+       ClearRebroadcastGuard, TrackBodySender, NestedSlotStateConsistent}
     [] candidate = VoteObservedMissingUrgentFetch ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseAwaitBody, BodyMissing,
        VotesObserved, ExactFetchArmed, NoCommitPipeline, FetchBody,
        FetchBodyUrgent, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, RecordVoteProgress,
-       ClearRebroadcastGuard, SyncCompatFields}
+       ClearRebroadcastGuard, NestedSlotStateConsistent}
     [] candidate = VoteObservedWithBodyCommitPipeline ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseAwaitCommitQc,
        BodyAvailable, VotesObserved, RequestCommitPipeline, NoFetchBody,
        NoUrgentFetch, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, RecordVoteProgress,
-       ClearRebroadcastGuard, SyncCompatFields}
+       ClearRebroadcastGuard, NestedSlotStateConsistent}
     [] candidate = VoteObservedDifferentHigherRepairsMissing ->
       NoExternalActions \cup {PreserveMode, SetOwnerExactSlotRepair,
         SetPhaseAwaitBody, BodyMissing, ValidationUnknown, VotesObserved,
         BlockCreatedUnseen, ExactFetchArmed, IncrementGeneration, UnlockOwner,
-        UpdateCandidate, NoteLag, UpdateActiveView, SyncCompatFields}
+        UpdateCandidate, NoteLag, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = VoteObservedDuplicatePreservesRebroadcast ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseAwaitCommitQc,
        BodyAvailable, VotesObserved, RequestCommitPipeline, NoFetchBody,
        NoUrgentFetch, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, PreserveRebroadcastGuard,
-       SyncCompatFields}
+       NestedSlotStateConsistent}
     [] candidate = CommitQcMissingUrgentFetch ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseAwaitBody, BodyMissing,
        CommitQcObserved, ExactFetchArmed, NoCommitPipeline, FetchBody,
        FetchBodyUrgent, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, RecordCommitQcProgress,
-       ClearRebroadcastGuard, SyncCompatFields}
+       ClearRebroadcastGuard, NestedSlotStateConsistent}
     [] candidate = CommitQcWithBodyCommitPipeline ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseAwaitCommitQc,
        BodyAvailable, CommitQcObserved, RequestCommitPipeline, NoFetchBody,
        NoUrgentFetch, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, RecordCommitQcProgress,
-       ClearRebroadcastGuard, SyncCompatFields}
+       ClearRebroadcastGuard, NestedSlotStateConsistent}
     [] candidate = CommitQcDuplicatePreservesRebroadcast ->
       {PreserveMode, SetOwnerExactSlotRepair, SetPhaseAwaitCommitQc,
        BodyAvailable, CommitQcObserved, RequestCommitPipeline, NoFetchBody,
        NoUrgentFetch, NoDeepCatchup, NoViewChange, NoRetire,
        PreserveGeneration, PreserveCandidate, PreserveRebroadcastGuard,
-       SyncCompatFields}
+       NestedSlotStateConsistent}
     [] candidate = AuthoritativeSupersedeMissingResetsNormal ->
       NoExternalActions \cup {SetModeNormal, SetOwnerBlockCreatedLed,
         SetPhaseAwaitBody, BodyMissing, ValidationUnknown, VoteNone,
         BlockCreatedSeen, ExactFetchArmed, IncrementGeneration, UnlockOwner,
         UpdateCandidate, ResetQuorumProgress, RecordBlockProgress,
         ClearRebroadcastGuard, TrackRequester, UpdateActiveView,
-        SyncCompatFields}
+        NestedSlotStateConsistent}
     [] candidate = AuthoritativeSupersedeBodyNoDirectPipeline ->
       NoExternalActions \cup {SetModeNormal, SetOwnerBlockCreatedLed,
         SetPhaseValidateBody, BodyAvailable, ValidationPending, VoteNone,
         BlockCreatedSeen, ExactFetchArmed, IncrementGeneration, UnlockOwner,
         UpdateCandidate, ResetQuorumProgress, RecordBlockProgress,
-        ClearRebroadcastGuard, UpdateActiveView, SyncCompatFields}
+        ClearRebroadcastGuard, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = FutureGapHigherExactFetchNormalFetch ->
       {SetModeNormal, SetOwnerExactSlotRepair, SetPhaseAwaitBody,
        BodyMissing, ValidationUnknown, VoteNone, BlockCreatedUnseen,
@@ -257,80 +292,107 @@ SpecActions(candidate) ==
        NoDeepCatchup, NoViewChange, NoRetire, IncrementGeneration,
        UnlockOwner, UpdateCandidate, ResetQuorumProgress,
        ClearRebroadcastGuard, NoteLag, UpdateActiveView, TrackRequester,
-       SyncCompatFields}
+       NestedSlotStateConsistent}
     [] candidate = FutureGapSameUnarmedNoFetch ->
       NoExternalActions \cup {SetModeNormal, SetOwnerExactSlotRepair,
         SetPhaseAwaitBody, BodyMissing, ExactFetchUnarmed,
         PreserveGeneration, PreserveCandidate, PreserveRebroadcastGuard,
-        NoteLag, SyncCompatFields}
+        NoteLag, MergeFutureGapHints, TrackRequester, NestedSlotStateConsistent}
     [] candidate = FetchRetryDueNormalExactMissingFetch ->
       {PreserveMode, PreserveGeneration, PreserveCandidate,
        PreserveRebroadcastGuard, NoCommitPipeline, FetchBody, NoUrgentFetch,
-       NoDeepCatchup, NoViewChange, NoRetire, SyncCompatFields}
+       NoDeepCatchup, NoViewChange, NoRetire, NestedSlotStateConsistent}
     [] candidate = FetchRetryDueDeepNoFetch ->
       NoExternalActions \cup {PreserveMode, PreserveGeneration,
-        PreserveCandidate, PreserveRebroadcastGuard, SyncCompatFields}
+        PreserveCandidate, PreserveRebroadcastGuard, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutExactMissingFirstRebroadcast ->
       {PreserveMode, PreserveGeneration, PreserveCandidate,
        ArmRebroadcastGuard, NoCommitPipeline, FetchBody, FetchBodyUrgent,
-       NoDeepCatchup, NoViewChange, NoRetire, SyncCompatFields}
+       NoDeepCatchup, NoViewChange, NoRetire, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutExactMissingSecondViewChange ->
       {PreserveMode, SetOwnerExactSlotRepair, PreserveGeneration,
        PreserveCandidate, ClearRebroadcastGuard, NoCommitPipeline,
        NoFetchBody, NoUrgentFetch, NoDeepCatchup, RequestViewChange,
-       NoRetire, UpdateActiveView, SyncCompatFields}
+       NoRetire, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutExactMissingLagExpiredDeep ->
       {SetModeDeepCatchup, SetOwnerExactSlotRepair, PreserveGeneration,
        PreserveCandidate, ClearRebroadcastGuard, RecordDeepReason,
        RecordLastReason, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
-       EnterDeepCatchup, NoViewChange, NoRetire, SyncCompatFields}
+       EnterDeepCatchup, NoViewChange, NoRetire, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutBodyPresentFirstArmsOnly ->
       {PreserveMode, PreserveGeneration, PreserveCandidate,
        ArmRebroadcastGuard, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
-       NoDeepCatchup, NoViewChange, NoRetire, SyncCompatFields}
+       NoDeepCatchup, NoViewChange, NoRetire, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutBodyPresentSecondViewChange ->
       {PreserveMode, SetOwnerExactSlotRepair, PreserveGeneration,
        PreserveCandidate, ClearRebroadcastGuard, NoCommitPipeline,
        NoFetchBody, NoUrgentFetch, NoDeepCatchup, RequestViewChange,
-       NoRetire, UpdateActiveView, SyncCompatFields}
+       NoRetire, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutDeepFirstReenter ->
       {PreserveMode, PreserveGeneration, PreserveCandidate,
        ArmRebroadcastGuard, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
-       EnterDeepCatchup, NoViewChange, NoRetire, SyncCompatFields}
+       EnterDeepCatchup, NoViewChange, NoRetire, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutDeepSecondViewChange ->
       {PreserveMode, SetOwnerExactSlotRepair, PreserveGeneration,
        PreserveCandidate, ClearRebroadcastGuard, NoCommitPipeline,
        NoFetchBody, NoUrgentFetch, NoDeepCatchup, RequestViewChange,
-       NoRetire, UpdateActiveView, SyncCompatFields}
+       NoRetire, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = QuorumTimeoutPassiveReasonOnly ->
       NoExternalActions \cup {PreserveMode, PreserveGeneration,
         PreserveCandidate, PreserveRebroadcastGuard, RecordLastReason,
-        SyncCompatFields}
+        NestedSlotStateConsistent}
     [] candidate = LagWindowExpiredNormalExactDeep ->
       {SetModeDeepCatchup, SetOwnerExactSlotRepair, PreserveGeneration,
        PreserveCandidate, ClearRebroadcastGuard, RecordDeepReason,
        RecordLastReason, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
-       EnterDeepCatchup, NoViewChange, NoRetire, SyncCompatFields}
+       EnterDeepCatchup, NoViewChange, NoRetire, NestedSlotStateConsistent}
     [] candidate = LagWindowExpiredPassiveReasonOnly ->
       NoExternalActions \cup {PreserveMode, PreserveGeneration,
         PreserveCandidate, PreserveRebroadcastGuard, RecordLastReason,
-        SyncCompatFields}
+        NestedSlotStateConsistent}
     [] candidate = LagWindowExpiredDeepReenter ->
       {PreserveMode, PreserveGeneration, PreserveCandidate,
        PreserveRebroadcastGuard, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
-       EnterDeepCatchup, NoViewChange, NoRetire, SyncCompatFields}
+       EnterDeepCatchup, NoViewChange, NoRetire, NestedSlotStateConsistent}
     [] candidate = ViewAdvanceImmediate ->
       {PreserveMode, SetOwnerExactSlotRepair, PreserveGeneration,
        PreserveCandidate, ClearRebroadcastGuard, NoCommitPipeline,
        NoFetchBody, NoUrgentFetch, NoDeepCatchup, RequestViewChange,
-       NoRetire, UpdateActiveView, SyncCompatFields}
+       NoRetire, UpdateActiveView, NestedSlotStateConsistent}
     [] candidate = CommitHeightAtOrAboveFinalizes ->
       {SetModeFinalized, PreserveGeneration, PreserveCandidate,
        PreserveRebroadcastGuard, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
-       NoDeepCatchup, NoViewChange, RetireSlot, SyncCompatFields}
+       NoDeepCatchup, NoViewChange, RetireSlot, NestedSlotStateConsistent}
     [] candidate = CommitHeightBelowNoRetire ->
       NoExternalActions \cup {PreserveMode, PreserveGeneration,
-        PreserveCandidate, PreserveRebroadcastGuard, SyncCompatFields}
+        PreserveCandidate, PreserveRebroadcastGuard, NestedSlotStateConsistent}
+    [] candidate = ApplyAbsentFetchRetryDefault ->
+      NoExternalActions \cup {NoCreateSlot, NoInnerStep, ReturnDefaultActions}
+    [] candidate = ApplyAbsentViewAdvanceRequestsFrontier ->
+      {NoCreateSlot, NoInnerStep, RequestViewChange,
+       RequestViewChangeAtFrontier, NoCommitPipeline, NoFetchBody,
+       NoUrgentFetch, NoDeepCatchup, NoRetire}
+    [] candidate = ApplyAbsentQuorumTimeoutRequestsFrontier ->
+      {NoCreateSlot, NoInnerStep, RequestViewChange,
+       RequestViewChangeAtFrontier, NoCommitPipeline, NoFetchBody,
+       NoUrgentFetch, NoDeepCatchup, NoRetire}
+    [] candidate = ApplyAbsentBlockCreatedCreatesSlot ->
+      {CreateSlot, RunInnerStep, StoreSlotAfterEvent}
+    [] candidate = ApplyStaleFetchRetryDropsThenDefault ->
+      NoExternalActions \cup {DropStaleSlot, NoCreateSlot, NoInnerStep,
+        ReturnDefaultActions}
+    [] candidate = ApplyStaleBlockCreatedDropsThenCreates ->
+      {DropStaleSlot, CreateSlot, RunInnerStep, StoreSlotAfterEvent}
+    [] candidate = ApplySameHeightEventUsesExistingSlot ->
+      {PreserveSlot, RunInnerStep, StoreSlotAfterEvent}
+    [] candidate = ApplyCommitRetireRemovesSlot ->
+      {PreserveSlot, RunInnerStep, RemoveSlotAfterRetire, SetModeFinalized,
+       RetireSlot, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
+       NoDeepCatchup, NoViewChange}
+    [] candidate = ApplyCommitBelowRetainsSlot ->
+      {PreserveSlot, RunInnerStep, StoreSlotAfterEvent, PreserveMode,
+       NoRetire, NoCommitPipeline, NoFetchBody, NoUrgentFetch,
+       NoDeepCatchup, NoViewChange}
     [] OTHER -> {}
 
 ImplementationActions(candidate) ==
@@ -351,12 +413,22 @@ ImplementationActions(candidate) ==
     [] candidate = SameBlockCreatedDuplicateBodyPreservesRebroadcast /\
           Bug = "same_duplicate_clears_rebroadcast" ->
       (spec \ {PreserveRebroadcastGuard}) \cup {ClearRebroadcastGuard}
+    [] candidate = SameBlockCreatedFreshMissingStartsLag /\
+          Bug = "same_missing_skips_peer_hints" ->
+      spec \ {MergeBlockCreatedHints}
+    [] candidate = SameBlockCreatedFreshBodyRecordsProgress /\
+          Bug = "same_fresh_body_skips_progress" ->
+      (spec \ {RecordBlockProgress, ClearRebroadcastGuard}) \cup
+        {PreserveRebroadcastGuard}
     [] candidate = MismatchedLowerBlockCreatedIgnored /\
           Bug = "mismatch_mutates_candidate" ->
       (spec \ {IgnoreMismatched, PreserveCandidate}) \cup {UpdateCandidate}
     [] candidate = BodyAvailableMissingRequestsCommit /\
           Bug = "body_available_skips_pipeline" ->
       (spec \ {RequestCommitPipeline}) \cup {NoCommitPipeline}
+    [] candidate = BodyAvailableMissingRequestsCommit /\
+          Bug = "body_available_skips_sender" ->
+      spec \ {TrackBodySender}
     [] candidate = BodyAvailableDuplicatePreservesRebroadcast /\
           Bug = "body_duplicate_clears_rebroadcast" ->
       (spec \ {PreserveRebroadcastGuard}) \cup {ClearRebroadcastGuard}
@@ -400,6 +472,12 @@ ImplementationActions(candidate) ==
     [] candidate = FutureGapSameUnarmedNoFetch /\
           Bug = "future_gap_unarmed_fetches" ->
       (spec \ {NoFetchBody}) \cup {FetchBody}
+    [] candidate = FutureGapSameUnarmedNoFetch /\
+          Bug = "future_gap_same_skips_peer_hints" ->
+      spec \ {MergeFutureGapHints}
+    [] candidate = FutureGapSameUnarmedNoFetch /\
+          Bug = "future_gap_same_skips_requester" ->
+      spec \ {TrackRequester}
     [] candidate = FetchRetryDueNormalExactMissingFetch /\
           Bug = "fetch_retry_normal_skips_fetch" ->
       (spec \ {FetchBody}) \cup {NoFetchBody}
@@ -447,8 +525,42 @@ ImplementationActions(candidate) ==
     [] candidate = CommitHeightAtOrAboveFinalizes /\
           Bug = "commit_height_at_or_above_not_finalized" ->
       (spec \ {RetireSlot, SetModeFinalized}) \cup {NoRetire, PreserveMode}
-    [] candidate = HigherBlockCreatedMissingBody /\ Bug = "missing_sync_compat" ->
-      spec \ {SyncCompatFields}
+    [] candidate = HigherBlockCreatedMissingBody /\ Bug = "missing_nested_slot_update" ->
+      spec \ {NestedSlotStateConsistent}
+    [] candidate = ApplyAbsentFetchRetryDefault /\
+          Bug = "apply_absent_fetch_retry_creates_slot" ->
+      (spec \ {NoCreateSlot, NoInnerStep, ReturnDefaultActions}) \cup
+        {CreateSlot, RunInnerStep, StoreSlotAfterEvent}
+    [] candidate = ApplyAbsentViewAdvanceRequestsFrontier /\
+          Bug = "apply_absent_view_advance_no_request" ->
+      (spec \ {RequestViewChange, RequestViewChangeAtFrontier}) \cup
+        {NoViewChange}
+    [] candidate = ApplyAbsentQuorumTimeoutRequestsFrontier /\
+          Bug = "apply_absent_quorum_timeout_no_request" ->
+      (spec \ {RequestViewChange, RequestViewChangeAtFrontier}) \cup
+        {NoViewChange}
+    [] candidate = ApplyAbsentBlockCreatedCreatesSlot /\
+          Bug = "apply_absent_block_created_no_slot" ->
+      (spec \ {CreateSlot, RunInnerStep, StoreSlotAfterEvent}) \cup
+        {NoCreateSlot, NoInnerStep, ReturnDefaultActions}
+    [] candidate = ApplyStaleFetchRetryDropsThenDefault /\
+          Bug = "apply_stale_fetch_retry_keeps_slot" ->
+      (spec \ {DropStaleSlot, NoCreateSlot, NoInnerStep,
+        ReturnDefaultActions, NoFetchBody}) \cup
+        {PreserveSlot, RunInnerStep, StoreSlotAfterEvent, FetchBody}
+    [] candidate = ApplyStaleBlockCreatedDropsThenCreates /\
+          Bug = "apply_stale_block_created_reuses_slot" ->
+      (spec \ {DropStaleSlot, CreateSlot}) \cup {PreserveSlot}
+    [] candidate = ApplySameHeightEventUsesExistingSlot /\
+          Bug = "apply_same_height_recreates_slot" ->
+      (spec \ {PreserveSlot}) \cup {CreateSlot}
+    [] candidate = ApplyCommitRetireRemovesSlot /\
+          Bug = "apply_commit_retire_reinserts_slot" ->
+      (spec \ {RemoveSlotAfterRetire}) \cup {StoreSlotAfterEvent}
+    [] candidate = ApplyCommitBelowRetainsSlot /\
+          Bug = "apply_commit_below_drops_slot" ->
+      (spec \ {StoreSlotAfterEvent, NoRetire, PreserveMode}) \cup
+        {RemoveSlotAfterRetire, RetireSlot, SetModeFinalized}
     [] OTHER -> spec
 
 Init ==
@@ -464,8 +576,11 @@ Bugs == {
   "higher_block_created_keeps_generation",
   "higher_block_created_skips_pipeline",
   "same_duplicate_clears_rebroadcast",
+  "same_missing_skips_peer_hints",
+  "same_fresh_body_skips_progress",
   "mismatch_mutates_candidate",
   "body_available_skips_pipeline",
+  "body_available_skips_sender",
   "body_duplicate_clears_rebroadcast",
   "passive_body_keeps_passive",
   "vote_missing_waits_commit_qc",
@@ -479,6 +594,8 @@ Bugs == {
   "authoritative_supersede_requests_pipeline",
   "future_gap_exact_skips_fetch",
   "future_gap_unarmed_fetches",
+  "future_gap_same_skips_peer_hints",
+  "future_gap_same_skips_requester",
   "fetch_retry_normal_skips_fetch",
   "fetch_retry_deep_fetches",
   "quorum_timeout_first_rotates",
@@ -493,7 +610,16 @@ Bugs == {
   "view_advance_keeps_guard",
   "commit_height_below_retires",
   "commit_height_at_or_above_not_finalized",
-  "missing_sync_compat"
+  "missing_nested_slot_update",
+  "apply_absent_fetch_retry_creates_slot",
+  "apply_absent_view_advance_no_request",
+  "apply_absent_quorum_timeout_no_request",
+  "apply_absent_block_created_no_slot",
+  "apply_stale_fetch_retry_keeps_slot",
+  "apply_stale_block_created_reuses_slot",
+  "apply_same_height_recreates_slot",
+  "apply_commit_retire_reinserts_slot",
+  "apply_commit_below_drops_slot"
 }
 
 TypeInvariant ==
@@ -521,6 +647,7 @@ BlockCreatedMatchesSpec ==
     HigherBlockCreatedMissingBody,
     SameBlockCreatedDuplicateBodyPreservesRebroadcast,
     SameBlockCreatedFreshMissingStartsLag,
+    SameBlockCreatedFreshBodyRecordsProgress,
     MismatchedLowerBlockCreatedIgnored
   }:
     ImplementationActions(candidate) = SpecActions(candidate)
@@ -587,7 +714,8 @@ UrgentFetchRequiresBodyFetch ==
 
 ViewChangeClearsRebroadcastGuard ==
   \A candidate \in Candidates:
-    RequestViewChange \in ImplementationActions(candidate) =>
+    (RequestViewChange \in ImplementationActions(candidate) /\
+     RequestViewChangeAtFrontier \notin ImplementationActions(candidate)) =>
       ClearRebroadcastGuard \in ImplementationActions(candidate)
 
 CommitPipelineRequiresBodyAvailable ==
@@ -600,9 +728,25 @@ RetiredSlotsAreFinalized ==
     RetireSlot \in ImplementationActions(candidate) =>
       SetModeFinalized \in ImplementationActions(candidate)
 
-EveryStepSyncsCompatFields ==
-  \A candidate \in Candidates:
-    SyncCompatFields \in ImplementationActions(candidate)
+EveryStepKeepsNestedStateConsistent ==
+  \A candidate \in StepCandidates:
+    NestedSlotStateConsistent \in ImplementationActions(candidate)
+
+WrapperMatchesSpec ==
+  \A candidate \in WrapperCandidates:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+PeerEvidenceAnchors ==
+  /\ MergeBlockCreatedHints
+       \in SpecActions(SameBlockCreatedFreshMissingStartsLag)
+  /\ MergeBlockCreatedHints
+       \in SpecActions(SameBlockCreatedFreshBodyRecordsProgress)
+  /\ TrackBodySender \in SpecActions(BodyAvailableMissingRequestsCommit)
+  /\ TrackBodySender
+       \in SpecActions(BodyAvailableDuplicatePreservesRebroadcast)
+  /\ TrackBodySender \in SpecActions(BodyAvailablePassiveReturnsNormal)
+  /\ MergeFutureGapHints \in SpecActions(FutureGapSameUnarmedNoFetch)
+  /\ TrackRequester \in SpecActions(FutureGapSameUnarmedNoFetch)
 
 ConstructorAnchors ==
   /\ SetOwnerProposalLed \in SpecActions(NewMissingInert)
@@ -622,6 +766,12 @@ BlockCreatedAnchors ==
   /\ NoteLag \in SpecActions(HigherBlockCreatedMissingBody)
   /\ PreserveRebroadcastGuard
        \in SpecActions(SameBlockCreatedDuplicateBodyPreservesRebroadcast)
+  /\ RecordBlockProgress
+       \in SpecActions(SameBlockCreatedFreshBodyRecordsProgress)
+  /\ ClearRebroadcastGuard
+       \in SpecActions(SameBlockCreatedFreshBodyRecordsProgress)
+  /\ NoCommitPipeline
+       \in SpecActions(SameBlockCreatedFreshBodyRecordsProgress)
   /\ IgnoreMismatched \in SpecActions(MismatchedLowerBlockCreatedIgnored)
   /\ UpdateCandidate \notin SpecActions(MismatchedLowerBlockCreatedIgnored)
 
@@ -630,6 +780,7 @@ BodyEvidenceAnchors ==
   /\ PreserveRebroadcastGuard
        \in SpecActions(BodyAvailableDuplicatePreservesRebroadcast)
   /\ SetModeNormal \in SpecActions(BodyAvailablePassiveReturnsNormal)
+  /\ TrackBodySender \in SpecActions(BodyAvailableMissingRequestsCommit)
 
 VoteAndCommitQcAnchors ==
   /\ FetchBodyUrgent \in SpecActions(VoteObservedMissingUrgentFetch)
@@ -648,6 +799,8 @@ AuthoritativeAndFetchAnchors ==
   /\ NoCommitPipeline \in SpecActions(AuthoritativeSupersedeBodyNoDirectPipeline)
   /\ FetchBody \in SpecActions(FutureGapHigherExactFetchNormalFetch)
   /\ NoFetchBody \in SpecActions(FutureGapSameUnarmedNoFetch)
+  /\ MergeFutureGapHints \in SpecActions(FutureGapSameUnarmedNoFetch)
+  /\ TrackRequester \in SpecActions(FutureGapSameUnarmedNoFetch)
   /\ FetchBody \in SpecActions(FetchRetryDueNormalExactMissingFetch)
   /\ NoFetchBody \in SpecActions(FetchRetryDueDeepNoFetch)
 
@@ -677,6 +830,21 @@ LagViewCommitAnchors ==
   /\ SetModeFinalized \in SpecActions(CommitHeightAtOrAboveFinalizes)
   /\ NoRetire \in SpecActions(CommitHeightBelowNoRetire)
 
+WrapperSlotLifecycleAnchors ==
+  /\ ReturnDefaultActions \in SpecActions(ApplyAbsentFetchRetryDefault)
+  /\ RequestViewChangeAtFrontier
+       \in SpecActions(ApplyAbsentViewAdvanceRequestsFrontier)
+  /\ RequestViewChangeAtFrontier
+       \in SpecActions(ApplyAbsentQuorumTimeoutRequestsFrontier)
+  /\ CreateSlot \in SpecActions(ApplyAbsentBlockCreatedCreatesSlot)
+  /\ DropStaleSlot \in SpecActions(ApplyStaleFetchRetryDropsThenDefault)
+  /\ NoInnerStep \in SpecActions(ApplyStaleFetchRetryDropsThenDefault)
+  /\ DropStaleSlot \in SpecActions(ApplyStaleBlockCreatedDropsThenCreates)
+  /\ CreateSlot \in SpecActions(ApplyStaleBlockCreatedDropsThenCreates)
+  /\ PreserveSlot \in SpecActions(ApplySameHeightEventUsesExistingSlot)
+  /\ RemoveSlotAfterRetire \in SpecActions(ApplyCommitRetireRemovesSlot)
+  /\ StoreSlotAfterEvent \in SpecActions(ApplyCommitBelowRetainsSlot)
+
 Safety ==
   /\ SlotTrackerStepMatchesSpec
   /\ ConstructorMatchesSpec
@@ -690,7 +858,9 @@ Safety ==
   /\ ViewChangeClearsRebroadcastGuard
   /\ CommitPipelineRequiresBodyAvailable
   /\ RetiredSlotsAreFinalized
-  /\ EveryStepSyncsCompatFields
+  /\ EveryStepKeepsNestedStateConsistent
+  /\ WrapperMatchesSpec
+  /\ PeerEvidenceAnchors
   /\ ConstructorAnchors
   /\ BlockCreatedAnchors
   /\ BodyEvidenceAnchors
@@ -698,6 +868,7 @@ Safety ==
   /\ AuthoritativeAndFetchAnchors
   /\ QuorumTimeoutAnchors
   /\ LagViewCommitAnchors
+  /\ WrapperSlotLifecycleAnchors
 
 =============================================================================
 ====

@@ -160,8 +160,8 @@ Qo'llash doirasi tashqarida: aloqador bo'lmagan qutilar va to'liq tizimli sinovl
 ### WSV ishlab chiqarish
 
 - Mavjud qamrov:
-  - tortishuvlarni qaytarish harakati: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - darajali orqa tomonda qulflash tartibi xavfsizligi: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - tortishuvlarni qaytarish harakati: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - darajali orqa tomonda qulflash tartibi xavfsizligi: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Bo'shliqlar:
   - og'ir dunyo majburiyatlari ostida maksimal qabul qilinadigan majburiyatlarni ushlab turish muddatini tasdiqlovchi miqdoriy tortishuv testi yo'q
   - agar DA kursorini ilgari surish invariantlari kutilmaganda buzilsa, vahimasiz ishlash uchun regressiya testi yo'q.
@@ -222,7 +222,7 @@ Qo'llash doirasi tashqarida: aloqador bo'lmagan qutilar va to'liq tizimli sinovl
 ## Tavsiya etilgan test qo'shimchalari1. `kura_writer_io_failures_do_not_panic` (birlik, nosozlik inyeksiyasi)
 2. `kura_budget_check_scales_with_pending_depth` (ishlash regressiyasi)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (integratsiya/mukammal)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (qarama-qarshilik regressiyasi)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (qarama-qarshilik regressiyasi)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (chidamlilik)
 6. `mock_wsv_admin_alias_requires_permissions` (xavfsizlik regressiyasi)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS himoyasi)

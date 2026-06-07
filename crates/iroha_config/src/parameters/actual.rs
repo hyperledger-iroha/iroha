@@ -8065,18 +8065,6 @@ pub struct SccpDestinationRollout {
     pub ton_verifier_code_boc_root_hash: Option<String>,
     /// Hex-encoded TON verifier code BoC bytes.
     pub ton_verifier_code_boc: Option<String>,
-    /// Hex-encoded finalized Substrate block head used for runtime evidence.
-    pub substrate_finalized_head: Option<String>,
-    /// Substrate runtime `specName` observed at the finalized head.
-    pub substrate_runtime_spec_name: Option<String>,
-    /// Canonical decimal Substrate runtime `specVersion`.
-    pub substrate_runtime_spec_version: Option<String>,
-    /// Canonical decimal Substrate runtime `transactionVersion`.
-    pub substrate_runtime_transaction_version: Option<String>,
-    /// Hex-encoded BLAKE2b-256 digest of the finalized Substrate runtime code.
-    pub substrate_runtime_code_hash: Option<String>,
-    /// Base64-encoded finalized Substrate runtime code bytes.
-    pub substrate_runtime_code_base64: Option<String>,
     /// Remaining rollout blockers. Must be empty for production.
     pub blockers: Vec<String>,
 }

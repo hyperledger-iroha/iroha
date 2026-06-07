@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### წარმოება WSV
 
 - არსებული დაფარვა:
-  - სადავო ქცევა: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - დაბლოკვის შეკვეთის უსაფრთხოება საფეხურების უკანა ნაწილის გარშემო: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - სადავო ქცევა: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - დაბლოკვის შეკვეთის უსაფრთხოება საფეხურების უკანა ნაწილის გარშემო: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - ხარვეზები:
   - არ არის რაოდენობრივი დაპირისპირების ტესტი, რომელიც ამტკიცებს ჩადენის მაქსიმალურ მისაღებ დროს მძიმე მსოფლიო ვალდებულებების დროს
   - არ არის რეგრესიული ტესტი პანიკისგან თავისუფალ მართვაში, თუ DA კურსორის წინსვლის ინვარიანტები მოულოდნელად იშლება
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## შემოთავაზებული ტესტის დამატებები1. `kura_writer_io_failures_do_not_panic` (ერთეული, გაუმართაობის ინექცია)
 2. `kura_budget_check_scales_with_pending_depth` (შესრულების რეგრესია)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (ინტეგრაცია/perf)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (დაპირისპირების რეგრესია)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (დაპირისპირების რეგრესია)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (გამძლეობა)
 6. `mock_wsv_admin_alias_requires_permissions` (უსაფრთხოების რეგრესია)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS მცველი)

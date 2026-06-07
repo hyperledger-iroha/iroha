@@ -200,9 +200,6 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         "pytests/scripts/sccp_solana_live_evidence_test.py",
         "pytests/scripts/sccp_solana_source_state_evidence_test.py",
-        "pytests/scripts/sccp_substrate_destination_evidence_test.py",
-        "pytests/scripts/sccp_substrate_live_evidence_test.py",
-        "pytests/scripts/sccp_substrate_source_evidence_test.py",
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         "pytests/scripts/sccp_ton_live_evidence_test.py",
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
@@ -725,51 +722,6 @@ TON_JAVA_ANDROID_USER_PROVER_HELPERS = (
     "TonSccpProver.FullLightClientAuditProofEngine",
     "TonSccpProver.buildSubmission",
 )
-SUBSTRATE_JS_USER_PROVER_HELPERS = (
-    "buildSubstrateSccpProofRequest",
-    "buildSubstrateSccpRuntimeStorageProofRequest",
-    "SubstrateSccpProver",
-    "witnessProvider",
-    "proveFn",
-    "buildSubstrateSccpSubmission",
-)
-SUBSTRATE_PYTHON_USER_PROVER_HELPERS = (
-    "build_substrate_sccp_proof_request",
-    "build_substrate_sccp_runtime_storage_proof_request",
-    "SubstrateSccpProver",
-    "witness_provider",
-    "prove",
-    "build_substrate_sccp_submission",
-)
-SUBSTRATE_SWIFT_USER_PROVER_HELPERS = (
-    "buildSubstrateSccpProofRequest",
-    "buildSubstrateSccpRuntimeStorageProofRequest",
-    "SubstrateSccpProver",
-    "SubstrateSccpWitnessProvider",
-    "SubstrateSccpProver.ProveFunction",
-    "buildSubstrateSccpSubmission",
-)
-SUBSTRATE_KOTLIN_USER_PROVER_HELPERS = (
-    "SccpSubstrate.buildProofRequest",
-    "SccpSourceProofs.buildSubstrateRuntimeStorageProofRequest",
-    "SubstrateSccpProver",
-    "SubstrateSccpWitnessProvider",
-    "SubstrateSccpProofEngine",
-    "SccpSubstrate.buildSubmission",
-)
-SUBSTRATE_JAVA_ANDROID_USER_PROVER_HELPERS = (
-    "SubstrateSccpProver.buildProofRequest",
-    "SourceSccpProofs.buildSubstrateRuntimeStorageProofRequest",
-    "SubstrateSccpProver",
-    "SubstrateSccpProver.WitnessProvider",
-    "SubstrateSccpProver.ProofEngine",
-    "SubstrateSccpProver.buildSubmission",
-)
-
-# Substrate helper inventories remain here for backlog/diagnostic checks, but
-# Substrate/Polkadot-family networks are not advertised in launch submission
-# surfaces until that support scope is explicitly re-opened.
-
 def _sdk_helper_sets(
     js: tuple[str, ...],
     python: tuple[str, ...],

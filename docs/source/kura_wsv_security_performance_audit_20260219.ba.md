@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### Производство WSV
 
 - Булған яҡтыртыу:
-  - бәхәсле ҡайтарыу тәртибе: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - блокировка-заказ хәүефһеҙлеге тирәләй яруслы бекэнд: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - бәхәсле ҡайтарыу тәртибе: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - блокировка-заказ хәүефһеҙлеге тирәләй яруслы бекэнд: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Бушлыҡтар:
   - Һанлы бәхәс һынауы юҡ, раҫлаусы максималь ҡабул итеү мөмкинлеге булған йөкләмә үткәреү ваҡыты аҫтында ауыр донъя йөкләмәләре
   - әгәр ҙә DA курсорының алға китеш инварианттары көтөлмәгәнсә өҙөлһә, паникаһыҙ эш итеү өсөн регрессия һынауы юҡ

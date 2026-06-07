@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### Արտադրության WSV
 
 - Առկա ծածկույթ.
-  - հակասությունների հետադարձ պահվածքը՝ `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - կողպեքի կարգի անվտանգություն աստիճանավոր հետևի շուրջ. `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - հակասությունների հետադարձ պահվածքը՝ `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - կողպեքի կարգի անվտանգություն աստիճանավոր հետևի շուրջ. `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Բացեր.
   - չկա քանակական վիճաբանության թեստ, որը հաստատում է առավելագույն ընդունելի կատարման ժամկետը ծանր համաշխարհային պարտավորությունների ներքո
   - Խուճապից զերծ վարման համար ռեգրեսիայի թեստ չկա, եթե DA կուրսորի առաջխաղացման անփոփոխները անսպասելիորեն կոտրվում են
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## Առաջարկվող թեստային հավելումներ1. `kura_writer_io_failures_do_not_panic` (միավոր, անսարք ներարկում)
 2. `kura_budget_check_scales_with_pending_depth` (կատարման ռեգրեսիա)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (ինտեգրում/պերֆ)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (վիճաբանության ռեգրեսիա)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (վիճաբանության ռեգրեսիա)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (առաձգականություն)
 6. `mock_wsv_admin_alias_requires_permissions` (անվտանգության ռեգրեսիա)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS պահակ)

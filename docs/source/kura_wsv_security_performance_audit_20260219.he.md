@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### הפקת WSV
 
 - כיסוי קיים:
-  - התנהגות ניצול מחלוקת: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - בטיחות בהזמנה של נעילה סביב קצה אחורי מדורג: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - התנהגות ניצול מחלוקת: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - בטיחות בהזמנה של נעילה סביב קצה אחורי מדורג: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - פערים:
   - אין מבחן מחלוקת כמותי הקובע את זמן החזקה מרבי מקובל תחת התחייבויות עולמיות כבדות
   - אין מבחן רגרסיה לטיפול נטול פאניקה אם אינוריאנטי התקדמות סמן DA נשברים באופן בלתי צפוי
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## תוספות מבחן מוצעות1. `kura_writer_io_failures_do_not_panic` (יחידה, הזרקת תקלה)
 2. `kura_budget_check_scales_with_pending_depth` (רגרסיית ביצועים)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (שילוב/פרפ)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (רגרסיית טענה)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (רגרסיית טענה)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (חוסן)
 6. `mock_wsv_admin_alias_requires_permissions` (רגרסיית אבטחה)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (שומר DoS)

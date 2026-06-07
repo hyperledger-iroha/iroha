@@ -19405,7 +19405,7 @@ async fn block_body_response_releases_dedup_when_block_created_is_rejected() {
     assert_eq!(slot.height, height);
     assert_eq!(slot.view, view);
     assert!(
-        !slot.body_present,
+        !slot.body_present(),
         "rejected BlockBodyResponse must not poison the frontier slot as body-present"
     );
     assert!(
@@ -19600,7 +19600,7 @@ async fn block_body_response_routes_block_sync_update_through_commit_sidecar_pat
         .as_ref()
         .expect("frontier slot retained");
     assert!(
-        slot.body_present,
+        slot.body_present(),
         "exact BlockBodyResponse should mark the frontier body as present"
     );
 
@@ -20145,7 +20145,7 @@ async fn block_body_response_releases_dedup_when_slot_mismatch_ignores_it() {
         .as_ref()
         .expect("frontier slot retained");
     assert_eq!(slot.block_hash, owner_block.hash());
-    assert!(!slot.body_present);
+    assert!(!slot.body_present());
 
     harness.shutdown.send();
 }
@@ -20526,7 +20526,7 @@ async fn block_created_initializes_exact_frontier_slot() {
         "BlockCreated must arm exact frontier body repair for committed + 1",
     );
     assert!(
-        slot.body_present,
+        slot.body_present(),
         "BlockCreated must mark the exact frontier body locally present",
     );
     assert!(
@@ -20882,7 +20882,7 @@ async fn frontier_body_repair_fetches_leader_before_voter_fallback() {
             .checked_sub(grace.saturating_add(Duration::from_millis(1)))
             .unwrap_or_else(Instant::now);
         slot.timers.observed_at = observed_at;
-        slot.observed_at = observed_at;
+        slot.timers.observed_at = observed_at;
     }
 
     assert!(
@@ -20912,9 +20912,10 @@ async fn frontier_body_repair_fetches_leader_before_voter_fallback() {
             .filter(|peer| *peer != &leader_peer)
             .cloned()
             .collect::<BTreeSet<_>>();
-        let last_fetch_at = Some(Instant::now() - slot.retry_window - Duration::from_millis(1));
+        let last_fetch_at =
+            Some(Instant::now() - slot.repair_state.retry_window - Duration::from_millis(1));
         slot.timers.last_fetch_at = last_fetch_at;
-        slot.last_fetch_at = last_fetch_at;
+        slot.timers.last_fetch_at = last_fetch_at;
         expected
     };
 
@@ -34012,7 +34013,7 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
         "frontier known-block recovery should keep exact fetch armed"
     );
     assert!(
-        !slot.body_present,
+        !slot.body_present(),
         "frontier known-block recovery should wait for exact-body repair when the payload is not local"
     );
     let request = actor
@@ -34041,7 +34042,7 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
         .checked_sub(grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or_else(Instant::now);
     slot.timers.observed_at = observed_at;
-    slot.observed_at = observed_at;
+    slot.timers.observed_at = observed_at;
     let _ = take_background_log(&background_log);
 
     assert!(
@@ -41955,7 +41956,7 @@ async fn request_missing_block_for_pending_rbc_holds_initial_frontier_fetch_with
         .checked_sub(grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or_else(Instant::now);
     slot.timers.observed_at = observed_at;
-    slot.observed_at = observed_at;
+    slot.timers.observed_at = observed_at;
     let _ = take_background_log(&background_log);
 
     actor.request_missing_block_for_pending_rbc(key, "test_ingress_grace", None);
@@ -42746,7 +42747,7 @@ async fn defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_fron
         "commit-quorum frontier repair should arm exact body repair for the slot"
     );
     assert!(
-        !frontier_slot.body_present,
+        !frontier_slot.body_present(),
         "commit-quorum frontier repair should still treat the body as missing"
     );
     assert!(
@@ -42832,7 +42833,7 @@ async fn qc_missing_block_defer_contiguous_frontier_commit_quorum_fetches_exact_
         "QC deferral should arm exact body repair for the slot"
     );
     assert!(
-        !frontier_slot.body_present,
+        !frontier_slot.body_present(),
         "QC deferral should still treat the body as missing"
     );
     assert!(
@@ -44273,7 +44274,7 @@ async fn handle_rbc_ready_when_init_missing_arms_exact_frontier_body_repair() {
         "READY-before-INIT must arm exact FetchBlockBody recovery"
     );
     assert!(
-        !frontier_slot.body_present,
+        !frontier_slot.body_present(),
         "READY-before-INIT should still treat the authoritative body as missing"
     );
     assert!(
@@ -44295,7 +44296,7 @@ async fn handle_rbc_ready_when_init_missing_arms_exact_frontier_body_repair() {
         .checked_sub(grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or_else(Instant::now);
     slot.timers.observed_at = observed_at;
-    slot.observed_at = observed_at;
+    slot.timers.observed_at = observed_at;
     let _ = take_background_log(&background_log);
 
     assert!(
@@ -45870,7 +45871,7 @@ async fn maybe_emit_rbc_ready_with_missing_chunks_requests_missing_block() {
     assert_eq!(frontier_slot.height, key.1);
     assert_eq!(frontier_slot.view, key.2);
     assert!(frontier_slot.exact_fetch_armed);
-    assert!(!frontier_slot.body_present);
+    assert!(!frontier_slot.body_present());
 
     harness.shutdown.send();
 }
@@ -45931,7 +45932,7 @@ async fn maybe_emit_rbc_ready_single_chunk_frontier_requests_missing_block_with_
     assert_eq!(frontier_slot.height, height);
     assert_eq!(frontier_slot.view, view);
     assert!(frontier_slot.exact_fetch_armed);
-    assert!(!frontier_slot.body_present);
+    assert!(!frontier_slot.body_present());
 
     harness.shutdown.send();
 }
@@ -46358,7 +46359,7 @@ async fn maybe_emit_rbc_ready_missing_chunks_on_exact_frontier_arms_body_repair(
     assert_eq!(frontier_slot.height, height);
     assert_eq!(frontier_slot.view, view);
     assert!(frontier_slot.exact_fetch_armed);
-    assert!(!frontier_slot.body_present);
+    assert!(!frontier_slot.body_present());
     assert!(
         take_background_log(&background_log)
             .into_iter()
@@ -46378,7 +46379,7 @@ async fn maybe_emit_rbc_ready_missing_chunks_on_exact_frontier_arms_body_repair(
         .checked_sub(grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or_else(Instant::now);
     slot.timers.observed_at = observed_at;
-    slot.observed_at = observed_at;
+    slot.timers.observed_at = observed_at;
     let _ = take_background_log(&background_log);
 
     assert!(
@@ -53935,7 +53936,7 @@ async fn maybe_emit_rbc_deliver_missing_payload_on_exact_frontier_arms_body_repa
     assert_eq!(frontier_slot.height, height);
     assert_eq!(frontier_slot.view, view);
     assert!(frontier_slot.exact_fetch_armed);
-    assert!(!frontier_slot.body_present);
+    assert!(!frontier_slot.body_present());
     assert!(
         take_background_log(&background_log)
             .into_iter()
@@ -53955,7 +53956,7 @@ async fn maybe_emit_rbc_deliver_missing_payload_on_exact_frontier_arms_body_repa
         .checked_sub(grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or_else(Instant::now);
     slot.timers.observed_at = observed_at;
-    slot.observed_at = observed_at;
+    slot.timers.observed_at = observed_at;
     let _ = take_background_log(&background_log);
 
     assert!(
@@ -61488,7 +61489,6 @@ async fn frontier_recovery_rotates_stale_exact_slot_despite_buffered_block_sync_
         slot.timers.last_updated_at = stale;
         slot.timers.lag_window_started_at = Some(stale);
         slot.repair_state.last_reason = Some("quorum_timeout");
-        slot.sync_compat_fields();
     }
     actor.deferred_block_sync_updates.insert(
         (height, view, block_hash),
@@ -62715,7 +62715,6 @@ async fn frontier_recovery_rotates_stale_partial_vote_commit_qc_repair_without_g
         slot.quorum_progress.last_vote_at = Some(stale);
         slot.timers.last_progress_at = stale;
         slot.timers.last_updated_at = stale;
-        slot.sync_compat_fields();
     }
     actor.pending.missing_commit_qc_requests.insert(
         block_hash,
@@ -62858,7 +62857,7 @@ async fn frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull() {
             slot.height == height
                 && slot.view == view
                 && slot.block_hash == block_hash
-                && slot.body_present
+                && slot.body_present()
                 && slot.block_created_seen
         }),
         "quorum-timeout recovery must keep the live contiguous frontier slot intact"
@@ -65759,7 +65758,7 @@ async fn request_missing_parent_uses_deferred_qc_hint_for_exact_frontier_owner()
         "deferred-QC frontier evidence should arm exact body repair"
     );
     assert!(
-        !frontier_slot.body_present,
+        !frontier_slot.body_present(),
         "deferred-QC frontier evidence should still treat the parent body as missing"
     );
 
@@ -68890,7 +68889,7 @@ fn assert_missing_request_migrated_to_frontier_slot(
                 && slot.view == view
                 && slot.block_hash == block_hash
                 && slot.exact_fetch_armed
-                && !slot.body_present
+                && !slot.body_present()
         }),
         "exact frontier body recovery should own the missing payload"
     );
@@ -76291,7 +76290,6 @@ async fn missing_qc_height_stall_mode_ignores_superseded_same_height_dependencie
     {
         let slot = actor.frontier_slot.as_mut().expect("frontier slot");
         slot.note_local_vote_emitted();
-        slot.sync_compat_fields();
     }
     assert!(
         actor
@@ -79891,7 +79889,7 @@ async fn retry_missing_block_requests_suppresses_frontier_handoff_while_contiguo
         "generic retry must not fabricate authoritative BlockCreated identity",
     );
     assert!(
-        frontier_slot.last_fetch_at.is_none(),
+        frontier_slot.timers.last_fetch_at.is_none(),
         "fresh same-slot retry should not emit an immediate fetch burst while the ingress grace window is still open",
     );
     assert!(
@@ -80104,7 +80102,7 @@ async fn try_route_missing_block_through_exact_frontier_slot_marks_local_payload
     assert_eq!(slot.view, view);
     assert_eq!(slot.block_hash, block_hash);
     assert!(
-        slot.body_present,
+        slot.body_present(),
         "exact-frontier handoff should mark the slot body as present when the payload is already local"
     );
     assert!(
@@ -80184,7 +80182,7 @@ async fn frontier_body_fetch_wakes_commit_pipeline_when_commit_qc_repair_body_is
         actor
             .frontier_slot
             .as_ref()
-            .is_some_and(|slot| slot.last_fetch_at.is_none()),
+            .is_some_and(|slot| slot.timers.last_fetch_at.is_none()),
         "local body repair should avoid redundant fetch retries"
     );
 
@@ -80520,8 +80518,8 @@ async fn retry_missing_block_requests_keeps_far_ahead_future_entries_passive_whi
             .checked_sub(grace.saturating_add(Duration::from_millis(1)))
             .unwrap_or(now);
         slot.timers.observed_at = observed_at;
-        slot.observed_at = observed_at;
-        slot.last_fetch_at = None;
+        slot.timers.observed_at = observed_at;
+        slot.timers.last_fetch_at = None;
         slot.timers.last_fetch_at = None;
     }
 
@@ -80723,7 +80721,7 @@ async fn retry_missing_block_requests_forces_view_change_after_backlog_extension
                 && slot.view == view
                 && slot.block_hash == block_hash
                 && slot.exact_fetch_armed
-                && !slot.body_present
+                && !slot.body_present()
         }),
         "backlog-extension expiry should hand ownership to the frontier recovery controller"
     );
@@ -80805,15 +80803,15 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_blocks_seen(
         "queue-block backpressure should still keep contiguous frontier recovery on the exact-body lane",
     );
     assert!(
-        !frontier_slot.body_present,
+        !frontier_slot.body_present(),
         "test setup expects the frontier body to remain missing while view change stays deferred",
     );
     assert!(
-        frontier_slot.fetch_stage == super::FrontierBodyFetchStage::Leader,
+        frontier_slot.repair_state.fetch_stage == super::FrontierBodyFetchStage::Leader,
         "contiguous frontier retry should stay on the leader-first exact fetch stage",
     );
     assert!(
-        frontier_slot.last_fetch_at.is_none(),
+        frontier_slot.timers.last_fetch_at.is_none(),
         "queue-block backpressure should not advance exact frontier fetch timing before the grace window elapses",
     );
     assert!(
@@ -80825,7 +80823,7 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_blocks_seen(
         "generic retry should not fabricate authoritative frontier metadata",
     );
     assert!(
-        frontier_slot.pending_requesters.is_empty(),
+        frontier_slot.repair_state.pending_requesters.is_empty(),
         "local exact frontier routing should remain receiver-driven only",
     );
     assert!(
@@ -80970,6 +80968,7 @@ async fn frontier_body_next_due_voter_stage_requires_remote_voters_after_derivat
         .frontier_slot
         .as_mut()
         .expect("frontier slot")
+        .repair_state
         .fetch_stage = super::FrontierBodyFetchStage::Voters;
 
     let slot = actor.frontier_slot.as_ref().expect("frontier slot");
@@ -81126,7 +81125,7 @@ async fn frontier_body_next_due_voter_stage_ignores_cached_leader_only_voter_set
         None,
         None,
     );
-    slot.fetch_stage = super::FrontierBodyFetchStage::Voters;
+    slot.repair_state.fetch_stage = super::FrontierBodyFetchStage::Voters;
     actor.frontier_slot = Some(slot);
 
     assert!(
@@ -81171,7 +81170,7 @@ async fn frontier_body_next_due_voter_stage_uses_cached_remote_voters_after_lead
         None,
         None,
     );
-    slot.fetch_stage = super::FrontierBodyFetchStage::Voters;
+    slot.repair_state.fetch_stage = super::FrontierBodyFetchStage::Voters;
     actor.frontier_slot = Some(slot);
 
     let expected = now
@@ -81262,7 +81261,7 @@ async fn frontier_body_next_due_keeps_retry_armed_when_body_present_but_commit_q
     );
     slot.leader = Some(remote_peer);
     slot.timers.last_fetch_at = Some(last_fetch_at);
-    slot.last_fetch_at = Some(last_fetch_at);
+    slot.timers.last_fetch_at = Some(last_fetch_at);
     actor.frontier_slot = Some(slot);
     actor.pending.missing_commit_qc_requests.insert(
         block_hash,
@@ -81417,7 +81416,7 @@ async fn frontier_body_next_due_returns_retry_deadline_after_grace_elapses() {
     );
     slot.leader = Some(remote_peer);
     slot.timers.last_fetch_at = Some(last_fetch_at);
-    slot.last_fetch_at = Some(last_fetch_at);
+    slot.timers.last_fetch_at = Some(last_fetch_at);
     actor.frontier_slot = Some(slot);
 
     let expected = last_fetch_at
@@ -83638,7 +83637,7 @@ async fn trigger_view_change_quorum_timeout_suppressed_while_future_gap_seeded_s
     let slot = actor.frontier_slot.as_ref().expect("frontier slot");
     assert_eq!(slot.block_hash, block_hash);
     assert!(
-        slot.exact_fetch_armed && !slot.body_present,
+        slot.exact_fetch_armed && !slot.body_present(),
         "future-gap evidence must seed the exact frontier owner without generic body materialization"
     );
     assert!(
@@ -83665,7 +83664,7 @@ async fn trigger_view_change_quorum_timeout_suppressed_while_future_gap_seeded_s
         actor
             .frontier_slot
             .as_ref()
-            .is_some_and(|slot| slot.last_fetch_at.is_some()),
+            .is_some_and(|slot| slot.timers.last_fetch_at.is_some()),
         "quorum-timeout suppression must feed a slot-owned exact body fetch"
     );
     let entries = take_background_log(&background_log);
@@ -83746,7 +83745,7 @@ async fn trigger_view_change_quorum_timeout_suppressed_for_exact_frontier_slot()
     );
     let slot = actor.frontier_slot.as_ref().expect("frontier slot");
     assert!(
-        slot.last_fetch_at.is_some(),
+        slot.timers.last_fetch_at.is_some(),
         "suppressed quorum timeout must arm an exact body retry for the same slot"
     );
     assert!(
@@ -85170,7 +85169,6 @@ async fn prune_stale_view_state_preserves_live_frontier_owner_and_validation_inf
     {
         let slot = actor.frontier_slot.as_mut().expect("frontier slot");
         slot.active_view = view.saturating_add(1);
-        slot.sync_compat_fields();
     }
     actor.subsystems.validation.inflight.insert(
         block_hash,
@@ -85241,7 +85239,6 @@ async fn prune_stale_view_state_preserves_live_frontier_owner_with_commit_qc_obs
         let slot = actor.frontier_slot.as_mut().expect("frontier slot");
         slot.active_view = view.saturating_add(1);
         slot.quorum_progress.commit_qc_observed = true;
-        slot.sync_compat_fields();
     }
 
     actor.prune_stale_view_state(height, view.saturating_add(1));
@@ -85299,7 +85296,6 @@ async fn prune_stale_view_state_retires_old_view_frontier_pending_without_inflig
     {
         let slot = actor.frontier_slot.as_mut().expect("frontier slot");
         slot.active_view = view.saturating_add(1);
-        slot.sync_compat_fields();
     }
 
     actor.prune_stale_view_state(height, view.saturating_add(1));
@@ -102592,7 +102588,7 @@ async fn proposal_repairs_no_pending_commit_qc_frontier_owner() {
         "commit-QC protected owner without local pending body should arm exact body repair"
     );
     assert!(
-        !slot.body_present,
+        !slot.body_present(),
         "test setup keeps the body absent so repair must fetch it from peers"
     );
     assert!(
@@ -102674,7 +102670,6 @@ async fn proposal_clears_hard_stale_no_pending_commit_qc_marker_without_cached_q
         slot.quorum_progress.commit_qc_observed = true;
         slot.quorum_progress.last_commit_qc_at = Some(hard_stale_at);
         slot.phase = super::FrontierSlotPhase::AwaitBody;
-        slot.sync_compat_fields();
     }
 
     assert!(
@@ -102771,7 +102766,6 @@ async fn proposal_clears_empty_queue_hard_stale_frontier_owner_for_recovery_hear
         slot.quorum_progress.commit_qc_observed = true;
         slot.quorum_progress.last_commit_qc_at = Some(hard_stale_at);
         slot.phase = super::FrontierSlotPhase::AwaitBody;
-        slot.sync_compat_fields();
     }
 
     assert_eq!(
@@ -102878,7 +102872,6 @@ async fn proposal_yields_hard_stale_pending_owner_with_slot_only_commit_qc_marke
         slot.quorum_progress.commit_qc_observed = true;
         slot.quorum_progress.last_commit_qc_at = Some(hard_stale_at);
         slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
-        slot.sync_compat_fields();
     }
 
     assert!(
@@ -102993,7 +102986,6 @@ async fn proposal_keeps_hard_stale_pending_commit_qc_owner_without_cached_qc() {
         slot.quorum_progress.commit_qc_observed = true;
         slot.quorum_progress.last_commit_qc_at = Some(hard_stale_at);
         slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
-        slot.sync_compat_fields();
     }
 
     assert!(
@@ -103234,7 +103226,7 @@ async fn cached_recovery_proposal_with_hint_repairs_missing_body_before_rotation
                 && slot.view == view
                 && slot.block_hash == missing_hash
                 && slot.exact_fetch_armed
-                && !slot.body_present
+                && !slot.body_present()
         }),
         "missing cached body should be routed through exact frontier repair"
     );
@@ -111610,7 +111602,7 @@ async fn proposal_missing_highest_qc_fetches_aborted_payload() {
                     && slot.view == view
                     && slot.block_hash == block_hash
                     && slot.exact_fetch_armed
-                    && !slot.body_present
+                    && !slot.body_present()
             }),
         "aborted pending payload for highest QC should still trigger explicit dependency repair"
     );
@@ -114504,7 +114496,7 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
         "exact frontier missing highest-QC block should keep exact body fetch armed"
     );
     assert!(
-        !frontier_slot.body_present,
+        !frontier_slot.body_present(),
         "exact frontier missing highest-QC block should stay body-missing until fetch succeeds"
     );
     assert!(
@@ -120506,7 +120498,7 @@ async fn fresh_proposal_escalates_vote_locked_recovery_before_rotation_escape_wi
         "bounded escalation should arm exact body repair before falling back to range repair"
     );
     assert!(
-        !slot.body_present,
+        !slot.body_present(),
         "the recovery target should remain body-missing until exact repair delivers it"
     );
 
@@ -121691,7 +121683,6 @@ async fn keep_frontier_pending_active_across_view_change_uses_commit_inflight_fo
     {
         let slot = actor.frontier_slot.as_mut().expect("frontier slot");
         slot.active_view = later_view;
-        slot.sync_compat_fields();
     }
     actor.subsystems.commit.inflight = Some(commit_inflight_for_block(
         actor,
@@ -121922,7 +121913,6 @@ async fn keep_frontier_pending_active_across_view_change_uses_validation_infligh
         let slot = actor.frontier_slot.as_mut().expect("frontier slot");
         slot.active_view = later_view;
         slot.lock_state = super::FrontierOwnerLockState::LocallyVoted;
-        slot.sync_compat_fields();
     }
     actor.subsystems.validation.inflight.insert(
         owner_hash,
@@ -121988,7 +121978,7 @@ async fn frontier_slot_has_active_owner_state_for_view_uses_exact_fetch_flag_wit
     );
     slot.candidate.exact_fetch_armed = true;
     slot.phase = super::FrontierSlotPhase::AwaitBlockCreated;
-    slot.sync_compat_fields();
+
     actor.frontier_slot = Some(slot);
 
     assert!(
@@ -122030,7 +122020,7 @@ async fn frontier_slot_has_active_owner_state_for_view_treats_deep_catchup_witho
     slot.mark_deep_catchup(now, "test_active_deep_catchup");
     slot.phase = super::FrontierSlotPhase::AwaitBlockCreated;
     slot.candidate.exact_fetch_armed = false;
-    slot.sync_compat_fields();
+
     actor.frontier_slot = Some(slot);
 
     assert!(
@@ -122071,9 +122061,9 @@ async fn frontier_slot_has_active_owner_state_for_view_ignores_finalized_slot_ev
     slot.mode = super::FrontierSlotMode::Finalized;
     slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
     slot.candidate.exact_fetch_armed = true;
-    slot.candidate.body_state = super::FrontierBodyState::Available;
+    slot.candidate.body_state = super::slot_tracker::FrontierBodyState::Available;
     slot.quorum_progress.commit_qc_observed = true;
-    slot.sync_compat_fields();
+
     actor.frontier_slot = Some(slot);
 
     assert!(
@@ -122125,7 +122115,6 @@ async fn keep_frontier_pending_active_across_view_change_uses_pending_commit_qc_
         slot.active_view = later_view;
         slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
         slot.quorum_progress.commit_qc_observed = true;
-        slot.sync_compat_fields();
     }
 
     assert!(
@@ -122349,7 +122338,6 @@ async fn keep_frontier_pending_active_across_view_change_drops_pending_commit_qc
         slot.active_view = later_view;
         slot.phase = super::FrontierSlotPhase::AwaitCommitQc;
         slot.quorum_progress.commit_qc_observed = true;
-        slot.sync_compat_fields();
     }
 
     assert!(
@@ -132938,7 +132926,7 @@ async fn assert_rbc_init_missing_payload_arms_frontier_body_repair(
         "INIT metadata alone must not become authoritative BlockCreated ownership"
     );
     assert!(
-        !frontier_slot.body_present,
+        !frontier_slot.body_present(),
         "frontier INIT payload gaps must still treat the body as missing"
     );
     assert!(
@@ -133238,7 +133226,7 @@ async fn maybe_emit_rbc_ready_metadata_only_on_exact_frontier_arms_body_repair()
     assert_eq!(frontier_slot.height, height);
     assert_eq!(frontier_slot.view, view);
     assert!(frontier_slot.exact_fetch_armed);
-    assert!(!frontier_slot.body_present);
+    assert!(!frontier_slot.body_present());
     assert!(
         take_background_log(&background_log)
             .into_iter()
@@ -135276,7 +135264,7 @@ async fn block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontie
     assert_eq!(frontier_slot.view, view);
     assert_eq!(frontier_slot.block_hash, conflicting_hash);
     assert!(
-        frontier_slot.body_present,
+        frontier_slot.body_present(),
         "commit-evidenced block sync update should retain the incoming body in the exact frontier slot"
     );
     assert!(
@@ -135523,7 +135511,7 @@ async fn commit_qc_conflicting_unknown_frontier_block_supersedes_live_owner_and_
         "the superseded owner should become a passive same-height payload"
     );
     assert!(
-        slot.exact_fetch_armed && !slot.body_present,
+        slot.exact_fetch_armed && !slot.body_present(),
         "certified same-height recovery should arm exact frontier body repair for the winning block"
     );
     assert_eq!(
@@ -135637,7 +135625,7 @@ async fn commit_qc_conflicting_unknown_lower_view_frontier_block_supersedes_live
         "the superseded higher-view owner should become a passive same-height payload"
     );
     assert!(
-        slot.exact_fetch_armed && !slot.body_present,
+        slot.exact_fetch_armed && !slot.body_present(),
         "lower-view certified recovery should arm exact frontier body repair for the winning block"
     );
     assert_eq!(
@@ -136921,7 +136909,6 @@ async fn frontier_recovery_same_slot_activity_is_exact_slot_scoped() {
     slot.quorum_progress.last_vote_at = Some(now);
     slot.timers.last_progress_at = now;
     slot.timers.last_updated_at = now;
-    slot.sync_compat_fields();
 
     assert!(
         actor.frontier_recovery_same_slot_payload_progress_recent(height, view, now),
@@ -136958,7 +136945,7 @@ async fn frontier_recovery_same_slot_activity_is_exact_slot_scoped() {
     slot.quorum_progress.last_vote_at = Some(stale_progress_at);
     slot.timers.last_progress_at = stale_progress_at;
     slot.timers.last_updated_at = refreshed_at;
-    slot.sync_compat_fields();
+
     assert!(
         !actor.frontier_recovery_same_slot_vote_backed_recovery_active(height, view, refreshed_at),
         "bookkeeping-only refreshes must not keep stale sub-quorum vote-backed recovery active"
@@ -137302,7 +137289,7 @@ async fn proposal_missing_highest_qc_triggers_dependency_repair_without_acceptin
             && slot.view == view
             && slot.block_hash == missing_parent
             && slot.exact_fetch_armed
-            && !slot.body_present
+            && !slot.body_present()
     });
     assert!(
         missing_request.is_some_and(|request| {
@@ -137373,7 +137360,7 @@ async fn proposal_hint_missing_highest_qc_triggers_missing_block_fetch() {
             && slot.view == view
             && slot.block_hash == missing_parent
             && slot.exact_fetch_armed
-            && !slot.body_present
+            && !slot.body_present()
     });
     assert!(
         missing_request.is_some_and(|request| {
@@ -149326,7 +149313,7 @@ async fn rebroadcast_stalled_rbc_payloads_requests_chunks_for_recovered_exact_fr
     assert_eq!(slot.height, height);
     assert_eq!(slot.view, view);
     assert!(slot.exact_fetch_armed);
-    assert!(!slot.body_present);
+    assert!(!slot.body_present());
 
     let background_log = attach_background_log(actor);
     let _ = take_background_log(&background_log);
@@ -150224,9 +150211,11 @@ fn derive_vrf_material_is_deterministic() {
     let chain_hash = Hash::new(chain.clone().into_inner().as_bytes());
 
     let (reveal_a, commit_a) =
-        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3);
+        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3)
+            .expect("VRF material signing succeeds");
     let (reveal_b, commit_b) =
-        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3);
+        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3)
+            .expect("VRF material signing succeeds");
 
     assert_eq!(reveal_a, reveal_b);
     assert_eq!(commit_a, commit_b);
@@ -153896,7 +153885,7 @@ async fn passive_frontier_slot_without_external_dependency_allows_idle_missing_q
         None,
     );
     passive_slot.mark_passive_catchup(stalled_at, "test_passive_without_dependency");
-    passive_slot.sync_compat_fields();
+
     actor.frontier_slot = Some(passive_slot);
 
     assert!(
@@ -155118,7 +155107,6 @@ async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
         slot.timers.last_progress_at = stalled_at;
         slot.timers.last_updated_at = stalled_at;
         slot.quorum_progress.last_vote_at = Some(stalled_at);
-        slot.sync_compat_fields();
     }
     actor
         .pending
@@ -162932,7 +162920,7 @@ async fn keep_exact_frontier_block_sync_repair_in_slot_clears_generic_missing_re
         "exact frontier repair should arm exact-body fetch",
     );
     assert!(
-        !slot.body_present,
+        !slot.body_present(),
         "exact frontier repair should keep the body marked missing until fetched",
     );
     assert_eq!(
@@ -162959,7 +162947,7 @@ async fn keep_exact_frontier_block_sync_repair_in_slot_clears_generic_missing_re
         .checked_sub(grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or_else(Instant::now);
     slot.timers.observed_at = observed_at;
-    slot.observed_at = observed_at;
+    slot.timers.observed_at = observed_at;
     let _ = take_background_log(&background_log);
 
     assert!(
@@ -164749,7 +164737,7 @@ async fn stale_view_hint_backed_rbc_chunk_seeds_frontier_repair_without_session(
                 && slot.view == view
                 && slot.block_hash == block_hash
                 && slot.exact_fetch_armed
-                && !slot.body_present
+                && !slot.body_present()
         }),
         "stashed stale RBC should arm exact frontier body repair"
     );

@@ -469,6 +469,7 @@ fn expected_fhe_execution_policy() -> FheExecutionPolicyV1 {
         bootstrap_key_zero_refresh_proof_statement_digest: Some(
             expected_fhe_bootstrap_key_proof_statement_digest(),
         ),
+        full_bootstrap_material_proof_statement_digest: None,
         max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
         max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
         max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
@@ -635,6 +636,17 @@ where
     let decoded = <T as Decode>::decode(&mut cursor).expect("decode succeeds");
     assert!(cursor.is_empty(), "decode must consume all bytes");
     assert_eq!(decoded, *value, "roundtrip must preserve payload");
+}
+
+fn decode_norito_roundtrip<T>(value: &T) -> T
+where
+    T: Encode + Decode,
+{
+    let encoded = Encode::encode(value);
+    let mut cursor = encoded.as_slice();
+    let decoded = <T as Decode>::decode(&mut cursor).expect("decode succeeds");
+    assert!(cursor.is_empty(), "decode must consume all bytes");
+    decoded
 }
 
 #[cfg(feature = "json")]
@@ -1916,11 +1928,129 @@ fn fhe_execution_policy_fixture_is_canonical() {
         FHE_EXECUTION_POLICY_FIXTURE,
         &policy,
     );
+    assert!(
+        policy.max_bootstrap_count > 0,
+        "canonical FHE policy fixture must exercise bootstrap-capable validation"
+    );
+    assert!(
+        policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .is_some(),
+        "bootstrap-capable FHE policy fixture must bind a proof statement digest"
+    );
     assert_norito_roundtrip(&policy);
     policy.validate().expect("fixture should validate");
     policy
         .validate_for_param_set(&expected_fhe_param_set())
         .expect("fixture should match expected parameter set");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn fhe_execution_policy_fixture_rejects_adversarial_bootstrap_digest_drift() {
+    let mut missing_digest: json::Value =
+        json::from_str(FHE_EXECUTION_POLICY_FIXTURE).expect("fixture must decode as JSON value");
+    let object = missing_digest
+        .as_object_mut()
+        .expect("fixture root must be object");
+    assert!(
+        object
+            .remove("bootstrap_key_zero_refresh_proof_statement_digest")
+            .is_some(),
+        "fixture should declare bootstrap proof digest before the omission check"
+    );
+    let decoded_missing_digest: FheExecutionPolicyV1 =
+        json::from_value(missing_digest).expect("defaulted digest omission must still decode");
+    let error = decoded_missing_digest
+        .validate()
+        .expect_err("bootstrap-capable decoded fixture must reject missing proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut stale_digest = expected_fhe_execution_policy();
+    stale_digest.max_bootstrap_count = 0;
+    let error = stale_digest
+        .validate()
+        .expect_err("zero-bootstrap policies must reject stale proof digests");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut non_bootstrap_json: json::Value =
+        json::from_str(FHE_EXECUTION_POLICY_FIXTURE).expect("fixture must decode as JSON value");
+    let object = non_bootstrap_json
+        .as_object_mut()
+        .expect("fixture root must be object");
+    object.insert(
+        "max_bootstrap_count".to_string(),
+        json::Value::Number(0_u64.into()),
+    );
+    assert!(
+        object
+            .remove("bootstrap_key_zero_refresh_proof_statement_digest")
+            .is_some(),
+        "fixture should declare bootstrap proof digest before the zero-budget check"
+    );
+    let decoded_non_bootstrap: FheExecutionPolicyV1 =
+        json::from_value(non_bootstrap_json).expect("non-bootstrap omitted digest must decode");
+    decoded_non_bootstrap
+        .validate()
+        .expect("zero-bootstrap decoded fixture may omit the proof digest");
+}
+
+#[test]
+fn fhe_execution_policy_norito_rejects_adversarial_bootstrap_digest_drift_after_decode() {
+    let param_set = expected_fhe_param_set();
+
+    let mut missing_digest = expected_fhe_execution_policy();
+    missing_digest.bootstrap_key_zero_refresh_proof_statement_digest = None;
+    let decoded_missing_digest: FheExecutionPolicyV1 = decode_norito_roundtrip(&missing_digest);
+    assert!(
+        decoded_missing_digest.max_bootstrap_count > 0,
+        "test policy must remain bootstrap-capable after binary decode"
+    );
+    let error = decoded_missing_digest
+        .validate_for_param_set(&param_set)
+        .expect_err("binary-decoded bootstrap policy must reject missing proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut stale_digest = expected_fhe_execution_policy();
+    stale_digest.max_bootstrap_count = 0;
+    let decoded_stale_digest: FheExecutionPolicyV1 = decode_norito_roundtrip(&stale_digest);
+    let error = decoded_stale_digest
+        .validate_for_param_set(&param_set)
+        .expect_err("binary-decoded zero-bootstrap policy must reject stale proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut non_bootstrap_policy = expected_fhe_execution_policy();
+    non_bootstrap_policy.max_bootstrap_count = 0;
+    non_bootstrap_policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+    let decoded_non_bootstrap: FheExecutionPolicyV1 =
+        decode_norito_roundtrip(&non_bootstrap_policy);
+    decoded_non_bootstrap
+        .validate_for_param_set(&param_set)
+        .expect("binary-decoded zero-bootstrap policy may omit the proof digest");
 }
 
 #[cfg(feature = "json")]
@@ -1936,6 +2066,124 @@ fn fhe_governance_bundle_fixture_is_canonical() {
     bundle
         .validate_for_admission()
         .expect("fixture should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
+    let mut missing_digest: json::Value =
+        json::from_str(FHE_GOVERNANCE_BUNDLE_FIXTURE).expect("fixture must decode as JSON value");
+    let execution_policy = missing_digest
+        .as_object_mut()
+        .expect("fixture root must be object")
+        .get_mut("execution_policy")
+        .expect("fixture must carry execution_policy")
+        .as_object_mut()
+        .expect("execution_policy must be object");
+    assert!(
+        execution_policy
+            .remove("bootstrap_key_zero_refresh_proof_statement_digest")
+            .is_some(),
+        "bundle fixture should declare bootstrap proof digest before the omission check"
+    );
+    let decoded_missing_digest: FheGovernanceBundleV1 =
+        json::from_value(missing_digest).expect("defaulted nested digest omission must decode");
+    let error = decoded_missing_digest
+        .validate_for_admission()
+        .expect_err("bootstrap-capable nested policy must reject missing proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut stale_digest = expected_fhe_governance_bundle();
+    stale_digest.execution_policy.max_bootstrap_count = 0;
+    let error = stale_digest
+        .validate_for_admission()
+        .expect_err("zero-bootstrap nested policy must reject stale proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut non_bootstrap_json: json::Value =
+        json::from_str(FHE_GOVERNANCE_BUNDLE_FIXTURE).expect("fixture must decode as JSON value");
+    let execution_policy = non_bootstrap_json
+        .as_object_mut()
+        .expect("fixture root must be object")
+        .get_mut("execution_policy")
+        .expect("fixture must carry execution_policy")
+        .as_object_mut()
+        .expect("execution_policy must be object");
+    execution_policy.insert(
+        "max_bootstrap_count".to_string(),
+        json::Value::Number(0_u64.into()),
+    );
+    assert!(
+        execution_policy
+            .remove("bootstrap_key_zero_refresh_proof_statement_digest")
+            .is_some(),
+        "bundle fixture should declare bootstrap proof digest before the zero-budget check"
+    );
+    let decoded_non_bootstrap: FheGovernanceBundleV1 =
+        json::from_value(non_bootstrap_json).expect("non-bootstrap omitted digest must decode");
+    decoded_non_bootstrap
+        .validate_for_admission()
+        .expect("zero-bootstrap nested policy may omit the proof digest");
+}
+
+#[test]
+fn fhe_governance_bundle_norito_rejects_adversarial_policy_digest_drift_after_decode() {
+    let mut missing_digest = expected_fhe_governance_bundle();
+    missing_digest
+        .execution_policy
+        .bootstrap_key_zero_refresh_proof_statement_digest = None;
+    let decoded_missing_digest: FheGovernanceBundleV1 = decode_norito_roundtrip(&missing_digest);
+    assert!(
+        decoded_missing_digest.execution_policy.max_bootstrap_count > 0,
+        "test bundle policy must remain bootstrap-capable after binary decode"
+    );
+    let error = decoded_missing_digest
+        .validate_for_admission()
+        .expect_err("binary-decoded bootstrap bundle must reject missing proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut stale_digest = expected_fhe_governance_bundle();
+    stale_digest.execution_policy.max_bootstrap_count = 0;
+    let decoded_stale_digest: FheGovernanceBundleV1 = decode_norito_roundtrip(&stale_digest);
+    let error = decoded_stale_digest
+        .validate_for_admission()
+        .expect_err("binary-decoded zero-bootstrap bundle must reject stale proof digest");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut non_bootstrap_bundle = expected_fhe_governance_bundle();
+    non_bootstrap_bundle.execution_policy.max_bootstrap_count = 0;
+    non_bootstrap_bundle
+        .execution_policy
+        .bootstrap_key_zero_refresh_proof_statement_digest = None;
+    let decoded_non_bootstrap: FheGovernanceBundleV1 =
+        decode_norito_roundtrip(&non_bootstrap_bundle);
+    decoded_non_bootstrap
+        .validate_for_admission()
+        .expect("binary-decoded zero-bootstrap bundle may omit the proof digest");
 }
 
 #[cfg(feature = "json")]

@@ -75,6 +75,7 @@ fn create_role_grant_and_revoke_affects_permissions() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     // Note: No direct MintAsset permission for alice; the role will grant it.
 
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
@@ -216,6 +217,7 @@ fn create_role_with_permissions_key_then_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

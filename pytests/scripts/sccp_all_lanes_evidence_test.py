@@ -92,20 +92,6 @@ def load_ton_live_module():
     return module
 
 
-def load_substrate_live_module():
-    script_path = (
-        Path(__file__).resolve().parents[2]
-        / "scripts"
-        / "sccp_substrate_live_evidence.py"
-    )
-    spec = spec_from_file_location("sccp_substrate_live_evidence_for_all_lanes", script_path)
-    module = module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)  # type: ignore[assignment]
-    return module
-
-
 def hex32(seed):
     return "0x" + f"{seed % 256:02x}" * 32
 
@@ -880,57 +866,6 @@ def fake_ton_live_opener(
     )
 
 
-def fake_substrate_live_opener(
-    module,
-    *,
-    finalized_head,
-    runtime_code,
-    spec_name="sora2",
-    spec_version=1234,
-    transaction_version=7,
-):
-    def opener(request, timeout):
-        del timeout
-        payload = json.loads(request.data.decode("utf-8"))
-        method = payload["method"]
-        if method == "chain_getFinalizedHead":
-            return FakeResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": payload["id"],
-                    "result": "0x" + finalized_head.hex(),
-                }
-            )
-        if method == "state_getRuntimeVersion":
-            assert payload["params"] == ["0x" + finalized_head.hex()]
-            return FakeResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": payload["id"],
-                    "result": {
-                        "specName": spec_name,
-                        "specVersion": spec_version,
-                        "transactionVersion": transaction_version,
-                    },
-                }
-            )
-        if method == "state_getStorage":
-            assert payload["params"] == [
-                module.RUNTIME_CODE_STORAGE_KEY,
-                "0x" + finalized_head.hex(),
-            ]
-            return FakeResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": payload["id"],
-                    "result": "0x" + runtime_code.hex(),
-                }
-            )
-        raise AssertionError(f"unexpected method {method}")
-
-    return opener
-
-
 def verifier_identity(profile, seed):
     if profile.chain in ("eth", "bsc"):
         return hex20(seed + 20)
@@ -1272,29 +1207,6 @@ def destination_rollout(module, profile, material, seed):
         record["destination_binding_key"] = tron_module.tron_destination_binding_key(
             **binding_args
         )
-    elif profile.chain.startswith("sora"):
-        substrate_module = module._load_sibling_module(
-            "sccp_substrate_destination_evidence.py"
-        )
-        runtime_code = bytes([0x00, 0x61, 0x73, 0x6D, seed & 0xFF, 0x01])
-        record["verifier_code_hash"] = (
-            "0x" + substrate_module.substrate_runtime_code_hash(runtime_code).hex()
-        )
-        record["destination_binding_key"] = substrate_module.substrate_destination_binding_key(
-            profile.domain
-        )
-        record["destination_binding_hash"] = (
-            "0x"
-            + substrate_module.substrate_destination_binding_hash(profile.domain).hex()
-        )
-        record["_comment_substrate_finalized_head"] = hex32(seed + 25)
-        record["_comment_substrate_runtime_spec_name"] = profile.chain
-        record["_comment_substrate_runtime_spec_version"] = str(1000 + seed)
-        record["_comment_substrate_runtime_transaction_version"] = str(10 + seed)
-        record["_comment_substrate_runtime_code_hash"] = record["verifier_code_hash"]
-        record["_comment_substrate_runtime_code_base64"] = base64.b64encode(
-            runtime_code
-        ).decode("ascii")
     return record
 
 
@@ -1601,41 +1513,6 @@ def route_allowlist(
             ),
         )
         route["_comment_route_canary_evidence_hash"] = "0x" + canary_hash.hex()
-    elif (
-        profile.chain.startswith("sora")
-        and destination is not None
-        and source_record_hashes is not None
-        and destination_binding_hash is not None
-    ):
-        substrate_module = module._load_sibling_module(
-            "sccp_substrate_destination_evidence.py"
-        )
-        canary_hash = substrate_module.substrate_route_canary_evidence_hash(
-            domain=profile.domain,
-            route_allowlist_hash=raw_hex(route_hash),
-            destination_binding_hash=raw_hex(destination_binding_hash),
-            source_verifier_material_hash=raw_hex(
-                source_record_hashes["source_verifier_material_hash"]
-            ),
-            source_adapter_engine_deployment_hash=raw_hex(
-                source_record_hashes["source_adapter_engine_deployment_hash"]
-            ),
-            verifier_entrypoint=destination["verifier_identity"],
-            verifier_code_hash=raw_hex(destination["verifier_code_hash"]),
-            finalized_head=raw_hex(destination["_comment_substrate_finalized_head"]),
-            runtime_spec_name=destination["_comment_substrate_runtime_spec_name"],
-            runtime_spec_version=int(
-                destination["_comment_substrate_runtime_spec_version"]
-            ),
-            runtime_transaction_version=int(
-                destination["_comment_substrate_runtime_transaction_version"]
-            ),
-            runtime_code=substrate_module.parse_runtime_code_base64(
-                destination["_comment_substrate_runtime_code_base64"],
-                label="Substrate runtime code",
-            ),
-        )
-        route["_comment_route_canary_evidence_hash"] = "0x" + canary_hash.hex()
     return route
 
 
@@ -1715,22 +1592,6 @@ def complete_bundle(module):
                 + tron_module.tron_dpos_source_gate_hash(
                     args,
                     raw_hex(material["source_bridge_config_hash"]),
-                ).hex()
-            )
-        if profile.chain.startswith("sora"):
-            substrate_module = module._load_sibling_module(
-                "sccp_substrate_source_evidence.py"
-            )
-            deployment["adapter_verifier_vk_hash"] = (
-                "0x"
-                + substrate_module.substrate_source_adapter_verifier_vk_hash(
-                    profile.domain
-                ).hex()
-            )
-            deployment["_comment_substrate_runtime_storage_gate_hash"] = (
-                "0x"
-                + substrate_module.substrate_runtime_storage_gate_hash(
-                    module._substrate_source_args(material, deployment)
                 ).hex()
             )
         source_record_hashes = module._canonical_source_record_hashes(
@@ -1900,22 +1761,7 @@ def destination_comment_lines(entry):
             "# sccp_tron_destination_binding_key = "
             + toml_value(entry["destination_binding_key"]),
         ]
-    return [
-        "# sccp_substrate_finalized_head = "
-        + toml_value(entry["_comment_substrate_finalized_head"]),
-        "# sccp_substrate_runtime_spec_name = "
-        + toml_value(entry["_comment_substrate_runtime_spec_name"]),
-        "# sccp_substrate_runtime_spec_version = "
-        + toml_value(entry["_comment_substrate_runtime_spec_version"]),
-        "# sccp_substrate_runtime_transaction_version = "
-        + toml_value(entry["_comment_substrate_runtime_transaction_version"]),
-        "# sccp_substrate_runtime_code_hash = "
-        + toml_value(entry["_comment_substrate_runtime_code_hash"]),
-        "# sccp_substrate_runtime_code_base64 = "
-        + toml_value(entry["_comment_substrate_runtime_code_base64"]),
-        "# sccp_substrate_destination_binding_hash = "
-        + toml_value(entry["destination_binding_hash"])
-    ]
+    return []
 
 
 SOURCE_VERIFIER_MATERIAL_COMMENT_KEYS = {
@@ -1924,9 +1770,6 @@ SOURCE_VERIFIER_MATERIAL_COMMENT_KEYS = {
     "sol": "sccp_solana_source_verifier_material_hash",
     "ton": "sccp_ton_source_verifier_material_hash",
     "tron": "sccp_tron_source_verifier_material_hash",
-    "sora-kusama": "sccp_substrate_source_verifier_material_hash",
-    "sora-polkadot": "sccp_substrate_source_verifier_material_hash",
-    "sora2": "sccp_substrate_source_verifier_material_hash",
 }
 SOURCE_DEPLOYMENT_COMMENT_KEYS = {
     "eth": "sccp_eth_source_adapter_engine_deployment_hash",
@@ -1934,9 +1777,6 @@ SOURCE_DEPLOYMENT_COMMENT_KEYS = {
     "sol": "sccp_solana_source_adapter_engine_deployment_hash",
     "ton": "sccp_ton_source_adapter_engine_deployment_hash",
     "tron": "sccp_tron_source_adapter_engine_deployment_hash",
-    "sora-kusama": "sccp_substrate_source_adapter_engine_deployment_hash",
-    "sora-polkadot": "sccp_substrate_source_adapter_engine_deployment_hash",
-    "sora2": "sccp_substrate_source_adapter_engine_deployment_hash",
 }
 
 
@@ -2011,11 +1851,6 @@ def source_deployment_comment_lines(entry):
         + " = "
         + toml_value(entry["_comment_source_adapter_engine_deployment_hash"])
     ]
-    if "_comment_substrate_runtime_storage_gate_hash" in entry:
-        comments.append(
-            "# sccp_substrate_runtime_storage_gate_hash = "
-            + toml_value(entry["_comment_substrate_runtime_storage_gate_hash"])
-        )
     return comments
 
 
@@ -2351,14 +2186,8 @@ def test_all_lanes_evidence_bundle_is_ready():
         for value in lane["source_record_hashes"].values():
             assert value.startswith("0x")
             assert len(value) == 66
-        if lane["domain"] in module.SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS:
-            assert lane["production_ready"] is False
-            assert lane["blockers"] == [
-                module.SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
-            ]
-        else:
-            assert lane["production_ready"] is True
-            assert lane["blockers"] == []
+        assert lane["production_ready"] is True
+        assert lane["blockers"] == []
         source_adapter_gate = lane["source_adapter_gate"]
         if lane["chain"] == "sol":
             deployment = deployments_by_domain[lane["domain"]]
@@ -2392,19 +2221,6 @@ def test_all_lanes_evidence_bundle_is_ready():
             assert set(source_adapter_gate["audit_hashes"]) == {
                 "tron_dpos_source_gate_hash"
             }
-            assert source_adapter_gate["blockers"] == []
-        elif lane["chain"].startswith("sora"):
-            assert source_adapter_gate["required"] is True
-            assert source_adapter_gate["ready"] is True
-            assert set(source_adapter_gate["audit_hashes"]) == {
-                "substrate_runtime_storage_gate_hash"
-            }
-            assert (
-                source_adapter_gate["gate_hash"]
-                == source_adapter_gate["audit_hashes"][
-                    "substrate_runtime_storage_gate_hash"
-                ]
-            )
             assert source_adapter_gate["blockers"] == []
         else:
             assert source_adapter_gate == {
@@ -2536,6 +2352,7 @@ def test_all_lanes_evidence_rejects_route_canary_comment_drift():
 def test_all_lanes_evidence_rejects_unsupported_domain_records():
     module = load_evidence_module()
     records = complete_bundle(module)
+    expected_record_index = len(module.SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS)
 
     extra_material = dict(records["sccp_source_verifier_materials"][0])
     extra_material["source_domain"] = 99
@@ -2555,15 +2372,23 @@ def test_all_lanes_evidence_rejects_unsupported_domain_records():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert (
-        "sccp_source_verifier_materials: record 8 uses unsupported source_domain 99"
+        f"sccp_source_verifier_materials: record {expected_record_index} "
+        "uses unsupported source_domain 99"
         in blockers
     )
     assert (
-        "sccp_source_adapter_engine_deployments: record 8 uses unsupported source_domain 99"
+        f"sccp_source_adapter_engine_deployments: record {expected_record_index} "
+        "uses unsupported source_domain 99"
         in blockers
     )
-    assert "sccp_destination_rollouts: record 8 uses unsupported domain 99" in blockers
-    assert "sccp_route_allowlists: record 8 uses unsupported domain 99" in blockers
+    assert (
+        f"sccp_destination_rollouts: record {expected_record_index} "
+        "uses unsupported domain 99"
+    ) in blockers
+    assert (
+        f"sccp_route_allowlists: record {expected_record_index} "
+        "uses unsupported domain 99"
+    ) in blockers
 
 
 def test_all_lanes_evidence_rejects_boolean_domain_fields():
@@ -2714,19 +2539,6 @@ def test_all_lanes_loads_source_record_hash_comments_from_toml(tmp_path):
     ] == records["sccp_source_adapter_engine_deployments"][0][
         "_comment_source_adapter_engine_deployment_hash"
     ]
-    loaded_substrate_deployment = next(
-        deployment
-        for deployment in loaded["sccp_source_adapter_engine_deployments"]
-        if deployment["source_domain"] == module.SCCP_DOMAIN_SORA_KUSAMA
-    )
-    substrate_deployment = next(
-        deployment
-        for deployment in records["sccp_source_adapter_engine_deployments"]
-        if deployment["source_domain"] == module.SCCP_DOMAIN_SORA_KUSAMA
-    )
-    assert loaded_substrate_deployment[
-        "_comment_substrate_runtime_storage_gate_hash"
-    ] == substrate_deployment["_comment_substrate_runtime_storage_gate_hash"]
     assert module.validate_evidence_bundle(loaded)["production_ready"] is True
 
 
@@ -4577,16 +4389,12 @@ def test_all_lanes_rejects_foreign_destination_live_fields():
     sol_destination = records["sccp_destination_rollouts"][2]
     ton_destination = records["sccp_destination_rollouts"][3]
     tron_destination = records["sccp_destination_rollouts"][4]
-    substrate_destination = records["sccp_destination_rollouts"][5]
 
     eth_destination["_comment_solana_programdata_address"] = sol_destination[
         "_comment_solana_programdata_address"
     ]
     eth_destination["ton_account_state_hash"] = ton_destination[
         "ton_account_state_hash"
-    ]
-    eth_destination["_comment_substrate_runtime_spec_name"] = substrate_destination[
-        "_comment_substrate_runtime_spec_name"
     ]
     sol_destination["_comment_evm_verifier_key_hash"] = eth_destination[
         "_comment_evm_verifier_key_hash"
@@ -4609,10 +4417,6 @@ def test_all_lanes_rejects_foreign_destination_live_fields():
     assert (
         "domain 1 (eth): ton_account_state_hash is only valid for "
         "TON destination live evidence"
-    ) in blockers
-    assert (
-        "domain 1 (eth): _comment_substrate_runtime_spec_name is only valid "
-        "for Substrate destination live evidence"
     ) in blockers
     assert (
         "domain 3 (sol): _comment_evm_verifier_key_hash is only valid for "
@@ -5039,9 +4843,6 @@ def test_all_lanes_rejects_noncanonical_destination_decimal_metadata():
 
     sol_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SOL)
     ton_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_TON)
-    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(
-        module.SCCP_DOMAIN_SORA2
-    )
 
     records["sccp_destination_rollouts"][sol_index][
         "_comment_solana_programdata_slot"
@@ -5052,9 +4853,6 @@ def test_all_lanes_rejects_noncanonical_destination_decimal_metadata():
     records["sccp_destination_rollouts"][ton_index]["ton_last_transaction_lt"] = (
         "02004"
     )
-    records["sccp_destination_rollouts"][substrate_index][
-        "_comment_substrate_runtime_spec_version"
-    ] = "01234"
 
     summary = module.validate_evidence_bundle(records)
     blockers = "\n".join(
@@ -5063,7 +4861,6 @@ def test_all_lanes_rejects_noncanonical_destination_decimal_metadata():
 
     assert "Solana ProgramData slot metadata must be a positive decimal string" in blockers
     assert "TON last transaction LT metadata must be a positive decimal string" in blockers
-    assert "Substrate runtime specVersion metadata must be a decimal string" in blockers
 
 
 def test_all_lanes_rejects_solana_programdata_slot_mismatch():
@@ -5781,379 +5578,6 @@ def test_all_lanes_rejects_ton_route_canary_governed_hash_role_reuse():
     ) in blockers
 
 
-def test_all_lanes_keeps_verified_substrate_live_toml_diagnostic_only(tmp_path):
-    module = load_evidence_module()
-    live_module = load_substrate_live_module()
-    records = complete_bundle(module)
-    domain = module.SCCP_DOMAIN_SORA2
-    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
-    profile = module.LANE_PROFILES[domain]
-    material = records["sccp_source_verifier_materials"][substrate_index]
-    deployment = records["sccp_source_adapter_engine_deployments"][substrate_index]
-    source_hashes = module._canonical_source_record_hashes(profile, material, deployment)
-    destination_hash = raw_hex(
-        records["sccp_destination_rollouts"][substrate_index][
-            "destination_binding_hash"
-        ]
-    )
-    route_allowlist_hash = module.route_allowlist_hash_for_lane_evidence(
-        profile,
-        raw_hex(source_hashes["source_verifier_material_hash"]),
-        raw_hex(source_hashes["source_adapter_engine_deployment_hash"]),
-        destination_hash,
-    )
-    finalized_head = bytes.fromhex("55" * 32)
-    runtime_code = bytes.fromhex("0061736d010203040506")
-    runtime_code_hash = live_module.runtime_code_hash(runtime_code)
-    live = live_module.collect_live_evidence(
-        "https://substrate.example",
-        domain=domain,
-        opener=fake_substrate_live_opener(
-            live_module,
-            finalized_head=finalized_head,
-            runtime_code=runtime_code,
-        ),
-        timeout=1.0,
-    )
-    route_canary_evidence_hash = (
-        live_module.evidence.substrate_route_canary_evidence_hash(
-            domain=domain,
-            route_allowlist_hash=route_allowlist_hash,
-            destination_binding_hash=destination_hash,
-            source_verifier_material_hash=raw_hex(
-                source_hashes["source_verifier_material_hash"]
-            ),
-            source_adapter_engine_deployment_hash=raw_hex(
-                source_hashes["source_adapter_engine_deployment_hash"]
-            ),
-            verifier_entrypoint=live["verifier_entrypoint"],
-            verifier_code_hash=runtime_code_hash,
-            finalized_head=raw_hex(live["finalized_head"]),
-            runtime_spec_name=live["runtime_spec_name"],
-            runtime_spec_version=live["runtime_spec_version"],
-            runtime_transaction_version=live["runtime_transaction_version"],
-            runtime_code=runtime_code,
-        )
-    )
-    args = SimpleNamespace(
-        route_allowlist_hash=route_allowlist_hash,
-        source_verifier_material_hash=raw_hex(
-            source_hashes["source_verifier_material_hash"]
-        ),
-        source_adapter_engine_deployment_hash=raw_hex(
-            source_hashes["source_adapter_engine_deployment_hash"]
-        ),
-        expected_destination_binding_hash=destination_hash,
-        expected_finalized_head=finalized_head,
-        expected_runtime_code_hash=runtime_code_hash,
-        expected_spec_name="sora2",
-        expected_spec_version=1234,
-        expected_transaction_version=7,
-        route_canary_evidence_hash=route_canary_evidence_hash,
-    )
-    live_summary = live_module._summary(args, live)
-    substrate_toml = live_module.render_toml(args, live)
-
-    assert live_summary["toml_ready"] is True
-    assert '# sccp_substrate_finalized_head = "0x' + "55" * 32 + '"' in substrate_toml
-    assert '# sccp_substrate_runtime_spec_name = "sora2"' in substrate_toml
-    assert '# sccp_substrate_runtime_spec_version = "1234"' in substrate_toml
-    assert '# sccp_substrate_runtime_transaction_version = "7"' in substrate_toml
-    assert (
-        '# sccp_substrate_runtime_code_hash = "0x'
-        + runtime_code_hash.hex()
-        + '"'
-        in substrate_toml
-    )
-    assert (
-        '# sccp_substrate_runtime_code_base64 = "'
-        + base64.b64encode(runtime_code).decode("ascii")
-        + '"'
-        in substrate_toml
-    )
-
-    substrate_path = tmp_path / "substrate-live.toml"
-    substrate_path.write_text(substrate_toml, encoding="utf-8")
-    substrate_records = module.load_evidence_bundle([substrate_path])
-
-    for section in ("sccp_destination_rollouts", "sccp_route_allowlists"):
-        records[section] = [
-            record
-            for record in records[section]
-            if record.get("source_domain", record.get("domain")) != domain
-        ]
-        records[section].extend(substrate_records[section])
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is True
-    substrate_lane = next(lane for lane in summary["lanes"] if lane["domain"] == domain)
-    assert substrate_lane["production_ready"] is False
-    assert substrate_lane["blockers"] == [
-        module.SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
-    ]
-    assert substrate_lane["destination_binding"]["destination_binding_hash"] == (
-        live_summary["destination_binding_hash"]
-    )
-    assert substrate_lane["route_allowlist"]["route_allowlist_hash"] == (
-        "0x" + route_allowlist_hash.hex()
-    )
-    assert substrate_lane["route_allowlist"]["route_canary"][
-        "substrate_runtime_code_hash"
-    ] == ("0x" + runtime_code_hash.hex())
-
-
-def test_all_lanes_keeps_direct_substrate_destination_toml_diagnostic_only(
-    tmp_path,
-):
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    domain = module.SCCP_DOMAIN_SORA2
-    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
-    profile = module.LANE_PROFILES[domain]
-    material = records["sccp_source_verifier_materials"][substrate_index]
-    deployment = records["sccp_source_adapter_engine_deployments"][substrate_index]
-    destination = records["sccp_destination_rollouts"][substrate_index]
-    route = records["sccp_route_allowlists"][substrate_index]
-    substrate_module = module._load_sibling_module(
-        "sccp_substrate_destination_evidence.py"
-    )
-    source_hashes = module._canonical_source_record_hashes(profile, material, deployment)
-    args = SimpleNamespace(
-        domain=domain,
-        verifier_entrypoint=destination["verifier_identity"],
-        verifier_code_hash=raw_hex(destination["verifier_code_hash"]),
-        route_allowlist_hash=raw_hex(route["route_allowlist_hash"]),
-        source_verifier_material_hash=raw_hex(
-            source_hashes["source_verifier_material_hash"]
-        ),
-        source_adapter_engine_deployment_hash=raw_hex(
-            source_hashes["source_adapter_engine_deployment_hash"]
-        ),
-        route_canary_evidence_hash=raw_hex(route["_comment_route_canary_evidence_hash"]),
-        expected_destination_binding_hash=raw_hex(destination["destination_binding_hash"]),
-        finalized_head=raw_hex(destination["_comment_substrate_finalized_head"]),
-        runtime_spec_name=destination["_comment_substrate_runtime_spec_name"],
-        runtime_spec_version=int(destination["_comment_substrate_runtime_spec_version"]),
-        runtime_transaction_version=int(
-            destination["_comment_substrate_runtime_transaction_version"]
-        ),
-        runtime_code_base64=substrate_module.parse_runtime_code_base64(
-            destination["_comment_substrate_runtime_code_base64"],
-            label="runtime code",
-        ),
-    )
-
-    substrate_toml = substrate_module.render_toml(args)
-    assert "# sccp_substrate_finalized_head" in substrate_toml
-    assert "# sccp_substrate_runtime_spec_name" in substrate_toml
-    assert "# sccp_substrate_runtime_code_hash" in substrate_toml
-    assert "# sccp_substrate_runtime_code_base64" in substrate_toml
-    substrate_path = tmp_path / "substrate-direct.toml"
-    substrate_path.write_text(substrate_toml, encoding="utf-8")
-    substrate_records = module.load_evidence_bundle([substrate_path])
-
-    for section in ("sccp_destination_rollouts", "sccp_route_allowlists"):
-        records[section] = [
-            record
-            for record in records[section]
-            if record.get("source_domain", record.get("domain")) != domain
-        ]
-        records[section].extend(substrate_records[section])
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is True
-    substrate_lane = next(lane for lane in summary["lanes"] if lane["domain"] == domain)
-    assert substrate_lane["production_ready"] is False
-    assert substrate_lane["blockers"] == [
-        module.SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
-    ]
-
-
-def test_all_lanes_rejects_substrate_destination_without_live_runtime_metadata():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    substrate_destination = next(
-        record
-        for record in records["sccp_destination_rollouts"]
-        if record["domain"] == module.SCCP_DOMAIN_SORA2
-    )
-    substrate_destination.pop("_comment_substrate_finalized_head")
-    substrate_destination.pop("_comment_substrate_runtime_spec_name")
-    substrate_destination.pop("_comment_substrate_runtime_spec_version")
-    substrate_destination.pop("_comment_substrate_runtime_transaction_version")
-    substrate_destination.pop("_comment_substrate_runtime_code_hash")
-    substrate_destination.pop("_comment_substrate_runtime_code_base64")
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert "Substrate finalized head metadata must be a non-zero" in blockers
-    assert "Substrate runtime specName metadata is required" in blockers
-    assert "Substrate runtime specVersion metadata must be a decimal" in blockers
-    assert "Substrate runtime transactionVersion metadata must be a decimal" in blockers
-    assert "Substrate runtime code hash metadata must be a non-zero" in blockers
-    assert "Substrate runtime code base64 metadata must be present" in blockers
-
-
-def test_all_lanes_rejects_substrate_destination_with_invalid_runtime_code_base64():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    substrate_destination = next(
-        record
-        for record in records["sccp_destination_rollouts"]
-        if record["domain"] == module.SCCP_DOMAIN_SORA2
-    )
-    substrate_destination["_comment_substrate_runtime_code_base64"] = "not base64!"
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    assert "Substrate runtime code base64 metadata is invalid" in "\n".join(
-        summary["blockers"]
-    )
-
-    records = complete_bundle(module)
-    substrate_destination = next(
-        record
-        for record in records["sccp_destination_rollouts"]
-        if record["domain"] == module.SCCP_DOMAIN_SORA2
-    )
-    substrate_destination["_comment_substrate_runtime_code_base64"] = (
-        noncanonical_base64_alias(b"\x00asm\x01")
-    )
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert "Substrate runtime code base64 metadata is invalid" in blockers
-    assert "canonical base64" in blockers
-
-
-def test_all_lanes_rejects_substrate_destination_when_runtime_code_hash_drifts():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    substrate_destination = next(
-        record
-        for record in records["sccp_destination_rollouts"]
-        if record["domain"] == module.SCCP_DOMAIN_SORA2
-    )
-    substrate_destination["_comment_substrate_runtime_code_base64"] = (
-        base64.b64encode(b"\x00asm-drift").decode("ascii")
-    )
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    assert "Substrate runtime code base64 hash must match runtime code hash metadata" in (
-        "\n".join(summary["blockers"])
-    )
-
-
-def test_all_lanes_rejects_substrate_destination_with_foreign_runtime_spec_name():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    substrate_destination = next(
-        record
-        for record in records["sccp_destination_rollouts"]
-        if record["domain"] == module.SCCP_DOMAIN_SORA2
-    )
-    substrate_destination["_comment_substrate_runtime_spec_name"] = "sora-polkadot"
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert (
-        "Substrate runtime specName metadata must match the destination domain sora2"
-        in blockers
-    )
-
-
-def test_all_lanes_rejects_substrate_route_canary_runtime_hash_drift():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    domain = module.SCCP_DOMAIN_SORA2
-    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
-    substrate_route = records["sccp_route_allowlists"][substrate_index]
-    drifted = bytearray(
-        raw_hex(substrate_route["_comment_route_canary_evidence_hash"])
-    )
-    drifted[0] ^= 0x01
-    substrate_route["_comment_route_canary_evidence_hash"] = (
-        "0x" + bytes(drifted).hex()
-    )
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    assert (
-        "Substrate route canary evidence hash must match finalized runtime metadata"
-        in "\n".join(summary["blockers"])
-    )
-
-
-def test_all_lanes_rejects_substrate_route_canary_verifier_code_hash_role_reuse():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    domain = module.SCCP_DOMAIN_SORA2
-    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
-    profile = module.LANE_PROFILES[domain]
-    material = records["sccp_source_verifier_materials"][substrate_index]
-    deployment = records["sccp_source_adapter_engine_deployments"][substrate_index]
-    source_hashes = module._canonical_source_record_hashes(
-        profile,
-        material,
-        deployment,
-    )
-    substrate_destination = records["sccp_destination_rollouts"][substrate_index]
-    substrate_destination["verifier_code_hash"] = source_hashes[
-        "source_adapter_engine_deployment_hash"
-    ]
-
-    summary = module.validate_evidence_bundle(records)
-
-    blockers = "\n".join(summary["blockers"])
-    assert summary["production_ready"] is False
-    assert (
-        "Substrate route canary hash role verifier_code_hash must not reuse "
-        "source_adapter_engine_deployment_hash"
-    ) in blockers
-
-
-def test_all_lanes_rejects_substrate_route_canary_finalized_head_hash_role_reuse():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    domain = module.SCCP_DOMAIN_SORA2
-    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(domain)
-    profile = module.LANE_PROFILES[domain]
-    material = records["sccp_source_verifier_materials"][substrate_index]
-    deployment = records["sccp_source_adapter_engine_deployments"][substrate_index]
-    source_hashes = module._canonical_source_record_hashes(
-        profile,
-        material,
-        deployment,
-    )
-    substrate_destination = records["sccp_destination_rollouts"][substrate_index]
-    substrate_destination["substrate_finalized_head"] = source_hashes[
-        "source_verifier_material_hash"
-    ]
-    substrate_destination["_comment_substrate_finalized_head"] = source_hashes[
-        "source_verifier_material_hash"
-    ]
-
-    summary = module.validate_evidence_bundle(records)
-
-    blockers = "\n".join(summary["blockers"])
-    assert summary["production_ready"] is False
-    assert (
-        "Substrate route canary hash role substrate_finalized_head must not "
-        "reuse source_verifier_material_hash"
-    ) in blockers
-
 
 def test_all_lanes_evidence_rejects_missing_ton_audit_and_route_blocker():
     module = load_evidence_module()
@@ -6182,103 +5606,6 @@ def test_all_lanes_evidence_rejects_missing_ton_audit_and_route_blocker():
         "\n".join(ton_gate["blockers"])
     )
 
-
-def test_all_lanes_evidence_reports_substrate_runtime_storage_gate():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    summary = module.validate_evidence_bundle(records)
-    substrate_module = module._load_sibling_module("sccp_substrate_source_evidence.py")
-
-    lanes = {lane["domain"]: lane for lane in summary["lanes"]}
-    by_domain = {
-        material["source_domain"]: (material, deployment)
-        for material, deployment in zip(
-            records["sccp_source_verifier_materials"],
-            records["sccp_source_adapter_engine_deployments"],
-        )
-    }
-    for domain in (
-        module.SCCP_DOMAIN_SORA_KUSAMA,
-        module.SCCP_DOMAIN_SORA_POLKADOT,
-        module.SCCP_DOMAIN_SORA2,
-    ):
-        material, deployment = by_domain[domain]
-        expected_gate_hash = (
-            "0x"
-            + substrate_module.substrate_runtime_storage_gate_hash(
-                module._substrate_source_args(material, deployment)
-            ).hex()
-        )
-        gate = lanes[domain]["source_adapter_gate"]
-        assert gate["required"] is True
-        assert gate["ready"] is True
-        assert gate["gate_hash"] == expected_gate_hash
-        assert gate["audit_hashes"] == {
-            "substrate_runtime_storage_gate_hash": expected_gate_hash,
-        }
-        assert gate["blockers"] == []
-
-
-def test_all_lanes_evidence_requires_substrate_runtime_storage_gate_metadata():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    substrate_deployment = next(
-        deployment
-        for deployment in records["sccp_source_adapter_engine_deployments"]
-        if deployment["source_domain"] == module.SCCP_DOMAIN_SORA_KUSAMA
-    )
-    substrate_deployment.pop("_comment_substrate_runtime_storage_gate_hash")
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert (
-        "domain 6 (sora-kusama): "
-        "sccp_substrate_runtime_storage_gate_hash metadata must be a "
-        "non-zero 32-byte hex value"
-    ) in blockers
-    gate = next(
-        lane["source_adapter_gate"]
-        for lane in summary["lanes"]
-        if lane["domain"] == module.SCCP_DOMAIN_SORA_KUSAMA
-    )
-    assert gate["required"] is True
-    assert gate["ready"] is False
-    assert gate["audit_hashes"] == {}
-
-
-def test_all_lanes_evidence_rejects_substrate_runtime_storage_gate_metadata_mismatch():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    substrate_deployment = next(
-        deployment
-        for deployment in records["sccp_source_adapter_engine_deployments"]
-        if deployment["source_domain"] == module.SCCP_DOMAIN_SORA_KUSAMA
-    )
-    substrate_deployment["_comment_substrate_runtime_storage_gate_hash"] = (
-        "0x" + "fe" * 32
-    )
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert (
-        "domain 6 (sora-kusama): "
-        "sccp_substrate_runtime_storage_gate_hash metadata does not match "
-        "source and deployment material"
-    ) in blockers
-    gate = next(
-        lane["source_adapter_gate"]
-        for lane in summary["lanes"]
-        if lane["domain"] == module.SCCP_DOMAIN_SORA_KUSAMA
-    )
-    assert gate["required"] is True
-    assert gate["ready"] is False
-    assert gate["audit_hashes"] == {
-        "substrate_runtime_storage_gate_hash": "0x" + "fe" * 32
-    }
 
 
 def test_all_lanes_evidence_rejects_source_gate_audit_hash_role_reuse():
@@ -6378,40 +5705,6 @@ def test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes():
         tron_gate["blockers"]
     )
 
-
-def test_all_lanes_evidence_rejects_substrate_runtime_storage_gate_drift():
-    module = load_evidence_module()
-    records = complete_bundle(module)
-    substrate_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_SORA2)
-    records["sccp_source_adapter_engine_deployments"][substrate_index][
-        "adapter_verifier_vk_hash"
-    ] = hex32(0xCE)
-
-    summary = module.validate_evidence_bundle(records)
-
-    assert summary["production_ready"] is False
-    blockers = "\n".join(summary["blockers"])
-    assert (
-        "domain 8 (sora2): Substrate runtime storage gate cannot be recomputed"
-        in blockers
-    )
-    pinned_gate_hash = records["sccp_source_adapter_engine_deployments"][
-        substrate_index
-    ]["_comment_substrate_runtime_storage_gate_hash"]
-    substrate_gate = next(
-        lane["source_adapter_gate"]
-        for lane in summary["lanes"]
-        if lane["domain"] == module.SCCP_DOMAIN_SORA2
-    )
-    assert substrate_gate["required"] is True
-    assert substrate_gate["ready"] is False
-    assert substrate_gate["gate_hash"] == pinned_gate_hash
-    assert substrate_gate["audit_hashes"] == {
-        "substrate_runtime_storage_gate_hash": pinned_gate_hash
-    }
-    assert "Substrate runtime storage gate cannot be recomputed" in "\n".join(
-        substrate_gate["blockers"]
-    )
 
 
 def test_all_lanes_evidence_rejects_tron_dpos_source_gate_hash_drift():
@@ -6913,31 +6206,12 @@ def test_all_lanes_evidence_rejects_canonical_source_validator_drift():
     records["sccp_source_adapter_engine_deployments"][0][
         "adapter_verifier_vk_hash"
     ] = hex32(0xA1)
-    substrate_module = module._load_sibling_module("sccp_substrate_source_evidence.py")
-    kusama_material = records["sccp_source_verifier_materials"][5]
-    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_SORA_KUSAMA]
-    kusama_material["source_state_verifier_hash"] = (
-        "0x"
-        + substrate_module._substrate_template_component_hash(
-            profile.domain,
-            profile.source_state_verifier_id,
-            "source-state-verifier",
-        ).hex()
-    )
-    records["sccp_source_adapter_engine_deployments"][5][
-        "source_state_verifier_hash"
-    ] = kusama_material["source_state_verifier_hash"]
 
     summary = module.validate_evidence_bundle(records)
 
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "domain 1 (eth): eth source evidence rejected by canonical validator" in blockers
-    assert (
-        "domain 6 (sora-kusama): sora-kusama source evidence rejected by "
-        "canonical validator"
-    ) in blockers
-    assert "template-derived source state verifier hash is not deployable" in blockers
 
 
 def test_all_lanes_evidence_rejects_malformed_destination_identities():

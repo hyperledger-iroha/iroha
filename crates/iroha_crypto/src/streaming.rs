@@ -187,6 +187,9 @@ pub enum HandshakeError {
     /// Secure random generation failed while preparing local streaming material.
     #[error("secure random generation failed")]
     Randomness(#[source] OsError),
+    /// Signing a local `KeyUpdate` frame failed.
+    #[error("key update signing failed")]
+    Signing(#[source] crate::Error),
 }
 
 const KYBER_FINGERPRINT_DOMAIN: &[u8] = b"nsc_kyber_pk";
@@ -1570,8 +1573,9 @@ impl StreamingSession {
     ///
     /// # Errors
     ///
-    /// Returns [`HandshakeError::UnsupportedAlgorithm`] if the signer is not Ed25519 and propagates
-    /// failures from suite-specific outbound ephemeral generation.
+    /// Returns [`HandshakeError::UnsupportedAlgorithm`] if the signer is not
+    /// Ed25519 and propagates failures from suite-specific outbound ephemeral
+    /// generation and local `KeyUpdate` signing.
     pub fn build_key_update(
         &mut self,
         session_id: Hash,
@@ -1595,7 +1599,7 @@ impl StreamingSession {
             signature: [0u8; 64],
         };
         let transcript = key_update_transcript_bytes(&frame)?;
-        let signature = Signature::new(signer, &transcript);
+        let signature = Signature::try_new(signer, &transcript).map_err(HandshakeError::Signing)?;
         frame.signature.copy_from_slice(signature.payload());
 
         let transport_material = shared_secret

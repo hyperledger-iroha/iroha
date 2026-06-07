@@ -2982,6 +2982,8 @@ reporting:
   already been reported,
 - already-reported jobs keep their timeout marker but do not duplicate status
   or warning diagnostics,
+- new timeout reports persist their timeout marker so the same inflight job
+  cannot report again on a later tick,
 - reporting preserves the inflight owner so a late worker result remains
   attachable,
 - timeout reporting does not requeue or abort pending work, prune proposal
@@ -2991,6 +2993,8 @@ reporting:
 `SumeragiPostCommitPacemakerKickGate.tla` captures post-commit pacemaker
 kickstart gating:
 - durable commits kick the pacemaker only when queued transaction work remains,
+- absence of queued work suppresses the kick even when pacing or hard
+  backpressure signals are present,
 - healthy proposal backpressure and pacing-only pressure from queue saturation
   or consensus ingress backlog still allow the kick,
 - active pending blocks, RBC backlog, and relay backpressure suppress the kick,
@@ -3001,6 +3005,8 @@ kickstart gating:
 budget preservation:
 - due proposals with queued work can preserve the idle-view repair budget only
   when no mode flip or commit job is in flight,
+- absence of queued work suppresses budget preservation even when pacing or
+  hard backpressure signals are present,
 - healthy proposal state and pacing-only queue/consensus pressure preserve the
   budget for proposal work,
 - active pending blocks, RBC backlog, and relay backpressure keep idle-view
@@ -3059,8 +3065,8 @@ selection:
 - the shortened timeout is capped by the ordinary quorum timeout,
 - zero votes, far-from-quorum votes, already-satisfied quorum, missing-data
   absence, consensus backlog, and RBC incompleteness keep the ordinary timeout,
-- repeated NPoS cached-slot timeouts compute a next streak from same-height
-  newer-view history and cap the hysteresis factor,
+- repeated NPoS cached-slot timeouts compute a saturating next streak from
+  same-height newer-view history and cap the hysteresis factor,
 - permissioned mode, zero quorum timeout, absent history, height mismatch,
   non-advancing views, and elapsed boundary/after-boundary cases do not wait.
 
@@ -3072,7 +3078,7 @@ derivation:
   quorum timeout with a one-millisecond minimum,
 - the 1000 ms boundary returns exactly 750 ms instead of falling back to half,
 - DA inline validation applies its separate 750 ms floor only when DA is
-  enabled.
+  enabled, and larger fast-path timeouts are left unchanged.
 
 `SumeragiStalledPendingTimeoutDecisionGate.tla` captures stalled pending-block
 timeout classification:
@@ -3085,7 +3091,9 @@ timeout classification:
   is open,
 - active recovery backlog includes worker recovery, residual round backlog,
   unresolved RBC, pending validation recovery, commit-QC repair, same-block
-  recovery, and valid queued commit-pipeline work with recovery evidence,
+  recovery, and valid queued commit-pipeline work with recovery evidence from
+  observed commit QC, validated commit artifacts, near-quorum votes, or
+  active commit-QC repair,
 - invalid queued work, queue-active-only work, validation inflight without
   pending validation, zero votes, existing quorum, payload-present, DA-disabled,
   and gate-closed cases do not select the near-quorum fallback.
@@ -3132,25 +3140,34 @@ state helpers:
   and applies the transition helper only to that slot.
 
 `SumeragiFrontierSlotTrackerGate.tla` captures the exact-frontier
-`FrontierSlot` constructor and step FSM:
+`FrontierSlot` constructor, step FSM, and `apply_frontier_slot_event(...)`
+wrapper:
 - constructor phase/owner selection tracks body availability, `BlockCreated`
-  evidence, exact-fetch arming, requester stashing, and compatibility mirrors,
+  evidence, exact-fetch arming, requester stashing, and nested state sources,
 - higher-view and authoritative ownership updates reset quorum progress,
   unlock stale local-vote locks, clear the rebroadcast guard, and update the
   active view while mismatched stale events preserve the current candidate,
+- same-candidate `BlockCreated`, body-available, and future-gap observations
+  merge the peer/requester hints needed by later exact body repair and commit
+  pipeline work,
 - body, vote, and commit-QC observations distinguish missing-body repair from
   payload-present commit work and keep duplicate observations from clearing the
   bounded quorum-timeout rebroadcast guard,
 - exact body waits spend one urgent-fetch rebroadcast before rotating views,
   lag expiry moves only missing-body normal slots into deep catch-up, and
   passive/deep catch-up plus finalization keep their distinct side effects.
+- absent-slot wrapper events either return default actions or request the
+  exact-frontier view change, stale non-commit slots are dropped before the
+  next event runs, same-height slots are reused, and committed-height events
+  remove only retired slots while retaining still-live slot state.
 
 `SumeragiFrontierSlotHelpersGate.tla` captures the small `FrontierSlot`
 helper methods that support the exact-frontier FSM:
 - lag-start lookup returns the existing lag window when present and falls back
   to last progress otherwise,
-- body-missing and local-vote helpers preserve unrelated slot state while
-  reporting body availability or locking the local owner,
+- body-missing, body-available, and local-vote helpers preserve unrelated slot
+  state while reporting body availability, moving Unknown validation into
+  Pending, or locking the local owner,
 - timeout view selection uses the maximum of active, requested, and candidate
   views,
 - progress and lag helpers refresh only the intended timers and clear or
@@ -3165,8 +3182,9 @@ helper methods that support the exact-frontier FSM:
 helper derivation:
 - proposal transaction-count clamping respects both world parameters and local
   config caps with a one-transaction floor,
-- assembly stale windows use ceiling batch counts, full-batch grace, multiplier
-  caps, and saturating duration multiplication,
+- assembly stale windows consume the clamped transaction-count budget, use
+  ceiling batch counts, full-batch grace, multiplier caps, and saturating
+  duration multiplication,
 - ingress drain grace applies the idle floor and active-backlog ceiling before
   full proposal grace adds the larger of ingress drain and rebroadcast
   cooldown,
@@ -3184,6 +3202,10 @@ retained-branch helpers:
   conflicting retained branches available for later passive recovery,
 - authoritative frontier metadata replacement keeps only one same-slot hash
   while preserving entries for other slots,
+- proposal-seen tracking inserts new `(height, view)` observations, preserves
+  duplicate observations, answers exact-match lookups, drops old same-height
+  views after a view change, and applies the bounded
+  `prune_proposals_seen_horizon(...)` height/view window,
 - retained-branch refresh preserves old frontier info when new metadata is
   absent, replaces it when supplied, ORs payload availability, and refreshes the
   timestamp,
@@ -5655,7 +5677,8 @@ cleanup:
   `max(commit_quorum_timeout, propose_interval, 1ms) * 8`.
 
 `SumeragiFrontierLiveOwnerWorkGate.tla` captures
-`frontier_slot_has_live_local_owner_work_for_view(...)`:
+`frontier_slot_has_live_local_owner_work_for_view(...)` and
+`frontier_slot_conflicts_with_live_local_owner(...)`:
 - finalized and passive-catchup frontier slots suppress all live-owner work,
 - exact active pending work, commit inflight work, validation inflight work,
   observed slot commit QC, later-view competing quorum lockout, explicit
@@ -5664,6 +5687,9 @@ cleanup:
 - terminal pending wrappers without observed commit QC block only local-lock
   and local-history paths, while independent validation or slot-QC evidence
   still keeps the owner live.
+- the conflict adapter blocks same-height handoffs only when the candidate hash
+  differs and the tracked owner still has live work; same-hash, wrong-height,
+  passive, and no-work cases fall through.
 
 `SumeragiKeepFrontierPendingActiveGate.tla` captures
 `keep_frontier_pending_active_across_view_change(...)`:
@@ -6743,13 +6769,13 @@ verification, and full networking details.
 - `SumeragiCommitStageTimingThresholdGate_bug_*.cfg`: expected-failure zero-threshold, blocking-total, boundary, stage maximum, validation substage, prevalidated-only, and empty-timing mutations.
 - `SumeragiCommitInflightTimeoutGate.tla`: commit-inflight timeout reporting gate model.
 - `SumeragiCommitInflightTimeoutGate_fast.cfg`: CI-friendly commit-inflight timeout gate check.
-- `SumeragiCommitInflightTimeoutGate_bug_*.cfg`: expected-failure timeout-boundary, one-shot reporting, inflight preservation, late-result attachability, and no-consensus-mutation mutations.
+- `SumeragiCommitInflightTimeoutGate_bug_*.cfg`: expected-failure timeout-boundary, one-shot reporting, timeout-mark persistence, inflight preservation, late-result attachability, and no-consensus-mutation mutations.
 - `SumeragiPostCommitPacemakerKickGate.tla`: post-commit pacemaker kickstart gate model.
 - `SumeragiPostCommitPacemakerKickGate_fast.cfg`: CI-friendly post-commit pacemaker kickstart gate check.
-- `SumeragiPostCommitPacemakerKickGate_bug_*.cfg`: expected-failure queue, pacing-only backpressure, hard-backpressure, callback-result, return, and timestamp-capture mutations.
+- `SumeragiPostCommitPacemakerKickGate_bug_*.cfg`: expected-failure queue, no-queue hard-stop, pacing-only backpressure, hard-backpressure, callback-result, return, and timestamp-capture mutations.
 - `SumeragiIdleViewProposalBudgetGate.tla`: proposal-side idle-view budget preservation gate model.
 - `SumeragiIdleViewProposalBudgetGate_fast.cfg`: CI-friendly proposal idle-view budget preservation gate check.
-- `SumeragiIdleViewProposalBudgetGate_bug_*.cfg`: expected-failure queue, mode-flip, commit-inflight, deadline, pacing-only backpressure, hard-backpressure, idle-repair deferral, proposal reservation, and post-proposal retry mutations.
+- `SumeragiIdleViewProposalBudgetGate_bug_*.cfg`: expected-failure queue, no-queue hard-stop, mode-flip, commit-inflight, deadline, pacing-only backpressure, hard-backpressure, idle-repair deferral, proposal reservation, and post-proposal retry mutations.
 - `SumeragiPacemakerCoreGate.tla`: Pacemaker state-machine helper model.
 - `SumeragiPacemakerCoreGate_fast.cfg`: CI-friendly Pacemaker state-machine helper check.
 - `SumeragiPacemakerCoreGate_bug_*.cfg`: expected-failure construction, interval reset, deadline boundary, fire advancement, zero-interval, and accessor mutations.
@@ -6761,13 +6787,13 @@ verification, and full networking details.
 - `SumeragiPacingGovernorGate_bug_*.cfg`: expected-failure sample-count, target-time, pressure/clear threshold, factor-bound, step-clamp, saturating-delta, current-clamp, and ambiguous-window mutations.
 - `SumeragiCachedSlotTimeoutGate.tla`: cached proposal-slot timeout gate model.
 - `SumeragiCachedSlotTimeoutGate_fast.cfg`: CI-friendly cached proposal-slot timeout gate check.
-- `SumeragiCachedSlotTimeoutGate_bug_*.cfg`: expected-failure near-quorum fast-timeout, min-boundary, backlog, NPoS hysteresis, streak, and factor-cap mutations.
+- `SumeragiCachedSlotTimeoutGate_bug_*.cfg`: expected-failure near-quorum fast-timeout, min-boundary, backlog, NPoS hysteresis, streak, streak-saturation, and factor-cap mutations.
 - `SumeragiPendingFastPathTimeoutGate.tla`: pending fast-path timeout and DA inline validation floor model.
 - `SumeragiPendingFastPathTimeoutGate_fast.cfg`: CI-friendly pending fast-path timeout check.
-- `SumeragiPendingFastPathTimeoutGate_bug_*.cfg`: expected-failure margin, floor-boundary, division, underflow, and DA-floor mutations.
+- `SumeragiPendingFastPathTimeoutGate_bug_*.cfg`: expected-failure margin, floor-boundary, division, underflow, and DA-floor/cap mutations.
 - `SumeragiStalledPendingTimeoutDecisionGate.tla`: stalled pending-block timeout decision model.
 - `SumeragiStalledPendingTimeoutDecisionGate_fast.cfg`: CI-friendly stalled pending-block timeout decision check.
-- `SumeragiStalledPendingTimeoutDecisionGate_bug_*.cfg`: expected-failure class-priority, near-quorum, recovery-backlog, and timeout-selection mutations.
+- `SumeragiStalledPendingTimeoutDecisionGate_bug_*.cfg`: expected-failure class-priority, near-quorum, recovery-backlog, commit-pipeline evidence, and timeout-selection mutations.
 - `SumeragiStalledPendingFrontierTimeoutGate.tla`: stalled pending-frontier timeout helper model.
 - `SumeragiStalledPendingFrontierTimeoutGate_fast.cfg`: CI-friendly stalled pending-frontier timeout helper check.
 - `SumeragiStalledPendingFrontierTimeoutGate_bug_*.cfg`: expected-failure backlog-extension, deferred-QC multiplier, active-gap cap, and saturating-arithmetic mutations.
@@ -6780,18 +6806,18 @@ verification, and full networking details.
 - `SumeragiProposalLivenessGate.tla`: missing-QC proposal-liveness state helper model.
 - `SumeragiProposalLivenessGate_fast.cfg`: CI-friendly proposal-liveness state helper check.
 - `SumeragiProposalLivenessGate_bug_*.cfg`: expected-failure transition, fresh-slot, ensure-slot, and mark-state mutations.
-- `SumeragiFrontierSlotTrackerGate.tla`: exact-frontier slot constructor/step FSM model.
+- `SumeragiFrontierSlotTrackerGate.tla`: exact-frontier slot constructor/step/apply-wrapper FSM model.
 - `SumeragiFrontierSlotTrackerGate_fast.cfg`: CI-friendly exact-frontier slot tracker check.
-- `SumeragiFrontierSlotTrackerGate_bug_*.cfg`: expected-failure constructor, ownership, body/vote/QC, timeout, catch-up, finalization, and compatibility-mirror mutations.
+- `SumeragiFrontierSlotTrackerGate_bug_*.cfg`: expected-failure constructor, ownership, body/vote/QC, same-candidate peer evidence, timeout, catch-up, finalization, nested-state, and apply-wrapper slot lifecycle mutations.
 - `SumeragiFrontierSlotHelpersGate.tla`: exact-frontier slot helper model.
 - `SumeragiFrontierSlotHelpersGate_fast.cfg`: CI-friendly exact-frontier slot helper check.
-- `SumeragiFrontierSlotHelpersGate_bug_*.cfg`: expected-failure lag-start, body-state, local-vote, timeout-view, progress/lag, catch-up marker, and compatibility-sync mutations.
+- `SumeragiFrontierSlotHelpersGate_bug_*.cfg`: expected-failure lag-start, body-state/body-available, local-vote, timeout-view, progress/lag, catch-up marker, and nested-state mutations.
 - `SumeragiFrontierProposalGraceGate.tla`: exact-frontier proposal grace helper model.
 - `SumeragiFrontierProposalGraceGate_fast.cfg`: CI-friendly exact-frontier proposal grace check.
-- `SumeragiFrontierProposalGraceGate_bug_*.cfg`: expected-failure transaction-count, assembly-window, ingress-drain, DA/SLA gating, active-gap, missing-QC, and saturating-arithmetic mutations.
-- `SumeragiSlotTrackerStateGate.tla`: slot tracker map/retained-branch helper model.
+- `SumeragiFrontierProposalGraceGate_bug_*.cfg`: expected-failure transaction-count, full-grace transaction-budget, assembly-window, ingress-drain, DA/SLA gating, active-gap, missing-QC, and saturating-arithmetic mutations.
+- `SumeragiSlotTrackerStateGate.tla`: slot tracker map/proposal-seen/retained-branch helper model.
 - `SumeragiSlotTrackerStateGate_fast.cfg`: CI-friendly slot tracker state helper check.
-- `SumeragiSlotTrackerStateGate_bug_*.cfg`: expected-failure authoritative owner/frontier, retained branch, seed-priority, clear, and height-prune mutations.
+- `SumeragiSlotTrackerStateGate_bug_*.cfg`: expected-failure authoritative owner/frontier, proposal-seen, horizon-prune, retained branch, seed-priority, clear, and height-prune mutations.
 - `SumeragiTimeoutDerivationGate.tla`: timeout and cooldown derivation helper model.
 - `SumeragiTimeoutDerivationGate_fast.cfg`: CI-friendly timeout and cooldown derivation helper check.
 - `SumeragiTimeoutDerivationGate_bug_*.cfg`: expected-failure cooldown, backoff, quorum-timeout, pacemaker, availability, and stale-gate mutations.
@@ -7647,9 +7673,9 @@ verification, and full networking details.
 - `SumeragiConsensusRecoveryPruneGate.tla`: consensus recovery prune/clear helper model.
 - `SumeragiConsensusRecoveryPruneGate_fast.cfg`: CI-friendly consensus recovery prune/clear helper check.
 - `SumeragiConsensusRecoveryPruneGate_bug_*.cfg`: expected-failure clear-height, status reset, dwell clear, committed-height floor, age boundary, timeout max, retention floor, and short-circuit mutations.
-- `SumeragiFrontierLiveOwnerWorkGate.tla`: frontier live-owner work helper model.
+- `SumeragiFrontierLiveOwnerWorkGate.tla`: frontier live-owner work helper and conflict-adapter model.
 - `SumeragiFrontierLiveOwnerWorkGate_fast.cfg`: CI-friendly frontier live-owner work helper check.
-- `SumeragiFrontierLiveOwnerWorkGate_bug_*.cfg`: expected-failure mode, pending, inflight, validation, slot-QC, competing-quorum, local-lock, local-history, and no-work mutations.
+- `SumeragiFrontierLiveOwnerWorkGate_bug_*.cfg`: expected-failure mode, pending, inflight, validation, slot-QC, competing-quorum, local-lock, local-history, no-work, and conflict-adapter mutations.
 - `SumeragiKeepFrontierPendingActiveGate.tla`: keep-frontier-pending-active helper model.
 - `SumeragiKeepFrontierPendingActiveGate_fast.cfg`: CI-friendly keep-frontier-pending-active helper check.
 - `SumeragiKeepFrontierPendingActiveGate_bug_*.cfg`: expected-failure live-owner gate, pending evidence, view bridge, exact-hash inflight, fall-through, and no-source mutations.
@@ -7721,12 +7747,19 @@ verification, and full networking details.
 - `SumeragiFrontierRecovery_deep.cfg`: larger frontier backlog/window/view bound set.
 - `SumeragiFrontierRecovery_wide.cfg`: wider frontier bound set used by formal CI.
 - `SumeragiFrontierRecovery_bug_stale_owner.cfg`: expected-failure stale-owner mutation.
+- `SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg`: expected-failure stale recovery-owner cleanup mutation.
 - `SumeragiFrontierRecovery_bug_vote_queue.cfg`: expected-failure vote-queue mutation.
 - `SumeragiFrontierRecovery_bug_payload_recovery.cfg`: expected-failure payload-recovery mutation.
+- `SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg`: expected-failure payload recovery-owner mutation.
 - `SumeragiFrontierRecovery_bug_retransmit_followthrough.cfg`: expected-failure retransmit-follow-through mutation.
+- `SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg`: expected-failure quorum retransmit window-cleanup mutation.
+- `SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence.cfg`: expected-failure view-bound retransmit-evidence mutation.
 - `SumeragiFrontierRecovery_bug_future_promotion.cfg`: expected-failure future-promotion mutation.
 - `SumeragiFrontierRecovery_bug_future_reanchor_clear.cfg`: expected-failure reanchor-clear mutation.
+- `SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg`: expected-failure reanchor active-marker preservation mutation.
+- `SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg`: expected-failure reanchor rotated-marker mutation.
 - `SumeragiFrontierRecovery_bug_future_evidence_drop.cfg`: expected-failure future-evidence drop mutation.
+- `SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg`: expected-failure zero-evidence staged-future drop mutation.
 - `SumeragiFrontierRecovery_bug_promotion_reset.cfg`: expected-failure promotion-reset mutation.
 - `SumeragiFrontierRecovery_bug_future_stale_owner.cfg`: expected-failure future stale-owner mutation.
 - `SumeragiFrontierRecovery_bug_progress_touch.cfg`: expected-failure pending progress-touch mutation.
@@ -7761,6 +7794,7 @@ Invariants:
 - `CommitViewMatchesFinality`
 - `CommitViewDoesNotLeadCurrentView`
 - `GstElapsedGateMatchesPreGst`
+- `CommittedPreGstOnlyEnablesGstElapsed`
 - `TimeoutTickGateMatchesStalledProgress`
 - `ByzantineCommitVoteDoesNotBlockTimeoutStall`
 - `ViewEvidenceMatchesActiveView`
@@ -8709,6 +8743,20 @@ Temporal properties:
 - `CommittedOnlyGstObservationCanChange` proves that after finality all
   consensus/progress/fault actions are disabled, and any remaining post-finality
   state change is exactly `GstElapsed` observing GST.
+- `CommittedPreGstOnlyEnablesGstElapsed` proves that a committed state before
+  GST enables the `GstElapsed` observation gate while every protocol, RBC,
+  timeout, fault, Byzantine-commit, and post-GST progress gate remains disabled.
+- `CommittedPreGstOnlyGstElapsedCanMove` proves that the only real
+  post-finality movement before GST is the `GstElapsed` observation step, and
+  that this step preserves the complete finality/certificate/RBC stack while
+  reaching the committed+GST terminal state with every action disabled.
+- `CommittedPreGstNextOnlyGstElapsed` proves that the `Next` relation itself
+  is exactly the `GstElapsed` action in committed pre-GST states, and that any
+  such non-stuttering step reaches committed+GST terminal quiescence.
+- `CommittedPreGstSpecStepStuttersOrObservesGst` proves that the
+  stuttering-closed `[Next]_vars` relation from committed pre-GST states either
+  stutters while preserving the only-GST gate state or observes GST and reaches
+  committed+GST terminal quiescence.
 - `CommittedGstStateNeverChanges` proves that once finality is reached and GST
   has already been observed, every model variable is stable across real or
   stuttering steps.
@@ -8738,6 +8786,13 @@ Temporal properties:
   commit-view or commit-certificate witness change commits the current active
   view without advancing the view counter, installs `commitView'` as that same
   view, preserves view-quorum evidence, and excludes NewView handoff state.
+- `CommitArtifactsChangeNeverChangesGst` proves that any durable commit-view or
+  commit-certificate witness change preserves the GST observation flag while
+  still being sourced by an exact finality branch.
+- `CommitArtifactsChangeOnlyLeavesGstElapsedGate` proves that durable
+  commit-view or commit-certificate witness changes close protocol progress
+  gates and expose only `GstElapsed` when GST is still unobserved, while
+  following the exact-source committed-delivery completion chain.
 - `FinalityLatchOnlySetsCompleteStack` proves that any transition setting the
   abstract finality latch enters `Committed` with the complete finality stack:
   prepare quorum, live commit quorum, stake quorum, commit-certificate witness,
@@ -8778,6 +8833,14 @@ Temporal properties:
   proves that any latched commit-certificate vote/stake witness change also
   completes the delivered committed state through the same certified
   exact-source chain as commit-artifact installation.
+- `CommitCertificateWitnessChangeNeverChangesGst` proves that any latched
+  commit-certificate vote/stake witness change preserves the GST observation
+  flag while following the certified finality stack and commit-artifact GST
+  preservation chain.
+- `CommitCertificateWitnessChangeOnlyLeavesGstElapsedGate` proves that latched
+  commit-certificate vote/stake witness changes close protocol progress gates
+  and expose only `GstElapsed` when GST is still unobserved, while following the
+  commit-artifact GST-only remaining gate chain.
 - `CommitViewWitnessOnlyChangesOnNonzeroFinality` proves that the latched
   commit-view witness changes exactly on nonzero-view finality transitions,
   where it is installed as the active view; view-zero finality is handled
@@ -8798,6 +8861,14 @@ Temporal properties:
   proves that any nonzero commit-view witness change also completes the
   delivered committed state through the same certified exact-source chain as
   commit-certificate witness installation.
+- `CommitViewWitnessChangeNeverChangesGst` proves that any nonzero commit-view
+  witness change preserves the GST observation flag while following the
+  certified finality stack and commit-certificate witness GST preservation
+  chain.
+- `CommitViewWitnessChangeOnlyLeavesGstElapsedGate` proves that any nonzero
+  commit-view witness change closes protocol progress gates and exposes only
+  `GstElapsed` when GST is still unobserved, while following the
+  commit-certificate GST-only remaining gate chain.
 - `FinalityLatchNeverCarriesNewViewHandoff` proves that a finality-latch
   transition is not a `NewView` handoff, carries no live NewView votes, and
   preserves the existing view-quorum evidence.
@@ -8805,6 +8876,12 @@ Temporal properties:
   transition can only be sourced by an honest commit vote, a Byzantine commit
   vote, or RBC delivery, and never by timeout, NewView, RBC setup/progress,
   Byzantine fault, proposal/prepare, or GST bookkeeping steps.
+- `FinalityLatchChangeNeverChangesGst` proves that finality-latch transitions
+  preserve the GST observation flag while following the same commit-or-delivery
+  source classification.
+- `FinalityLatchChangeOnlyLeavesGstElapsedGate` proves that finality-latch
+  transitions close protocol progress gates and expose only `GstElapsed` when
+  GST is still unobserved, while preserving the exact latch source effects.
 - `FinalityLatchSourceEffectsAlwaysExact` proves that those finality-latch
   source actions are mutually exclusive on the latch-flip transition and
   install the exact source-specific vote, stake, commit-certificate, commit-view,
@@ -8859,6 +8936,12 @@ Temporal properties:
   that those exact finality-source actions also leave the post-state with every
   proposal, vote, view-change, RBC, timeout, Byzantine-fault, and post-GST
   progress gate disabled.
+- `FinalitySourceActionNeverChangesGst` proves that those exact finality-source
+  actions preserve the GST observation flag while installing finality; synchrony
+  observation remains owned by the explicit `GstElapsed` step.
+- `FinalitySourceActionOnlyLeavesGstElapsedGate` proves that those exact
+  finality-source actions leave all protocol progress gates closed and expose
+  only the `GstElapsed` gate when GST has not yet been observed.
 - `FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses` proves that
   those exact finality-source actions install the latched commit-certificate
   vote and stake witnesses from the post-state live counters.
@@ -9044,6 +9127,12 @@ Temporal properties:
   `Committed` commits the current active view without advancing the view
   counter, installs `commitView'` as that same view, preserves view-quorum
   evidence, and excludes NewView handoff state from the commit.
+- `CommittedPhaseEntryNeverChangesGst` proves that first entry into
+  `Committed` preserves the GST observation flag while using the same
+  finality-source classification required for the committed-phase entry.
+- `CommittedPhaseEntryOnlyLeavesGstElapsedGate` proves that first entry into
+  `Committed` leaves all protocol progress gates closed and exposes only the
+  `GstElapsed` gate when GST has not yet been observed.
 - `CommittedPhaseEntryAlwaysDisablesProgressActions` proves that the post-state
   of first entry into `Committed` already disables proposal, vote, timeout,
   Byzantine fault, and RBC progress gates.
@@ -9241,6 +9330,9 @@ Temporal properties:
   stake after finality.
 - `StakeAccountingNeverDiverges` proves that the live signed-stake accumulator
   always equals the weighted honest and Byzantine commit-vote counters.
+- `LiveStakeNeverExceedsRosterBudget` proves that the live signed-stake
+  accumulator stays within the maximum weighted validator roster budget in every
+  reachable state.
 - `CommitEvidenceNeverExceedsRosterBudget` proves that latched commit
   certificate vote/stake evidence stays within the configured validator and
   weighted-stake budgets in every reachable state.
@@ -9267,6 +9359,13 @@ Temporal properties:
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
   coverage, and ready/delivered states keep ready quorum.
+- `RbcPartialProgressEvidenceNeverDiverges` proves the complementary partial
+  progress evidence shape: idle and init states carry no stale chunk/READY
+  counters, chunking stays below full chunk coverage, chunk-complete states have
+  no READY votes yet, and partial READY states remain below commit quorum.
+- `RbcCorruptedDigestNeverValid` proves that once RBC enters the corrupted
+  repair path, any retained RBC evidence is paired with an invalidated digest
+  until the protocol repairs through RBC INIT.
 - `RbcStateOnlyChangesByProtocolOrFault` proves that the top-level RBC state
   changes only through proposal startup, explicit RBC INIT/CHUNK/READY/DELIVER
   protocol progress, or Byzantine fault corruption.
@@ -9407,6 +9506,9 @@ Temporal properties:
   DELIVER transition is enabled exactly when the session is in `ReadyQuorum`
   with READY quorum, full chunk coverage, header evidence, and a valid digest,
   so DELIVER cannot bypass complete RBC evidence.
+- `RbcReadyQuorumNeverLacksDeliverGate` proves the dual availability boundary:
+  every reachable `ReadyQuorum` state has the live RBC DELIVER gate enabled, so
+  READY quorum cannot be reached without exposing the delivery handoff.
 - `RbcDeliverStepAlwaysPreservesCompleteEvidence` proves that an RBC DELIVER
   step moves `ReadyQuorum` to `Delivered` while preserving the complete
   READY/chunk/header/digest evidence tuple and the live vote/view/GST context.
@@ -9436,6 +9538,108 @@ Temporal properties:
   evidence in place, keeps commit-certificate artifacts absent, disables the
   remaining RBC/fault progress gates, and still lacks the vote or stake
   evidence required to commit.
+- `RbcDeliveredWithoutFinalityNeverCarriesCommitCertificate` proves that every
+  reachable delivered-but-uncommitted RBC state keeps complete delivered
+  evidence while commit-certificate artifacts remain absent and either live
+  commit-vote quorum or signed-stake quorum is still missing.
+- `RbcDeliveredFinalityOnlyComesFromCommitVote` proves that once RBC is already
+  delivered but not yet final, any later finality latch must come from an honest
+  or Byzantine commit-vote action while the RBC DELIVER action remains disabled.
+- `RbcDeliveredFinalityAlwaysCompletesCommittedDelivery` proves that such a
+  delivered-state finality transition also installs the complete committed
+  delivery certificate stack, keeps delivered RBC evidence, and closes
+  post-finality progress gates.
+- `RbcDeliveredFinalityAlwaysCommitsCurrentView` proves that delivered-state
+  finality latches the active view as the commit-view witness, preserves active
+  view evidence, and cannot carry a NewView handoff into finality.
+- `RbcDeliveredFinalityOnlyLeavesGstElapsedGate` proves that delivered-state
+  finality preserves the GST observation flag, closes all protocol progress
+  gates, and leaves only the explicit `GstElapsed` gate while GST is still
+  unobserved.
+- `RbcDeliveredFinalityAlwaysInstallsCommitCertificateWitnesses` proves that
+  delivered-state finality installs the commit-certificate witness counters
+  from the post-transition commit votes and signed stake, with both certificate
+  witness fields meeting quorum.
+- `RbcDeliveredFinalityAlwaysMatchesCommitCertificateWitnessChange` proves that
+  delivered-state finality follows the complete commit-certificate witness
+  change stack, including committed-phase entry equivalence, certified finality
+  artifacts, commit-view witness installation, and exact-source committed
+  delivery completion.
+- `RbcDeliveredFinalityAlwaysMatchesCommitViewWitnessChange` proves that
+  delivered-state finality installs the current-view witness, leaves the witness
+  unchanged exactly at view zero, and follows the complete commit-view
+  witness-change stack whenever the committed view is nonzero.
+- `RbcDeliveredFinalityAlwaysMatchesLiveCommitGateCrossing` proves that
+  delivered-state finality is exactly a live commit-gate crossing from
+  `~CanCommit(...)` to `CanCommit(...)`, with post-state finality and RBC
+  evidence predicates consistent with the committed latch.
+- `RbcDeliveredFinalityAlwaysDisablesProgressAfterCommittedDelivery` proves
+  that delivered-state finality closes every post-state protocol progress gate:
+  proposal, prepare, commit, Byzantine commit, NewView, RBC, timeout,
+  Byzantine-fault, and post-GST progress.
+- `RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack` proves that
+  delivered-state finality satisfies the certified source-stack classifiers for
+  finality-latch change, exact source effects, and quorum gates, while ruling
+  out an RBC deliver source for this already-delivered path.
+- `RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack` proves that
+  delivered-state finality installs the complete post-state finality certificate
+  stack: finality-stack presence/completeness, committed-phase matching,
+  commit-certificate matching, commit-view matching, and live commit-gate
+  evidence matching.
+- `RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry` proves that
+  delivered-state finality follows the complete committed-phase entry bridge,
+  including finality-latch coupling, certified finality stack entry, exact
+  source effects, current-view commitment, GST preservation, and post-entry
+  delivery completion.
+- `RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange` proves that
+  delivered-state finality installs durable commit artifacts through the
+  certified finality stack, preserves GST, commits the current view, and leaves
+  only the explicit `GstElapsed` gate after finality.
+- `RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts` proves that
+  delivered-state finality changes the abstract finality latch and durable
+  commit artifacts together, with artifact installation restricted to honest or
+  Byzantine commit-vote sources rather than RBC delivery.
+- `RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses` proves that
+  delivered-state finality records exact durable commit-vote witnesses: empty
+  pre-finality artifacts become post-state vote/stake counters for the current
+  view, sourced only from honest or Byzantine commit-vote finality and never
+  from RBC delivery.
+- `RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence` proves that
+  delivered-state finality preserves already-delivered RBC evidence while the
+  live commit gate crosses: READY quorum, complete chunks, header, and digest
+  evidence are stable before and after the commit-vote finality step.
+- `RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence` proves that
+  delivered-state finality enters `Committed` without carrying a NewView
+  handoff and without mutating prepare or view evidence for the current view.
+- `RbcDeliveredFinalityAlwaysHasExactProtocolFrame` proves the full
+  delivered-state finality frame: GST, active view, prepare/view handoff
+  evidence, and delivered RBC evidence are preserved while exact commit-vote
+  witnesses and post-commit disabled-action gates are installed.
+- `RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame` proves that
+  delivered-state finality is exactly one commit-vote action and not proposal,
+  prepare, timeout, NewView, RBC, Byzantine-fault, or GST observation work.
+- `RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants` proves that
+  delivered-state finality installs the committed post-state safety bundle:
+  finality/certificate/live-gate equivalence, RBC evidence, current-view
+  binding, cleared NewView handoff, and disabled progress gates.
+- `RbcDeliveredFinalityAlwaysSplitsPostStateGate` proves the exact
+  delivered-state finality post-state gate split: pre-GST finality leaves only
+  `GstElapsed` enabled, while post-GST finality leaves the committed terminal
+  state with no enabled actions.
+- `RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed` proves the
+  pre-GST branch of delivered-state finality explicitly: the post-state is
+  committed, keeps GST unobserved, disables all progress and fault gates, and
+  leaves only `GstElapsed` enabled.
+- `RbcDeliveredFinalityPostGstPostStateIsTerminal` proves the post-GST branch
+  explicitly: delivered-state finality reaches committed+GST terminal
+  quiescence with every action gate disabled.
+- `RbcDeliveredNeverEnablesRbcProgress` proves that a delivered RBC session
+  keeps INIT, CHUNK, READY, DELIVER, and Byzantine RBC-fault gates closed, so
+  delivered RBC evidence cannot be reopened by RBC-side progress.
+- `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
+  prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
+  pending branches preserve the GST observation flag; synchrony observation
+  remains owned by the explicit `GstElapsed` step.
 - `LiveHeaderDigestEvidenceNeverBypassRbcHandoff` proves that live RBC header
   and digest evidence remains confined to initialized, withheld, corrupted, or
   delivered handoff states; digest evidence always implies a seen header and an
@@ -9456,7 +9660,17 @@ Frontier recovery invariants:
 - `TypeInvariant`
 - `CommitImpliesVoteQuorum`
 - `CommitImpliesPayloadAvailability`
+- `CommittedFrontierHasNoStagedFuture`, which requires a committed frontier to
+  keep fresh recovery ownership and have no live future slot or promotion-ready
+  wrapper competing with its commit source.
 - `VoteBackedNotDroppedAsZeroEvidenceZombie`
+- `ZeroEvidenceDropHasNoConsensusEvidence`, which requires a zero-evidence
+  terminal drop to have no vote, quorum, commit-QC, retransmit, rotation, or
+  promotion-ready evidence attached to it.
+- `ZeroEvidenceDropHasNoStagedFuture`, which requires a zero-evidence terminal
+  drop to have no live future slot or promotion-ready wrapper competing with
+  the no-evidence decision; any observed future evidence must already be
+  promoted.
 - `PostGstVoteBackedFrontierHasProgress`, which rules out a terminal
   post-GST state where `pending /\ voteBacked /\ ~committed` has no recovery,
   commit, retransmit, rotation, or bounded-drop transition.
@@ -9472,9 +9686,14 @@ Frontier recovery invariants:
 - `MissingPayloadHasRecoveryProgress`, which requires a vote-backed active
   frontier with a drained vote queue and missing payload to expose a payload
   recovery transition.
+- `PayloadRecoveredHasLocalOwner`, which requires any recovered payload marker
+  to keep the active payload local and its recovery ownership local.
 - `QuorumWindowHasRetransmitProgress`, which requires an expired
   quorum-reschedule window to expose a quorum retransmit transition before
   bounded rotation/drop can follow.
+- `QuorumRetransmitClearsRescheduleWindow`, which requires a completed quorum
+  retransmit to have cleared the reschedule timer while preserving the
+  vote-backed, payload-available evidence it will follow through.
 - `RetransmitHasFollowthroughProgress`, which requires a vote-backed frontier
   that already retransmitted quorum evidence to expose the deterministic
   rotation or view-bound clear follow-through.
@@ -9491,16 +9710,36 @@ Frontier recovery invariants:
   evidence, and reset through the active-progress cleanup invariant.
 - `FuturePromotionReadyClearsCurrentWrapper`, which requires the
   promotion-ready staging state to have cleared the current pending wrapper,
-  reset the quorum-reschedule timer, marked a future-reanchor progress event,
-  and kept concrete future evidence as the only promotion source.
+  stayed separate from rotation and terminal outcomes, reset the
+  quorum-reschedule timer, marked a future-reanchor progress event, and kept
+  concrete future evidence as the only promotion source.
+- `FuturePromotionReadyClearsActiveMarkers`, which requires the
+  promotion-ready staging state to have cleared the current recovery owner,
+  validation, local-vote, commit-QC, payload-recovery, and quorum-retransmit
+  markers before promotion.
 - `TerminalFrontierOutcomesAreExclusive`, which requires committed, dropped,
   and rotated frontier terminal outcomes to stay mutually exclusive, clear
   quorum-reschedule timers, and keep drop labels exactly aligned with dropped
   states.
+- `RotatedFrontierHasRetransmitEvidence`, which requires a rotated non-dropped
+  frontier to preserve retransmit, vote, payload, owner, and non-quorum
+  evidence while aligning subject-view and recovery-rotation bookkeeping.
+- `RotatedFrontierHasNoStagedFuture`, which requires a rotated non-dropped
+  frontier to have no live future slot or promotion-ready wrapper competing
+  with its rotation source, and any observed future evidence must already be
+  promoted.
+- `ViewBoundDropHasRetransmitEvidence`, which requires a view-bound drop to
+  preserve the retransmit, vote, payload, owner, max-view, and non-quorum
+  evidence that made the view-bound terminal outcome admissible.
+- `ViewBoundDropHasNoStagedFuture`, which requires a view-bound drop to have
+  no live future slot or promotion-ready wrapper competing with the terminal
+  drop source, and any observed future evidence must already be promoted.
 - `PendingProgressEventsTouchAge`, which requires every modeled pending
   progress event to reset the abstract progress age.
 - `StaleRecoveryUnlockIsViewScoped`, which requires any stale recovery unlock
   to have rotated at least the pending block's subject view.
+- `StaleRecoveryUnlockClearsStaleOwner`, which requires a stale recovery
+  unlock to remove the stale owner label from the active frontier.
 
 Frontier recovery temporal property:
 - `PostGstVoteBackedFrontierEventuallyResolves`: after GST, every unresolved
@@ -10164,7 +10403,8 @@ implementation surfaces it abstracts:
 
 | Model concept | Implementation surface |
 | --- | --- |
-| `preserve_no_queue`, `preserve_mode_flip`, `preserve_commit_inflight`, `preserve_deadline_not_due` | `should_preserve_idle_view_budget_for_proposal(...)` requires queued work, no pending mode flip, no commit inflight job, and a due proposal deadline or queue nudge. |
+| `preserve_no_queue*` | `should_preserve_idle_view_budget_for_proposal(...)` requires queued work before considering pacing or hard proposal backpressure, so zero queued work keeps idle-view repair available. |
+| `preserve_mode_flip`, `preserve_commit_inflight`, `preserve_deadline_not_due` | `should_preserve_idle_view_budget_for_proposal(...)` also requires no pending mode flip, no commit inflight job, and a due proposal deadline or queue nudge. |
 | `preserve_healthy_due` | A due proposal with queued work and no backpressure preserves the tick budget for proposal handling before idle-view repair. |
 | `preserve_queue_saturated_due`, `preserve_consensus_pacing_due`, `preserve_combined_pacing_due` | Pacing-only pressure from queue saturation and/or consensus ingress backlog still preserves proposal budget. Bridge coverage includes `idle_view_budget_is_preserved_for_due_proposal_under_pacing_backpressure`. |
 | `preserve_active_pending_due`, `preserve_rbc_backlog_due`, `preserve_relay_backpressure_due` | Hard proposal backpressure keeps idle-view repair available. |
@@ -10207,7 +10447,7 @@ implementation surfaces it abstracts:
 | `effective_near_fast_not_shorter` | The near-quorum path remains capped by the ordinary quorum timeout when the derived near-quorum window is longer. |
 | `effective_near_no_missing_data`, `effective_near_consensus_backlog`, `effective_near_rbc_incomplete`, `effective_near_both_backlogs` | Missing local data is required, and consensus queue or RBC backlog disables the fast retry path. |
 | `hysteresis_permissioned_mode`, `hysteresis_zero_quorum_timeout`, `hysteresis_no_previous`, `hysteresis_height_mismatch`, `hysteresis_same_view`, `hysteresis_lower_view` | `cached_slot_timeout_hysteresis_remaining(...)` returns `None` unless NPoS mode has a nonzero quorum timeout, prior same-height timeout history, and a strictly newer view. |
-| `hysteresis_streak0_before`, `hysteresis_streak1_before`, `hysteresis_streak2_before`, `hysteresis_streak3_before` | `next_cached_slot_timeout_streak(...)` increments the previous streak for same-height newer views, while the hysteresis multiplier is capped at four quorum-timeout windows. |
+| `hysteresis_streak0_before`, `hysteresis_streak1_before`, `hysteresis_streak2_before`, `hysteresis_streak3_before`, `hysteresis_streak_max_before` | `next_cached_slot_timeout_streak(...)` increments the previous streak for same-height newer views with `u8::saturating_add`, while the hysteresis multiplier is capped at four quorum-timeout windows. |
 | `hysteresis_boundary`, `hysteresis_after` | The wait is present only while elapsed time is strictly below the hysteresis window; boundary and later ticks do not delay rotation. Bridge coverage includes `npos_timeout_hysteresis_applies_after_previous_trigger`. |
 
 The proposal parent-resolution model is intentionally finite. These are the
@@ -10649,7 +10889,7 @@ implementation surfaces it abstracts:
 | `duplicateSameSlot` | `local_same_slot_vote(...)` prevents duplicate local precommit votes for the same height/view/epoch. |
 | `unsupersededConflict`, `supersededConflict` | Same-height local vote history is enforced by `local_conflicting_slot_vote(...)`, `new_view_qc_supersedes_same_height_vote_conflict(...)`, and stale-vote rotation checks; bridge coverage includes `precommit_vote_rejects_newer_view_after_conflict` and the NEW_VIEW retry regressions in `main_loop/tests.rs`. |
 | `candidateCompletesNewerQuorum`, `olderConflictCompletesQuorum` | `candidate_commit_quorum_completes_with_local_vote(...)` can unblock only newer conflicting candidates that complete quorum; bridge coverage includes `precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum` and `precommit_vote_rejects_older_conflict_even_when_local_vote_would_complete_quorum`. |
-| `lockedSameHeightConflict`, `missingLockedPayloadOldView`, `missingLockedPayloadNewerView`, `nonExtendingLockedChain`, `extendsLockedChain` | Locked-QC checks in `emit_precommit_vote(...)` and `qc_satisfies_locked_with_lookup(...)` reject same-height locked conflicts, require missing locked payload recovery at the same/older view, allow newer-view override, and require chain extension; bridge coverage includes `precommit_vote_skips_when_block_conflicts_with_locked_chain`, `emit_precommit_vote_requests_missing_locked_payload_before_skipping`, `emit_precommit_vote_allows_newer_view_when_locked_payload_missing`, and `precommit_vote_allows_when_block_extends_locked_chain`. |
+| `lockedSameHeightConflict`, `missingLockedPayloadOldView`, `missingLockedPayloadSameHeightNewerView`, `nonExtendingLockedChain`, `extendsLockedChain` | Locked-QC checks in `emit_precommit_vote(...)` and `qc_satisfies_locked_with_lookup(...)` reject same-height locked conflicts, request missing locked-payload recovery before signing same-height newer-view candidates, and require chain extension before permitted lock cases can emit; bridge coverage includes `precommit_vote_skips_when_block_conflicts_with_locked_chain`, `emit_precommit_vote_requests_missing_locked_payload_before_skipping`, `emit_precommit_vote_skips_newer_view_when_same_height_locked_payload_missing`, and `precommit_vote_allows_when_block_extends_locked_chain`. |
 
 The same-height vote conflict-gate model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -12900,47 +13140,52 @@ blocking-total thresholds, individual stage maxima, validation substages, and
 recorded-timing gates for slow commit-stage diagnostics.
 `commit-inflight-timeout-fast` and `commit-inflight-timeout-bug-*`
 cross-check one-shot commit-inflight timeout reporting, diagnostic marking,
-inflight owner preservation, late-result attachability, and absence of
-recovery/view/pacemaker side effects.
+timeout-mark persistence, inflight owner preservation, late-result
+attachability, and absence of recovery/view/pacemaker side effects.
 `post-commit-pacemaker-kick-fast` and
 `post-commit-pacemaker-kick-bug-*` cross-check queued-work admission,
-pacing-only allowance, hard backpressure suppression, callback-result
-independence, and timestamp capture for post-commit pacemaker kickstarts.
+pacing-only allowance, no-queue hard-stop suppression, hard backpressure
+suppression, callback-result independence, and timestamp capture for
+post-commit pacemaker kickstarts.
 `idle-view-proposal-budget-fast` and
 `idle-view-proposal-budget-bug-*` cross-check due-proposal budget
-preservation, pacing-only allowance, hard-backpressure suppression,
-proposal-slot reservation, and retry-after-proposal gating.
+preservation, pacing-only allowance, no-queue hard-stop suppression,
+hard-backpressure suppression, proposal-slot reservation, and
+retry-after-proposal gating.
 `cached-slot-timeout-fast` and `cached-slot-timeout-bug-*` cross-check
 near-quorum fast-timeout selection, base-timeout fallback, hysteresis wait
-boundaries, invalid-input suppression, streak advancement, and capped
-hysteresis factors.
+boundaries, invalid-input suppression, streak advancement, streak saturation,
+and capped hysteresis factors.
 `pending-fast-path-timeout-fast` and `pending-fast-path-timeout-bug-*`
 cross-check saturated margin subtraction, half-timeout fallback, one
 millisecond minimums, floor boundaries, and DA inline validation floor
-application.
+application without capping larger timeouts.
 `stalled-pending-timeout-fast` and `stalled-pending-timeout-bug-*` cross-check
 base quorum timeout flooring, near-quorum payload fast timeout priority,
 active recovery backlog classification, same-block recovery suppression, and
-decision projection fields.
+commit-pipeline evidence disjuncts in decision projection fields.
 `stalled-pending-frontier-timeout-fast` and
 `stalled-pending-frontier-timeout-bug-*` cross-check recovery backlog timeout
 extension, deferred-QC multiplier selection, active block-production gap caps,
 and saturating arithmetic.
 `frontier-proposal-grace-fast` and `frontier-proposal-grace-bug-*`
-cross-check transaction-count caps, proposal assembly windows, ingress drain
-grace, full and initial frontier proposal grace, missing-QC reacquire windows,
-and saturating arithmetic.
+cross-check transaction-count caps, full-grace transaction-budget coupling,
+proposal assembly windows, ingress drain grace, full and initial frontier
+proposal grace, missing-QC reacquire windows, and saturating arithmetic.
 `frontier-slot-helpers-fast` and `frontier-slot-helpers-bug-*` cross-check
-lag-start fallback, body-state predicates, local-vote locking, timeout-view
-selection, progress/lag timer updates, catch-up markers, and compatibility
-mirror synchronization.
+lag-start fallback, body-state predicates, body-available state transitions,
+local-vote locking, timeout-view selection, progress/lag timer updates,
+catch-up markers, and nested slot-state consistency.
 `frontier-slot-tracker-fast` and `frontier-slot-tracker-bug-*` cross-check
 constructor mode/phase selection, block-created and body/vote/QC evidence
-steps, authoritative supersede, fetch retry, quorum timeout, lag-expiry,
-view-advance, finalization, and compatibility-sync behavior.
+steps, same-candidate peer/requester evidence merging, authoritative supersede,
+fetch retry, quorum timeout, lag-expiry, view-advance, finalization, and
+nested-state behavior, plus absent-slot defaults, stale non-commit slot
+eviction, same-height slot reuse, and commit retire/retain wrapper behavior.
 `slot-tracker-state-fast` and `slot-tracker-state-bug-*` cross-check
-authoritative owner/frontier replacement, retained-branch refresh and seed
-priority, clear/remove-height behavior, and committed/above-height pruning.
+authoritative owner/frontier replacement, proposal-seen insertion/exact reads,
+view-change and horizon pruning, retained-branch refresh and seed priority,
+clear/remove-height behavior, and committed/above-height pruning.
 `timeout-derivation-fast` and `timeout-derivation-bug-*` cross-check
 rebroadcast cooldown clamps, payload and targeted rescue cooldowns, quorum
 reschedule backoff, DA/non-DA commit and availability timeouts, pacemaker
@@ -12991,7 +13236,8 @@ flooring.
 `frontier-live-owner-work-fast` and `frontier-live-owner-work-bug-*`
 cross-check terminal frontier modes, pending/commit/validation live work,
 slot commit-QC evidence, competing quorum lockouts, local lock/history guards,
-and fall-through after earlier local-source misses.
+fall-through after earlier local-source misses, and exact-height/different-hash
+conflict-adapter gating.
 `keep-frontier-pending-active-fast` and
 `keep-frontier-pending-active-bug-*` cross-check exact live-frontier owner
 preservation, pending commit-QC and bridged local-vote evidence, exact-hash
@@ -14544,12 +14790,19 @@ Individual mutation modes are also accepted by the runner:
 
 ```bash
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-recovery-owner-cleanup
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-vote-queue
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-payload-recovery
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-payload-recovery-owner
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-retransmit-followthrough
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-quorum-window-cleanup
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-view-bound-retransmit-evidence
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-promotion
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-clear
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-active-marker
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-rotated
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-evidence-drop
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-zero-evidence-future-drop
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-promotion-reset
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-stale-owner
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-progress-touch
@@ -20240,6 +20493,7 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-above-timeo
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-already-reported-repeats
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-already-reported-clears-flag
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-non-timeout-sets-flag
+bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-without-mark
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-without-status-record
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-without-warning
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-status-without-new-report
@@ -20257,6 +20511,7 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-app
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-kickstarts-pacemaker
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-detaches-late-result
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-trigger-without-queue
+bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-trigger-no-queue-hard-stop
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-skip-healthy-queue
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-skip-queue-saturated-pacing
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-skip-consensus-pacing
@@ -20274,6 +20529,7 @@ bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-ignore-a
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-ignore-rbc-with-pacing
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-ignore-relay-with-pacing
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-without-queue
+bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-no-queue-hard-stop
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-during-mode-flip
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-during-commit-inflight
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-before-deadline
@@ -20389,6 +20645,7 @@ bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-no-wait-before-
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-boundary-still-waits
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-after-still-waits
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-skip-streak-increment
+bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-streak-overflow-wraps
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-wrong-factor-streak0
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-wrong-factor-streak1
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-wrong-factor-streak2
@@ -20429,6 +20686,7 @@ bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-
 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-without-da
 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-uses-min
 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-added
+bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-caps-high
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-base-timeout-no-floor
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-near-timeout-not-capped
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-near-uses-base-timeout
@@ -20447,6 +20705,8 @@ bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-commit
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-invalid-commit-pipeline-backlog
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-queue-without-evidence-active
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-validation-inflight-without-pending
+bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-commit-qc-observed-backlog
+bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-validated-artifact-backlog
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-frontier-timeout-bug-recovery-uses-consensus-queue
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-frontier-timeout-bug-skip-worker-recovery-extension
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-frontier-timeout-bug-skip-residual-recovery-extension
@@ -20501,8 +20761,11 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-new-body-pres
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-higher-block-created-keeps-generation
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-higher-block-created-skips-pipeline
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-same-duplicate-clears-rebroadcast
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-same-missing-skips-peer-hints
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-same-fresh-body-skips-progress
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-mismatch-mutates-candidate
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-body-available-skips-pipeline
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-body-available-skips-sender
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-body-duplicate-clears-rebroadcast
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-passive-body-keeps-passive
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-vote-missing-waits-commit-qc
@@ -20516,6 +20779,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-authoritative
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-authoritative-supersede-requests-pipeline
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-exact-skips-fetch
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-unarmed-fetches
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-same-skips-peer-hints
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-same-skips-requester
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-fetch-retry-normal-skips-fetch
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-fetch-retry-deep-fetches
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-quorum-timeout-first-rotates
@@ -20530,11 +20795,25 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-lag-expired-d
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-view-advance-keeps-guard
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-commit-height-below-retires
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-commit-height-at-or-above-not-finalized
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-missing-sync-compat
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-missing-nested-slot-update
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-fetch-retry-creates-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-view-advance-no-request
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-quorum-timeout-no-request
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-block-created-no-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-stale-fetch-retry-keeps-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-stale-block-created-reuses-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-same-height-recreates-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-commit-retire-reinserts-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-commit-below-drops-slot
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-lag-uses-progress
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-lag-missing-returns-zero
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-missing-missing-false
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-missing-available-true
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-body-state
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-unknown-skips-validation
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-pending-clears-validation
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-phase
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-record-progress
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-local-vote-does-not-lock
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-local-vote-mutates-candidate
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-current-view-ignores-active
@@ -20556,12 +20835,12 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-keeps-rebroadcast
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-skips-reason
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-mutates-phase
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-candidate
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-body-state
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-peer-sets
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-timers
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-repair
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-requesters
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-candidate
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-body-state
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-peer-sets
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-timers
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-repair
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-requesters
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-tx-count-ignores-config-cap
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-tx-count-ignores-world-limit
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-tx-count-no-floor
@@ -20572,6 +20851,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-ingress-act
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-omits-base-floor
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-omits-ingress-grace
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-uses-min-ingress-cooldown
+bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-ignores-config-tx-cap
+bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-ignores-world-tx-limit
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-initial-ignores-da-gate
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-initial-ignores-sla-gate-for-proposal
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-initial-omits-active-gap-cap
@@ -20606,6 +20887,16 @@ bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-above-drop
 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-above-keeps-above
 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-committed-keeps-equal
 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-committed-drops-above
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-proposal-insert-missing
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-proposal-duplicate-drops-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-proposal-read-absent-returns-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-view-prune-keeps-old-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-view-prune-drops-next-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-keeps-committed-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-keeps-far-future-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-keeps-active-old-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-drops-active-current-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-applies-view-cap-to-other-height
 bash scripts/formal/sumeragi_apalache.sh timeout-derivation-bug-control-zero-returns-zero
 bash scripts/formal/sumeragi_apalache.sh timeout-derivation-bug-control-skips-floor
 bash scripts/formal/sumeragi_apalache.sh timeout-derivation-bug-control-uses-block-time
@@ -24011,6 +24302,14 @@ bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-loc
 bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-local-history-prevote
 bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-local-history-remote
 bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-no-work
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-pending-live
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-slot-qc
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-competing-quorum
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-local-history
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-same-hash-blocks
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-wrong-height-blocks
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-no-work-blocks
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-passive-blocks
 bash scripts/formal/sumeragi_apalache.sh keep-frontier-pending-active-bug-reject-pending-commit-qc
 bash scripts/formal/sumeragi_apalache.sh keep-frontier-pending-active-bug-reject-pending-local-vote-active-bridge
 bash scripts/formal/sumeragi_apalache.sh keep-frontier-pending-active-bug-reject-pending-local-vote-lock-bridge

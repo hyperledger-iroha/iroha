@@ -166,8 +166,7 @@ La validación rechaza versiones no compatibles con
 - Política de ejecución de la FHE:
   -`max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
-  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
-    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
+  - Bootstrap-capable policies (`max_bootstrap_count > 0`) must bind exactly the statement class used by their bootstrap key material: `bootstrap_key_zero_refresh_proof_statement_digest` for `RefreshOnlyV1`, or `full_bootstrap_material_proof_statement_digest` for `FullBootstrapV1`. Policies with `max_bootstrap_count = 0` must omit both fields.
   - el enlace del conjunto de parámetros debe coincidir con `(param_set, version)`.
   - `max_multiplication_depth` no debe exceder la profundidad establecida por los parámetros.
   - La admisión de políticas rechaza el ciclo de vida del conjunto de parámetros `Proposed` o `Withdrawn`.

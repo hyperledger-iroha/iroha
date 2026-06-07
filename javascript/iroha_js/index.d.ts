@@ -616,9 +616,6 @@ export const SCCP_DOMAIN_BSC: number;
 export const SCCP_DOMAIN_SOL: number;
 export const SCCP_DOMAIN_TON: number;
 export const SCCP_DOMAIN_TRON: number;
-export const SCCP_DOMAIN_SORA_KUSAMA: number;
-export const SCCP_DOMAIN_SORA_POLKADOT: number;
-export const SCCP_DOMAIN_SORA2: number;
 export const SCCP_CODEC_TEXT_UTF8: 1;
 export const SCCP_CODEC_EVM_HEX: 2;
 export const SCCP_CODEC_SOLANA_BASE58: 3;
@@ -714,10 +711,6 @@ export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,byte
 export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1: "burnToTaira(bytes32,bytes32,bytes,uint256)";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1: string;
 export const TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1: string;
-export const SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1: "substrate-runtime-v1";
-export const SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1: "scale_call_v1";
-export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "SccpBridge.submit_message_proof";
-export const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-substrate-runtime-storage-v1";
 export const SCCP_CORE_REMOTE_DOMAINS: number[];
 
 export interface SccpBurnPayload {
@@ -3294,59 +3287,6 @@ export interface BscCommitSealInput {
   signatures?: ReadonlyArray<BinaryLike>;
 }
 
-export interface SubstrateAuthoritySetPayloadInput {
-  authorityPublicKeys?: readonly string[];
-  authority_public_keys?: readonly string[];
-  authorityWeights?: readonly (string | number | bigint)[];
-  authority_weights?: readonly (string | number | bigint)[];
-}
-
-export interface SubstrateGrandpaJustificationProofInput
-  extends SubstrateAuthoritySetPayloadInput {
-  version?: SccpVersionInput;
-  totalWeight?: string | number | bigint;
-  total_weight?: string | number | bigint;
-  signedWeight?: string | number | bigint;
-  signed_weight?: string | number | bigint;
-  precommitMessageHash?: string;
-  precommit_message_hash?: string;
-  signersBitmap?: BinaryLike;
-  signers_bitmap?: BinaryLike;
-  signatures?: readonly BinaryLike[];
-}
-
-export interface SubstrateAuthoritySetTransitionMessageInput {
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  fromGrandpaSetId?: string | number | bigint;
-  from_grandpa_set_id?: string | number | bigint;
-  toGrandpaSetId?: string | number | bigint;
-  to_grandpa_set_id?: string | number | bigint;
-  transitionBlockNumber?: string | number | bigint;
-  transition_block_number?: string | number | bigint;
-  transitionBlockHash?: string;
-  transition_block_hash?: string;
-  parentAuthoritySetHash?: string;
-  parent_authority_set_hash?: string;
-  nextAuthoritySetHash?: string;
-  next_authority_set_hash?: string;
-  nextAuthoritySetPayload?: BinaryLike | SubstrateAuthoritySetPayloadInput;
-  next_authority_set_payload?: BinaryLike | SubstrateAuthoritySetPayloadInput;
-  nextAuthoritySetPayloadHash?: string;
-  next_authority_set_payload_hash?: string;
-  nextAuthoritySetProofHash?: string;
-  next_authority_set_proof_hash?: string;
-}
-
-export interface SubstrateAuthoritySetTransitionJustificationInput
-  extends SubstrateAuthoritySetTransitionMessageInput {
-  version?: SccpVersionInput;
-  transitionMessageHash?: string;
-  transition_message_hash?: string;
-  grandpaJustification?: SubstrateGrandpaJustificationProofInput;
-  grandpa_justification?: SubstrateGrandpaJustificationProofInput;
-}
-
 export interface TronSccpReceiptProofInput {
   sourceEventDigest?: string;
   source_event_digest?: string;
@@ -3606,95 +3546,6 @@ export interface TronWitnessScheduleTransitionSealInput
   seal_proof?: TronWitnessSealInput;
   witnessSealProof?: TronWitnessSealInput;
   witness_seal_proof?: TronWitnessSealInput;
-}
-
-export interface SubstrateSccpStorageProofInput {
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  sourceEventDigest?: string;
-  source_event_digest?: string;
-  sourceEventLeafIndex?: string | number | bigint;
-  source_event_leaf_index?: string | number | bigint;
-  leafIndex?: string | number | bigint;
-  leaf_index?: string | number | bigint;
-  finalizedBlockNumber?: string | number | bigint;
-  finalized_block_number?: string | number | bigint;
-  finalityHeight?: string | number | bigint;
-  finality_height?: string | number | bigint;
-  grandpaSetId?: string | number | bigint;
-  grandpa_set_id?: string | number | bigint;
-  blockHash?: string;
-  block_hash?: string;
-  finalityBlockHash?: string;
-  finality_block_hash?: string;
-  authoritySetHash?: string;
-  authority_set_hash?: string;
-  eventsRoot?: string;
-  events_root?: string;
-  receiptOrMessageRoot?: string;
-  receipt_or_message_root?: string;
-  inclusionBranch?: readonly (
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[]
-  )[];
-  inclusion_branch?: readonly (
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[]
-  )[];
-}
-
-export interface SubstrateSccpRuntimeStorageProofRequestInput
-  extends SubstrateSccpStorageProofInput,
-    SccpSourceVerifierMaterialInput {
-  storageProofHash?: string;
-  storage_proof_hash?: string;
-  sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
-  source_verifier_material?: SccpSourceVerifierMaterialInput;
-  material?: SccpSourceVerifierMaterialInput;
-}
-
-export interface SubstrateSccpRuntimeStorageFastpqPublicInputs {
-  readonly dsid: string;
-  readonly slot: string;
-  readonly oldRoot: string;
-  readonly newRoot: string;
-  readonly permRoot: string;
-  readonly txSetHash: string;
-}
-
-export interface SubstrateSccpRuntimeStorageFastpqTransition {
-  readonly key: string;
-  readonly operation: "meta_set";
-  readonly oldValue: "0x";
-  readonly newValue: string;
-}
-
-export interface SubstrateSccpRuntimeStorageProofRequest {
-  readonly version: 1;
-  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
-  readonly circuitId: typeof SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1;
-  readonly parameterSet: "fastpq-lane-balanced";
-  readonly sourceDomain: number;
-  readonly finalizedBlockNumber: string;
-  readonly grandpaSetId: string;
-  readonly sourceStateVerifierId: string;
-  readonly sourceStateVerifierHash: string;
-  readonly runtimeStorageProofPublicInputsHash: string;
-  readonly storageProofHash: string;
-  readonly statementBytes: Uint8Array;
-  readonly verificationContextBytes: Uint8Array;
-  readonly schemaDescriptor: Uint8Array;
-  readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
-  readonly fastpqPublicInputs: Readonly<SubstrateSccpRuntimeStorageFastpqPublicInputs>;
-  readonly fastpqTransitions: ReadonlyArray<
-    Readonly<SubstrateSccpRuntimeStorageFastpqTransition>
-  >;
 }
 
 export interface SolanaSccpProofPublicInputs {
@@ -5728,120 +5579,6 @@ export interface TronSccpBridgeProofSubmitPayloadInput
   destination_binding?: TronSccpDestinationBindingInput;
 }
 
-export interface SubstrateSccpProofRequestInput {
-  publicInputs?: SccpMessageTransparentPublicInputsInput;
-  public_inputs?: SccpMessageTransparentPublicInputsInput;
-  bundleBytes?: BinaryLike;
-  bundle_bytes?: BinaryLike;
-  sourceProofBytes?: BinaryLike;
-  source_proof_bytes?: BinaryLike;
-  backend?: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  statementHash?: string;
-  statement_hash?: string;
-  destinationBindingHash?: string;
-  destination_binding_hash?: string;
-  proofContext?: SolanaSccpProofContextInput;
-  proof_context?: SolanaSccpProofContextInput;
-}
-
-export interface SubstrateSccpProofRequest {
-  readonly version: 1;
-  readonly backend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  readonly sourceDomain: number;
-  readonly targetDomain: number;
-  readonly publicInputs: Readonly<
-    Required<{
-      version: number;
-      messageId: string;
-      payloadHash: string;
-      targetDomain: number;
-      commitmentRoot: string;
-      finalityHeight: string;
-      finalityBlockHash: string;
-    }>
-  >;
-  readonly publicInputsBytes: Uint8Array;
-  readonly bundleBytes: Uint8Array;
-  readonly sourceProofBytes: Uint8Array;
-  readonly proofContext: Readonly<SolanaSccpProofContext>;
-  readonly statementHash: string;
-  readonly destinationBindingHash: string;
-  readonly requestHash: string;
-}
-
-export interface SubstrateSccpProofResult {
-  readonly version: 1;
-  readonly backend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  readonly proofBytes: Uint8Array;
-  readonly proofBase64: string;
-  readonly publicInputs: SubstrateSccpProofRequest["publicInputs"];
-  readonly bundleBytes: Uint8Array;
-  readonly sourceProofBytes: Uint8Array;
-  readonly proofContext: Readonly<SolanaSccpProofContext>;
-  readonly statementHash: string;
-  readonly destinationBindingHash: string;
-  readonly requestHash: string;
-  readonly envelopeHash: string;
-}
-
-export interface SubstrateSccpSubmissionInput {
-  proofResult?: SubstrateSccpProofResult;
-  proof_result?: SubstrateSccpProofResult;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  publicInputs?: SccpMessageTransparentPublicInputsInput;
-  public_inputs?: SccpMessageTransparentPublicInputsInput;
-  publicInputsBytes?: BinaryLike;
-  public_inputs_bytes?: BinaryLike;
-  bundleBytes?: BinaryLike;
-  bundle_bytes?: BinaryLike;
-  /** Accepted only with `proofResult`; raw runtime-call payloads do not carry these request-bound bytes. */
-  sourceProofBytes?: BinaryLike;
-  /** Accepted only with `proof_result`; raw runtime-call payloads do not carry these request-bound bytes. */
-  source_proof_bytes?: BinaryLike;
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  statementHash?: string;
-  statement_hash?: string;
-  destinationBindingHash?: string;
-  destination_binding_hash?: string;
-  proofContext?: SolanaSccpProofContextInput;
-  proof_context?: SolanaSccpProofContextInput;
-}
-
-export interface SubstrateSccpSubmission {
-  readonly version: 1;
-  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
-  readonly verifierBackend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  readonly platformPayload: "substrate_runtime_call";
-  readonly envelopeEncoding: typeof SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1;
-  readonly submissionKind: "runtime_call";
-  readonly verifierEntrypoint: typeof SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1;
-  readonly sourceDomain: number;
-  readonly targetDomain: number;
-  readonly publicInputs: SubstrateSccpProofRequest["publicInputs"];
-  readonly proofContext: Readonly<SolanaSccpProofContext>;
-  readonly statementHash: string;
-  readonly destinationBindingHash: string;
-  readonly requestHash: string;
-  readonly proofBytes: Uint8Array;
-  readonly publicInputsBytes: Uint8Array;
-  readonly bundleBytes: Uint8Array;
-  readonly arguments: ReadonlyArray<
-    Readonly<{
-      key: "proof_bytes" | "public_inputs" | "bundle_bytes";
-      encoding: "raw_bytes";
-      bytes: string;
-    }>
-  >;
-  readonly runtimeCall: Uint8Array;
-  readonly runtimeCallHex: string;
-  readonly envelopeBytes: Uint8Array;
-  readonly envelopeHex: string;
-}
-
 export type SccpWitnessProviderFn<Input> = (
   input: Input,
   options?: Record<string, unknown>,
@@ -6799,53 +6536,6 @@ export class TronSccpProver {
   ): Promise<TronSccpProofResult>;
 }
 
-export type SubstrateSccpWitnessProvider =
-  SccpWitnessProviderResolverOption<SubstrateSccpProofRequestInput>;
-
-export interface SubstrateSccpProveResult {
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  proofBase64?: string;
-  proof_base64?: string;
-  backend?: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  requestHash?: string;
-  request_hash?: string;
-  envelopeHash?: string;
-  envelope_hash?: string;
-  publicInputs?: SccpMessageTransparentPublicInputsInput;
-  public_inputs?: SccpMessageTransparentPublicInputsInput;
-  proofContext?: SolanaSccpProofContextInput;
-  proof_context?: SolanaSccpProofContextInput;
-  statementHash?: string;
-  statement_hash?: string;
-  destinationBindingHash?: string;
-  destination_binding_hash?: string;
-}
-
-export type SubstrateSccpProveFn = (
-  request: SubstrateSccpProofRequest,
-  options?: Record<string, unknown>,
-) => SubstrateSccpProveResult | Promise<SubstrateSccpProveResult>;
-
-export type SubstrateSccpProverOptions = SccpProverWitnessProviderOption<
-  SubstrateSccpWitnessProvider,
-  SubstrateSccpProofRequestInput
-> &
-  SccpProverProveOption<SubstrateSccpProveFn>;
-
-export class SubstrateSccpProver {
-  constructor(options?: SubstrateSccpProverOptions);
-  buildRequest(
-    input: SubstrateSccpProofRequestInput,
-    options?: Record<string, unknown>,
-  ): Promise<SubstrateSccpProofRequest>;
-  prove(
-    input: SubstrateSccpProofRequestInput,
-    options?: Record<string, unknown>,
-  ): Promise<SubstrateSccpProofResult>;
-}
-
 export type SolanaSccpWitnessProvider =
   SccpWitnessProviderResolverOption<SolanaSccpWitnessInput>;
 
@@ -7003,16 +6693,6 @@ export function buildTronSccpSubmission(
 export function buildTronSccpBridgeProofSubmitPayload(
   input: TronSccpBridgeProofSubmitPayloadInput,
 ): ToriiBridgeProofSubmitPayload;
-export function buildSubstrateSccpProofRequest(
-  input: SubstrateSccpProofRequestInput,
-): SubstrateSccpProofRequest;
-export function wrapSubstrateSccpProofResult(
-  proofBytes: BinaryLike,
-  request: SubstrateSccpProofRequest,
-): SubstrateSccpProofResult;
-export function buildSubstrateSccpSubmission(
-  input: SubstrateSccpSubmissionInput,
-): SubstrateSccpSubmission;
 export function canonicalEvmSccpReceiptProofBytes(
   input: EvmSccpReceiptProofInput,
 ): Uint8Array;
@@ -7507,67 +7187,6 @@ export function canonicalTronWitnessScheduleTransitionSealBytes(
 ): Uint8Array;
 export function tronWitnessScheduleTransitionSealHash(
   input: TronWitnessScheduleTransitionSealInput,
-): string;
-export function canonicalSubstrateSccpStorageProofBytes(
-  input: SubstrateSccpStorageProofInput,
-): Uint8Array;
-export function substrateSccpStorageProofHash(
-  input: SubstrateSccpStorageProofInput,
-): string;
-export function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): Uint8Array;
-export function substrateSccpRuntimeStorageProofPublicInputsHash(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): string;
-export function canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): Uint8Array;
-export function substrateSccpRuntimeStoragePublicInputColumns(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): string[][];
-export function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(
-  input:
-    | SubstrateSccpRuntimeStorageProofRequestInput
-    | number
-    | string
-    | bigint,
-): Uint8Array;
-export function buildSubstrateSccpRuntimeStorageProofRequest(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): SubstrateSccpRuntimeStorageProofRequest;
-export function canonicalSubstrateAuthoritySetPayloadBytes(
-  input: SubstrateAuthoritySetPayloadInput,
-): Uint8Array;
-export function substrateAuthoritySetPayloadHash(
-  input:
-    | SubstrateAuthoritySetPayloadInput
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[],
-): string;
-export function substrateAuthoritySetHashFromPayload(
-  input:
-    | SubstrateAuthoritySetPayloadInput
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[],
-): string;
-export function canonicalSubstrateAuthoritySetTransitionMessageBytes(
-  input: SubstrateAuthoritySetTransitionMessageInput,
-): Uint8Array;
-export function substrateAuthoritySetTransitionMessageHash(
-  input: SubstrateAuthoritySetTransitionMessageInput,
-): string;
-export function canonicalSubstrateAuthoritySetTransitionJustificationBytes(
-  input: SubstrateAuthoritySetTransitionJustificationInput,
-): Uint8Array;
-export function substrateAuthoritySetTransitionJustificationHash(
-  input: SubstrateAuthoritySetTransitionJustificationInput,
 ): string;
 export function solanaSccpMainnetEpochForSlot(
   slot: string | number | bigint,
@@ -12895,15 +12514,13 @@ export type ToriiSccpProofFinalityModel =
   | "BscValidatorSet"
   | "SolanaFinalizedSlot"
   | "TonMasterchain"
-  | "TronDpos"
-  | "SubstrateGrandpa";
+  | "TronDpos";
 
 export type ToriiSccpProofVerifierTarget =
   | "EvmContract"
   | "SolanaProgram"
   | "TonContract"
-  | "TronContract"
-  | "SubstrateRuntime";
+  | "TronContract";
 
 export type ToriiSccpProofSecurityModel = "RecursiveZk";
 
@@ -12921,8 +12538,7 @@ export type ToriiSccpDestinationVerifierPlan =
   | "SolanaProgramNativeRecursive"
   | "TonContractNativeRecursive"
   | "TronContractNativeRecursive"
-  | "TronContractGroth16Bn254"
-  | "SubstrateRuntimeNativeRecursive";
+  | "TronContractGroth16Bn254";
 
 export interface ToriiSccpDestinationRollout {
   version: number;
@@ -13074,14 +12690,6 @@ export type ToriiSccpPlatformSubmissionPayload =
       };
     }
   | {
-      kind: "substrate_runtime_call";
-      value: {
-        proofBytes: string;
-        publicInputsBytes: string;
-        bundleBytes: string;
-      };
-    }
-  | {
       kind: "ton_internal_message";
       value: {
         messageBodyBoc: string;
@@ -13150,8 +12758,7 @@ export type ToriiSccpChainFamily =
   | "Evm"
   | "Solana"
   | "Ton"
-  | "Tron"
-  | "Substrate";
+  | "Tron";
 
 export type ToriiSccpNormalizedCodecValue =
   | { kind: "TextUtf8"; value: string }

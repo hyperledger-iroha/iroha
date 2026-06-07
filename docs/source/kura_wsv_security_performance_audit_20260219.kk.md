@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### Өндіріс WSV
 
 - Қолданыстағы қамту:
-  - қайшылықтың қайталану әрекеті: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - деңгейлі сервер айналасында бұғаттау тәртібі қауіпсіздігі: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - қайшылықтың қайталану әрекеті: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - деңгейлі сервер айналасында бұғаттау тәртібі қауіпсіздігі: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Бос орындар:
   - ауыр әлемдік міндеттемелер кезінде рұқсат етілген максималды ұстау уақытын растайтын сандық дау сынағы жоқ
   - DA курсорының алға жылжу инварианттары күтпеген жерден бұзылса, дүрбелеңсіз өңдеуге арналған регрессия сынағы жоқ.
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## Ұсынылатын сынақ қосымшалары1. `kura_writer_io_failures_do_not_panic` (бірлік, инъекция ақауы)
 2. `kura_budget_check_scales_with_pending_depth` (өнімділік регрессиясы)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (интеграция/мінсіз)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (даулы регрессия)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (даулы регрессия)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (икемділік)
 6. `mock_wsv_admin_alias_requires_permissions` (қауіпсіздік регрессі)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS қорғаушысы)

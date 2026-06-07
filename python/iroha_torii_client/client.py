@@ -90,14 +90,12 @@ SCCP_FINALITY_MODEL_VALUES = {
     "SolanaFinalizedSlot",
     "TonMasterchain",
     "TronDpos",
-    "SubstrateGrandpa",
 }
 SCCP_VERIFIER_TARGET_VALUES = {
     "EvmContract",
     "SolanaProgram",
     "TonContract",
     "TronContract",
-    "SubstrateRuntime",
 }
 SCCP_HUB_MESSAGE_KIND_VALUES = {
     "Burn",
@@ -108,7 +106,7 @@ SCCP_HUB_MESSAGE_KIND_VALUES = {
     "RouteActivate",
     "Transfer",
 }
-SCCP_CHAIN_FAMILY_VALUES = {"Evm", "Solana", "Ton", "Tron", "Substrate"}
+SCCP_CHAIN_FAMILY_VALUES = {"Evm", "Solana", "Ton", "Tron"}
 SCCP_MESSAGE_PAYLOAD_KIND_VALUES = {
     "AssetRegister",
     "RouteActivate",
@@ -9938,22 +9936,6 @@ class ToriiClient:
                     body.get("proof_context_hash"),
                     context=f"{context}.payload.proof_context_hash",
                     expected_length=64,
-                ),
-            }
-            return SccpPlatformSubmissionPayload(kind=kind, value=value)
-        if kind == "substrate_runtime_call":
-            value = {
-                "proof_bytes": ToriiClient._require_hex_string(
-                    body.get("proof_bytes"),
-                    f"{context}.payload.proof_bytes",
-                ),
-                "public_inputs_bytes": ToriiClient._require_hex_string(
-                    body.get("public_inputs_bytes"),
-                    f"{context}.payload.public_inputs_bytes",
-                ),
-                "bundle_bytes": ToriiClient._require_hex_string(
-                    body.get("bundle_bytes"),
-                    f"{context}.payload.bundle_bytes",
                 ),
             }
             return SccpPlatformSubmissionPayload(kind=kind, value=value)

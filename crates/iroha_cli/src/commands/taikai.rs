@@ -2202,7 +2202,7 @@ fn process_ingest_file(
         combined_metadata,
         &config.key_pair,
         None,
-    );
+    )?;
     let request_bytes = norito::to_bytes(&request).wrap_err("failed to encode DA request")?;
     let request_json = norito::json::to_json_pretty(&request)
         .map_err(|err| eyre!("failed to render DA request JSON: {err}"))?;

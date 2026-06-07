@@ -1963,7 +1963,8 @@ fn sorafs_alias_proof_fixture_py(
         PrivateKey::from_bytes(Algorithm::Ed25519, &[0x66; 32]).expect("seeded key"),
     )
     .expect("derive keypair");
-    let signature = Signature::new(keypair.private_key(), digest.as_ref());
+    let signature = Signature::try_new(keypair.private_key(), digest.as_ref())
+        .map_err(|err| PyValueError::new_err(format!("failed to sign alias proof: {err}")))?;
     let (_, signer_bytes) = public_key_to_bytes(keypair.public_key(), "alias proof signer")?;
     let signer: [u8; 32] = signer_bytes.try_into().map_err(|_| {
         PyValueError::new_err(format!(
@@ -15584,7 +15585,8 @@ fn sign_py(
 ) -> PyResult<Py<PyBytes>> {
     let algorithm = parse_algorithm_arg(algorithm)?;
     let private_key = parse_private_key_for_algorithm(algorithm, private_key)?;
-    let signature = Signature::new(&private_key, message);
+    let signature = Signature::try_new(&private_key, message)
+        .map_err(|err| PyValueError::new_err(format!("failed to sign message: {err}")))?;
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
 
@@ -15710,7 +15712,8 @@ fn load_ed25519_keypair_py(
 /// Sign `message` using the given Ed25519 private key; returns the raw signature bytes.
 fn sign_ed25519_py(py: Python<'_>, private_key: &[u8], message: &[u8]) -> PyResult<Py<PyBytes>> {
     let private_key = parse_private_key(private_key)?;
-    let signature = Signature::new(&private_key, message);
+    let signature = Signature::try_new(&private_key, message)
+        .map_err(|err| PyValueError::new_err(format!("failed to sign Ed25519 message: {err}")))?;
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
 

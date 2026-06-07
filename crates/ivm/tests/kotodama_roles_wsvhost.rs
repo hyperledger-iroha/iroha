@@ -19,6 +19,7 @@ fn make_vm_with_wsv() -> (IVM, AccountId) {
             .into_account_id();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
+    wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(1_000_000);
     vm.set_host(host);
