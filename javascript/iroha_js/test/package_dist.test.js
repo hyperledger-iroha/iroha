@@ -3602,6 +3602,33 @@ test("browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned", (
   assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned();
 });
 
+test("package declarations use BSC-specific mainnet native prover bundle types", () => {
+  assert.doesNotMatch(
+    DECLARATIONS_TEXT,
+    /export type BscMainnetNativeEvmProverBundleInput =\s+EthereumMainnetNativeEvmProverBundleInput &/u,
+  );
+  assert.doesNotMatch(
+    DECLARATIONS_TEXT,
+    /export type BscMainnetNativeEvmProverBundle =\s+EthereumMainnetNativeEvmProverBundle &/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetNativeEvmProverBundleInput[\s\S]*extends Omit<[\s\S]*EthereumMainnetNativeEvmProverBundleInput,[\s\S]*"bundleId" \| "bundle_id" \| "chain"[\s\S]*bundleId\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*bundle_id\?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*chain\?: "bsc-mainnet";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetNativeEvmProverBundle[\s\S]*extends Omit<EthereumMainnetNativeEvmProverBundle, "bundleId" \| "chain">[\s\S]*readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;[\s\S]*readonly chain: "bsc-mainnet";/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface BscMainnetNativeEvmProverArtifactBundleInput[\s\S]*metadata: BscMainnetNativeEvmProverArtifactResolverMetadata/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function runBscMainnetNativeProverSelfTest\([\s\S]*\): Promise<BscMainnetNativeEvmProverSelfTestSdkResult>;/u,
+  );
+});
+
 test("package declarations expose BSC mainnet Parlia finality evidence hooks", () => {
   assert.match(
     DECLARATIONS_TEXT,

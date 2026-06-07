@@ -52,6 +52,12 @@ export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
   "sccp-bsc-testnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
   "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
+  "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
+  "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
+  "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1 =
   Object.freeze({
     javascript: "pure-typescript",
@@ -8195,6 +8201,21 @@ const nativeEvmProverBundleProfiles = Object.freeze({
     selfTestUnavailableCode:
       "ERR_SCCP_BSC_TESTNET_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
   }),
+  bscMainnet: Object.freeze({
+    displayName: "BSC mainnet",
+    className: "BscMainnetSccp",
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-mainnet",
+    bundleId: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    parityFixtureSchema:
+      SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    selfTestFixtureSchema:
+      SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    destinationBinding: bscMainnetSccpDestinationBinding,
+    unavailableCode: "ERR_SCCP_BSC_MAINNET_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+    selfTestUnavailableCode:
+      "ERR_SCCP_BSC_MAINNET_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+  }),
 });
 
 const normalizeExpectedNativeEvmProverDestinationBindingHash = (
@@ -8574,6 +8595,16 @@ export function validateBscTestnetNativeEvmProverBundle(
   });
 }
 
+export function validateBscMainnetNativeEvmProverBundle(
+  manifest,
+  options = {},
+) {
+  return validateNativeEvmProverBundle(manifest, {
+    ...options,
+    profile: nativeEvmProverBundleProfiles.bscMainnet,
+  });
+}
+
 export function parseEthereumMainnetNativeEvmProverBundleManifest(
   json,
   options = {},
@@ -8594,6 +8625,17 @@ export function parseBscTestnetNativeEvmProverBundleManifest(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
   return validateBscTestnetNativeEvmProverBundle(JSON.parse(json), options);
+}
+
+export function parseBscMainnetNativeEvmProverBundleManifest(
+  json,
+  options = {},
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverBundle JSON manifest must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
+  return validateBscMainnetNativeEvmProverBundle(JSON.parse(json), options);
 }
 
 const normalizeNativeEvmProverParityHex32 = (value, label) =>
@@ -8940,6 +8982,17 @@ export function validateBscTestnetNativeEvmProverParityFixture(
   );
 }
 
+export function validateBscMainnetNativeEvmProverParityFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverParityFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.bscMainnet,
+  );
+}
+
 export function parseEthereumMainnetNativeEvmProverParityFixture(
   json,
   nativeProverBundle,
@@ -8963,6 +9016,20 @@ export function parseBscTestnetNativeEvmProverParityFixture(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverParityFixture");
   return validateBscTestnetNativeEvmProverParityFixture(
+    JSON.parse(json),
+    nativeProverBundle,
+  );
+}
+
+export function parseBscMainnetNativeEvmProverParityFixture(
+  json,
+  nativeProverBundle,
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverParityFixture JSON must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverParityFixture");
+  return validateBscMainnetNativeEvmProverParityFixture(
     JSON.parse(json),
     nativeProverBundle,
   );
@@ -9327,6 +9394,17 @@ export function validateBscTestnetNativeEvmProverSelfTestFixture(
   );
 }
 
+export function validateBscMainnetNativeEvmProverSelfTestFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverSelfTestFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.bscMainnet,
+  );
+}
+
 export function parseEthereumMainnetNativeEvmProverSelfTestFixture(
   json,
   nativeProverBundle,
@@ -9350,6 +9428,20 @@ export function parseBscTestnetNativeEvmProverSelfTestFixture(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverSelfTestFixture");
   return validateBscTestnetNativeEvmProverSelfTestFixture(
+    JSON.parse(json),
+    nativeProverBundle,
+  );
+}
+
+export function parseBscMainnetNativeEvmProverSelfTestFixture(
+  json,
+  nativeProverBundle,
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverSelfTestFixture JSON must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverSelfTestFixture");
+  return validateBscMainnetNativeEvmProverSelfTestFixture(
     JSON.parse(json),
     nativeProverBundle,
   );
@@ -9780,6 +9872,17 @@ export function verifyBscTestnetNativeEvmProverArtifacts(
   );
 }
 
+export function verifyBscMainnetNativeEvmProverArtifacts(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscMainnet,
+  );
+}
+
 const resolveNativeEvmProverArtifactBytes = async (
   resolver,
   path,
@@ -9933,6 +10036,17 @@ export async function verifyBscTestnetNativeEvmProverArtifactsFromBundle(
     input,
     options,
     nativeEvmProverBundleProfiles.bscTestnet,
+  );
+}
+
+export async function verifyBscMainnetNativeEvmProverArtifactsFromBundle(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifactsFromBundle(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscMainnet,
   );
 }
 
@@ -10580,6 +10694,14 @@ export async function runBscTestnetNativeProverSelfTest(input = {}, options = {}
     input,
     options,
     nativeEvmProverBundleProfiles.bscTestnet,
+  );
+}
+
+export async function runBscMainnetNativeProverSelfTest(input = {}, options = {}) {
+  return runNativeProverSelfTestForProfile(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscMainnet,
   );
 }
 
