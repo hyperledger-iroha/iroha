@@ -166,6 +166,8 @@ export const SCCP_CORE_REMOTE_DOMAINS = [
 ];
 
 const SCCP_MSG_PREFIX_BURN_V1 = "sccp:burn:v1";
+const SCCP_MSG_PREFIX_ASSET_REGISTER_V1 = "sccp:asset:register:v1";
+const SCCP_MSG_PREFIX_ROUTE_ACTIVATE_V1 = "sccp:route:activate:v1";
 const SCCP_MSG_PREFIX_TRANSFER_V1 = "sccp:transfer:v1";
 const SCCP_MSG_PREFIX_TOKEN_ADD_V1 = "sccp:token:add:v1";
 const SCCP_MSG_PREFIX_TOKEN_PAUSE_V1 = "sccp:token:pause:v1";
