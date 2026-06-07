@@ -279,6 +279,39 @@ NoBugInvariant ==
 
 SafetyFast == NoBugInvariant
 
+TopologyRotationExact ==
+  \A c \in RotateCases:
+    ActualRotateOutput(c) = SpecRotateOutput(c)
+
+TopologyNthRotationExact ==
+  \A c \in NthCases:
+    ActualNthOutput(c) = SpecNthOutput(c)
+
+TopologyConstructionExact ==
+  \A c \in NewCases:
+    ActualNewOutput(c) = SpecNewOutput(c)
+
+TopologyPeerListUpdateExact ==
+  \A c \in UpdateCases:
+    ActualUpdateOutput(c) = SpecUpdateOutput(c)
+
+TopologyBlockCommitResetExact ==
+  \A c \in BlockCases:
+    ActualBlockOutput(c) = SpecBlockOutput(c)
+
+TopologyCanonicalizationExact ==
+  \A c \in CanonCases:
+    ActualCanonOutput(c) = SpecCanonOutput(c)
+
+TopologyOrderedRosterMutationExactness ==
+  /\ SafetyFast
+  /\ TopologyRotationExact
+  /\ TopologyNthRotationExact
+  /\ TopologyConstructionExact
+  /\ TopologyPeerListUpdateExact
+  /\ TopologyBlockCommitResetExact
+  /\ TopologyCanonicalizationExact
+
 BugRotateIgnoresModulo ==
   ActualOutput("rotate_len4_idx6") = SpecOutput("rotate_len4_idx6")
 

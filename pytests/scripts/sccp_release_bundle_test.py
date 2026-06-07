@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
@@ -501,6 +502,37 @@ def test_release_bundle_verifier_reports_sparse_retired_network_surface_inventor
     )
 
 
+def test_release_bundle_verifier_reports_removed_retired_network_pipeline_doc_guard(
+    tmp_path: Path,
+) -> None:
+    """Translated pipeline-doc scan coverage must stay pinned in the guard."""
+
+    verifier = load_verify_helpers()
+    required_markers = verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1]
+    removed_marker = "def test_retired_network_surface_scan_covers_pipeline_translations"
+    guard = tmp_path / "sccp_retired_network_surface_test.py"
+    guard.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+        (
+            (
+                guard,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP retired network-surface guard source inventory" in error
+        and str(guard) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+
 def test_release_bundle_verifier_reports_stale_retired_network_surface_allowlist(
     tmp_path: Path,
 ) -> None:
@@ -595,6 +627,64 @@ def test_release_bundle_evidence_phase_requires_retired_network_surface_scan() -
         assert retired_scan in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
             "evidence-scripts"
         ]
+
+
+def test_release_bundle_evidence_phase_accepts_pytest_runner_command_shape() -> None:
+    """Report and verifier parsers must accept the production pytest command."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    command = "+ python3 -m pytest -q " + " ".join(corridor_evidence_script_tests())
+
+    for module in (report, verifier):
+        for fragment in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]:
+            assert module._phase_command_matches_required_fragment(
+                "evidence-scripts",
+                command,
+                fragment,
+            )
+
+
+def test_release_bundle_phase_command_matchers_accept_corridor_dry_run() -> None:
+    """Report and verifier command matchers must accept real dry-run commands."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    completed = subprocess.run(
+        [str(CORRIDOR_SCRIPT), "--dry-run"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    for module in (report, verifier):
+        for phase, fragments in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.items():
+            phase_block = module._phase_transcript_block(phase, completed.stdout)
+            assert phase_block is not None, f"missing dry-run phase block: {phase}"
+            for fragment in fragments:
+                assert module._phase_block_has_command_fragment(
+                    phase,
+                    phase_block,
+                    fragment,
+                ), f"{module.__name__} {phase} dry-run command missed {fragment}"
+
+
+def test_release_bundle_phase_command_matchers_reject_echoed_fragments() -> None:
+    """Report and verifier command matchers must reject traced echo commands."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+
+    for module in (report, verifier):
+        for phase, fragments in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.items():
+            for fragment in fragments:
+                command = f"+ echo {shlex.quote(fragment)}"
+                assert not module._phase_command_matches_required_fragment(
+                    phase,
+                    command,
+                    fragment,
+                ), f"{module.__name__} {phase} accepted echoed {fragment}"
 
 
 def test_release_bundle_java_android_phase_requires_source_proof_harness() -> None:
@@ -9754,6 +9844,50 @@ def test_release_bundle_verifier_rejects_output_only_phase_command_fragment(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_echoed_contract_smoke_command(
+    tmp_path: Path,
+) -> None:
+    """Published contract-smoke evidence must prove node ran the smoke check."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(required_fragments),
+                f"+ echo {omitted_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_phase_transcript_inventory_matches_report() -> None:
     """Verifier-owned public phase transcript inventory must mirror the report."""
 
@@ -9881,6 +10015,102 @@ def test_release_bundle_verifier_requires_retired_network_scan_evidence(
             (
                 "==> SCCP production corridor: evidence-scripts",
                 *phase_command_lines(required_fragments),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_output_only_retired_network_scan_evidence(
+    tmp_path: Path,
+) -> None:
+    """Published retired-network scan evidence must be a traced command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_retired_network_surface_test.py"
+    assert (
+        omitted_fragment
+        in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+    )
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                omitted_fragment,
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_echoed_retired_network_scan_command(
+    tmp_path: Path,
+) -> None:
+    """Published retired-network scan evidence must come from the pytest command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_retired_network_surface_test.py"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                f"+ echo {omitted_fragment}",
                 *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
                 "SCCP production corridor completed.",
                 "",
@@ -13125,4 +13355,81 @@ def test_release_bundle_verifier_rejects_command_line_only_success_marker(
     assert (
         "readiness report phase contract-smoke evidence artifact is missing "
         "expected phase-block success marker: sccp_message_bridge_smoke: ok"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_command_line_only_completion_marker(
+    tmp_path: Path,
+) -> None:
+    """Published phase completion must be output, not a traced echo command."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: contract-smoke",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"],
+                "+ echo SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "the phase-block completion sentinel"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_command_line_only_full_completion_marker(
+    tmp_path: Path,
+) -> None:
+    """The full-corridor completion fallback must be observed output."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    lines: list[str] = []
+    for phase in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS:
+        lines.append(f"==> SCCP production corridor: {phase}")
+        if phase == "contract-smoke":
+            lines.extend(
+                phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["contract-smoke"]
+                )
+            )
+            lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["contract-smoke"])
+    lines.extend(("+ echo SCCP production corridor completed.", ""))
+
+    phase_log = output_dir / "corridor" / "contract-smoke.log"
+    phase_log.write_text("\n".join(lines), encoding="utf-8")
+    rewrite_report_phase_artifact(output_dir, "contract-smoke")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase contract-smoke evidence artifact is missing "
+        "the phase-block completion sentinel"
     ) in verified.stdout

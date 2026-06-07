@@ -150,6 +150,29 @@ ActualOutput ==
 SafetyFast ==
   ActualOutput = SpecOutput
 
+TrustedTopologyUnionExact ==
+  \A c \in Cases:
+    /\ ActualTopology(c) = SpecTopology(c)
+    /\ ActualTopologySize(c) = SpecTopologySize(c)
+
+OutsidePeerFilteringExact ==
+  \A c \in Cases:
+    ActualStrays(c) = SpecStrays(c)
+
+TrustedObserverNonStrayExact ==
+  ActualCase("trusted_observer") = SpecCase("trusted_observer")
+
+OnlineStrayOrderDuplicateExact ==
+  ActualCase("online_order_duplicates") =
+    SpecCase("online_order_duplicates")
+
+TrustedP2pTopologyExactness ==
+  /\ SafetyFast
+  /\ TrustedTopologyUnionExact
+  /\ OutsidePeerFilteringExact
+  /\ TrustedObserverNonStrayExact
+  /\ OnlineStrayOrderDuplicateExact
+
 BugIncludesLocal ==
   ActualCase("local_absent_world") = SpecCase("local_absent_world")
 

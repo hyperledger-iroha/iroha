@@ -34,6 +34,7 @@ BANNED_PATTERNS: tuple[re.Pattern[str], ...] = (
     _word("x", "cm"),
     _word("sr", "25519"),
     _word("sp", "_", _RUNTIME),
+    _word("frame", "_", "system"),
     _word("frame", "_", "support"),
     re.compile(chr(0x57FA) + chr(0x677F), re.IGNORECASE),
     re.compile("".join(chr(code) for code in (0x0627, 0x0644, 0x0631, 0x0643, 0x064A, 0x0632, 0x0629))),
@@ -94,13 +95,14 @@ SCAN_ROOTS = (
     Path("IrohaSwift/Sources"),
     Path("IrohaSwift/Tests"),
     Path("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp"),
-    Path("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/sccp"),
+    Path("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp"),
     Path("java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp"),
     Path("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp"),
     Path("scripts"),
     Path("pytests/scripts"),
     Path("docs/source/bridge_proofs.md"),
     Path("docs/source/engineering_backlog.md"),
+    Path("docs/source"),
     Path("docs/source/crypto"),
     Path("roadmap.md"),
     Path("status.md"),
@@ -130,6 +132,9 @@ def _scanned_files() -> list[Path]:
         if root == Path("scripts") or root == Path("pytests/scripts"):
             files.update(candidate for candidate in path.glob("sccp*.py") if _is_scanned_file(candidate))
             continue
+        if root == Path("docs/source"):
+            files.update(candidate for candidate in path.glob("new_pipeline*.md") if _is_scanned_file(candidate))
+            continue
         if root == Path("docs/source/crypto"):
             files.update(
                 candidate
@@ -139,6 +144,23 @@ def _scanned_files() -> list[Path]:
             continue
         files.update(candidate for candidate in path.rglob("*") if _is_scanned_file(candidate))
     return sorted(files)
+
+
+def test_retired_network_surface_scan_roots_exist_and_are_nonempty() -> None:
+    for root in SCAN_ROOTS:
+        path = REPO_ROOT / root
+        assert path.exists(), f"retired-network scan root is missing: {root}"
+
+    scanned = {path.relative_to(REPO_ROOT) for path in _scanned_files()}
+    for root in SCAN_ROOTS:
+        path = REPO_ROOT / root
+        if path.is_file():
+            assert root in scanned
+        else:
+            assert any(
+                scanned_path == root or scanned_path.is_relative_to(root)
+                for scanned_path in scanned
+            ), f"retired-network scan root has no scanned files: {root}"
 
 
 def test_retired_network_patterns_catch_adversarial_examples() -> None:
@@ -155,6 +177,7 @@ def test_retired_network_patterns_catch_adversarial_examples() -> None:
         ("x", "cm"),
         ("sr", "25519"),
         ("sp", "_", _RUNTIME),
+        ("frame", "_", "system"),
         ("frame", "_", "support"),
         (chr(0x57FA), chr(0x677F)),
         tuple(chr(code) for code in (0x0627, 0x0644, 0x0631, 0x0643, 0x064A, 0x0632, 0x0629)),
@@ -170,11 +193,24 @@ def test_retired_network_surface_scan_covers_expected_files() -> None:
 
     assert Path("docs/source/bridge_proofs.md") in scanned
     assert Path("docs/source/engineering_backlog.md") in scanned
+    assert Path("docs/source/new_pipeline.md") in scanned
     assert Path("roadmap.md") in scanned
     assert Path("status.md") in scanned
     assert Path("crates/iroha_sccp/src/lib.rs") in scanned
     assert Path("python/iroha_torii_client/tests/sccp_test.py") in scanned
     assert Path("javascript/iroha_js/test/sccpPackageExports.test.js") in scanned
+
+
+def test_retired_network_surface_scan_covers_pipeline_translations() -> None:
+    pipeline_docs = {
+        path.relative_to(REPO_ROOT)
+        for path in (REPO_ROOT / "docs/source").glob("new_pipeline*.md")
+        if _is_scanned_file(path)
+    }
+    scanned = {path.relative_to(REPO_ROOT) for path in _scanned_files()}
+
+    assert pipeline_docs
+    assert pipeline_docs <= scanned
 
 
 def test_active_tree_excludes_retired_network_surface_tokens() -> None:

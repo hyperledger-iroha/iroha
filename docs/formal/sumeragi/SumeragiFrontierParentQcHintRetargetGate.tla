@@ -213,6 +213,49 @@ RewriteStable ==
   /\ ActualSource(NoPreviousEmitNoRetarget) = ExpectedSource
   /\ ActualTarget(NoPreviousEmitNoRetarget) = ExpectedHash
 
+ParentQcHintRetargetHasExactPositiveEvidence ==
+  /\ ActualGate(StallActiveRetarget)
+  /\ ActualRetarget(StallActiveRetarget)
+  /\ ActualRetarget(UnchangedProgressRetarget)
+  /\ ActualRetarget(EqualProgressRetarget)
+  /\ ActualRetarget(ClearedProgressRetarget)
+
+ParentQcHintRetargetRejectsIneligibleInputs ==
+  /\ ~ActualGate(StallWrongFrontierRejected)
+  /\ ~ActualRetarget(StallWrongFrontierRejected)
+  /\ ~ActualRetarget(CreatedProgressNoRetarget)
+  /\ ~ActualRetarget(AdvancedProgressNoRetarget)
+  /\ ~ActualRetarget(NoPreviousEmitNoRetarget)
+  /\ ~ActualRetarget(AbsentGateNoRetarget)
+  /\ ~ActualRetarget(NoHintNoRetarget)
+  /\ ~ActualRetarget(SameHashNoRetarget)
+  /\ ~ActualRetarget(NonFrontierParentNoRetarget)
+
+ParentQcHintRetargetPreservesRewriteTargets ==
+  /\ ActualSource(StallActiveRetarget) = QcHintSource
+  /\ ActualTarget(StallActiveRetarget) = HintHash
+  /\ ActualSource(UnchangedProgressRetarget) = QcHintSource
+  /\ ActualTarget(UnchangedProgressRetarget) = HintHash
+  /\ ActualSource(EqualProgressRetarget) = QcHintSource
+  /\ ActualTarget(EqualProgressRetarget) = HintHash
+  /\ ActualSource(ClearedProgressRetarget) = QcHintSource
+  /\ ActualTarget(ClearedProgressRetarget) = HintHash
+  /\ ActualSource(StallWrongFrontierRejected) = ExpectedSource
+  /\ ActualTarget(StallWrongFrontierRejected) = ExpectedHash
+  /\ ActualSource(NoPreviousEmitNoRetarget) = ExpectedSource
+  /\ ActualTarget(NoPreviousEmitNoRetarget) = ExpectedHash
+  /\ ActualSource(NoHintNoRetarget) = ExpectedSource
+  /\ ActualTarget(NoHintNoRetarget) = ExpectedHash
+  /\ ActualSource(SameHashNoRetarget) = ExpectedSource
+  /\ ActualTarget(SameHashNoRetarget) = ExpectedHash
+  /\ ActualSource(NonFrontierParentNoRetarget) = ExpectedSource
+  /\ ActualTarget(NonFrontierParentNoRetarget) = ExpectedHash
+
+FrontierParentQcHintRetargetExactness ==
+  /\ ParentQcHintRetargetHasExactPositiveEvidence
+  /\ ParentQcHintRetargetRejectsIneligibleInputs
+  /\ ParentQcHintRetargetPreservesRewriteTargets
+
 SafetyFast ==
   /\ GateExact
   /\ RetargetExact
@@ -221,6 +264,7 @@ SafetyFast ==
   /\ ProgressGateStable
   /\ RequestBranchStable
   /\ RewriteStable
+  /\ FrontierParentQcHintRetargetExactness
 
 GateAnchors ==
   /\ GateExact

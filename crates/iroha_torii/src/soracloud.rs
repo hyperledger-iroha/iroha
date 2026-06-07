@@ -71,8 +71,8 @@ use iroha_data_model::{
         SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
         SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
         SoraUploadedModelRuntimeFormatV1, SoracloudFheBootstrapKeyProofV1,
-        SoracloudFheFullBootstrapMaterialProofV1, SoracloudFheInputAdmissionProofV1,
-        encode_agent_artifact_allow_provenance_payload,
+        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheFullBootstrapMaterialProofV1,
+        SoracloudFheInputAdmissionProofV1, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -848,6 +848,8 @@ pub(crate) struct FheJobRunPayload {
     pub full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
     #[norito(default)]
     pub full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    #[norito(default)]
+    pub full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     pub governance_tx_hash: Hash,
 }
 
@@ -5127,6 +5129,7 @@ fn encode_fhe_job_run_signature_payload(
         payload.bootstrap_key_zero_refresh_proof.clone(),
         payload.full_bootstrap_material_proof.clone(),
         payload.full_bootstrap_circuit_artifacts.clone(),
+        payload.full_bootstrap_execution_proofs.clone(),
         payload.governance_tx_hash.clone(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode fhe job payload: {err}")))
@@ -10860,6 +10863,7 @@ pub(crate) async fn handle_fhe_job_run(
             bootstrap_key_zero_refresh_proof: request.payload.bootstrap_key_zero_refresh_proof,
             full_bootstrap_material_proof: request.payload.full_bootstrap_material_proof,
             full_bootstrap_circuit_artifacts: request.payload.full_bootstrap_circuit_artifacts,
+            full_bootstrap_execution_proofs: request.payload.full_bootstrap_execution_proofs,
             governance_tx_hash: request.payload.governance_tx_hash,
             provenance: request.provenance,
         }),
@@ -13756,6 +13760,46 @@ mod tests {
         SoracloudFheFullBootstrapMaterialProofV1 {
             schema_version:
                 iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
+            statement_hash,
+            proof,
+        }
+    }
+
+    fn sample_fhe_full_bootstrap_execution_proof() -> SoracloudFheFullBootstrapExecutionProofV1 {
+        let vk_hash = [0x63; Hash::LENGTH];
+        let statement_hash = Hash::new(b"torii-full-bootstrap-execution-proof-statement");
+        let open_proof = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+            envelope_bytes: vec![0xD5; 32],
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            vk_hash,
+            iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1
+                .to_vec(),
+            norito::to_bytes(&open_proof)
+                .expect("encode FHE full-bootstrap execution STARK wrapper"),
+        );
+        let proof_box = ProofBox::new(
+            "stark/fri/sha256-goldilocks".into(),
+            norito::to_bytes(&envelope)
+                .expect("encode FHE full-bootstrap execution OpenVerifyEnvelope"),
+        );
+        let mut proof = ProofAttachment::new_ref(
+            "stark/fri/sha256-goldilocks".into(),
+            proof_box,
+            VerifyingKeyId::new(
+                "stark/fri/sha256-goldilocks",
+                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            ),
+        );
+        proof.vk_commitment = Some(vk_hash);
+        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
+        SoracloudFheFullBootstrapExecutionProofV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
             statement_hash,
             proof,
         }
@@ -17133,6 +17177,7 @@ mod tests {
             bootstrap_key_zero_refresh_proof: None,
             full_bootstrap_material_proof: None,
             full_bootstrap_circuit_artifacts: None,
+            full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -17148,6 +17193,7 @@ mod tests {
             Option::<SoracloudFheBootstrapKeyProofV1>::None,
             Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");
@@ -17174,6 +17220,7 @@ mod tests {
             bootstrap_key_zero_refresh_proof: Some(proof.clone()),
             full_bootstrap_material_proof: None,
             full_bootstrap_circuit_artifacts: None,
+            full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -17189,6 +17236,7 @@ mod tests {
             Some(proof),
             Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");
@@ -17205,6 +17253,7 @@ mod tests {
             Option::<SoracloudFheBootstrapKeyProofV1>::None,
             Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
             payload.governance_tx_hash,
         ))
         .expect("encode stripped canonical tuple");
@@ -17231,6 +17280,7 @@ mod tests {
             bootstrap_key_zero_refresh_proof: None,
             full_bootstrap_material_proof: Some(proof.clone()),
             full_bootstrap_circuit_artifacts: None,
+            full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -17246,6 +17296,7 @@ mod tests {
             Option::<SoracloudFheBootstrapKeyProofV1>::None,
             Some(proof),
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");
@@ -17262,6 +17313,7 @@ mod tests {
             payload.bootstrap_key_zero_refresh_proof,
             Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
             payload.governance_tx_hash,
         ))
         .expect("encode stripped canonical tuple");
@@ -17288,6 +17340,7 @@ mod tests {
             bootstrap_key_zero_refresh_proof: None,
             full_bootstrap_material_proof: None,
             full_bootstrap_circuit_artifacts: Some(artifacts.clone()),
+            full_bootstrap_execution_proofs: Vec::new(),
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -17303,6 +17356,7 @@ mod tests {
             Option::<SoracloudFheBootstrapKeyProofV1>::None,
             Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
             Some(artifacts),
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");
@@ -17319,6 +17373,67 @@ mod tests {
             payload.bootstrap_key_zero_refresh_proof,
             payload.full_bootstrap_material_proof,
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
+            payload.governance_tx_hash,
+        ))
+        .expect("encode stripped canonical tuple");
+        assert_ne!(encoded, stripped);
+    }
+
+    #[test]
+    fn fhe_job_run_signature_payload_binds_full_bootstrap_execution_proof_vector() {
+        let job = fixture_fhe_job_spec();
+        let policy = fixture_fhe_execution_policy();
+        let param_set = fixture_fhe_param_set();
+        let evaluation_keys = fixture_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = fixture_bfv_evaluation_key_refresh_transcript();
+        let proof = sample_fhe_full_bootstrap_execution_proof();
+        let governance_tx_hash = Hash::new(b"governance-with-full-bootstrap-execution-proof");
+        let payload = FheJobRunPayload {
+            service_name: "health_portal".to_owned(),
+            binding_name: "private_state".to_owned(),
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_material_proof: None,
+            full_bootstrap_circuit_artifacts: None,
+            full_bootstrap_execution_proofs: vec![proof.clone()],
+            governance_tx_hash: governance_tx_hash.clone(),
+        };
+        let encoded =
+            encode_fhe_job_run_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            job.clone(),
+            policy,
+            param_set,
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            vec![proof],
+            governance_tx_hash,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+
+        let stripped = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            job,
+            payload.policy,
+            payload.param_set,
+            payload.evaluation_keys,
+            payload.evaluation_key_refresh_transcript,
+            payload.bootstrap_key_zero_refresh_proof,
+            payload.full_bootstrap_material_proof,
+            payload.full_bootstrap_circuit_artifacts,
+            Vec::<SoracloudFheFullBootstrapExecutionProofV1>::new(),
             payload.governance_tx_hash,
         ))
         .expect("encode stripped canonical tuple");

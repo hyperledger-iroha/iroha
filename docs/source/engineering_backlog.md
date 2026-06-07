@@ -8,12 +8,11 @@ track detailed unfinished engineering work.
 
 ## SCCP launch-scope note
 
-The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Backlog
-notes for unsupported network families are diagnostic only; they should not be
-treated as release blockers or advertised as production network support unless
-governance explicitly re-opens that scope. This exclusion includes
-Sub&#115;trate/Pol&#107;adot-style networks such as Pol&#107;adot and
-Ku&#115;ama for now.
+The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
+runtime-network families outside that launch scope are not supported for now.
+Backlog notes for unsupported network families are diagnostic only; they should
+not be treated as release blockers or advertised as production network support
+unless governance explicitly re-opens that scope.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
@@ -209,10 +208,11 @@ redistributable schemas, and official trust/revocation bundles.
   public-input schema/prover-key/verifier-key digests. The material validator
   rejects zero commitments, duplicate artifact/proof commitments, and artifact
   or proof commitments that reuse registered profile digests, so each governed
-  digest role remains domain-separated at admission. Bundle admission
-  and digesting bind that material, while refresh/proof/execution paths still
-  fail closed because the full BFV bootstrap evaluator is not implemented, so
-  the current refresh bridge cannot be mislabeled as full bootstrapping. Direct
+  digest role remains domain-separated at admission. Bundle admission and
+  digesting bind that material, while refresh/proof paths and direct
+  no-artifact registered execution fail closed with an explicit governed
+  artifact requirement, so the current refresh bridge cannot be mislabeled as
+  full bootstrapping. Direct
   key-authorized refresh execution, bootstrap output-bound helpers, and
   Soracloud exact/bounded bootstrap execution now share the same mode-aware
   request preflight, so reserved full-bootstrap keys are rejected before
@@ -260,8 +260,8 @@ redistributable schemas, and official trust/revocation bundles.
   commitments. Each artifact byte field is now a Norito role/profile envelope
   that declares the canonical circuit id, registered parameter/RNS/decomposition
   digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
-  and empty-payload artifact attachments fail before the unavailable evaluator
-  boundary. Coefficient-to-slot and slot-to-coefficient artifacts now carry
+  and empty-payload artifact attachments fail before artifact-aware output
+  execution. Coefficient-to-slot and slot-to-coefficient artifacts now carry
   typed diagonal packed-slot linear transforms, and crypto exposes exact and
   bounded deterministic evaluators for those transforms through the registered
   RNS paths. The blind-rotation artifact now carries canonical packed-slot
@@ -276,12 +276,16 @@ redistributable schemas, and official trust/revocation bundles.
   secret polynomial basis, with exact and bounded raw-sample bound propagation.
   Crypto now composes the governed coefficient-to-slot, blind-rotation, and raw
   sample-extraction artifacts into an exact/bounded execution-prefix trace with
-  propagated bounds, coefficient-zero diagnostic repack output, and missing-key
-  fail-closed checks.
+  propagated bounds, coefficient-zero diagnostic repack output,
+  slot-to-coefficient diagnostic execution, and missing-key fail-closed checks.
   Crypto also exposes an explicit coefficient-zero raw-sample repack diagnostic
-  bridge with exact and bounded coefficient-zero bounds; final governed sample
-  key-switch/repacking into the full BFV output ciphertext shape remains part
-  of the unfinished full-bootstrap evaluator. The
+  bridge with exact and bounded coefficient-zero bounds, plus deterministic
+  exact and bounded raw-sample switch-key material, secret-consistency checks,
+  switch execution, public bound propagation, governed artifact carriage, and
+  artifact-aware full-bootstrap output/bound helpers that run through
+  slot-to-coefficient. Direct no-artifact registered entrypoints now validate
+  preflight, then fail with an explicit governed-artifact requirement; the real
+  proof verifier/prover backend remains unfinished. The
   accumulator artifact now
   carries typed packed-slot test-vector material and rejects opaque,
   wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
@@ -293,13 +297,17 @@ redistributable schemas, and official trust/revocation bundles.
   exposes a domain-separated full-bootstrap execution proof statement digest
   that validates and binds the public key, governed bootstrap key/material,
   concrete artifact bundle, input/output ciphertexts, exact or bounded proof
-  mode, and input/output bound metadata for the future verifier.
-  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts, provenance
-  signs them, and Core routes exact/bounded full-mode jobs through
-  artifact-aware preflight before the current unavailable-evaluator error.
+  mode, and input/output bound metadata for the verifier.
+  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts plus an
+  ordered execution-proof vector, provenance signs both, and Core routes
+  exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
+  and bound propagation through sample-switch and slot-to-coefficient output
+  before requiring one governed execution proof per output slot.
+  The legacy no-artifact Core execution helpers are test-only, so production
+  full-mode jobs must pass through the governed artifact-aware path.
   Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-  Remaining production work is the executable full BFV bootstrapping evaluator
-  and the real prover/verifier artifacts and implementation.
+  Remaining production work is the real proof-producing backend and end-to-end
+  positive proof fixture for the wired verifier gate.
   Direct crypto
   refresh-transcript validation/digesting and Soracloud transcript digesting
   now also preflight the advertised BFV public-key shape
@@ -1272,8 +1280,14 @@ redistributable schemas, and official trust/revocation bundles.
 				  relying on panic-only `u32` conversions; SCCP source-adapter
 				  verification statement, adapter-commitment, and FastPQ context
 				  packaging now also fail closed on unbounded adapter-proof shapes and
-				  checked proof-byte length prefixes, while the remaining SCCP
-				  proof-body transcript helper audit stays open; config
+				  checked proof-byte length prefixes, and the checked source-adapter
+				  proof-body encoder now uses fallible nested proof/list/vector
+				  writers across all launch lanes; strict SCCP production builders now
+				  require non-SORA bundles to satisfy the production source-proof gate
+				  before packaging destination submissions, and Rust EVM/TRON Groth16
+				  proof requests now require canonical bundle bytes plus non-empty
+				  source-proof witness bytes for non-SORA source bundles, while
+				  diagnostic `allow_unready` builders remain available for structural fixtures; config
 				  parsing for streaming identity, Torii receipt signer, and Torii
 				  offline issuer public keys now also uses checked algorithm access
 				  before allow-list decisions; the Nexus app

@@ -17511,6 +17511,7 @@ impl Actor {
             slot.candidate.leader = Some(leader);
         }
         slot.candidate.voters.extend(voters);
+        slot.sync_compat_fields();
         slot.leader.is_some() || !slot.voters.is_empty()
     }
 

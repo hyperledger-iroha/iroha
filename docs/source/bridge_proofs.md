@@ -3525,7 +3525,7 @@ count equal to selected signers, claimed total/signed stake equal to the
 validator roster and selected signers, strict `> 2/3` signed-stake quorum,
 non-empty StakeHistory sysvar data, and the exact 2,048-byte non-zero
 AccountsLtHash before deeper account/finality checks run.
-canonical `frame_system::Events` storage key and the source-event leaf index as
+canonical runtime events storage key and the source-event leaf index as
 first-class UI witness material, so the same runtime storage item and path bits
 used to reconstruct the events root are also signed by the finality precommit
 the adapter must additionally carry the

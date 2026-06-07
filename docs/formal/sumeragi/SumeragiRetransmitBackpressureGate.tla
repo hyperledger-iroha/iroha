@@ -50,6 +50,53 @@ Cases == {
   "timeout_high_clamp"
 }
 
+QueuePressureCases == {
+  "capacity_zero",
+  "tx_low",
+  "tx_sixty",
+  "tx_eighty",
+  "tx_ninety_five",
+  "tx_saturated"
+}
+
+RbcPressureCases == {
+  "rbc_level_one",
+  "rbc_level_two",
+  "rbc_soft",
+  "rbc_hard"
+}
+
+CombinedPressureCases == {
+  "combined_moderate",
+  "combined_heavy"
+}
+
+TargetLimitCases == {
+  "combined_heavy",
+  "zero_targets_heavy",
+  "half_round_up",
+  "quarter_round_up"
+}
+
+CooldownCases == {
+  "tx_low",
+  "half_round_up",
+  "combined_moderate",
+  "combined_heavy"
+}
+
+BackoffCases == {
+  "base_zero_backoff",
+  "consensus_backlog",
+  "near_backlog"
+}
+
+TimeoutCases == {
+  "timeout_low_clamp",
+  "timeout_mid",
+  "timeout_high_clamp"
+}
+
 Min(a, b) == IF a <= b THEN a ELSE b
 Max(a, b) == IF a >= b THEN a ELSE b
 CeilDiv(n, d) == IF n = 0 THEN 0 ELSE ((n - 1) \div d) + 1
@@ -279,6 +326,70 @@ SafetyFast ==
   /\ ActualOutput("timeout_low_clamp") = SpecOutput("timeout_low_clamp")
   /\ ActualOutput("timeout_mid") = SpecOutput("timeout_mid")
   /\ ActualOutput("timeout_high_clamp") = SpecOutput("timeout_high_clamp")
+
+RetransmitQueuePressureExact ==
+  \A c \in QueuePressureCases:
+    /\ ActualTxScore(c) = SpecTxScore(c)
+    /\ ActualPressureScore(c) = SpecPressureScore(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+RetransmitRbcPressureExact ==
+  \A c \in RbcPressureCases:
+    /\ ActualRbcLevelScore(c) = SpecRbcLevelScore(c)
+    /\ ActualRbcBytesScore(c) = SpecRbcBytesScore(c)
+    /\ ActualPressureScore(c) = SpecPressureScore(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+RetransmitCombinedPressureExact ==
+  \A c \in CombinedPressureCases:
+    /\ ActualPressureScore(c) =
+         ActualTxScore(c) + ActualRbcLevelScore(c) + ActualRbcBytesScore(c)
+    /\ ActualPressureScore(c) = SpecPressureScore(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+RetransmitTargetLimitExact ==
+  \A c \in TargetLimitCases:
+    /\ ActualTargetLimit(c) = SpecTargetLimit(c)
+    /\ ActualTargetLimit(c) = LimitFor(ActualPressureScore(c), TargetCount(c))
+    /\ IF TargetCount(c) = 0 THEN ActualTargetLimit(c) = 0
+       ELSE ActualTargetLimit(c) >= 1
+    /\ ActualTargetLimit(c) <= TargetCount(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+RetransmitCooldownExact ==
+  \A c \in CooldownCases:
+    /\ ActualCooldownMultiplier(c) = SpecCooldownMultiplier(c)
+    /\ ActualCooldownMultiplier(c) = CooldownFor(ActualPressureScore(c))
+    /\ ActualOutput(c) = SpecOutput(c)
+
+RetransmitBackoffExact ==
+  \A c \in BackoffCases:
+    /\ ActualIngressBackoff(c) = SpecIngressBackoff(c)
+    /\ IF BaseBackoff(c) = 0 THEN ActualIngressBackoff(c) = 0 ELSE TRUE
+    /\ IF NearQuorumBacklog(c) /\ BaseBackoff(c) # 0 THEN
+         ActualIngressBackoff(c) = BaseBackoff(c) * 8
+       ELSE TRUE
+    /\ IF ConsensusBacklog(c) /\ ~NearQuorumBacklog(c) /\ BaseBackoff(c) # 0
+       THEN ActualIngressBackoff(c) = BaseBackoff(c) * 4
+       ELSE TRUE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+RetransmitTimeoutClampExact ==
+  \A c \in TimeoutCases:
+    /\ ActualNearTimeout(c) = SpecNearTimeout(c)
+    /\ ActualNearTimeout(c) >= 200
+    /\ ActualNearTimeout(c) <= 2000
+    /\ ActualOutput(c) = SpecOutput(c)
+
+RetransmitBackpressurePacingExactness ==
+  /\ SafetyFast
+  /\ RetransmitQueuePressureExact
+  /\ RetransmitRbcPressureExact
+  /\ RetransmitCombinedPressureExact
+  /\ RetransmitTargetLimitExact
+  /\ RetransmitCooldownExact
+  /\ RetransmitBackoffExact
+  /\ RetransmitTimeoutClampExact
 
 BugCapacityZeroUsesDepth ==
   ActualOutput("capacity_zero") = SpecOutput("capacity_zero")

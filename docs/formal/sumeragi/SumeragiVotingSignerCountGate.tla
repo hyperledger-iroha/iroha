@@ -185,6 +185,38 @@ Safety ==
   \A c \in Cases:
     ActualCount(c) = SpecCount(c)
 
+EmptyAndZeroRosterSupportExact ==
+  /\ ActualCount("empty_set_zero") = 0
+  /\ ActualCount("zero_roster_zero") = 0
+
+InRangeSupportExact ==
+  /\ ActualCount("signer_zero_counts") = 1
+  /\ ActualCount("single_in_range") = 1
+  /\ ActualCount("multiple_in_range") = 3
+  /\ ActualCount("last_index_included") = 1
+  /\ ActualCount("full_roster_counts_all") = 4
+  /\ ActualCount("higher_in_range_counts") = 1
+
+OutOfRangeSupportFiltered ==
+  /\ ActualCount("index_at_len_excluded") = 0
+  /\ ActualCount("out_of_range_ignored") = 0
+  /\ ActualCount("mixed_range") = 2
+  /\ ActualCount("padding_ignored") = 4
+  /\ ActualCount("sparse_high_ignored") = 1
+
+DuplicateSupportCollapsed ==
+  /\ ActualCount("duplicates_collapsed") = 2
+  /\ ActualCount("duplicates_collapsed") < OccurrenceCount("duplicates_collapsed")
+
+VotingSignerSupportCountExactness ==
+  /\ Safety
+  /\ SpecCountBounds
+  /\ VoteSupportAnchors
+  /\ EmptyAndZeroRosterSupportExact
+  /\ InRangeSupportExact
+  /\ OutOfRangeSupportFiltered
+  /\ DuplicateSupportCollapsed
+
 BugEmptySetReturnsOne ==
   ActualCount("empty_set_zero") = SpecCount("empty_set_zero")
 

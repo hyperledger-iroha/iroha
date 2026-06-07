@@ -58,6 +58,47 @@ Cases == {
   NonExactNoSlotGeneric
 }
 
+ExactSlotCases == {
+  ExactRequestedDominates,
+  ExactActiveDominates,
+  ExactCandidateDominates,
+  ExactSaturatingIncrement,
+  ExactClearsRebroadcast,
+  ExactUpdatesTimestamps,
+  ExactCausePreserved
+}
+
+ExactFallbackCases == {
+  ExactNoSlotFallback,
+  ExactStaleSlotFallback
+}
+
+GenericRouteCases == {
+  LowerHeightGeneric,
+  FutureHeightGeneric,
+  GenericPreservesSlotState,
+  GenericCausePreserved,
+  NonExactNoSlotGeneric
+}
+
+CurrentViewCases == {
+  ExactRequestedDominates,
+  ExactActiveDominates,
+  ExactCandidateDominates,
+  ExactSaturatingIncrement
+}
+
+SlotStateCases == {
+  ExactClearsRebroadcast,
+  ExactUpdatesTimestamps,
+  ExactSaturatingIncrement
+}
+
+CauseCases == {
+  ExactCausePreserved,
+  GenericCausePreserved
+}
+
 RouteSlotApply == 1
 RouteGenericTrigger == 2
 CauseQuorumTimeout == 1
@@ -349,6 +390,74 @@ SafetyFast ==
   /\ ExactFrontierRoutesThroughSlot
   /\ NonExactRoutesThroughGeneric
   /\ SlotEventStateStable
+
+CompletedQuorumExactSlotRouteExact ==
+  \A c \in ExactSlotCases:
+    /\ ActualRoute(c) = RouteSlotApply
+    /\ ActualTreatsSlotAsUsable(c)
+    /\ ActualAppliedHeight(c) = FrontierHeight(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+CompletedQuorumExactFallbackExact ==
+  \A c \in ExactFallbackCases:
+    /\ ActualRoute(c) = RouteSlotApply
+    /\ ~ActualTreatsSlotAsUsable(c)
+    /\ ActualSlotPresentAfter(c) = FALSE
+    /\ ActualAppliedHeight(c) = FrontierHeight(c)
+    /\ ActualAppliedView(c) = RequestedView(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+CompletedQuorumGenericRouteExact ==
+  \A c \in GenericRouteCases:
+    /\ ActualRoute(c) = RouteGenericTrigger
+    /\ ActualAppliedHeight(c) = InputHeight(c)
+    /\ ActualAppliedView(c) = RequestedView(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+CompletedQuorumCurrentViewExact ==
+  \A c \in CurrentViewCases:
+    /\ ActualCurrentView(c) = SpecCurrentView(c)
+    /\ ActualAppliedView(c) = SpecCurrentView(c)
+    /\ ActualActiveViewAfter(c) = SatAddOne(SpecCurrentView(c))
+    /\ ActualOutput(c) = SpecOutput(c)
+
+CompletedQuorumSlotStateExact ==
+  \A c \in SlotStateCases:
+    /\ ActualOwnerKindAfter(c) = OwnerExactSlotRepair
+    /\ ActualLastAdvanceUpdated(c) = TRUE
+    /\ ActualLastUpdatedAtUpdated(c) = TRUE
+    /\ ActualRebroadcastAfter(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+CompletedQuorumCauseExact ==
+  \A c \in CauseCases:
+    /\ ActualCause(c) = CauseInput(c)
+    /\ ActualOutput(c)[4] = CauseInput(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+CompletedQuorumGenericPreservesSlotExact ==
+  /\ ActualSlotPresentAfter(GenericPreservesSlotState) =
+       SpecSlotPresentAfter(GenericPreservesSlotState)
+  /\ ActualOwnerKindAfter(GenericPreservesSlotState) =
+       OwnerKindBefore(GenericPreservesSlotState)
+  /\ ActualActiveViewAfter(GenericPreservesSlotState) =
+       ActiveViewBefore(GenericPreservesSlotState)
+  /\ ActualLastAdvanceUpdated(GenericPreservesSlotState) = FALSE
+  /\ ActualLastUpdatedAtUpdated(GenericPreservesSlotState) = FALSE
+  /\ ActualRebroadcastAfter(GenericPreservesSlotState) =
+       RebroadcastBefore(GenericPreservesSlotState)
+  /\ ActualOutput(GenericPreservesSlotState) =
+       SpecOutput(GenericPreservesSlotState)
+
+CompletedQuorumViewAdvanceExactness ==
+  /\ SafetyFast
+  /\ CompletedQuorumExactSlotRouteExact
+  /\ CompletedQuorumExactFallbackExact
+  /\ CompletedQuorumGenericRouteExact
+  /\ CompletedQuorumCurrentViewExact
+  /\ CompletedQuorumSlotStateExact
+  /\ CompletedQuorumCauseExact
+  /\ CompletedQuorumGenericPreservesSlotExact
 
 Safety ==
   SafetyFast

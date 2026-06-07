@@ -292,6 +292,39 @@ TriggerSetsGossipFlag ==
 TriggerReturnsTrueOnlyFirstTime ==
   trigger_return <=> ~input_gossip
 
+CollectorConstructorStateExact ==
+  /\ TargetLenPreserved
+  /\ PlanSentMatchesConstructor
+  /\ SentNeverExceedsTargets
+  /\ NewAndDefaultPlansStartUnsent
+  /\ WithSentCapsInputAtLength
+  /\ SentCountMatchesPlan
+
+CollectorCursorReadExact ==
+  /\ PeekMatchesSpec
+  /\ PeekDoesNotAdvance
+
+CollectorCursorAdvanceExact ==
+  /\ NextMatchesSpec
+  /\ NextReturnsCurrentTargetAndAdvances
+  /\ NextAtExhaustionIsNoop
+
+CollectorExhaustionExact ==
+  /\ ExhaustedMatchesSpec
+  /\ ExhaustedIffSentAtOrBeyondLength
+
+CollectorGossipFallbackExact ==
+  /\ TriggerReturnMatchesSpec
+  /\ TriggerSetsGossipFlag
+  /\ TriggerReturnsTrueOnlyFirstTime
+
+CollectorPlanRetryGossipExactness ==
+  /\ CollectorConstructorStateExact
+  /\ CollectorCursorReadExact
+  /\ CollectorCursorAdvanceExact
+  /\ CollectorExhaustionExact
+  /\ CollectorGossipFallbackExact
+
 Safety ==
   /\ TargetLenPreserved
   /\ PlanSentMatchesConstructor
@@ -309,6 +342,7 @@ Safety ==
   /\ TriggerReturnMatchesSpec
   /\ TriggerSetsGossipFlag
   /\ TriggerReturnsTrueOnlyFirstTime
+  /\ CollectorPlanRetryGossipExactness
 
 =============================================================================
 ====

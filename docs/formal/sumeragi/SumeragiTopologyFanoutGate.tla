@@ -324,6 +324,29 @@ SafetyFast ==
   /\ ActualFanoutOutput("len7_count_ten") =
        SpecFanoutOutput("len7_count_ten")
 
+RedundantSendCountExact ==
+  \A c \in RedundantCases:
+    ActualRedundantSendR(c) = SpecRedundantSendR(c)
+
+ViewChangeQuorumExact ==
+  \A c \in ViewCases:
+    ActualViewChangeQuorum(c) = SpecViewChangeQuorum(c)
+
+RedundantSendFloorExact ==
+  \A c \in FloorCases:
+    ActualRedundantFloor(c) = SpecRedundantFloor(c)
+
+TailFanoutSelectionExact ==
+  \A c \in FanoutCases:
+    ActualFanoutOutput(c) = SpecFanoutOutput(c)
+
+TopologyFanoutHelperExactness ==
+  /\ SafetyFast
+  /\ RedundantSendCountExact
+  /\ ViewChangeQuorumExact
+  /\ RedundantSendFloorExact
+  /\ TailFanoutSelectionExact
+
 BugRedundantZeroLenReturnsZero ==
   ActualRedundantSendR("redundant_len_zero") =
     SpecRedundantSendR("redundant_len_zero")
