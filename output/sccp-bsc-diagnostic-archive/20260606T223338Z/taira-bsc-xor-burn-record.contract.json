@@ -1,0 +1,67 @@
+{
+  "schema": "iroha-sccp-taira-xor-burn-record-contract/v1",
+  "created_at": "2026-06-06T05:55:55.571Z",
+  "route_id": "taira_bsc_xor",
+  "asset_key": "xor",
+  "source_name": "contracts/taira/sccp/TairaXorBscSccpBurnRecord.ko",
+  "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
+  "code_hash": "044edf91bc430019378d4e6d16755a71df8eceb8aac0e483ff7495c3b9125429",
+  "abi_hash": "73cefb1b419f97b9e2864cdc6545d3f80ae2328dc0fbe2fbd034cd51a837ba0d",
+  "artifact_sha256": "0x4b0517d3c4d5f0caecaacc1250261caa19ff3df4ea915fa126c88d7f5cc3be55",
+  "artifact_b64": "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",
+  "vkRef": {
+    "backend": "halo2_ipa",
+    "name": "taira_bsc_xor_burn_record_v1"
+  },
+  "manifest": {
+    "code_hash": "hash:044EDF91BC430019378D4E6D16755A71DF8ECEB8AAC0E483FF7495C3B9125429#D0E7",
+    "abi_hash": "hash:73CEFB1B419F97B9E2864CDC6545D3F80AE2328DC0FBE2FBD034CD51A837BA0D#4D00",
+    "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
+    "features_bitmap": 1,
+    "entrypoints": [
+      {
+        "name": "burn_and_record",
+        "kind": {
+          "kind": "Public",
+          "value": null
+        },
+        "params": [
+          {
+            "name": "sender",
+            "type_name": "AccountId"
+          },
+          {
+            "name": "settlement_asset",
+            "type_name": "AssetDefinitionId"
+          },
+          {
+            "name": "amount",
+            "type_name": "int"
+          },
+          {
+            "name": "record_instruction",
+            "type_name": "Blob"
+          }
+        ],
+        "return_type": null,
+        "permission": "AssetTransferRole",
+        "read_keys": [],
+        "write_keys": [],
+        "access_hints_complete": true,
+        "access_hints_skipped": [],
+        "triggers": []
+      }
+    ],
+    "access_set_hints": null,
+    "states": [],
+    "kotoba": null,
+    "provenance": null
+  },
+  "execution": {
+    "executable": "IvmProved",
+    "force_zk_mode": true,
+    "entrypoint": "burn_and_record",
+    "settlement_instruction": "Burn<Numeric, Asset>",
+    "record_instruction": "RecordSccpMessage"
+  }
+}

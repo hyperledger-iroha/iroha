@@ -1,0 +1,73 @@
+{
+  "schema": "iroha-sccp-bsc-taira-xor-deployment-evidence/v1",
+  "routeId": "taira_bsc_xor",
+  "assetKey": "xor",
+  "bscNetwork": "testnet",
+  "chain": "bsc-testnet",
+  "chainIdHex": "0x61",
+  "networkIdHex": "0x0000000000000000000000000000000000000000000000000000000000000061",
+  "bscBridgeAddress": "0xa3cebb2c206939f7fc740ec73bbf59c87dbe21de",
+  "bscTokenAddress": "0x02ef3c154964890f57ba37db2027a4ab855109cd",
+  "sccpBscSourceBridgeAddress": "0xc54750cf75e6eeb19770cdcdfe6e134ac9525ec5",
+  "bscVerifierAddress": "0x109197a81221db7bb79e5763e4a6319af9e4e6d6",
+  "destinationRollout": {
+    "version": 1,
+    "destinationNetworkId": "0x0000000000000000000000000000000000000000000000000000000000000061",
+    "sourceDomain": 0,
+    "targetDomain": 2,
+    "verifierIdentity": "0x109197a81221db7bb79e5763e4a6319af9e4e6d6",
+    "verifierBackend": "evm-groth16-bn254-v1",
+    "proofFamily": "stark-fri-v1",
+    "verifierCodeHash": "0x3d3f0b6646825f67452bc984e69cb83e2c5db922ccd00d8050d41e9081d7a3fe",
+    "verifierKeyHash": "0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4",
+    "destinationBridgeAddress": "0xa3cebb2c206939f7fc740ec73bbf59c87dbe21de",
+    "destinationBindingHash": "0x9be4e84ab3cc24c6411938ca5babe375100edfa84c10d20672e60c4cf63dbf7b",
+    "destinationBindingKey": "evm:0:2:0000000000000000000000000000000000000000000000000000000000000061:0x109197a81221db7bb79e5763e4a6319af9e4e6d6:0xa3cebb2c206939f7fc740ec73bbf59c87dbe21de:0x3d3f0b6646825f67452bc984e69cb83e2c5db922ccd00d8050d41e9081d7a3fe:0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4"
+  },
+  "destinationBinding": {
+    "version": 1,
+    "sourceDomain": 0,
+    "targetDomain": 2,
+    "networkIdHex": "0x0000000000000000000000000000000000000000000000000000000000000061",
+    "key": "evm:0:2:0000000000000000000000000000000000000000000000000000000000000061:0x109197a81221db7bb79e5763e4a6319af9e4e6d6:0xa3cebb2c206939f7fc740ec73bbf59c87dbe21de:0x3d3f0b6646825f67452bc984e69cb83e2c5db922ccd00d8050d41e9081d7a3fe:0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4",
+    "bindingHash": "0x9be4e84ab3cc24c6411938ca5babe375100edfa84c10d20672e60c4cf63dbf7b"
+  },
+  "bscContractReadback": {
+    "chainIdHex": "0x61",
+    "codePresent": {
+      "token": true,
+      "bridge": true,
+      "sourceBridge": true,
+      "verifier": true
+    },
+    "tokenBridgeAddress": "0xa3cebb2c206939f7fc740ec73bbf59c87dbe21de",
+    "tokenBridgeLocked": true,
+    "sourceBridgeOwner": "0xa3cebb2c206939f7fc740ec73bbf59c87dbe21de",
+    "bridgeDestinationBindingHash": "0x9be4e84ab3cc24c6411938ca5babe375100edfa84c10d20672e60c4cf63dbf7b",
+    "bridgeVerifierAddress": "0x109197a81221db7bb79e5763e4a6319af9e4e6d6",
+    "bridgeVerifierCodeHash": "0x3d3f0b6646825f67452bc984e69cb83e2c5db922ccd00d8050d41e9081d7a3fe",
+    "bridgeVerifierKeyHash": "0x9ef8067d260532f88e60cfa4b458fe678fc46b9c242de18fc91ba646e0857fc4",
+    "bridgeNetworkId": "0x0000000000000000000000000000000000000000000000000000000000000061",
+    "bridgeSourceDomain": 0,
+    "bridgeTargetDomain": 2
+  },
+  "postDeployChecklist": [
+    "TairaXOR.bridge() equals bscBridgeAddress",
+    "TairaXOR.bridgeLocked() is true",
+    "SccpBscSourceBridge.owner() equals bscBridgeAddress",
+    "TairaXorBscSccpBridge.destinationBindingHash() equals destinationRollout.destinationBindingHash",
+    "TairaXorBscSccpBridge.verifier() equals bscVerifierAddress",
+    "TairaXorBscSccpBridge verifier code/key hashes and domains match destinationRollout"
+  ],
+  "disabledReason": "Deployment evidence is not production-ready until TAIRA route publication, live canary evidence, and TAIRA burn-record material are attached by the route manifest step.",
+  "deploymentTransactions": {
+    "verifier": "0x4b39765d35c063b6f0b1d27e63a1417ea8d2ed3812339aff93d9ca14398a98ae",
+    "sourceBridge": "0x23ca468b653493d6a52a0bf8dc891e60e9033f13bd2544a46baf64c810a96dcc",
+    "token": "0xc97202a449d041a9c34e83dbad9039b84b8b086783f489bd589636bd132ac537",
+    "bridge": "0xba6220c4948065d9b601cc95577c0ca1b08d6f11a08ad4942e275e53ff783b50",
+    "setBridge": "0x37330a09d9acd66650c5300b3e0a5c909f72df1e86d57f866337f914e0ae673f",
+    "lockBridge": "0xfb3f2d93b13a2d3e16959280b8d98ba8a166e82bb4bace3cd11c6834d5309976",
+    "transferSourceBridgeOwnership": "0xd8395dff62ec76fc8a744f6bb4be34237933acdfdbea176b9f767751221796e0"
+  },
+  "deployerAddress": "0xd029081edb3c73261f9293a3e754a6dbdfe855a7"
+}
