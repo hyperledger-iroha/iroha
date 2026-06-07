@@ -154,6 +154,156 @@ def capture_redirect_server(body=b"redirect"):
 
 
 class IsoRailGatewayAdapterTest(unittest.TestCase):
+    def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
+        cases = (
+            ("password_rail_unknown_secret", "rail_unknown_secret"),
+            ("%70assword_rail_unknown_leak", "rail_unknown_leak"),
+            ("private-key_rail_unknown_leak", "rail_unknown_leak"),
+        )
+        for unknown_key, hidden in cases:
+            with self.subTest(unknown_key=unknown_key):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._reject_unknown_keys(
+                        {unknown_key: "redacted"}, set(), "sidecar"
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("contains unknown keys", message)
+                self.assertNotIn("password", message)
+                self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_output_cli_path_flags_reject_flag_like_values(self):
+        cases = (
+            ["--receipt-dir"],
+            ["--receipt-dir", ""],
+            ["--receipt-dir", "--allow-insecure-http"],
+            ["--receipt-dir="],
+            ["--receipt-dir=--allow-insecure-http"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(
+                    ADAPTER.AdapterError,
+                    "--receipt-dir requires a path value",
+                ):
+                    ADAPTER._preflight_output_cli_paths(argv, {"--receipt-dir"})
+
+    def test_output_cli_paths_reject_encoded_secret_material_without_echo(self):
+        cases = (
+            ("token=rail-path-leak.receipts", "token=rail-path-leak"),
+            ("token%3Drail-path-leak.receipts", "token=rail-path-leak"),
+            ("%70assword%253Drail-path-leak.receipts", "password=rail-path-leak"),
+            ("token-rail-path-secret.receipts", "token-rail-path-secret"),
+        )
+        for raw_path, decoded_secret in cases:
+            with self.subTest(raw_path=raw_path):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._preflight_output_cli_paths(
+                        ["--receipt-dir", raw_path], {"--receipt-dir"}
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(raw_path, message)
+                self.assertNotIn(decoded_secret, message)
+                self.assertNotIn("rail-path-leak", message)
+
+    def test_url_cli_flags_reject_missing_empty_or_flag_like_values(self):
+        cases = (
+            ["--torii-base-url"],
+            ["--torii-base-url", ""],
+            ["--torii-base-url", "--receipt-dir"],
+            ["--torii-base-url="],
+            ["--torii-base-url=--receipt-dir"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("--torii-base-url requires a URL value", stderr)
+
+    def test_message_cli_path_flags_reject_missing_empty_or_flag_like_values(self):
+        cases = (
+            ["--message"],
+            ["--message", ""],
+            ["--message", "--dry-run"],
+            ["--message="],
+            ["--message=--dry-run"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("--message requires a path value", stderr)
+
+    def test_boolean_cli_flags_reject_values_without_echo(self):
+        cases = (
+            (["--dry-run=true"], "--dry-run", "--dry-run=true"),
+            (["--allow-insecure-http", "true"], "--allow-insecure-http", "true"),
+        )
+        for argv, flag, rejected in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"{flag} does not take a value", stderr)
+                self.assertNotIn(rejected, stderr)
+
+    def test_numeric_cli_flags_reject_malformed_values_without_echo(self):
+        cases = (
+            ["--max-payload-bytes", "token=rail-secret"],
+            ["--response-limit-bytes=token=rail-secret"],
+            ["--timeout-secs", "--receipt-dir"],
+            ["--timeout-secs="],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("numeric value", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("rail-secret", stderr)
+
+    def test_raw_cli_secret_like_values_rejected_without_echo(self):
+        cases = (
+            ["--private-key=rail-secret"],
+            ["token=rail-secret"],
+            ["password=rail-secret"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("secret-looking", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("password=", stderr)
+                self.assertNotIn("rail-secret", stderr)
+
+    def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "rail-status.xml"
+            path.write_bytes(SAMPLE_XML)
+
+            for limit in (True, "64"):
+                with self.subTest(helper="_read_regular_file", limit=limit):
+                    with self.assertRaisesRegex(
+                        ADAPTER.AdapterError,
+                        "max file bytes must be a positive integer",
+                    ):
+                        ADAPTER._read_regular_file(path, max_bytes=limit)
+                with self.subTest(helper="_bounded_read", limit=limit):
+                    with self.assertRaisesRegex(
+                        ADAPTER.AdapterError,
+                        "max payload bytes must be a positive integer",
+                    ):
+                        ADAPTER._bounded_read(path, limit)
+
     def test_submit_verified_file_drop_to_torii_endpoint(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -243,6 +393,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertEqual(requests, [])
             self.assertIn("payload_sha256 duplicates", stderr)
+            self.assertNotIn(ADAPTER.sha256_hex(SAMPLE_XML), stderr)
             self.assertFalse((inbox / "receipts").exists())
 
     def test_duplicate_rail_message_ids_are_rejected_before_network_delivery(self):
@@ -252,13 +403,13 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 inbox,
                 "first",
                 payload=b"<Document><FIToFIPmtStsRpt><GrpHdr><MsgId>first</MsgId></GrpHdr></FIToFIPmtStsRpt></Document>",
-                rail_message_id="rail-duplicate",
+                rail_message_id="duplicate-rail-id",
             )
             write_named_message(
                 inbox,
                 "second",
                 payload=b"<Document><FIToFIPmtStsRpt><GrpHdr><MsgId>second</MsgId></GrpHdr></FIToFIPmtStsRpt></Document>",
-                rail_message_id="rail-duplicate",
+                rail_message_id="duplicate-rail-id",
             )
             with capture_server() as (base_url, requests):
                 rc, stdout, stderr = run_main(
@@ -275,7 +426,50 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertEqual(requests, [])
             self.assertIn("rail_message_id duplicates", stderr)
+            self.assertNotIn("duplicate-rail-id", stderr)
             self.assertFalse((inbox / "receipts").exists())
+
+    def test_secret_material_in_sidecar_fields_is_rejected_without_echo(self):
+        cases = (
+            ("message_type", "token=rail-sidecar-secret"),
+            ("message_type", "token%253Drail-sidecar-secret"),
+            ("message_type", "token-rail-message-type-secret"),
+            ("profile", "private-key=rail-sidecar-secret"),
+            ("profile", "token-rail-profile-secret"),
+            ("payload_sha256", "client_secret=rail-sidecar-secret"),
+            ("payload_sha256", "token-rail-payload-secret"),
+            ("rail_message_id", "password=rail-sidecar-secret"),
+            ("rail_message_id", "session-key-rail-message-secret"),
+        )
+        for field, value in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    xml_path, sidecar = write_message(inbox)
+                    sidecar[field] = value
+                    xml_path.with_suffix(".xml.json").write_text(
+                        json.dumps(sidecar),
+                        encoding="utf-8",
+                    )
+
+                    rc, stdout, stderr = run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            "https://torii.example",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("secret-looking", stderr)
+                    self.assertNotIn(value, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("password=", stderr)
+                    self.assertNotIn("private-key=", stderr)
+                    self.assertNotIn("client_secret=", stderr)
+                    self.assertNotIn("rail-sidecar-secret", stderr)
 
     def test_malformed_bearer_token_file_is_rejected_before_network_delivery(self):
         cases = [
@@ -328,6 +522,45 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 ADAPTER.MAX_BEARER_TOKEN_BYTES = original_limit
 
             self.assertIn("exceeds 8 byte bearer token limit", str(raised.exception))
+
+    def test_bearer_token_file_errors_do_not_echo_runtime_path(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            secret_dir = Path(raw_inbox) / "private_key=rail-secret"
+            secret_dir.mkdir()
+            cases = [
+                (
+                    "missing",
+                    secret_dir / "token=rail-secret-missing.txt",
+                    None,
+                    "does not exist",
+                ),
+                ("empty", secret_dir / "token=rail-secret-empty.txt", b"", "empty"),
+                (
+                    "non-utf8",
+                    secret_dir / "token=rail-secret-nonutf8.txt",
+                    b"rail-token\xff",
+                    "not UTF-8",
+                ),
+                (
+                    "oversized",
+                    secret_dir / "token=rail-secret-oversized.txt",
+                    b"a" * (ADAPTER.MAX_BEARER_TOKEN_BYTES + 1),
+                    "exceeds",
+                ),
+            ]
+            for name, token_file, token_bytes, message in cases:
+                with self.subTest(name=name):
+                    if token_bytes is not None:
+                        token_file.write_bytes(token_bytes)
+                    with self.assertRaises(ADAPTER.AdapterError) as raised:
+                        ADAPTER._load_bearer_token(token_file)
+
+                    error = str(raised.exception)
+                    self.assertIn("bearer token file", error)
+                    self.assertIn(message, error)
+                    self.assertNotIn("private_key=rail-secret", error)
+                    self.assertNotIn("token=rail-secret", error)
+                    self.assertNotIn(str(token_file), error)
 
     def test_non_regular_bearer_token_files_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -421,6 +654,24 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 r"nested\token.txt",
                 "forward slashes",
             ),
+            (
+                "token secret-looking",
+                "--bearer-token-file",
+                "token=rail-secret",
+                "secret-looking material",
+            ),
+            (
+                "inbox secret-looking",
+                "--inbox-dir",
+                "token=rail-secret",
+                "secret-looking material",
+            ),
+            (
+                "receipt secret-looking",
+                "--receipt-dir",
+                "private_key=rail-secret",
+                "secret-looking material",
+            ),
         )
         for name, flag, raw_path, message in cases:
             with self.subTest(name=name):
@@ -448,6 +699,30 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+                    if "secret-looking" in name:
+                        self.assertNotIn("rail-secret", stderr)
+
+    def test_secret_looking_message_paths_are_rejected_before_receipt_output(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_named_message(inbox, "token=rail-secret")
+            with capture_server() as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("message XML path must not contain secret-looking material", stderr)
+            self.assertNotIn("token=rail-secret", stderr)
+            self.assertFalse((inbox / "receipts").exists())
 
     def test_numeric_cli_limits_reject_nonpositive_and_nonfinite_before_network_delivery(self):
         cases = (
@@ -1028,7 +1303,9 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             _xml_path, sidecar = write_message(inbox)
             (inbox / "rail-status.xml.json").write_text(
                 (
-                    '{"message_type":"pacs.002","message_type":"pacs.008",'
+                    '{"message_type":"pacs.002",'
+                    '"token=rail-duplicate-key-secret":1,'
+                    '"token=rail-duplicate-key-secret":2,'
                     f'"profile":"swift-cbpr-plus",'
                     f'"payload_sha256":"{sidecar["payload_sha256"]}",'
                     '"rail_message_id":"rail-drop-1"}\n'
@@ -1049,6 +1326,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
             self.assertIn("duplicate key", stderr)
+            self.assertNotIn("rail-duplicate-key-secret", stderr)
 
     def test_non_finite_sidecar_json_numbers_are_rejected_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -1395,6 +1673,62 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertNotIn("token=", stderr)
             self.assertNotIn("rail-secret", stderr)
 
+    def test_rejected_torii_url_does_not_echo_secret_path(self):
+        cases = (
+            "https://torii.example/base/token=rail-path-secret",
+            "https://torii.example/base/token-rail-path-secret",
+            "https://torii.example/base/token%3Drail-path-secret",
+            "https://torii.example/base/token%253Drail-path-secret",
+        )
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            for secret_url in cases:
+                with self.subTest(secret_url=secret_url):
+                    rc, _stdout, stderr = run_main(
+                        ["--inbox-dir", str(inbox), "--torii-base-url", secret_url]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn(secret_url, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("rail-path-secret", stderr)
+
+    def test_rejected_torii_url_does_not_echo_secret_port(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            secret_url = "https://torii.example:token-rail-port-secret/base"
+
+            rc, _stdout, stderr = run_main(
+                ["--inbox-dir", str(inbox), "--torii-base-url", secret_url]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid port", stderr)
+            self.assertNotIn(secret_url, stderr)
+            self.assertNotIn("token-rail-port-secret", stderr)
+
+    def test_rejected_torii_url_does_not_echo_secret_host_or_parser_error(self):
+        cases = (
+            ("https://token-rail-host-secret.torii.example/base", "secret-looking material"),
+            ("https://[token-rail-host-secret/base", "is not a valid URL"),
+        )
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            for secret_url, message in cases:
+                with self.subTest(secret_url=secret_url):
+                    rc, _stdout, stderr = run_main(
+                        ["--inbox-dir", str(inbox), "--torii-base-url", secret_url]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(secret_url, stderr)
+                    self.assertNotIn("token-rail-host-secret", stderr)
+
     def test_non_successful_torii_response_writes_failed_receipt(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -1448,38 +1782,64 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertTrue(receipt_digest_matches(receipt))
 
     def test_secret_looking_torii_response_preview_is_redacted(self):
-        body = b'{"error":"token=rail-secret"}'
-        with tempfile.TemporaryDirectory() as raw_inbox:
-            inbox = Path(raw_inbox)
-            _xml_path, _sidecar = write_message(inbox)
-            with capture_server(status=500, body=body) as (base_url, requests):
-                rc, _stdout, _stderr = run_main(
-                    [
-                        "--inbox-dir",
-                        str(inbox),
-                        "--torii-base-url",
+        cases = (
+            b'{"error":"token=rail-secret"}',
+            b'{"error":"password=rail-secret"}',
+            b'{"error":"%70assword%253Drail-secret"}',
+            b'{"error":"private-key=rail-secret"}',
+            b'{"error":"Set-Cookie: rail-secret"}',
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    _xml_path, _sidecar = write_message(inbox)
+                    with capture_server(status=500, body=body) as (
                         base_url,
-                        "--allow-insecure-http",
-                    ]
-                )
+                        requests,
+                    ):
+                        rc, _stdout, _stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )
 
-            self.assertEqual(rc, 1)
-            self.assertEqual(len(requests), 1)
-            receipts = list((inbox / "receipts").glob("*.receipt.json"))
-            self.assertEqual(len(receipts), 1)
-            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
-            self.assertEqual(receipt["status_code"], 500)
-            self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(body))
-            self.assertEqual(
-                receipt["response_body_preview"],
-                ADAPTER.REDACTED_RESPONSE_PREVIEW,
-            )
-            self.assertNotIn("rail-secret", receipts[0].read_text(encoding="utf-8"))
-            self.assertTrue(receipt_digest_matches(receipt))
+                    self.assertEqual(rc, 1)
+                    self.assertEqual(len(requests), 1)
+                    receipts = list((inbox / "receipts").glob("*.receipt.json"))
+                    self.assertEqual(len(receipts), 1)
+                    receipt_text = receipts[0].read_text(encoding="utf-8")
+                    receipt = json.loads(receipt_text)
+                    self.assertEqual(receipt["status_code"], 500)
+                    self.assertEqual(
+                        receipt["response_body_sha256"], ADAPTER.sha256_hex(body)
+                    )
+                    self.assertEqual(
+                        receipt["response_body_preview"],
+                        ADAPTER.REDACTED_RESPONSE_PREVIEW,
+                    )
+                    self.assertNotIn("rail-secret", receipt_text)
+                    self.assertTrue(receipt_digest_matches(receipt))
 
     def test_secret_looking_url_error_is_redacted(self):
         self.assertEqual(
             ADAPTER._receipt_error("upstream token=rail-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream password=rail-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream %70assword%253Drail-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream private-key=rail-secret"),
             ADAPTER.REDACTED_ERROR,
         )
         self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")

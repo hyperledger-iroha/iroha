@@ -1,5 +1,10 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+
 /** Native recursive Kagemusha spend ABI-6 bridge. */
 public final class KagemushaRecursiveSpendProver {
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 6;
@@ -41,6 +46,13 @@ public final class KagemushaRecursiveSpendProver {
 
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   private static final byte[] MALFORMED_NATIVE_PROBE_ARCHIVE = new byte[] {0x00};
+  private static final byte[] KAGEMUSHA_ZK1_MAGIC = new byte[] {0x5A, 0x4B, 0x31, 0x00};
+  private static final byte[] KAGEMUSHA_ZK1_TLV_CID1 =
+      "CID1".getBytes(StandardCharsets.US_ASCII);
+  private static final byte[] KAGEMUSHA_ZK1_TLV_IPAK =
+      "IPAK".getBytes(StandardCharsets.US_ASCII);
+  private static final byte[] KAGEMUSHA_ZK1_TLV_H2VK =
+      "H2VK".getBytes(StandardCharsets.US_ASCII);
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   public enum Mode {
@@ -162,7 +174,170 @@ public final class KagemushaRecursiveSpendProver {
     if (lineageProvingKeyArchive == null || lineageProvingKeyArchive.length == 0) {
       throw new IllegalArgumentException("lineage_proving_key_archive");
     }
+    validateLineageKeyArtifactPackageBinding(
+        artifacts.proofCircuitId,
+        artifacts.lineageVerifierKeyBackend,
+        lineageVerifierKey,
+        lineageProvingKeyArchive);
     return artifacts;
+  }
+
+  private static void validateLineageKeyArtifactPackageBinding(
+      final String proofCircuitId,
+      final String lineageVerifierKeyBackend,
+      final byte[] lineageVerifierKey,
+      final byte[] lineageProvingKeyArchive) {
+    final String verifierCircuitId = lineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey);
+    if (!proofCircuitId.equals(verifierCircuitId)) {
+      throw new IllegalArgumentException("lineage_verifier_key");
+    }
+    final byte[] archivePayload = lineageProvingKeyArchivePayload(lineageProvingKeyArchive);
+    final byte[] circuitIdBytes = proofCircuitId.getBytes(StandardCharsets.UTF_8);
+    final byte[] verifierKeyCommitment =
+        verifyingKeyCommitment(lineageVerifierKeyBackend, lineageVerifierKey);
+    if (indexOfSlice(archivePayload, circuitIdBytes) < 0
+        || indexOfSlice(archivePayload, verifierKeyCommitment) < 0) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+  }
+
+  private static String lineageVerifierKeyEnvelopeCircuitId(final byte[] lineageVerifierKey) {
+    if (!startsWith(lineageVerifierKey, KAGEMUSHA_ZK1_MAGIC)) {
+      throw new IllegalArgumentException("lineage_verifier_key");
+    }
+    int offset = KAGEMUSHA_ZK1_MAGIC.length;
+    String circuitId = null;
+    boolean sawIpaK = false;
+    boolean sawH2Vk = false;
+    while (offset < lineageVerifierKey.length) {
+      if (offset + 8 > lineageVerifierKey.length) {
+        throw new IllegalArgumentException("lineage_verifier_key");
+      }
+      final byte[] tag = Arrays.copyOfRange(lineageVerifierKey, offset, offset + 4);
+      final int payloadLength = readIntLittleEndian(lineageVerifierKey, offset + 4);
+      final int payloadStart = offset + 8;
+      final long payloadEndLong = (long) payloadStart + payloadLength;
+      if (payloadLength < 0 || payloadEndLong > lineageVerifierKey.length) {
+        throw new IllegalArgumentException("lineage_verifier_key");
+      }
+      final int payloadEnd = (int) payloadEndLong;
+      final byte[] payload = Arrays.copyOfRange(lineageVerifierKey, payloadStart, payloadEnd);
+      if (Arrays.equals(tag, KAGEMUSHA_ZK1_TLV_CID1)) {
+        if (circuitId != null || payload.length == 0 || !isPrintableAscii(payload)) {
+          throw new IllegalArgumentException("lineage_verifier_key");
+        }
+        final String decoded = new String(payload, StandardCharsets.UTF_8).trim();
+        if (decoded.isEmpty()) {
+          throw new IllegalArgumentException("lineage_verifier_key");
+        }
+        circuitId = decoded;
+      } else if (Arrays.equals(tag, KAGEMUSHA_ZK1_TLV_IPAK)) {
+        if (sawIpaK || payload.length != 4) {
+          throw new IllegalArgumentException("lineage_verifier_key");
+        }
+        sawIpaK = true;
+      } else if (Arrays.equals(tag, KAGEMUSHA_ZK1_TLV_H2VK)) {
+        if (sawH2Vk || payload.length == 0) {
+          throw new IllegalArgumentException("lineage_verifier_key");
+        }
+        sawH2Vk = true;
+      } else {
+        throw new IllegalArgumentException("lineage_verifier_key");
+      }
+      offset = payloadEnd;
+    }
+    if (circuitId == null || !sawIpaK || !sawH2Vk) {
+      throw new IllegalArgumentException("lineage_verifier_key");
+    }
+    return circuitId;
+  }
+
+  private static byte[] lineageProvingKeyArchivePayload(final byte[] lineageProvingKeyArchive) {
+    if (!KagemushaCompactPaymentTokenProver.isValidNoritoArchive(lineageProvingKeyArchive)
+        || !KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(
+            lineageProvingKeyArchive)) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    final long payloadLength = readLongLittleEndian(lineageProvingKeyArchive, 23);
+    if (payloadLength <= 0 || payloadLength > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("lineage_proving_key_archive");
+    }
+    final int payloadOffset = lineageProvingKeyArchive.length - (int) payloadLength;
+    return Arrays.copyOfRange(lineageProvingKeyArchive, payloadOffset, lineageProvingKeyArchive.length);
+  }
+
+  private static byte[] verifyingKeyCommitment(
+      final String lineageVerifierKeyBackend, final byte[] lineageVerifierKey) {
+    try {
+      final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      final byte[] backend = lineageVerifierKeyBackend.getBytes(StandardCharsets.UTF_8);
+      digest.update("iroha:zk:v1:vk".getBytes(StandardCharsets.US_ASCII));
+      digest.update(longBigEndian(backend.length));
+      digest.update(backend);
+      digest.update(longBigEndian(lineageVerifierKey.length));
+      digest.update(lineageVerifierKey);
+      return digest.digest();
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 is unavailable", ex);
+    }
+  }
+
+  private static boolean isPrintableAscii(final byte[] bytes) {
+    for (final byte value : bytes) {
+      final int unsigned = value & 0xFF;
+      if (unsigned < 0x20 || unsigned > 0x7E) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean startsWith(final byte[] bytes, final byte[] prefix) {
+    return bytes != null
+        && bytes.length >= prefix.length
+        && Arrays.equals(Arrays.copyOfRange(bytes, 0, prefix.length), prefix);
+  }
+
+  private static int indexOfSlice(final byte[] bytes, final byte[] needle) {
+    if (needle.length == 0 || needle.length > bytes.length) {
+      return -1;
+    }
+    for (int offset = 0; offset <= bytes.length - needle.length; offset++) {
+      boolean matched = true;
+      for (int index = 0; index < needle.length; index++) {
+        if (bytes[offset + index] != needle[index]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        return offset;
+      }
+    }
+    return -1;
+  }
+
+  private static int readIntLittleEndian(final byte[] bytes, final int offset) {
+    return (bytes[offset] & 0xFF)
+        | ((bytes[offset + 1] & 0xFF) << 8)
+        | ((bytes[offset + 2] & 0xFF) << 16)
+        | ((bytes[offset + 3] & 0xFF) << 24);
+  }
+
+  private static long readLongLittleEndian(final byte[] bytes, final int offset) {
+    long value = 0L;
+    for (int index = 0; index < 8; index++) {
+      value |= (bytes[offset + index] & 0xFFL) << (index * 8);
+    }
+    return value;
+  }
+
+  private static byte[] longBigEndian(final long value) {
+    final byte[] output = new byte[8];
+    for (int index = 0; index < output.length; index++) {
+      output[index] = (byte) ((value >>> ((7 - index) * 8)) & 0xFF);
+    }
+    return output;
   }
 
   public static LineageKeyArtifacts lineageKeyArtifacts(
@@ -341,9 +516,9 @@ public final class KagemushaRecursiveSpendProver {
 
   private static byte[] callArchive(
       final String label, final String archiveName, final byte[] archive, final NativeCall call) {
-    requireNativeInput(archive, archiveName);
+    final byte[] ownedArchive = ownedNativeInput(archive, archiveName);
     requireNative();
-    final byte[] output = call.run(archive);
+    final byte[] output = call.run(ownedArchive);
     return requireRecursiveSpendOutput(output, label);
   }
 
@@ -352,10 +527,10 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] requestArchive,
       final byte[] bundleArchive,
       final NativePairCall call) {
-    requireNativeInput(requestArchive, "requestArchive");
-    requireNativeInput(bundleArchive, "bundleArchive");
+    final byte[] request = ownedNativeInput(requestArchive, "requestArchive");
+    final byte[] bundle = ownedNativeInput(bundleArchive, "bundleArchive");
     requireNative();
-    final byte[] output = call.run(requestArchive, bundleArchive);
+    final byte[] output = call.run(request, bundle);
     return requireRecursiveSpendOutput(output, label);
   }
 
@@ -365,11 +540,11 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] requestArchive,
       final byte[] bundleArchive,
       final NativeTripleCall call) {
-    requireNativeInput(previousWitnessArchive, "previousWitnessArchive");
-    requireNativeInput(requestArchive, "requestArchive");
-    requireNativeInput(bundleArchive, "bundleArchive");
+    final byte[] previousWitness = ownedNativeInput(previousWitnessArchive, "previousWitnessArchive");
+    final byte[] request = ownedNativeInput(requestArchive, "requestArchive");
+    final byte[] bundle = ownedNativeInput(bundleArchive, "bundleArchive");
     requireNative();
-    final byte[] output = call.run(previousWitnessArchive, requestArchive, bundleArchive);
+    final byte[] output = call.run(previousWitness, request, bundle);
     return requireRecursiveSpendOutput(output, label);
   }
 
@@ -377,9 +552,18 @@ public final class KagemushaRecursiveSpendProver {
     return requireNativeOutput(output, "native " + label);
   }
 
+  static byte[] ownedNativeInput(final byte[] archive, final String archiveName) {
+    requireNativeInput(archive, archiveName);
+    return Arrays.copyOf(archive, archive.length);
+  }
+
   private static void requireNativeInput(final byte[] archive, final String archiveName) {
     if (archive == null || archive.length == 0) {
       throw new IllegalArgumentException(archiveName + " must not be empty");
+    }
+    if (archive.length > NATIVE_ARCHIVE_MAX_BYTES) {
+      throw new IllegalArgumentException(
+          archiveName + " must not exceed " + NATIVE_ARCHIVE_MAX_BYTES + " bytes");
     }
     if (!KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)) {
       throw new IllegalArgumentException(archiveName + " must be a valid Norito archive");

@@ -68,6 +68,9 @@ Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
 rejected before runtime key generation.
+Use `kagemushaRecursiveSpendLineageKeyArtifactsForInit(...)` and
+`kagemushaRecursiveSpendLineageKeyArtifactsForAppend(...)` to package and
+validate these verifier/proving key artifacts before building the raw request.
 Verify request archives must pass the same public-binding preflight before the
 native host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles

@@ -64,6 +64,9 @@ pub enum Command {
     /// IVM prove helpers (non-consensus, app API)
     #[command(subcommand)]
     Ivm(IvmCommand),
+    /// Kagemusha offline-cash release tooling
+    #[command(subcommand)]
+    Kagemusha(KagemushaCommand),
     /// ZK Vote helpers (tally)
     #[command(subcommand)]
     Vote(VoteCommand),
@@ -97,6 +100,7 @@ impl Run for Command {
             Command::Proofs(args) => args.run(context),
             Command::Prover(args) => args.run(context),
             Command::Ivm(args) => args.run(context),
+            Command::Kagemusha(args) => args.run(context),
             Command::Vote(args) => args.run(context),
             Command::Envelope(args) => args.run(context),
         }
@@ -1089,6 +1093,300 @@ impl Run for IvmDerivePkArgs {
 }
 
 #[derive(clap::Subcommand, Debug)]
+pub enum KagemushaCommand {
+    /// Generate portable Reserved-lineage verifier/proving key artifacts
+    LineageKeyArtifacts(KagemushaLineageKeyArtifactsArgs),
+    /// Build a Reserved-lineage verifier record from an existing verifier key file
+    LineageRecord(KagemushaLineageRecordArgs),
+}
+
+impl Run for KagemushaCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            KagemushaCommand::LineageKeyArtifacts(args) => args.run(context),
+            KagemushaCommand::LineageRecord(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum KagemushaLineageKeyProfile {
+    /// First-hop Reserved-lineage init proof profile
+    Init,
+    /// Multi-hop Reserved-lineage append proof profile
+    Append,
+}
+
+impl KagemushaLineageKeyProfile {
+    fn circuit_id(self) -> &'static str {
+        match self {
+            Self::Init => iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            Self::Append => iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Append => "append",
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct KagemushaLineageKeyArtifactsArgs {
+    /// Reserved-lineage proof profile to generate
+    #[arg(long, value_enum)]
+    profile: KagemushaLineageKeyProfile,
+    /// Supported Pallas IPA opening vector length for the key pair
+    #[arg(long, value_name = "LEN")]
+    opening_len: u32,
+    /// Output path for Norito `KagemushaRecursiveSpendLineageKeyArtifactsV1`
+    #[arg(long, value_name = "PATH")]
+    out: std::path::PathBuf,
+    /// Optional output path for the verifier key envelope bytes
+    #[arg(long, value_name = "PATH")]
+    vk_out: Option<std::path::PathBuf>,
+    /// Optional output path for the proving key archive bytes
+    #[arg(long, value_name = "PATH")]
+    pk_out: Option<std::path::PathBuf>,
+    /// Optional output path for a Norito `VerifyingKeyRecord`
+    #[arg(long, value_name = "PATH")]
+    record_out: Option<std::path::PathBuf>,
+    /// Namespace to embed in `--record-out`
+    #[arg(long, default_value = "offline_kagemusha")]
+    record_namespace: String,
+    /// Governance version to embed in `--record-out`
+    #[arg(long, default_value_t = 1)]
+    record_version: u32,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct KagemushaLineageRecordArgs {
+    /// Reserved-lineage proof profile for the verifier key
+    #[arg(long, value_enum)]
+    profile: KagemushaLineageKeyProfile,
+    /// Supported Pallas IPA opening vector length for the verifier key
+    #[arg(long, value_name = "LEN")]
+    opening_len: u32,
+    /// Path to the verifier key envelope bytes
+    #[arg(long, value_name = "PATH")]
+    vk: std::path::PathBuf,
+    /// Output path for a Norito `VerifyingKeyRecord`
+    #[arg(long, value_name = "PATH")]
+    out: std::path::PathBuf,
+    /// Namespace to embed in the record
+    #[arg(long, default_value = "offline_kagemusha")]
+    record_namespace: String,
+    /// Governance version to embed in the record
+    #[arg(long, default_value_t = 1)]
+    record_version: u32,
+}
+
+fn kagemusha_lineage_vk_record_from_bytes(
+    profile: KagemushaLineageKeyProfile,
+    namespace: String,
+    version: u32,
+    opening_len: u32,
+    vk_bytes: Vec<u8>,
+) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
+    let vk_box = iroha::data_model::proof::VerifyingKeyBox::new(
+        iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+        vk_bytes,
+    );
+    match profile {
+        KagemushaLineageKeyProfile::Init => {
+            iroha_core::zk::kagemusha_recursive_spend_lineage_vk_record_from_box(
+                namespace,
+                version,
+                opening_len,
+                vk_box,
+            )
+        }
+        KagemushaLineageKeyProfile::Append => {
+            iroha_core::zk::kagemusha_recursive_spend_lineage_append_vk_record_from_box(
+                namespace,
+                version,
+                opening_len,
+                vk_box,
+            )
+        }
+    }
+    .map_err(|err| {
+        eyre::eyre!(
+            "failed to build {} Reserved-lineage verifier record for opening length {}: {err}",
+            profile.label(),
+            opening_len
+        )
+    })
+}
+
+impl Run for KagemushaLineageRecordArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let vk_bytes = std::fs::read(&self.vk)
+            .wrap_err_with(|| format!("failed to read {}", self.vk.display()))?;
+        let vk_len = vk_bytes.len();
+        let record = kagemusha_lineage_vk_record_from_bytes(
+            self.profile,
+            self.record_namespace,
+            self.record_version,
+            self.opening_len,
+            vk_bytes,
+        )?;
+        let record_bytes = norito::to_bytes(&record)
+            .map_err(|err| eyre::eyre!("failed to encode Reserved-lineage verifier record: {err}"))?;
+        write_kagemusha_lineage_key_artifact_file(&self.out, &record_bytes)
+            .wrap_err_with(|| format!("failed to write {}", self.out.display()))?;
+        context.println(format!(
+            "Wrote {} Reserved-lineage verifier record for `{}` opening_len={} from {} to {} (vk={} bytes, record={} bytes)",
+            self.profile.label(),
+            self.profile.circuit_id(),
+            self.opening_len,
+            self.vk.display(),
+            self.out.display(),
+            vk_len,
+            record_bytes.len(),
+        ))?;
+        Ok(())
+    }
+}
+
+impl Run for KagemushaLineageKeyArtifactsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        use iroha::data_model::offline::KagemushaRecursiveSpendLineageKeyArtifactsV1;
+
+        let vk_box = match self.profile {
+            KagemushaLineageKeyProfile::Init => {
+                iroha_core::zk::kagemusha_recursive_spend_lineage_vk_box(self.opening_len)
+            }
+            KagemushaLineageKeyProfile::Append => {
+                iroha_core::zk::kagemusha_recursive_spend_lineage_append_vk_box(self.opening_len)
+            }
+        }
+        .map_err(|err| {
+            eyre::eyre!(
+                "failed to generate {} Reserved-lineage verifier key for opening length {}: {err}",
+                self.profile.label(),
+                self.opening_len
+            )
+        })?;
+
+        let proving_key = match self.profile {
+            KagemushaLineageKeyProfile::Init => {
+                iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+                    &vk_box,
+                    self.opening_len,
+                )
+            }
+            KagemushaLineageKeyProfile::Append => {
+                iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+                    &vk_box,
+                    self.opening_len,
+                )
+            }
+        }
+        .map_err(|err| {
+            eyre::eyre!(
+                "failed to derive {} Reserved-lineage proving key archive for opening length {}: {err}",
+                self.profile.label(),
+                self.opening_len
+            )
+        })?;
+
+        let artifacts = match self.profile {
+            KagemushaLineageKeyProfile::Init => {
+                KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
+                    self.opening_len,
+                    vk_box.clone(),
+                    proving_key.clone(),
+                )
+            }
+            KagemushaLineageKeyProfile::Append => {
+                KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
+                    self.opening_len,
+                    vk_box.clone(),
+                    proving_key.clone(),
+                )
+            }
+        }
+        .map_err(|err| {
+            eyre::eyre!(
+                "generated {} Reserved-lineage key package failed validation: {err}",
+                self.profile.label()
+            )
+        })?;
+        let artifact_bytes = norito::to_bytes(&artifacts)
+            .map_err(|err| eyre::eyre!("failed to encode Reserved-lineage key package: {err}"))?;
+
+        write_kagemusha_lineage_key_artifact_file(&self.out, &artifact_bytes)
+            .wrap_err_with(|| format!("failed to write {}", self.out.display()))?;
+        if let Some(path) = &self.vk_out {
+            write_kagemusha_lineage_key_artifact_file(path, &vk_box.bytes)
+                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        }
+        if let Some(path) = &self.pk_out {
+            write_kagemusha_lineage_key_artifact_file(path, &proving_key)
+                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        }
+        let mut record_summary = String::new();
+        if let Some(path) = &self.record_out {
+            let record = match self.profile {
+                KagemushaLineageKeyProfile::Init => {
+                    iroha_core::zk::kagemusha_recursive_spend_lineage_vk_record_from_box(
+                        self.record_namespace.clone(),
+                        self.record_version,
+                        self.opening_len,
+                        vk_box.clone(),
+                    )
+                }
+                KagemushaLineageKeyProfile::Append => {
+                    iroha_core::zk::kagemusha_recursive_spend_lineage_append_vk_record_from_box(
+                        self.record_namespace.clone(),
+                        self.record_version,
+                        self.opening_len,
+                        vk_box.clone(),
+                    )
+                }
+            }
+            .map_err(|err| {
+                eyre::eyre!(
+                    "failed to build {} Reserved-lineage verifier record for opening length {}: {err}",
+                    self.profile.label(),
+                    self.opening_len
+                )
+            })?;
+            let record_bytes = norito::to_bytes(&record).map_err(|err| {
+                eyre::eyre!("failed to encode Reserved-lineage verifier record: {err}")
+            })?;
+            record_summary = format!(", record={} bytes", record_bytes.len());
+            write_kagemusha_lineage_key_artifact_file(path, &record_bytes)
+                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        }
+
+        context.println(format!(
+            "Wrote {} Reserved-lineage key package for `{}` opening_len={} to {} (package={} bytes, vk={} bytes, pk={} bytes{})",
+            self.profile.label(),
+            self.profile.circuit_id(),
+            self.opening_len,
+            self.out.display(),
+            artifact_bytes.len(),
+            vk_box.bytes.len(),
+            proving_key.len(),
+            record_summary
+        ))?;
+        Ok(())
+    }
+}
+
+fn write_kagemusha_lineage_key_artifact_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+#[derive(clap::Subcommand, Debug)]
 pub enum VoteCommand {
     /// Get election tally (JSON)
     Tally(VoteTallyArgs),
@@ -1751,6 +2049,274 @@ fn build_proof_attachment_from_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestContext {
+        cfg: iroha::config::Config,
+        json_outputs: Vec<String>,
+        lines: Vec<String>,
+        i18n: iroha_i18n::Localizer,
+    }
+
+    impl TestContext {
+        fn new() -> Self {
+            let key_pair =
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+            let account_id = iroha::data_model::account::AccountId::new(
+                key_pair.public_key().clone(),
+            );
+            let cfg = iroha::config::Config {
+                chain: iroha::data_model::prelude::ChainId::from(
+                    "00000000-0000-0000-0000-000000000000",
+                ),
+                account: account_id,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
+                key_pair,
+                basic_auth: None,
+                torii_api_url: url::Url::parse("http://127.0.0.1/").unwrap(),
+                torii_api_version: iroha::config::default_torii_api_version(),
+                torii_api_min_proof_version: iroha::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
+                    .to_string(),
+                torii_request_timeout: iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+                transaction_ttl: iroha::config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+                transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
+                transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
+                connect_queue_root: iroha::config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
+                sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
+                sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
+                sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
+            };
+            Self {
+                cfg,
+                json_outputs: Vec::new(),
+                lines: Vec::new(),
+                i18n: iroha_i18n::Localizer::new(
+                    iroha_i18n::Bundle::Cli,
+                    iroha_i18n::Language::English,
+                ),
+            }
+        }
+    }
+
+    impl RunContext for TestContext {
+        fn config(&self) -> &iroha::config::Config {
+            &self.cfg
+        }
+
+        fn transaction_metadata(&self) -> Option<&iroha::data_model::prelude::Metadata> {
+            None
+        }
+
+        fn input_instructions(&self) -> bool {
+            false
+        }
+
+        fn output_instructions(&self) -> bool {
+            false
+        }
+
+        fn i18n(&self) -> &iroha_i18n::Localizer {
+            &self.i18n
+        }
+
+        fn print_data<T>(&mut self, data: &T) -> Result<()>
+        where
+            T: norito::json::JsonSerialize + ?Sized,
+        {
+            let json = norito::json::to_json_pretty(data)
+                .map_err(|err| eyre::eyre!(err.to_string()))?;
+            self.json_outputs.push(json);
+            Ok(())
+        }
+
+        fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
+            self.lines.push(data.to_string());
+            Ok(())
+        }
+    }
+
+    fn append_test_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
+        buf.extend_from_slice(tag);
+        buf.extend_from_slice(
+            &u32::try_from(payload.len())
+                .expect("test TLV payload length fits u32")
+                .to_le_bytes(),
+        );
+        buf.extend_from_slice(payload);
+    }
+
+    fn h2vk_header(k: u32, selector_compression: u8, fixed_columns: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.push(0x02);
+        bytes.extend_from_slice(&k.to_le_bytes());
+        bytes.push(selector_compression);
+        bytes.extend_from_slice(&fixed_columns.to_le_bytes());
+        bytes.extend(vec![
+            0x42;
+            usize::try_from(fixed_columns).expect("test fixed-column count fits usize")
+                * 32
+        ]);
+        bytes.extend_from_slice(b"test-h2vk-body");
+        bytes
+    }
+
+    fn lineage_vk_bytes(circuit_id: &str) -> Vec<u8> {
+        let ipa_k = iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K;
+        let mut bytes = b"ZK1\0".to_vec();
+        append_test_tlv(&mut bytes, b"CID1", circuit_id.as_bytes());
+        append_test_tlv(&mut bytes, b"IPAK", &ipa_k.to_le_bytes());
+        append_test_tlv(&mut bytes, b"H2VK", &h2vk_header(ipa_k, 1, 3));
+        bytes
+    }
+
+    #[test]
+    fn kagemusha_lineage_record_from_existing_vk_bytes_canonicalizes_without_keygen() {
+        let init_vk = lineage_vk_bytes(
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        );
+        let init_record = kagemusha_lineage_vk_record_from_bytes(
+            KagemushaLineageKeyProfile::Init,
+            "test_kagemusha".to_owned(),
+            7,
+            2,
+            init_vk.clone(),
+        )
+        .expect("init record from existing vk");
+        assert_eq!(init_record.version, 7);
+        assert_eq!(init_record.namespace, "test_kagemusha");
+        assert_eq!(
+            init_record.circuit_id,
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID
+        );
+        assert_eq!(init_record.vk_len as usize, init_vk.len());
+        assert_eq!(
+            init_record
+                .key
+                .as_ref()
+                .expect("embedded init vk")
+                .bytes
+                .as_slice(),
+            init_vk.as_slice()
+        );
+
+        let append_vk =
+            lineage_vk_bytes(iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID);
+        let append_record = kagemusha_lineage_vk_record_from_bytes(
+            KagemushaLineageKeyProfile::Append,
+            "test_kagemusha".to_owned(),
+            8,
+            2,
+            append_vk.clone(),
+        )
+        .expect("append record from existing vk");
+        assert_eq!(append_record.version, 8);
+        assert_eq!(
+            append_record.circuit_id,
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID
+        );
+        assert_eq!(append_record.vk_len as usize, append_vk.len());
+        assert_eq!(
+            append_record
+                .key
+                .as_ref()
+                .expect("embedded append vk")
+                .bytes
+                .as_slice(),
+            append_vk.as_slice()
+        );
+    }
+
+    #[test]
+    fn kagemusha_lineage_record_run_writes_norito_record_from_existing_vk_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vk_path = temp.path().join("keys/init.vk");
+        let out_path = temp.path().join("records/init.record.norito");
+        let init_vk = lineage_vk_bytes(
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        );
+        std::fs::create_dir_all(vk_path.parent().expect("vk parent")).expect("vk dir");
+        std::fs::write(&vk_path, &init_vk).expect("write vk");
+
+        let mut context = TestContext::new();
+        KagemushaLineageRecordArgs {
+            profile: KagemushaLineageKeyProfile::Init,
+            opening_len: 2,
+            vk: vk_path.clone(),
+            out: out_path.clone(),
+            record_namespace: "run_kagemusha".to_owned(),
+            record_version: 9,
+        }
+        .run(&mut context)
+        .expect("lineage-record run");
+
+        let record_bytes = std::fs::read(&out_path).expect("read record");
+        let expected_record = kagemusha_lineage_vk_record_from_bytes(
+            KagemushaLineageKeyProfile::Init,
+            "run_kagemusha".to_owned(),
+            9,
+            2,
+            init_vk,
+        )
+        .expect("expected record");
+        let expected_bytes = norito::to_bytes(&expected_record).expect("expected record bytes");
+        assert_eq!(record_bytes, expected_bytes);
+        assert!(
+            context
+                .lines
+                .iter()
+                .any(|line| line.contains("Wrote init Reserved-lineage verifier record")),
+            "missing lineage-record summary: {:?}",
+            context.lines
+        );
+    }
+
+    #[test]
+    fn kagemusha_lineage_record_from_existing_vk_bytes_rejects_adversarial_inputs() {
+        let init_vk = lineage_vk_bytes(
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        );
+        let err = kagemusha_lineage_vk_record_from_bytes(
+            KagemushaLineageKeyProfile::Append,
+            "test_kagemusha".to_owned(),
+            1,
+            2,
+            init_vk,
+        )
+        .expect_err("init vk must not be accepted as append");
+        assert!(
+            format!("{err}").contains("is not `kagemusha-recursive-spend-lineage-append-v1`"),
+            "unexpected profile mismatch error: {err}"
+        );
+
+        let err = kagemusha_lineage_vk_record_from_bytes(
+            KagemushaLineageKeyProfile::Init,
+            "test_kagemusha".to_owned(),
+            1,
+            2,
+            Vec::new(),
+        )
+        .expect_err("empty vk bytes must reject");
+        assert!(
+            format!("{err}").contains("must be non-empty"),
+            "unexpected empty-key error: {err}"
+        );
+
+        let append_vk =
+            lineage_vk_bytes(iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID);
+        let err = kagemusha_lineage_vk_record_from_bytes(
+            KagemushaLineageKeyProfile::Append,
+            "test_kagemusha".to_owned(),
+            1,
+            3,
+            append_vk,
+        )
+        .expect_err("unsupported opening length must reject");
+        assert!(
+            format!("{err}").contains("opening length `3` is unsupported"),
+            "unexpected opening-length error: {err}"
+        );
+    }
 
     #[test]
     fn build_proof_attachment_from_json_vk_ref() {

@@ -370,6 +370,25 @@ fn kagemusha_archive_out_of_bounds(len: usize) -> bool {
     len == 0 || len > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
 }
 
+unsafe fn read_kagemusha_archive_bytes(ptr: *const c_uchar, len: c_ulong) -> BridgeResult<Vec<u8>> {
+    if ptr.is_null() {
+        return Err(BridgeError::NullPtr);
+    }
+    let len: usize = len.try_into().map_err(|_| BridgeError::KagemushaProve)?;
+    if kagemusha_archive_out_of_bounds(len) {
+        return Err(BridgeError::KagemushaProve);
+    }
+    unsafe { read_vec_bytes(ptr, len as c_ulong) }
+}
+
+fn is_kagemusha_recursive_compact_unavailable_error(err: &str) -> bool {
+    matches!(
+        err,
+        iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE
+            | iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
+    )
+}
+
 unsafe fn write_kagemusha_archive_bridge(
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
@@ -724,6 +743,17 @@ fn clear_bridge_output(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
             *out_len = 0;
         }
     }
+}
+
+fn clear_bridge_output_or_null(
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
+) -> BridgeResult<()> {
+    clear_bridge_output(out_ptr, out_len);
+    if out_ptr.is_null() || out_len.is_null() {
+        return Err(BridgeError::NullPtr);
+    }
+    Ok(())
 }
 
 fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
@@ -5926,24 +5956,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment
     out_compact_token_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if verified_bundle_norito_ptr.is_null()
-            || out_compact_token_ptr.is_null()
-            || out_compact_token_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_compact_token_ptr, out_compact_token_len)?;
         let bytes = unsafe {
-            slice::from_raw_parts(
-                verified_bundle_norito_ptr,
-                verified_bundle_norito_len as usize,
-            )
-        };
+            read_kagemusha_archive_bytes(verified_bundle_norito_ptr, verified_bundle_norito_len)
+        }?;
         let _bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle =
-            norito::decode_from_bytes(bytes).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe {
-            *out_compact_token_ptr = ptr::null_mut();
-            *out_compact_token_len = 0;
-        }
+            norito::decode_from_bytes(&bytes).map_err(|_| BridgeError::KagemushaProve)?;
         Err(BridgeError::KagemushaProve)
     })();
 
@@ -5965,19 +5983,14 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment
     out_compact_token_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if verified_record_bundle_norito_ptr.is_null()
-            || out_compact_token_ptr.is_null()
-            || out_compact_token_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_compact_token_ptr, out_compact_token_len)?;
         let bytes = unsafe {
-            slice::from_raw_parts(
+            read_kagemusha_archive_bytes(
                 verified_record_bundle_norito_ptr,
-                verified_record_bundle_norito_len as usize,
+                verified_record_bundle_norito_len,
             )
-        };
-        let token = prove_verified_kagemusha_compact_token_from_record_bundle(bytes)?;
+        }?;
+        let token = prove_verified_kagemusha_compact_token_from_record_bundle(&bytes)?;
         let archive = norito::to_bytes(&token).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe {
             write_kagemusha_archive_bridge(out_compact_token_ptr, out_compact_token_len, &archive)
@@ -6013,8 +6026,8 @@ fn prove_verified_kagemusha_compact_token_from_record_bundle(
 ///
 /// Inputs are Norito-archive bytes of
 /// `iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle` and a
-/// `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`. The output is Norito-archive
-/// bytes of `KagemushaRecursiveAggregationProofBundle`.
+/// Pallas open-envelope archive. The output is Norito-archive bytes of
+/// `KagemushaRecursiveAggregationProofBundle`.
 ///
 /// This symbol is proof-carrying and admission-neutral: compact-token
 /// aggregation mode `2` remains reserved until the recursive circuit verifies
@@ -6029,29 +6042,23 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_aggre
     out_proof_bundle_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if verified_record_bundle_norito_ptr.is_null()
-            || pallas_open_envelopes_norito_ptr.is_null()
-            || out_proof_bundle_ptr.is_null()
-            || out_proof_bundle_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_proof_bundle_ptr, out_proof_bundle_len)?;
         let record_bundle_bytes = unsafe {
-            slice::from_raw_parts(
+            read_kagemusha_archive_bytes(
                 verified_record_bundle_norito_ptr,
-                verified_record_bundle_norito_len as usize,
+                verified_record_bundle_norito_len,
             )
-        };
+        }?;
         let pallas_open_envelope_bytes = unsafe {
-            slice::from_raw_parts(
+            read_kagemusha_archive_bytes(
                 pallas_open_envelopes_norito_ptr,
-                pallas_open_envelopes_norito_len as usize,
+                pallas_open_envelopes_norito_len,
             )
-        };
+        }?;
         let proof_bundle =
             prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
-                record_bundle_bytes,
-                pallas_open_envelope_bytes,
+                &record_bundle_bytes,
+                &pallas_open_envelope_bytes,
             )?;
         let archive = norito::to_bytes(&proof_bundle).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe {
@@ -6103,33 +6110,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_compa
     out_compact_token_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        clear_bridge_output(out_compact_token_ptr, out_compact_token_len);
-        if out_compact_token_ptr.is_null() || out_compact_token_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        if verified_record_bundle_norito_ptr.is_null() || pallas_open_envelopes_norito_ptr.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let record_bundle_len: usize = verified_record_bundle_norito_len
-            .try_into()
-            .map_err(|_| BridgeError::KagemushaProve)?;
-        let pallas_open_envelopes_len: usize = pallas_open_envelopes_norito_len
-            .try_into()
-            .map_err(|_| BridgeError::KagemushaProve)?;
-        if kagemusha_archive_out_of_bounds(record_bundle_len)
-            || kagemusha_archive_out_of_bounds(pallas_open_envelopes_len)
-        {
-            return Err(BridgeError::KagemushaProve);
-        }
+        clear_bridge_output_or_null(out_compact_token_ptr, out_compact_token_len)?;
         let record_bundle_archive = unsafe {
-            read_vec_bytes(
+            read_kagemusha_archive_bytes(
                 verified_record_bundle_norito_ptr,
                 verified_record_bundle_norito_len,
             )
         }?;
         let pallas_open_envelopes_archive = unsafe {
-            read_vec_bytes(
+            read_kagemusha_archive_bytes(
                 pallas_open_envelopes_norito_ptr,
                 pallas_open_envelopes_norito_len,
             )
@@ -6137,11 +6126,23 @@ pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_recursive_compa
         let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
             norito::decode_from_bytes(&record_bundle_archive)
                 .map_err(|_| BridgeError::KagemushaProve)?;
-        let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-            norito::decode_from_bytes(&pallas_open_envelopes_archive)
-                .map_err(|_| BridgeError::KagemushaProve)?;
-        let _ = (record_bundle, pallas_open_envelopes);
-        Err(BridgeError::KagemushaRecursiveCompactUnavailable)
+        let token =
+            iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                &pallas_open_envelopes_archive,
+                None,
+            )
+            .map_err(|err| {
+                if is_kagemusha_recursive_compact_unavailable_error(&err) {
+                    BridgeError::KagemushaRecursiveCompactUnavailable
+                } else {
+                    BridgeError::KagemushaProve
+                }
+            })?;
+        let archive = norito::to_bytes(&token).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(out_compact_token_ptr, out_compact_token_len, &archive)
+        }
     })();
 
     bridge_result_to_code(result)
@@ -6169,24 +6170,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_verify_recursive_compact_payme
         if out_valid.is_null() || compact_token_norito_ptr.is_null() {
             return Err(BridgeError::NullPtr);
         }
-        let compact_token_len: usize = compact_token_norito_len
-            .try_into()
-            .map_err(|_| BridgeError::KagemushaProve)?;
-        if kagemusha_archive_out_of_bounds(compact_token_len) {
-            return Err(BridgeError::KagemushaProve);
-        }
-        let compact_token_archive =
-            unsafe { read_vec_bytes(compact_token_norito_ptr, compact_token_norito_len) }?;
+        let compact_token_archive = unsafe {
+            read_kagemusha_archive_bytes(compact_token_norito_ptr, compact_token_norito_len)
+        }?;
         let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
             norito::decode_from_bytes(&compact_token_archive)
                 .map_err(|_| BridgeError::KagemushaProve)?;
         let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
             .map_err(|_| BridgeError::KagemushaProve)?;
         match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
-            Err(err)
-                if err.contains(
-                    iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
-                ) => {}
+            Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {}
             Err(_) => return Err(BridgeError::KagemushaProve),
             Ok(()) => {
                 if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box)
@@ -6220,12 +6213,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init(
     out_bundle_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if request_norito_ptr.is_null() || out_bundle_ptr.is_null() || out_bundle_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_bundle_ptr, out_bundle_len)?;
         let bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
-        let bundle = kagemusha_recursive_spend_init_from_request_archive(bytes)?;
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let bundle = kagemusha_recursive_spend_init_from_request_archive(&bytes)?;
         let archive = norito::to_bytes(&bundle).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_bundle_ptr, out_bundle_len, &archive) }
     })();
@@ -6292,12 +6283,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append(
     out_bundle_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if request_norito_ptr.is_null() || out_bundle_ptr.is_null() || out_bundle_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_bundle_ptr, out_bundle_len)?;
         let bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
-        let bundle = kagemusha_recursive_spend_append_from_request_archive(bytes)?;
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let bundle = kagemusha_recursive_spend_append_from_request_archive(&bytes)?;
         let archive = norito::to_bytes(&bundle).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_bundle_ptr, out_bundle_len, &archive) }
     })();
@@ -6399,13 +6388,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_transition_pro
     out_profile_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if request_norito_ptr.is_null() || out_profile_ptr.is_null() || out_profile_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_profile_ptr, out_profile_len)?;
         let bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
         let profile =
-            kagemusha_recursive_spend_transition_profile_init_from_request_archive(bytes)?;
+            kagemusha_recursive_spend_transition_profile_init_from_request_archive(&bytes)?;
         let archive = norito::to_bytes(&profile).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_profile_ptr, out_profile_len, &archive) }
     })();
@@ -6467,13 +6454,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_transition_pro
     out_profile_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if request_norito_ptr.is_null() || out_profile_ptr.is_null() || out_profile_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_profile_ptr, out_profile_len)?;
         let bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
         let profile =
-            kagemusha_recursive_spend_transition_profile_append_from_request_archive(bytes)?;
+            kagemusha_recursive_spend_transition_profile_append_from_request_archive(&bytes)?;
         let archive = norito::to_bytes(&profile).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_profile_ptr, out_profile_len, &archive) }
     })();
@@ -6571,15 +6556,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_lineage_append
     out_boundary_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if profile_norito_ptr.is_null() || out_boundary_ptr.is_null() || out_boundary_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_boundary_ptr, out_boundary_len)?;
         let bytes =
-            unsafe { slice::from_raw_parts(profile_norito_ptr, profile_norito_len as usize) };
+            unsafe { read_kagemusha_archive_bytes(profile_norito_ptr, profile_norito_len) }?;
         let boundary =
             kagemusha_recursive_spend_lineage_append_boundary_from_transition_profile_archive(
-                bytes,
+                &bytes,
             )?;
         let archive = norito::to_bytes(&boundary).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_boundary_ptr, out_boundary_len, &archive) }
@@ -6622,20 +6604,14 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_lineage_witnes
     out_witness_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if request_norito_ptr.is_null()
-            || bundle_norito_ptr.is_null()
-            || out_witness_ptr.is_null()
-            || out_witness_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_witness_ptr, out_witness_len)?;
         let request_bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
         let bundle_bytes =
-            unsafe { slice::from_raw_parts(bundle_norito_ptr, bundle_norito_len as usize) };
+            unsafe { read_kagemusha_archive_bytes(bundle_norito_ptr, bundle_norito_len) }?;
         let witness = kagemusha_recursive_spend_lineage_witness_from_init_result_archives(
-            request_bytes,
-            bundle_bytes,
+            &request_bytes,
+            &bundle_bytes,
         )?;
         let archive = norito::to_bytes(&witness).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_witness_ptr, out_witness_len, &archive) }
@@ -6680,28 +6656,18 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_lineage_witnes
     out_witness_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if previous_witness_norito_ptr.is_null()
-            || request_norito_ptr.is_null()
-            || bundle_norito_ptr.is_null()
-            || out_witness_ptr.is_null()
-            || out_witness_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_witness_ptr, out_witness_len)?;
         let previous_witness_bytes = unsafe {
-            slice::from_raw_parts(
-                previous_witness_norito_ptr,
-                previous_witness_norito_len as usize,
-            )
-        };
+            read_kagemusha_archive_bytes(previous_witness_norito_ptr, previous_witness_norito_len)
+        }?;
         let request_bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
         let bundle_bytes =
-            unsafe { slice::from_raw_parts(bundle_norito_ptr, bundle_norito_len as usize) };
+            unsafe { read_kagemusha_archive_bytes(bundle_norito_ptr, bundle_norito_len) }?;
         let witness = kagemusha_recursive_spend_lineage_witness_append_result_archives(
-            previous_witness_bytes,
-            request_bytes,
-            bundle_bytes,
+            &previous_witness_bytes,
+            &request_bytes,
+            &bundle_bytes,
         )?;
         let archive = norito::to_bytes(&witness).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_witness_ptr, out_witness_len, &archive) }
@@ -6745,12 +6711,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify(
     out_result_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if request_norito_ptr.is_null() || out_result_ptr.is_null() || out_result_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
         let bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
-        let result = kagemusha_recursive_spend_verify_from_request_archive(bytes)?;
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let result = kagemusha_recursive_spend_verify_from_request_archive(&bytes)?;
         let archive = norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe { write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive) }
     })();
@@ -6802,15 +6766,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem(
     out_instruction_len: *mut c_ulong,
 ) -> c_int {
     let result = (|| {
-        if request_norito_ptr.is_null()
-            || out_instruction_ptr.is_null()
-            || out_instruction_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
+        clear_bridge_output_or_null(out_instruction_ptr, out_instruction_len)?;
         let bytes =
-            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
-        let instruction = kagemusha_recursive_spend_redeem_from_request_archive(bytes)?;
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let instruction = kagemusha_recursive_spend_redeem_from_request_archive(&bytes)?;
         let archive = norito::to_bytes(&instruction).map_err(|_| BridgeError::KagemushaProve)?;
         unsafe {
             write_kagemusha_archive_bridge(out_instruction_ptr, out_instruction_len, &archive)
@@ -6998,8 +6957,10 @@ mod offline_note_prover_tests {
 
     use iroha_core::zk::{
         KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
-        confidential_v2, hash_vk, kagemusha_folded_vk_box,
+        confidential_v2, hash_vk, kagemusha_fold_step_proof_hash,
+        kagemusha_fold_step_public_inputs_digest, kagemusha_folded_vk_box,
         kagemusha_pallas_open_envelope_metadata_for_verified_hop,
+        kagemusha_recursive_aggregation_proof_public_input_instance_values,
         kagemusha_recursive_aggregation_proof_vk_box,
         kagemusha_recursive_compact_payment_token_vk_box,
         kagemusha_recursive_fixed_window_shared_table_manifest_digest,
@@ -7029,6 +6990,8 @@ mod offline_note_prover_tests {
             KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
+            kagemusha_recursive_aggregation_evidence_from_steps,
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence,
             kagemusha_recursive_spend_accumulator_from_initial_evidence,
             kagemusha_recursive_spend_public_inputs_from_accumulator,
         },
@@ -7771,6 +7734,116 @@ mod offline_note_prover_tests {
             .clone()
     }
 
+    fn sample_two_hop_kagemusha_verified_record_bundle() -> KagemushaVerifiedFoldRecordBundle {
+        static BUNDLE: OnceLock<KagemushaVerifiedFoldRecordBundle> = OnceLock::new();
+        BUNDLE
+            .get_or_init(|| {
+                let mut record_bundle = sample_kagemusha_verified_record_bundle();
+                let chain_id = record_bundle.bundle.chain_id.clone();
+                let asset = record_bundle.bundle.asset.clone();
+                let record = record_bundle
+                    .verifier_records
+                    .first()
+                    .expect("one-hop fixture has verifier record")
+                    .record
+                    .clone();
+                let verifier_key = record_bundle
+                    .bundle
+                    .steps
+                    .first()
+                    .expect("one-hop fixture has step")
+                    .verifier_key
+                    .clone();
+                let first_spend_key = [0x11_u8; Hash::LENGTH];
+                let first_input_rho = [0x21_u8; Hash::LENGTH];
+                let first_input_diversifier =
+                    confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-bridge-input");
+                let first_input_owner_tag =
+                    confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &first_spend_key,
+                        first_input_diversifier,
+                    )
+                    .expect("first input owner tag");
+                let first_input_commitment = confidential_v2::derive_confidential_note_v2(
+                    &asset.to_string(),
+                    7,
+                    first_input_rho,
+                    first_input_owner_tag,
+                )
+                .expect("first input commitment");
+                let mut second_tree = vec![first_input_commitment];
+                assert_eq!(
+                    confidential_v2::compute_confidential_root_v2(&second_tree)
+                        .expect("first root"),
+                    record_bundle.bundle.steps[0].root_before
+                );
+                second_tree.extend(
+                    record_bundle.bundle.steps[0]
+                        .output_commitments
+                        .iter()
+                        .copied(),
+                );
+                let second_spend_key = [0x41_u8; Hash::LENGTH];
+                let second_input_diversifier =
+                    confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-bridge-output");
+                let final_owner_tag =
+                    confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &[0x51_u8; Hash::LENGTH],
+                        confidential_v2::derive_confidential_diversifier_v2(
+                            b"kagemusha-bridge-second-output",
+                        ),
+                    )
+                    .expect("second output owner tag");
+                let second_root_before =
+                    confidential_v2::compute_confidential_root_v2(&second_tree)
+                        .expect("second root before");
+                let second_proof = confidential_v2::build_confidential_transfer_proof_v2(
+                    &chain_id,
+                    &asset.to_string(),
+                    &second_spend_key,
+                    &second_tree,
+                    &[confidential_v2::ConfidentialTransferInputV2 {
+                        amount: 7,
+                        rho: [0x31_u8; Hash::LENGTH],
+                        diversifier: second_input_diversifier,
+                        leaf_index: 1,
+                    }],
+                    &[confidential_v2::ConfidentialTransferOutputV2 {
+                        amount: 7,
+                        rho: [0x61_u8; Hash::LENGTH],
+                        owner_tag: final_owner_tag,
+                    }],
+                    second_root_before,
+                    &record.circuit_id,
+                    &verifier_key,
+                )
+                .expect("second confidential transfer v2 proof");
+                let mut final_tree = second_tree;
+                final_tree.extend(second_proof.output_commitments.iter().copied());
+                let second_root_after = confidential_v2::compute_confidential_root_v2(&final_tree)
+                    .expect("second root after");
+                let mut attachment = ProofAttachment::new_ref(
+                    ZK_BACKEND_HALO2_IPA.into(),
+                    second_proof.proof,
+                    VerifyingKeyId::new(
+                        ZK_BACKEND_HALO2_IPA,
+                        "kagemusha-bridge-confidential-transfer-v2",
+                    ),
+                );
+                attachment.vk_commitment = Some(hash_vk(&verifier_key));
+                record_bundle.bundle.steps.push(KagemushaVerifiedFoldStep {
+                    root_before: second_root_before,
+                    input_nullifiers: second_proof.nullifiers,
+                    output_commitments: second_proof.output_commitments,
+                    root_after: second_root_after,
+                    attachment,
+                    verifier_key,
+                });
+                record_bundle
+            })
+            .clone()
+    }
+
     fn sample_recursive_compact_token_shape(
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
     ) -> KagemushaCompactPaymentToken {
@@ -7800,6 +7873,127 @@ mod offline_note_prover_tests {
                 proof: ProofBox::new(
                     ZK_BACKEND_HALO2_IPA.to_owned(),
                     norito::to_bytes(&envelope).expect("encode recursive compact envelope"),
+                ),
+            },
+        }
+    }
+
+    fn sample_recursive_compact_shape_valid_token(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+    ) -> KagemushaCompactPaymentToken {
+        sample_recursive_compact_shape_token(record_bundle, false)
+    }
+
+    fn sample_recursive_compact_multi_row_instance_token(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+    ) -> KagemushaCompactPaymentToken {
+        sample_recursive_compact_shape_token(record_bundle, true)
+    }
+
+    fn sample_recursive_compact_shape_token(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+        multi_row_instances: bool,
+    ) -> KagemushaCompactPaymentToken {
+        let verified_steps = record_bundle
+            .bundle
+            .steps
+            .iter()
+            .map(|step| iroha_data_model::offline::KagemushaFoldStep {
+                root_before: step.root_before,
+                input_nullifiers: step.input_nullifiers.clone(),
+                output_commitments: step.output_commitments.clone(),
+                root_after: step.root_after,
+                proof_hash: kagemusha_fold_step_proof_hash(&step.attachment.proof)
+                    .expect("Kagemusha hop proof hash"),
+                proof_public_inputs_digest: kagemusha_fold_step_public_inputs_digest(
+                    &step.attachment.proof,
+                )
+                .expect("Kagemusha hop public-input digest"),
+                verifier_key_id: step.attachment.vk_ref.clone(),
+                verifier_key_commitment: step
+                    .attachment
+                    .vk_commitment
+                    .expect("sample hop has verifier-key commitment"),
+                verifier_key_poseidon_digest:
+                    iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                        step.verifier_key.backend.as_str(),
+                        &step.verifier_key.bytes,
+                    )
+                    .expect("Kagemusha verifier key poseidon digest"),
+            })
+            .collect::<Vec<_>>();
+        let evidence = kagemusha_recursive_aggregation_evidence_from_steps(
+            &record_bundle.bundle.chain_id,
+            &record_bundle.bundle.asset,
+            &verified_steps,
+            4,
+            fixed_bytes(b"bridge-recursive-compact-shape-verifier-params"),
+            kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                .expect("recursive compact fixed-window schedule digest"),
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                .expect("recursive compact shared-table manifest digest"),
+            fixed_bytes(b"bridge-recursive-compact-shape-table-base"),
+            fixed_bytes(b"bridge-recursive-compact-shape-witness-batch"),
+        )
+        .expect("recursive compact shape evidence");
+        let public_inputs =
+            iroha_data_model::offline::kagemusha_folded_public_inputs_from_aggregation_statement(
+                &evidence.aggregation_statement,
+            )
+            .expect("recursive compact folded public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive compact public input hash");
+        let mut recursive_public_inputs =
+            kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(&evidence)
+                .expect("recursive compact proof public inputs");
+        recursive_public_inputs.recursive_verifier_scalar_projection_digest =
+            fixed_bytes(b"bridge-recursive-compact-shape-scalar-projection");
+        assert_eq!(
+            recursive_public_inputs.folded_public_inputs_hash,
+            *public_inputs_hash.as_ref()
+        );
+
+        let compact_vk =
+            kagemusha_recursive_compact_payment_token_vk_box().expect("recursive compact vk");
+        let mut proof_bytes = b"ZK1\0".to_vec();
+        append_zk1_tlv(&mut proof_bytes, *b"PROF", &[0xC7; 64]);
+        let mut public_instance_columns =
+            kagemusha_recursive_aggregation_proof_public_input_instance_values(
+                &recursive_public_inputs,
+            )
+            .expect("recursive compact public instance values")
+            .public_instance_columns();
+        if multi_row_instances {
+            for (index, column) in public_instance_columns.iter_mut().enumerate() {
+                let mut row = [0u8; Hash::LENGTH];
+                row[..8].copy_from_slice(
+                    &(u64::try_from(index).expect("test index fits u64") + 1).to_le_bytes(),
+                );
+                column.push(row);
+            }
+        }
+        append_zk1_raw_instance_columns(&mut proof_bytes, public_instance_columns);
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1.to_owned(),
+            vk_hash: hash_vk(&compact_vk),
+            public_inputs: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA.to_vec(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        KagemushaCompactPaymentToken {
+            public_inputs,
+            folded_proof: KagemushaFoldedProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+                ),
+                public_inputs_hash,
+                proof: ProofBox::new(
+                    ZK_BACKEND_HALO2_IPA.to_owned(),
+                    norito::to_bytes(&envelope)
+                        .expect("encode shape-valid recursive compact envelope"),
                 ),
             },
         }
@@ -7858,6 +8052,78 @@ mod offline_note_prover_tests {
             norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
     }
 
+    fn mutate_kagemusha_compact_token_envelope(
+        token: &mut KagemushaCompactPaymentToken,
+        mutate: impl FnOnce(&mut iroha_data_model::zk::OpenVerifyEnvelope),
+    ) {
+        let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&token.folded_proof.proof.bytes)
+                .expect("Kagemusha compact token proof should be an OpenVerifyEnvelope");
+        mutate(&mut envelope);
+        token.folded_proof.proof.bytes =
+            norito::to_bytes(&envelope).expect("encode mutated compact-token OpenVerifyEnvelope");
+    }
+
+    fn call_single_archive_ffi_with_stale_output(
+        entry: unsafe extern "C" fn(
+            *const c_uchar,
+            c_ulong,
+            *mut *mut c_uchar,
+            *mut c_ulong,
+        ) -> c_int,
+        archive: &[u8],
+    ) -> (c_int, *mut c_uchar, c_ulong) {
+        let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+        let mut out_len: c_ulong = 99;
+        let status = unsafe {
+            entry(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        (status, out_ptr, out_len)
+    }
+
+    fn call_recursive_aggregation_ffi_with_stale_output(
+        record_archive: &[u8],
+        pallas_open_envelope_archive: &[u8],
+    ) -> (c_int, *mut c_uchar, c_ulong) {
+        let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+        let mut out_len: c_ulong = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                record_archive.as_ptr(),
+                record_archive.len() as c_ulong,
+                pallas_open_envelope_archive.as_ptr(),
+                pallas_open_envelope_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        (status, out_ptr, out_len)
+    }
+
+    fn call_recursive_compact_ffi_with_stale_output(
+        record_archive: &[u8],
+        pallas_open_envelope_archive: &[u8],
+    ) -> (c_int, *mut c_uchar, c_ulong) {
+        let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+        let mut out_len: c_ulong = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                record_archive.as_ptr(),
+                record_archive.len() as c_ulong,
+                pallas_open_envelope_archive.as_ptr(),
+                pallas_open_envelope_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        (status, out_ptr, out_len)
+    }
+
     fn sample_pallas_coeffs(n: usize) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
         (0..n)
             .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
@@ -7912,20 +8178,75 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs() {
-        let malformed_archive = [0_u8];
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
+    fn kagemusha_compact_ffi_rejects_oversized_lengths_without_output() {
+        let archive = [0xA5_u8];
+
+        let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+        let mut out_len: c_ulong = 99;
         let status = unsafe {
-            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
-                malformed_archive.as_ptr(),
-                malformed_archive.len() as c_ulong,
-                malformed_archive.as_ptr(),
-                malformed_archive.len() as c_ulong,
+            connect_norito_kagemusha_prove_verified_compact_payment_token(
+                archive.as_ptr(),
+                c_ulong::MAX,
                 &mut out_ptr,
                 &mut out_len,
             )
         };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
+                archive.as_ptr(),
+                c_ulong::MAX,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                archive.as_ptr(),
+                c_ulong::MAX,
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                archive.as_ptr(),
+                c_ulong::MAX,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs() {
+        let malformed_archive = [0_u8];
+        let (status, out_ptr, out_len) =
+            call_recursive_compact_ffi_with_stale_output(&malformed_archive, &malformed_archive);
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -7943,21 +8264,52 @@ mod offline_note_prover_tests {
         let _: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
             norito::decode_from_bytes(&envelope_archive)
                 .expect("valid recursive compact Pallas envelope fixture must decode");
-        out_ptr = ptr::null_mut();
-        out_len = 0;
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
-                record_archive.as_ptr(),
-                record_archive.len() as c_ulong,
-                malformed_archive.as_ptr(),
-                malformed_archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) =
+            call_recursive_compact_ffi_with_stale_output(&record_archive, &malformed_archive);
         assert_eq!(
             status, ERR_KAGEMUSHA_PROVE,
             "ABI-7 compact prover must reject malformed Pallas opening archives before the unavailable gate"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+        let detached_record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id: "kagemusha-bridge-detached-compact-record"
+                    .parse()
+                    .expect("detached chain id"),
+                asset: record_bundle.bundle.asset.clone(),
+                steps: Vec::new(),
+            },
+            verifier_records: Vec::new(),
+        };
+        let detached_record_archive = norito::to_bytes(&detached_record_bundle)
+            .expect("encode detached recursive compact record bundle");
+        let (status, out_ptr, out_len) = call_recursive_compact_ffi_with_stale_output(
+            &detached_record_archive,
+            &envelope_archive,
+        );
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact prover must reject detached valid Pallas opening archives before the unavailable gate"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+        let mut extra_envelope_archive_items: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&envelope_archive)
+                .expect("decode valid recursive compact Pallas envelope fixture");
+        extra_envelope_archive_items.push(
+            extra_envelope_archive_items
+                .first()
+                .expect("one-hop envelope archive contains one item")
+                .clone(),
+        );
+        let extra_envelope_archive = norito::to_bytes(&extra_envelope_archive_items)
+            .expect("encode extra recursive compact Pallas envelope archive");
+        let (status, out_ptr, out_len) =
+            call_recursive_compact_ffi_with_stale_output(&record_archive, &extra_envelope_archive);
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact prover must reject extra valid Pallas opening archives before the unavailable gate"
         );
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -7968,19 +8320,47 @@ mod offline_note_prover_tests {
             !verify_kagemusha_recursive_compact_payment_token(&direct_token, &compact_vk),
             "core recursive compact verifier must fail closed until compact proofs compose the private-hop verifier slice"
         );
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
-                record_archive.as_ptr(),
-                record_archive.len() as c_ulong,
-                envelope_archive.as_ptr(),
-                envelope_archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) =
+            call_recursive_compact_ffi_with_stale_output(&record_archive, &envelope_archive);
         assert_eq!(status, ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
+
+        let multi_hop_record_bundle = sample_two_hop_kagemusha_verified_record_bundle();
+        let multi_hop_record_archive =
+            norito::to_bytes(&multi_hop_record_bundle).expect("encode multi-hop record bundle");
+        let multi_hop_envelope_archive = sample_pallas_open_envelopes_archive_for_record_bundle(
+            &multi_hop_record_bundle,
+            "bridge-recursive-compact-multi-hop-open-envelope",
+        );
+        let multi_hop_envelope_archive_items: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&multi_hop_envelope_archive)
+                .expect("valid multi-hop recursive compact Pallas fixture must decode");
+        let mut missing_envelope_archive_items = multi_hop_envelope_archive_items;
+        missing_envelope_archive_items.pop();
+        let missing_envelope_archive = norito::to_bytes(&missing_envelope_archive_items)
+            .expect("encode missing recursive compact Pallas envelope archive");
+        let (status, out_ptr, out_len) = call_recursive_compact_ffi_with_stale_output(
+            &multi_hop_record_archive,
+            &missing_envelope_archive,
+        );
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact prover must reject missing valid Pallas opening archives before the unavailable gate"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+        let (status, out_ptr, out_len) = call_recursive_compact_ffi_with_stale_output(
+            &multi_hop_record_archive,
+            &multi_hop_envelope_archive,
+        );
+        assert_eq!(
+            status, ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE,
+            "valid multi-hop recursive compact Pallas archives must map to unavailable until verifier-batch composition is enabled"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
         let token = direct_token;
         let token_archive = norito::to_bytes(&token).expect("encode direct compact token");
         assert_eq!(
@@ -8014,6 +8394,138 @@ mod offline_note_prover_tests {
         assert_eq!(
             out_valid, 0,
             "malformed dummy compact tokens must clear stale valid flags"
+        );
+
+        let shape_valid_token = sample_recursive_compact_shape_valid_token(&record_bundle);
+        assert_eq!(
+            shape_valid_token.public_inputs.aggregation_mode,
+            iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        );
+        assert_eq!(
+            shape_valid_token.folded_proof.verifier_key_id.name,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
+        );
+        assert!(
+            !verify_kagemusha_recursive_compact_payment_token(&shape_valid_token, &compact_vk),
+            "shape-valid ABI-7 compact tokens must remain fail-closed in core"
+        );
+        let shape_valid_archive =
+            norito::to_bytes(&shape_valid_token).expect("encode shape-valid compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                shape_valid_archive.as_ptr(),
+                shape_valid_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, 0,
+            "shape-valid ABI-7 compact tokens must return a soft invalid result while production proof composition is unavailable"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "shape-valid unavailable compact tokens must not set valid"
+        );
+
+        let mut forged_vk_hash_token = shape_valid_token.clone();
+        mutate_kagemusha_compact_token_envelope(&mut forged_vk_hash_token, |envelope| {
+            envelope.vk_hash = fixed_bytes(b"bridge-recursive-compact-forged-vk-hash");
+        });
+        let forged_vk_hash_archive =
+            norito::to_bytes(&forged_vk_hash_token).expect("encode forged-vk-hash compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                forged_vk_hash_archive.as_ptr(),
+                forged_vk_hash_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "non-canonical compact-token verifier-key hashes must clear stale valid flags"
+        );
+
+        let multi_row_instance_token =
+            sample_recursive_compact_multi_row_instance_token(&record_bundle);
+        let multi_row_instance_archive = norito::to_bytes(&multi_row_instance_token)
+            .expect("encode multi-row recursive compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                multi_row_instance_archive.as_ptr(),
+                multi_row_instance_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "ABI-7 compact verifier must reject multi-row public instances before returning a soft invalid result"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "multi-row compact-token public instances must clear stale valid flags"
+        );
+
+        let mut sentinel_spoofed_circuit_id = shape_valid_token.clone();
+        sentinel_spoofed_circuit_id
+            .folded_proof
+            .verifier_key_id
+            .name = format!(
+            "forged::{}",
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE
+        );
+        let sentinel_spoofed_archive = norito::to_bytes(&sentinel_spoofed_circuit_id)
+            .expect("encode sentinel-spoofed compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                sentinel_spoofed_archive.as_ptr(),
+                sentinel_spoofed_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "malformed compact tokens must not spoof the unavailable sentinel through interpolated circuit ids"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "sentinel-spoofed compact tokens must clear stale valid flags"
+        );
+
+        let mut stale_shape_binding = shape_valid_token.clone();
+        stale_shape_binding.public_inputs.hop_count = stale_shape_binding
+            .public_inputs
+            .hop_count
+            .checked_add(1)
+            .expect("test hop count increment");
+        stale_shape_binding.folded_proof.public_inputs_hash = stale_shape_binding
+            .public_inputs
+            .public_inputs_hash()
+            .expect("stale shape public-input hash");
+        let stale_shape_archive =
+            norito::to_bytes(&stale_shape_binding).expect("encode stale shape compact token");
+        out_valid = 0xAA;
+        let status = unsafe {
+            connect_norito_kagemusha_verify_recursive_compact_payment_token(
+                stale_shape_archive.as_ptr(),
+                stale_shape_archive.len() as c_ulong,
+                &mut out_valid,
+            )
+        };
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "shape-valid envelopes with stale folded-token bindings must hard-fail before soft invalid"
+        );
+        assert_eq!(
+            out_valid, 0,
+            "stale shape bindings must clear stale valid flags"
         );
 
         let mut forged_token = token.clone();
@@ -8092,8 +8604,8 @@ mod offline_note_prover_tests {
         };
         assert_eq!(status, ERR_NULL_PTR);
 
-        out_ptr = std::ptr::dangling_mut::<c_uchar>();
-        out_len = 99;
+        let mut out_ptr = std::ptr::dangling_mut::<c_uchar>();
+        let mut out_len = 99;
         let status = unsafe {
             connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
                 ptr::null(),
@@ -8136,6 +8648,8 @@ mod offline_note_prover_tests {
             "null-envelope rejection must clear stale output lengths"
         );
 
+        out_ptr = std::ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
         let status = unsafe {
             connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
                 malformed_archive.as_ptr(),
@@ -8179,17 +8693,10 @@ mod offline_note_prover_tests {
     fn kagemusha_unanchored_compact_token_ffi_rejects_valid_bundle_without_records() {
         let bundle = sample_kagemusha_verified_bundle();
         let archive = norito::to_bytes(&bundle).expect("encode verified fold bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token,
+            &archive,
+        );
 
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(
@@ -8397,20 +8904,12 @@ mod offline_note_prover_tests {
             norito::to_bytes(&record_bundle).expect("encode record-backed verified fold bundle");
         let envelope_archive =
             norito::to_bytes(&vec![envelope.clone()]).expect("encode Pallas open-envelope archive");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
 
         let malformed_envelope_archive = b"not a norito archive";
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
-                record_archive.as_ptr(),
-                record_archive.len() as c_ulong,
-                malformed_envelope_archive.as_ptr(),
-                malformed_envelope_archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_recursive_aggregation_ffi_with_stale_output(
+            &record_archive,
+            malformed_envelope_archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8418,16 +8917,8 @@ mod offline_note_prover_tests {
         let mut missing = record_bundle.clone();
         missing.verifier_records.clear();
         let missing_archive = norito::to_bytes(&missing).expect("encode missing-record bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
-                missing_archive.as_ptr(),
-                missing_archive.len() as c_ulong,
-                envelope_archive.as_ptr(),
-                envelope_archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) =
+            call_recursive_aggregation_ffi_with_stale_output(&missing_archive, &envelope_archive);
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8436,16 +8927,10 @@ mod offline_note_prover_tests {
         wrong_schema.public_inputs_schema_hash = Some([0x7B; Hash::LENGTH]);
         let wrong_schema_archive =
             norito::to_bytes(&vec![wrong_schema]).expect("encode wrong-schema envelope archive");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
-                record_archive.as_ptr(),
-                record_archive.len() as c_ulong,
-                wrong_schema_archive.as_ptr(),
-                wrong_schema_archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_recursive_aggregation_ffi_with_stale_output(
+            &record_archive,
+            &wrong_schema_archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8456,16 +8941,10 @@ mod offline_note_prover_tests {
         let mut missing = sample_kagemusha_verified_record_bundle();
         missing.verifier_records.clear();
         let archive = norito::to_bytes(&missing).expect("encode missing-record bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8478,14 +8957,10 @@ mod offline_note_prover_tests {
                 record: extra.verifier_records[0].record.clone(),
             });
         let archive = norito::to_bytes(&extra).expect("encode extra-record bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8493,14 +8968,10 @@ mod offline_note_prover_tests {
         let mut inactive = sample_kagemusha_verified_record_bundle();
         inactive.verifier_records[0].record.status = ConfidentialStatus::Withdrawn;
         let archive = norito::to_bytes(&inactive).expect("encode inactive-record bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8509,14 +8980,10 @@ mod offline_note_prover_tests {
         wrong_namespace.verifier_records[0].record.namespace =
             "generic_confidential_transfer".to_owned();
         let archive = norito::to_bytes(&wrong_namespace).expect("encode wrong-namespace bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8526,14 +8993,10 @@ mod offline_note_prover_tests {
             "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
         let archive =
             norito::to_bytes(&wrong_circuit_alias).expect("encode wrong-circuit-alias bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8544,14 +9007,10 @@ mod offline_note_prover_tests {
         });
         let archive =
             norito::to_bytes(&wrong_envelope_alias).expect("encode wrong-envelope-alias bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8561,14 +9020,10 @@ mod offline_note_prover_tests {
             .record
             .public_inputs_schema_hash = [0x33; Hash::LENGTH];
         let archive = norito::to_bytes(&wrong_schema).expect("encode wrong-schema bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8584,14 +9039,10 @@ mod offline_note_prover_tests {
         )
         .expect("proof length fits u32");
         let archive = norito::to_bytes(&too_small).expect("encode proof-cap bundle");
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
@@ -8603,17 +9054,10 @@ mod offline_note_prover_tests {
         record_bundle.bundle.steps[0].attachment.envelope_hash = Some([0xA7; Hash::LENGTH]);
         let archive =
             norito::to_bytes(&record_bundle).expect("encode forged-envelope-hash record bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
 
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
@@ -8628,17 +9072,10 @@ mod offline_note_prover_tests {
         });
         let archive =
             norito::to_bytes(&record_bundle).expect("encode forged-hop-aux record bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
+            &archive,
+        );
 
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
@@ -8662,17 +9099,10 @@ mod offline_note_prover_tests {
             let mut bundle = sample_kagemusha_verified_bundle();
             mutate(&mut bundle);
             let archive = norito::to_bytes(&bundle).expect("encode mutated trust-anchor bundle");
-            let mut out_ptr: *mut c_uchar = ptr::null_mut();
-            let mut out_len: c_ulong = 0;
-
-            let status = unsafe {
-                connect_norito_kagemusha_prove_verified_compact_payment_token(
-                    archive.as_ptr(),
-                    archive.len() as c_ulong,
-                    &mut out_ptr,
-                    &mut out_len,
-                )
-            };
+            let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+                connect_norito_kagemusha_prove_verified_compact_payment_token,
+                &archive,
+            );
 
             assert_eq!(status, ERR_KAGEMUSHA_PROVE, "{case} must reject");
             assert!(out_ptr.is_null(), "{case} must not return an output buffer");
@@ -8683,17 +9113,10 @@ mod offline_note_prover_tests {
     #[test]
     fn kagemusha_verified_compact_token_ffi_rejects_invalid_archive() {
         let bad_archive = b"not a norito archive";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                bad_archive.as_ptr(),
-                bad_archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
+        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
+            connect_norito_kagemusha_prove_verified_compact_payment_token,
+            bad_archive,
+        );
 
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
@@ -8725,7 +9148,7 @@ mod offline_note_prover_tests {
         type RecursiveSpendFfi =
             unsafe extern "C" fn(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int;
 
-        let entries: [(&str, RecursiveSpendFfi); 6] = [
+        let entries: [(&str, RecursiveSpendFfi); 7] = [
             (
                 "init",
                 connect_norito_kagemusha_recursive_spend_init as RecursiveSpendFfi,
@@ -8745,6 +9168,11 @@ mod offline_note_prover_tests {
                     as RecursiveSpendFfi,
             ),
             (
+                "lineage append boundary",
+                connect_norito_kagemusha_recursive_spend_lineage_append_boundary
+                    as RecursiveSpendFfi,
+            ),
+            (
                 "verify",
                 connect_norito_kagemusha_recursive_spend_verify as RecursiveSpendFfi,
             ),
@@ -8758,8 +9186,8 @@ mod offline_note_prover_tests {
 
         for (entry_name, entry) in entries {
             for (case, archive) in bad_archives {
-                let mut out_ptr: *mut c_uchar = ptr::null_mut();
-                let mut out_len: c_ulong = 0;
+                let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+                let mut out_len: c_ulong = 99;
                 let status = unsafe {
                     entry(
                         archive.as_ptr(),
@@ -8776,12 +9204,22 @@ mod offline_note_prover_tests {
                 assert_eq!(out_len, 0, "{entry_name} {case} must not set length");
             }
 
-            let mut out_ptr: *mut c_uchar = ptr::null_mut();
-            let mut out_len: c_ulong = 0;
+            let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+            let mut out_len: c_ulong = 99;
             let status = unsafe { entry(ptr::null(), 0, &mut out_ptr, &mut out_len) };
             assert_eq!(status, ERR_NULL_PTR, "{entry_name} null request");
             assert!(out_ptr.is_null(), "{entry_name} null must not return bytes");
             assert_eq!(out_len, 0, "{entry_name} null must not set length");
+
+            let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+            let mut out_len: c_ulong = 99;
+            let status = unsafe { entry(b"x".as_ptr(), c_ulong::MAX, &mut out_ptr, &mut out_len) };
+            assert_eq!(status, ERR_KAGEMUSHA_PROVE, "{entry_name} oversized");
+            assert!(
+                out_ptr.is_null(),
+                "{entry_name} oversized must not return bytes"
+            );
+            assert_eq!(out_len, 0, "{entry_name} oversized must not set length");
         }
     }
 
@@ -8976,8 +9414,8 @@ mod offline_note_prover_tests {
             .expect("encode recursive spend bundle");
         let bad = b"not a norito archive";
 
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
+        let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
+        let mut out_len: c_ulong = 99;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result(
                 bad.as_ptr(),
@@ -8992,6 +9430,8 @@ mod offline_note_prover_tests {
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
 
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result(
                 ptr::null(),
@@ -9006,6 +9446,40 @@ mod offline_note_prover_tests {
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
 
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result(
+                good.as_ptr(),
+                c_ulong::MAX,
+                good.as_ptr(),
+                good.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result(
+                good.as_ptr(),
+                good.len() as c_ulong,
+                good.as_ptr(),
+                c_ulong::MAX,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
                 bad.as_ptr(),
@@ -9022,6 +9496,8 @@ mod offline_note_prover_tests {
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
 
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
         let status = unsafe {
             connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
                 good.as_ptr(),
@@ -9035,6 +9511,60 @@ mod offline_note_prover_tests {
             )
         };
         assert_eq!(status, ERR_NULL_PTR);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
+                good.as_ptr(),
+                c_ulong::MAX,
+                good.as_ptr(),
+                good.len() as c_ulong,
+                good.as_ptr(),
+                good.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
+                good.as_ptr(),
+                good.len() as c_ulong,
+                good.as_ptr(),
+                c_ulong::MAX,
+                good.as_ptr(),
+                good.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        out_ptr = ptr::dangling_mut::<c_uchar>();
+        out_len = 99;
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
+                good.as_ptr(),
+                good.len() as c_ulong,
+                good.as_ptr(),
+                good.len() as c_ulong,
+                good.as_ptr(),
+                c_ulong::MAX,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
     }
@@ -9093,15 +9623,41 @@ mod offline_note_prover_tests {
         record_bundle: &KagemushaVerifiedFoldRecordBundle,
         label: &str,
     ) -> Vec<u8> {
-        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
-            &record_bundle.bundle.chain_id,
-            &record_bundle.bundle.asset,
-            0,
-            &record_bundle.bundle.steps[0],
-        )
-        .expect("current-hop Pallas open-envelope metadata");
-        let envelope = sample_pallas_open_envelope_with_metadata(4, label, metadata);
-        norito::to_bytes(&vec![envelope]).expect("encode current-hop Pallas open-envelope archive")
+        assert_eq!(
+            record_bundle.bundle.steps.len(),
+            1,
+            "current-hop Pallas archive helper requires exactly one hop"
+        );
+        sample_pallas_open_envelopes_archive_for_record_bundle(record_bundle, label)
+    }
+
+    fn sample_pallas_open_envelopes_archive_for_record_bundle(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+        label: &str,
+    ) -> Vec<u8> {
+        let hop_count = record_bundle.bundle.steps.len();
+        let envelopes = record_bundle
+            .bundle
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(hop_index, step)| {
+                let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+                    &record_bundle.bundle.chain_id,
+                    &record_bundle.bundle.asset,
+                    hop_index,
+                    step,
+                )
+                .expect("Pallas open-envelope hop metadata");
+                let envelope_label = if hop_count == 1 {
+                    label.to_owned()
+                } else {
+                    format!("{label}-{hop_index}")
+                };
+                sample_pallas_open_envelope_with_metadata(4, &envelope_label, metadata)
+            })
+            .collect::<Vec<_>>();
+        norito::to_bytes(&envelopes).expect("encode Pallas open-envelope archive")
     }
 
     fn refresh_reserved_lineage_previous_bundle_public_inputs(
@@ -9382,8 +9938,10 @@ mod offline_note_prover_tests {
         assert_eq!(out_len, 0);
     }
 
-    #[test]
-    fn kagemusha_recursive_spend_transition_profile_append_ffi_binds_append_opening_preflight() {
+    fn sample_recursive_spend_append_transition_profile_with_opening_contract() -> (
+        KagemushaRecursiveSpendAppendRequestV1,
+        iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1,
+    ) {
         let record_bundle = sample_kagemusha_verified_record_bundle();
         let step = record_bundle
             .bundle
@@ -9426,7 +9984,7 @@ mod offline_note_prover_tests {
             spend_nullifier: fixed_bytes(b"bridge-transition-profile-current-nullifier"),
             amount: Numeric::new(7, 0),
         };
-        let mut request = KagemushaRecursiveSpendAppendRequestV1 {
+        let request = KagemushaRecursiveSpendAppendRequestV1 {
             previous_bundle,
             previous_lineage_verifier_record: Some(sample_recursive_spend_lineage_verifier_record()),
             record_bundle,
@@ -9448,6 +10006,63 @@ mod offline_note_prover_tests {
             &norito::to_bytes(&request).expect("encode append transition-profile request"),
         )
         .expect("append transition profile with previous proof openings");
+        (request, profile)
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_append_boundary_ffi_rejects_semantic_profile_archives() {
+        fn call_append_boundary_ffi(
+            profile: &iroha_data_model::offline::KagemushaRecursiveSpendTransitionProfileV1,
+        ) -> (i32, *mut c_uchar, c_ulong) {
+            let archive = norito::to_bytes(profile).expect("encode transition profile archive");
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let status = unsafe {
+                connect_norito_kagemusha_recursive_spend_lineage_append_boundary(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+
+            (status, out_ptr, out_len)
+        }
+
+        let init_request = sample_recursive_spend_init_request_for_transition_profile();
+        let init_profile = kagemusha_recursive_spend_transition_profile_init_from_request_archive(
+            &norito::to_bytes(&init_request).expect("encode init transition-profile request"),
+        )
+        .expect("init transition profile should build");
+        let (status, out_ptr, out_len) = call_append_boundary_ffi(&init_profile);
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "append-boundary FFI must reject Norito-valid initial transition profiles"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+
+        let (_, mut stale_append_profile) =
+            sample_recursive_spend_append_transition_profile_with_opening_contract();
+        stale_append_profile
+            .append_opening_preflight
+            .as_mut()
+            .expect("sample append profile carries opening preflight")
+            .current_hop_proof_hash = Hash::new(b"bridge-append-boundary-stale-current-proof");
+        let (status, out_ptr, out_len) = call_append_boundary_ffi(&stale_append_profile);
+        assert_eq!(
+            status, ERR_KAGEMUSHA_PROVE,
+            "append-boundary FFI must reject Norito-valid profiles with stale opening contracts"
+        );
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_transition_profile_append_ffi_binds_append_opening_preflight() {
+        let (mut request, profile) =
+            sample_recursive_spend_append_transition_profile_with_opening_contract();
         let append_opening_preflight_digest = profile
             .append_opening_preflight_digest
             .expect("bridge append profile binds append opening preflight digest");
@@ -17384,6 +17999,29 @@ fn java_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+    record_bundle_archive: &[u8],
+    pallas_open_envelopes_archive: &[u8],
+) -> Result<Vec<u8>, String> {
+    let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+        norito::decode_from_bytes(record_bundle_archive)
+            .map_err(|err| format!("failed to decode Kagemusha record bundle archive: {err}"))?;
+    let token =
+        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
+            &record_bundle,
+            pallas_open_envelopes_archive,
+            None,
+        )?;
+    norito::to_bytes(&token)
+        .map_err(|err| format!("failed to encode Kagemusha recursive compact payment token: {err}"))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_native_kagemusha_prove_verified_compact_payment_token_with_records(
     env: &mut jni::JNIEnv<'_>,
     record_bundle_archive: jni::objects::JByteArray<'_>,
@@ -17469,16 +18107,15 @@ fn java_native_kagemusha_prove_verified_recursive_compact_payment_token_with_rec
             "pallasOpenEnvelopesArchive",
         )
         .ok_or_else(|| "invalid Kagemusha Pallas open-envelope archive bytes".to_string())?;
-        let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
-            norito::decode_from_bytes(&record_bundle_bytes).map_err(|err| {
-                format!("failed to decode Kagemusha record bundle archive: {err}")
-            })?;
-        let pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
-            norito::decode_from_bytes(&pallas_open_envelope_bytes).map_err(|err| {
-                format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
-            })?;
-        let _ = (record_bundle, pallas_open_envelopes);
-        Err(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE.to_owned())
+        let token_archive =
+            java_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
+                &record_bundle_bytes,
+                &pallas_open_envelope_bytes,
+            )?;
+        let array = env
+            .byte_array_from_slice(&token_archive)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
     })();
     match result {
         Ok(array) => array,
@@ -17508,13 +18145,7 @@ fn java_native_kagemusha_verify_recursive_compact_payment_token(
             })?;
         let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()?;
         match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
-            Err(err)
-                if err.contains(
-                    iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE,
-                ) =>
-            {
-                Ok(0)
-            }
+            Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => Ok(0),
             Err(err) => Err(err),
             Ok(()) => Ok(
                 iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box)

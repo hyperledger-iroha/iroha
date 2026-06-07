@@ -38,6 +38,18 @@
       }
     },
     {
+      "path": "iso/pacs.004.001.09.xsd",
+      "message_def_id": "pacs.004.001.09",
+      "payload_root": "PmtRtr",
+      "source": {
+        "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+        "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+        "path": "XSD/pacs.004.001.09.xsd",
+        "license": "Apache-2.0",
+        "sha256": "d8777d442e5728025279ebb527ad81cf6538f18770d60cc9e6d0c8ee6558dd90"
+      }
+    },
+    {
       "path": "iso/pacs.004.001.10.xsd",
       "message_def_id": "pacs.004.001.10",
       "payload_root": "PmtRtr",
@@ -103,7 +115,7 @@
       "path": "../pacs004_fixture.xml",
       "message_def_id": "pacs.004.001.09",
       "payload_root": "PmtRtr",
-      "missing_schema_reason": "Legacy payment-return fixture used by runtime profile tests; the corresponding pacs.004.001.09 Standards Editor XSD is not checked in yet."
+      "schema": "iso/pacs.004.001.09.xsd"
     },
     {
       "path": "../camt056_fixture.xml",
@@ -140,6 +152,56 @@
       "message_def_id": "colr.012.001.05",
       "payload_root": "CollSbstitnConf",
       "missing_schema_reason": "Collateral substitution confirmation runtime fixture; official colr.012.001.05 XSD package is still pending."
+    }
+  ],
+  "blocked_schema_sources": [
+    {
+      "message_def_id": "pacs.002.001.12",
+      "source": {
+        "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+        "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+        "path": "XSDtoGo/xsd/pacs.002.001.12.xsd",
+        "sha256": "92630b81604db82429006f6898455ddb3700dce0584ae909d7863dba8a3ce3bb"
+      },
+      "reason": "Public candidate carries SWIFT licensed-product redistribution restrictions and is not importable as checked-in release evidence.",
+      "restriction_markers": [
+        "swift-copyright-header",
+        "licensed-product-redistribution-agreement",
+        "no-public-distribution-right",
+        "exclusive-swift-property"
+      ]
+    },
+    {
+      "message_def_id": "pacs.008.001.10",
+      "source": {
+        "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+        "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+        "path": "XSDtoGo/xsd/pacs.008.001.10.xsd",
+        "sha256": "f0105110928868142f496740303413d213fc182161391134f424f7271295d986"
+      },
+      "reason": "Public candidate carries SWIFT licensed-product redistribution restrictions and is not importable as checked-in release evidence.",
+      "restriction_markers": [
+        "swift-copyright-header",
+        "licensed-product-redistribution-agreement",
+        "no-public-distribution-right",
+        "exclusive-swift-property"
+      ]
+    },
+    {
+      "message_def_id": "pacs.009.001.10",
+      "source": {
+        "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+        "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+        "path": "XSDtoGo/xsd/pacs.009.001.10.xsd",
+        "sha256": "cd3ae758c3694f9ac7b5a0fb6d208eb21b6e3be7f57882cca62a8c60915899af"
+      },
+      "reason": "Public candidate carries SWIFT licensed-product redistribution restrictions and is not importable as checked-in release evidence.",
+      "restriction_markers": [
+        "swift-copyright-header",
+        "licensed-product-redistribution-agreement",
+        "no-public-distribution-right",
+        "exclusive-swift-property"
+      ]
     }
   ]
 }

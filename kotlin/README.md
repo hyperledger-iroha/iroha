@@ -67,7 +67,13 @@ Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. The
 ABI 7 symbols remain source-stable but public compact proving and receiver-side
 verification fail closed until the compact proof composes the private-hop
-verifier-slice relation in-circuit.
+verifier-slice relation in-circuit. When the native bridge reaches that
+proof-composition reservation, `proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
+throws `IllegalStateException`; `isRecursiveCompactUnavailable(error)` matches
+both the generic compact-token reservation and the multi-hop verifier-batch
+reservation. Empty or malformed local archives still fail as
+`IllegalArgumentException` before they can be confused with reserved ABI-7
+state.
 `KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
 surface. Preferred mode selection chooses `recursive_spend_v1` after the JNI
 bridge ABI-version probe succeeds and init, append, both transition-profile helpers,

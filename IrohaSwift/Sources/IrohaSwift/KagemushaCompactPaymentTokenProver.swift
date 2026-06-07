@@ -2,6 +2,7 @@ import Foundation
 
 public enum KagemushaCompactPaymentTokenProverError: Error, Equatable, LocalizedError {
     case emptyRecordBundleArchive
+    case oversizedRecordBundleArchive
     case invalidRecordBundleArchive
     case emptyRecordBundlePayload
     case oversizedCompactTokenArchive
@@ -14,6 +15,8 @@ public enum KagemushaCompactPaymentTokenProverError: Error, Equatable, Localized
         switch self {
         case .emptyRecordBundleArchive:
             return "Kagemusha verified fold record bundle archive must not be empty."
+        case .oversizedRecordBundleArchive:
+            return "Kagemusha verified fold record bundle archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .invalidRecordBundleArchive:
             return "Kagemusha verified fold record bundle archive must be a valid Norito archive."
         case .emptyRecordBundlePayload:
@@ -86,8 +89,10 @@ public enum KagemushaCompactPaymentTokenProver {
     }
 
     private static func requireValidRecordBundleArchive(_ archive: Data) throws {
-        guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes,
-              let frame = noritoDecodeFrame(archive),
+        guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes else {
+            throw KagemushaCompactPaymentTokenProverError.oversizedRecordBundleArchive
+        }
+        guard let frame = noritoDecodeFrame(archive),
               frame.paddingLength <= maxNoritoHeaderPaddingBytes else {
             throw KagemushaCompactPaymentTokenProverError.invalidRecordBundleArchive
         }

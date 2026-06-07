@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.util.Arrays;
+
 /** Native record-backed Kagemusha compact payment token prover. */
 public final class KagemushaCompactPaymentTokenProver {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
@@ -22,17 +24,26 @@ public final class KagemushaCompactPaymentTokenProver {
 
   public static byte[] proveVerifiedCompactPaymentTokenWithRecords(
       final byte[] recordBundleArchive) {
-    requireNativeInput(recordBundleArchive, "recordBundleArchive");
+    final byte[] recordBundle = ownedNativeInput(recordBundleArchive, "recordBundleArchive");
     requireNative();
     final byte[] tokenArchive =
-        nativeProveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive);
+        nativeProveVerifiedCompactPaymentTokenWithRecords(recordBundle);
     return requireNativeOutput(
         tokenArchive, "nativeProveVerifiedCompactPaymentTokenWithRecords");
+  }
+
+  static byte[] ownedNativeInput(final byte[] archive, final String archiveName) {
+    requireNativeInput(archive, archiveName);
+    return Arrays.copyOf(archive, archive.length);
   }
 
   static void requireNativeInput(final byte[] archive, final String archiveName) {
     if (archive == null || archive.length == 0) {
       throw new IllegalArgumentException(archiveName + " must not be empty");
+    }
+    if (archive.length > NATIVE_ARCHIVE_MAX_BYTES) {
+      throw new IllegalArgumentException(
+          archiveName + " must not exceed " + NATIVE_ARCHIVE_MAX_BYTES + " bytes");
     }
     if (!isValidNoritoArchive(archive)) {
       throw new IllegalArgumentException(archiveName + " must be a valid Norito archive");

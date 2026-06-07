@@ -638,7 +638,10 @@ Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. The
 ABI 7 symbols remain source-stable but public compact proving and receiver-side
 verification fail closed until the compact proof composes the private-hop
-verifier-slice relation in-circuit. Swift accepts additive native bridge ABI
+verifier-slice relation in-circuit. The Swift wrapper maps the native
+recursive-compact-unavailable bridge code to
+`KagemushaRecursiveCompactPaymentTokenProverError.recursiveCompactUnavailable`
+so wallet code can distinguish reserved admission from malformed inputs. Swift accepts additive native bridge ABI
 versions at or above ABI 6 so ABI 7 bundles keep the minimum-ABI-6 privacy and
 recursive-spend helpers usable.
 `KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
