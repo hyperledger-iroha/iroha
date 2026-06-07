@@ -336,6 +336,11 @@ function requireBscNetworkConfirmation(options, profile, action) {
     ) {
       return;
     }
+    if (profile.key === "testnet" && !modern) {
+      throw new Error(
+        `${action} requires --confirm-testnet ${CONFIRMATION_TEXT} or --confirm-network ${profile.confirmNetwork}.`,
+      );
+    }
     throw new Error(
       `${action} requires --confirm-network ${profile.confirmNetwork}.`,
     );
@@ -493,7 +498,12 @@ export function normalizeBscRpcUrl(
   return url.toString().replace(/\/$/u, "");
 }
 
-function normalizeBscTestnetExplorerTxUrl(value, label, expectedTxHash) {
+function normalizeBscExplorerTxUrl(
+  value,
+  label,
+  expectedTxHash,
+  profile = BSC_NETWORK_PROFILES.testnet,
+) {
   const text = normalizeNonEmptyText(value, label);
   let url;
   try {
@@ -503,14 +513,14 @@ function normalizeBscTestnetExplorerTxUrl(value, label, expectedTxHash) {
   }
   if (
     url.protocol !== "https:" ||
-    url.hostname !== "testnet.bscscan.com" ||
+    url.hostname !== new URL(profile.explorerUrl).hostname ||
     url.username ||
     url.password ||
     url.search ||
     url.hash
   ) {
     throw new Error(
-      `${label} must be an HTTPS BSC testnet explorer transaction URL without credentials, query strings, or fragments.`,
+      `${label} must be an HTTPS ${profile.label} explorer transaction URL without credentials, query strings, or fragments.`,
     );
   }
   const match = url.pathname
@@ -524,7 +534,7 @@ function normalizeBscTestnetExplorerTxUrl(value, label, expectedTxHash) {
   if (actual !== expected) {
     throw new Error(`${label} transaction hash must match ${expected}.`);
   }
-  return `https://testnet.bscscan.com/tx/${expected}`;
+  return `${profile.explorerUrl}/tx/${expected}`;
 }
 
 function abiWordBytes(bytes, label, byteLength) {
@@ -2836,7 +2846,12 @@ function normalizeRouteManifestForConfig(manifest) {
       ],
       "route manifest postDeployLiveEvidence.sourceEventExplorerUrl",
       (value, label) =>
-        normalizeBscTestnetExplorerTxUrl(value, label, sourceEventTransactionId),
+        normalizeBscExplorerTxUrl(
+          value,
+          label,
+          sourceEventTransactionId,
+          bscProfile,
+        ),
     );
     const routeCanaryExplorerUrl = readConsistentNormalizedString(
       [
@@ -2853,7 +2868,12 @@ function normalizeRouteManifestForConfig(manifest) {
       ],
       "route manifest postDeployLiveEvidence.routeCanaryExplorerUrl",
       (value, label) =>
-        normalizeBscTestnetExplorerTxUrl(value, label, routeCanaryTransactionId),
+        normalizeBscExplorerTxUrl(
+          value,
+          label,
+          routeCanaryTransactionId,
+          bscProfile,
+        ),
     );
     const offlineFullTomlSha256 = readConsistentNormalizedString(
       [

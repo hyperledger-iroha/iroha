@@ -13,6 +13,7 @@ import {
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
 } from "../javascript/iroha_js/src/sccp.js";
 import {
+  BSC_MAINNET_NETWORK_ID_HEX,
   BSC_TESTNET_NETWORK_ID_HEX,
   CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT,
   ROUTE_MANIFEST_SCHEMA,
@@ -50,6 +51,8 @@ const HASH_77 = `0x${"77".repeat(32)}`;
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
 const SOURCE_EVENT_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_55}`;
 const ROUTE_CANARY_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_77}`;
+const MAINNET_SOURCE_EVENT_EXPLORER_URL = `https://bscscan.com/tx/${HASH_55}`;
+const MAINNET_ROUTE_CANARY_EXPLORER_URL = `https://bscscan.com/tx/${HASH_77}`;
 const DIAGNOSTIC_BSC_VERIFIER_KEY_HASH = [
   ...SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES,
 ][0];
@@ -924,6 +927,76 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
         }),
       ),
     /transaction hash must match/u,
+  );
+});
+
+test("BSC route-config validates explorer URLs against the selected network", () => {
+  const mainnetBindingHash = bscDestinationBindingHash({
+    networkId: BSC_MAINNET_NETWORK_ID_HEX,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+  });
+  const mainnetBindingKey = bscDestinationBindingKey({
+    networkId: BSC_MAINNET_NETWORK_ID_HEX,
+    verifierAddress: BSC_VERIFIER_ADDRESS,
+    bridgeAddress: BSC_BRIDGE_ADDRESS,
+    verifierCodeHash: HASH_11,
+    verifierKeyHash: HASH_22,
+  });
+  const mainnetManifest = routeManifest({
+    bscNetwork: "mainnet",
+    chain: "bsc-mainnet",
+    chainIdHex: "0x38",
+    networkIdHex: BSC_MAINNET_NETWORK_ID_HEX,
+    destinationRollout: {
+      destinationNetworkId: BSC_MAINNET_NETWORK_ID_HEX,
+      destinationBindingHash: mainnetBindingHash,
+      destinationBindingKey: mainnetBindingKey,
+    },
+    destinationBinding: {
+      networkIdHex: BSC_MAINNET_NETWORK_ID_HEX,
+      key: mainnetBindingKey,
+      bindingHash: mainnetBindingHash,
+    },
+    postDeployLiveEvidence: {
+      sourceEventExplorerUrl: MAINNET_SOURCE_EVENT_EXPLORER_URL,
+      routeCanaryExplorerUrl: MAINNET_ROUTE_CANARY_EXPLORER_URL,
+    },
+  });
+
+  const toml = buildBscTairaXorRouteConfigToml(mainnetManifest, {
+    "allow-unready": "true",
+  });
+  assert.match(
+    toml,
+    new RegExp(
+      `post_deploy_source_event_explorer_url = "${MAINNET_SOURCE_EVENT_EXPLORER_URL}"`,
+      "u",
+    ),
+  );
+  assert.match(
+    toml,
+    new RegExp(
+      `post_deploy_route_canary_explorer_url = "${MAINNET_ROUTE_CANARY_EXPLORER_URL}"`,
+      "u",
+    ),
+  );
+
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        {
+          ...mainnetManifest,
+          postDeployLiveEvidence: {
+            ...mainnetManifest.postDeployLiveEvidence,
+            sourceEventExplorerUrl: SOURCE_EVENT_EXPLORER_URL,
+          },
+        },
+        { "allow-unready": "true" },
+      ),
+    /BSC mainnet explorer/u,
   );
 });
 
