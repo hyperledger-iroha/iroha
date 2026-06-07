@@ -2,6 +2,19 @@
 
 Last updated: 2026-06-07
 
+## 2026-06-07 WSL-safe plain cargo test defaults
+
+- Tightened the repository Cargo defaults so plain `cargo test` uses one Cargo
+  build job and sets `RUST_TEST_THREADS=1` unless the caller overrides it,
+  avoiding the default logical-CPU fan-out that can exhaust WSL and
+  memory-constrained VMs.
+- Aligned `scripts/run_full_tests.sh --wsl-safe` with the same single Cargo job
+  default and documented the override path for high-memory hosts in the
+  integration-test README.
+- Validation:
+  - `python3 -c 'import pathlib,tomllib; tomllib.loads(pathlib.Path(".cargo/config.toml").read_text()); print(".cargo/config.toml: ok")'`
+  - `bash -n scripts/run_full_tests.sh`
+
 ## 2026-06-07 BFV full-bootstrap executable prefix trace
 
 - Added a governed full-bootstrap prefix trace that validates concrete artifact
