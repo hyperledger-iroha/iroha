@@ -22382,6 +22382,42 @@ fn sccp_tron_witness_seal_shape_is_bounded(seal: &SccpTronDposWitnessSealProofV1
             .all(|signature| tron_recoverable_signature_slice_is_canonical(signature))
 }
 
+fn sccp_tron_witness_seal_binding_shape_is_bounded(
+    adapter: &SccpTronDposSourceProofV1,
+) -> bool {
+    if !sccp_tron_witness_seal_shape_is_bounded(&adapter.witness_seal_proof) {
+        return false;
+    }
+
+    let seal = &adapter.witness_seal_proof;
+    let Some(witness_schedule_hash) =
+        sccp_tron_witness_schedule_hash(&seal.witness_addresses, &seal.witness_weights)
+    else {
+        return false;
+    };
+    if witness_schedule_hash != adapter.witness_schedule_hash {
+        return false;
+    }
+
+    let Some(expected_solid_block_message_hash) = sccp_tron_solid_block_message_hash(
+        adapter.source_domain,
+        adapter.solid_block_number,
+        adapter.block_hash,
+        adapter.witness_schedule_hash,
+        adapter.receipt_root,
+        adapter.transaction_root,
+        adapter.receipt_proof_hash,
+    ) else {
+        return false;
+    };
+    if seal.solid_block_message_hash != expected_solid_block_message_hash {
+        return false;
+    }
+
+    sccp_tron_witness_seal_transcript_hash(seal, witness_schedule_hash)
+        == adapter.witness_seal_hash
+}
+
 fn sccp_tron_solid_block_header_shape_is_bounded(header: &SccpTronSolidBlockHeaderProofV1) -> bool {
     header.version == 1
         && !header.raw_data.is_empty()
@@ -22566,7 +22602,7 @@ fn sccp_tron_source_adapter_shape_is_bounded(adapter: &SccpTronDposSourceProofV1
             .solid_block_confirmation_headers
             .iter()
             .all(sccp_tron_signed_block_header_shape_is_bounded)
-        && sccp_tron_witness_seal_shape_is_bounded(&adapter.witness_seal_proof)
+        && sccp_tron_witness_seal_binding_shape_is_bounded(adapter)
         && sccp_tron_witness_schedule_transition_chain_shape_is_bounded(adapter)
 }
 
@@ -30935,10 +30971,30 @@ pub fn canonical_sccp_tron_witness_seal_bytes(
     if !verify_sccp_tron_witness_seal_signatures(proof, witness_schedule_hash) {
         return None;
     }
+    Some(sccp_tron_witness_seal_transcript_bytes(
+        proof,
+        witness_schedule_hash,
+    ))
+}
+
+fn sccp_tron_witness_seal_transcript_bytes(
+    proof: &SccpTronDposWitnessSealProofV1,
+    witness_schedule_hash: H256,
+) -> Vec<u8> {
     let mut out = Vec::new();
     push_tron_witness_seal_proof(&mut out, proof);
     out.extend_from_slice(&witness_schedule_hash);
-    Some(out)
+    out
+}
+
+fn sccp_tron_witness_seal_transcript_hash(
+    proof: &SccpTronDposWitnessSealProofV1,
+    witness_schedule_hash: H256,
+) -> H256 {
+    prefixed_blake2b(
+        SCCP_TRON_WITNESS_SEAL_PREFIX_V1,
+        &sccp_tron_witness_seal_transcript_bytes(proof, witness_schedule_hash),
+    )
 }
 
 pub fn sccp_tron_witness_seal_hash(proof: &SccpTronDposWitnessSealProofV1) -> Option<H256> {

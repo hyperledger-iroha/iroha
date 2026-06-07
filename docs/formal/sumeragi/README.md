@@ -8774,6 +8774,10 @@ Temporal properties:
 - `CommitArtifactsChangeNeverChangesGst` proves that any durable commit-view or
   commit-certificate witness change preserves the GST observation flag while
   still being sourced by an exact finality branch.
+- `CommitArtifactsChangeOnlyLeavesGstElapsedGate` proves that durable
+  commit-view or commit-certificate witness changes close protocol progress
+  gates and expose only `GstElapsed` when GST is still unobserved, while
+  following the exact-source committed-delivery completion chain.
 - `FinalityLatchOnlySetsCompleteStack` proves that any transition setting the
   abstract finality latch enters `Committed` with the complete finality stack:
   prepare quorum, live commit quorum, stake quorum, commit-certificate witness,

@@ -2,6 +2,20 @@
 
 Last updated: 2026-06-07
 
+## 2026-06-07 Sumeragi commit-artifact GST-only remaining gate
+
+- Added `CommitArtifactsChangeLeavesOnlyGstElapsedGateStep` and
+  `CommitArtifactsChangeOnlyLeavesGstElapsedGate` to the top-level Sumeragi
+  model so durable commit-view or commit-certificate witness changes close
+  protocol progress gates and expose only the `GstElapsed` gate when GST is
+  still unobserved, while following the exact-source committed-delivery
+  completion chain and preserving GST.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the commit-artifact GST-only remaining
+  gate obligation in the formal README and roadmap.
+- Validation:
+  - Pending in this working tree update.
+
 ## 2026-06-07 SCCP Solana vote-message preflight binding
 
 - Tightened Solana finalized source-adapter structural admission so the

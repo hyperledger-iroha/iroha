@@ -2468,6 +2468,7 @@ and completed history lives in [`status.md`](./status.md).
   commit-artifact exact-source committed-delivery completion,
   commit-artifact current-view witness exactness,
   commit-artifact GST preservation,
+  commit-artifact GST-only remaining gate,
   commit-certificate exact-source committed-delivery completion,
   commit-certificate GST preservation,
   commit-view exact-source committed-delivery completion,
