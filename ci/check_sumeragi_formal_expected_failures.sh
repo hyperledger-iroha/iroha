@@ -33,6 +33,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-bug-duplicate-ready
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-under-quorum-deliver
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-wrong-commit-formula
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-force-one-ignored
+bash scripts/formal/sumeragi_apalache.sh rbc-bug-inbound-force-one-acceptance
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-header-hash
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-leader-signature
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-chunk-root

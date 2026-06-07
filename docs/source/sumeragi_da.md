@@ -18,7 +18,10 @@ With `sumeragi.da.enabled=true`, the commit pipeline records local payload avail
 (`BlockCreated` or RBC delivery) in the DA gate. Availability evidence (availability votes
 or an RBC `READY` quorum) is tracked for audit/telemetry and is advisory in v1; commit/finalize
 continue even when availability is missing. Missing local payloads are logged for operator
-visibility and fetched via RBC or block sync.
+visibility and fetched via RBC or block sync. The DA gate status records
+`missing_data_recovered` when local payload material arrives and
+`manifest_guard_recovered` when required DA manifest material arrives and passes
+the manifest guard.
 
 The availability deadline is derived from the configured block/commit times and the
 DA timeout tuning knobs; it is used to classify missing payloads as "stale" for logging
@@ -81,8 +84,10 @@ inspect results directly from GitHub Actions.
 
 These scenarios enable `sumeragi.debug.rbc.force_deliver_quorum_one = true` so
 RBC DELIVER is emitted after the first READY, keeping the throughput checks
-focused on payload transport. Leave the knob disabled in production to preserve
-the full 2f+1 READY quorum.
+focused on payload transport. Receivers still validate external DELIVER bundles
+against the full commit-topology READY quorum; the override only lowers local
+DELIVER emission inside these harnesses. Leave the knob disabled in production
+to preserve the normal 2f+1 READY emission threshold.
 
 ### RS16 initial fanout
 

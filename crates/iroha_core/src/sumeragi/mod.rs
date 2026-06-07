@@ -12980,7 +12980,25 @@ mod frontier_block_sync_hint_tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::peer::PeerId;
 
-    use super::{FrontierBlockSyncHint, direct_block_sync_response_permit_ttl};
+    use super::{
+        DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING, DirectBlockSyncResponsePermit,
+        FrontierBlockSyncHint, direct_block_sync_response_permit_ttl,
+    };
+
+    fn peer_id() -> PeerId {
+        PeerId::new(KeyPair::random().public_key().clone())
+    }
+
+    fn direct_permit_state(
+        hint: &FrontierBlockSyncHint,
+        peer_id: &PeerId,
+    ) -> Option<DirectBlockSyncResponsePermit> {
+        hint.direct_response_permits
+            .lock()
+            .expect("direct block sync response permits poisoned")
+            .get(peer_id)
+            .copied()
+    }
 
     #[test]
     fn latest_gossip_pauses_until_initialized() {
@@ -13006,7 +13024,7 @@ mod frontier_block_sync_hint_tests {
     #[test]
     fn direct_block_sync_response_permits_are_single_use_and_expire() {
         let hint = FrontierBlockSyncHint::default();
-        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_id = peer_id();
         let now = Instant::now();
 
         assert!(
@@ -13031,6 +13049,184 @@ mod frontier_block_sync_hint_tests {
         assert!(
             !hint.allow_direct_block_sync_response(&peer_id, expired),
             "stale direct recovery response permits should expire"
+        );
+    }
+
+    #[test]
+    fn frontier_block_sync_hint_matches_formal_gate() {
+        let hint = FrontierBlockSyncHint::default();
+        assert!(
+            !hint.should_pause_latest_gossip(),
+            "default initialized hints should allow proactive latest-block gossip",
+        );
+
+        hint.set_initialized(false);
+        assert!(
+            hint.should_pause_latest_gossip(),
+            "startup should pause latest-block gossip",
+        );
+        hint.set_initialized(true);
+
+        hint.set_contiguous_frontier_pressure_active(true);
+        assert!(
+            hint.should_pause_latest_gossip(),
+            "contiguous frontier pressure should pause latest-block gossip",
+        );
+        hint.set_contiguous_frontier_pressure_active(false);
+
+        hint.set_frontier_lane_active(true);
+        assert!(
+            hint.should_pause_latest_gossip(),
+            "frontier lane activity should pause latest-block gossip",
+        );
+        hint.set_contiguous_frontier_pressure_active(true);
+        assert!(
+            hint.should_pause_latest_gossip(),
+            "either active frontier hint should pause latest-block gossip",
+        );
+        hint.set_contiguous_frontier_pressure_active(false);
+        hint.set_frontier_lane_active(false);
+        assert!(
+            !hint.should_pause_latest_gossip(),
+            "clearing both frontier hints should resume latest-block gossip",
+        );
+
+        let owner = peer_id();
+        let other = peer_id();
+        let now = Instant::now();
+        let ttl = direct_block_sync_response_permit_ttl();
+        assert!(
+            !hint.allow_direct_block_sync_response(&owner, now),
+            "absent peer permits must reject direct ShareBlocks responses",
+        );
+
+        hint.record_direct_block_sync_response_permit(owner.clone(), now);
+        let permit = direct_permit_state(&hint, &owner).expect("new permit recorded");
+        assert_eq!(
+            permit.pending, 1,
+            "new direct response permits should start with one pending response",
+        );
+        assert_eq!(
+            permit.last_request, now,
+            "recording should store the request timestamp",
+        );
+        assert!(
+            !hint.allow_direct_block_sync_response(&other, now),
+            "permits must be scoped to the requesting peer",
+        );
+        assert!(
+            direct_permit_state(&hint, &owner).is_some(),
+            "wrong-peer attempts must not consume the owner permit",
+        );
+
+        let refreshed = now.checked_add(Duration::from_millis(5)).unwrap_or(now);
+        hint.record_direct_block_sync_response_permit(owner.clone(), refreshed);
+        let permit = direct_permit_state(&hint, &owner).expect("permit refreshed");
+        assert_eq!(
+            permit.pending, 2,
+            "recording an existing permit should increment pending responses",
+        );
+        assert_eq!(
+            permit.last_request, refreshed,
+            "recording an existing permit should refresh last_request",
+        );
+
+        for _ in 0..usize::from(DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING) {
+            hint.record_direct_block_sync_response_permit(owner.clone(), refreshed);
+        }
+        assert_eq!(
+            direct_permit_state(&hint, &owner)
+                .expect("saturated permit remains")
+                .pending,
+            DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING,
+            "pending direct response permits must saturate at the configured cap",
+        );
+
+        assert!(
+            hint.allow_direct_block_sync_response(&owner, refreshed),
+            "fresh direct response permits should admit one response",
+        );
+        assert_eq!(
+            direct_permit_state(&hint, &owner)
+                .expect("multi-pending permit remains")
+                .pending,
+            DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING.saturating_sub(1),
+            "admitting a response should consume exactly one permit",
+        );
+
+        while direct_permit_state(&hint, &owner).is_some() {
+            assert!(
+                hint.allow_direct_block_sync_response(&owner, refreshed),
+                "remaining fresh permits should be consumed one by one",
+            );
+        }
+        assert!(
+            !hint.allow_direct_block_sync_response(&owner, refreshed),
+            "exhausted direct response permits should reject and remain absent",
+        );
+
+        hint.record_direct_block_sync_response_permit(owner.clone(), now);
+        let ttl_boundary = now.checked_add(ttl).unwrap_or(now);
+        assert!(
+            hint.allow_direct_block_sync_response(&owner, ttl_boundary),
+            "direct response permits should remain valid at the exact TTL boundary",
+        );
+        assert!(
+            direct_permit_state(&hint, &owner).is_none(),
+            "single permits consumed at the TTL boundary should be removed",
+        );
+
+        hint.record_direct_block_sync_response_permit(owner.clone(), now);
+        let expired = now
+            .checked_add(ttl.saturating_add(Duration::from_millis(1)))
+            .unwrap_or(now);
+        assert!(
+            !hint.allow_direct_block_sync_response(&owner, expired),
+            "expired direct response permits should reject",
+        );
+        assert!(
+            direct_permit_state(&hint, &owner).is_none(),
+            "expired direct response permits should be pruned",
+        );
+
+        {
+            let mut permits = hint
+                .direct_response_permits
+                .lock()
+                .expect("direct block sync response permits poisoned");
+            permits.insert(
+                owner.clone(),
+                DirectBlockSyncResponsePermit {
+                    last_request: now,
+                    pending: 0,
+                },
+            );
+        }
+        assert!(
+            !hint.allow_direct_block_sync_response(&owner, now),
+            "zero-pending permits should reject",
+        );
+        assert!(
+            direct_permit_state(&hint, &owner).is_none(),
+            "zero-pending permits should be removed",
+        );
+
+        hint.record_direct_block_sync_response_permit(owner.clone(), now);
+        hint.record_direct_block_sync_response_permit(other.clone(), ttl_boundary);
+        FrontierBlockSyncHint::prune_direct_block_sync_response_permits(
+            &mut hint
+                .direct_response_permits
+                .lock()
+                .expect("direct block sync response permits poisoned"),
+            expired,
+        );
+        assert!(
+            direct_permit_state(&hint, &owner).is_none(),
+            "pruning should drop expired permits",
+        );
+        assert!(
+            direct_permit_state(&hint, &other).is_some(),
+            "pruning should keep fresh permits",
         );
     }
 }

@@ -1164,6 +1164,8 @@ pub enum SumeragiDaGateSatisfaction {
     None,
     /// Missing local data was recovered.
     MissingDataRecovered,
+    /// Manifest guard was satisfied after previously reporting missing or invalid manifests.
+    ManifestGuardRecovered,
 }
 
 /// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.

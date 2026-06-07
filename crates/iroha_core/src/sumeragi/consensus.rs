@@ -716,6 +716,276 @@ mod tests {
     }
 
     #[test]
+    fn vote_preimage_matches_formal_layout_and_excludes_signature_material() {
+        let chain = ChainId::from("iroha:test:classic-vote-preimage-layout");
+        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x11; 32]));
+        let parent_state_root = iroha_crypto::Hash::prehashed([0x12; 32]);
+        let post_state_root = iroha_crypto::Hash::prehashed([0x13; 32]);
+        let chain_order_hash = iroha_crypto::Hash::prehashed([0x14; 32]);
+        let highest_block_hash =
+            HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x15; 32]));
+        let mut vote = Vote {
+            block_hash,
+            parent_state_root,
+            post_state_root,
+            height: 0x0102_0304_0506_0708,
+            view: 0x1112_1314_1516_1718,
+            epoch: 0x2122_2324_2526_2728,
+            chain_order_hash,
+            rechain_seq: 0x3132_3334_3536_3738,
+            phase: Phase::Commit,
+            highest_qc: None,
+            signer: 0x4142_4344,
+            bls_sig: vec![0xAA, 0xBB, 0xCC],
+        };
+
+        let mut expected_without_highest = Vec::new();
+        expected_without_highest.extend_from_slice(&consensus_domain(
+            &chain,
+            "Vote",
+            b"v1",
+            PERMISSIONED_TAG,
+        ));
+        expected_without_highest.extend_from_slice(vote.block_hash.as_ref().as_ref());
+        expected_without_highest.extend_from_slice(vote.parent_state_root.as_ref());
+        expected_without_highest.extend_from_slice(vote.post_state_root.as_ref());
+        expected_without_highest.extend_from_slice(&vote.height.to_be_bytes());
+        expected_without_highest.extend_from_slice(&vote.view.to_be_bytes());
+        expected_without_highest.extend_from_slice(&vote.epoch.to_be_bytes());
+        expected_without_highest.extend_from_slice(vote.chain_order_hash.as_ref());
+        expected_without_highest.extend_from_slice(&vote.rechain_seq.to_be_bytes());
+        expected_without_highest.push(vote.phase as u8);
+        expected_without_highest.push(0);
+
+        assert_eq!(
+            vote_preimage(&chain, PERMISSIONED_TAG, &vote),
+            expected_without_highest
+        );
+        assert_ne!(
+            vote_preimage(
+                &ChainId::from("iroha:test:classic-vote-other-chain"),
+                PERMISSIONED_TAG,
+                &vote
+            ),
+            expected_without_highest,
+            "chain id must be bound through the consensus domain"
+        );
+        assert_ne!(
+            vote_preimage(&chain, NPOS_TAG, &vote),
+            expected_without_highest,
+            "mode tag must be bound through the consensus domain"
+        );
+
+        vote.signer = 0x5152_5354;
+        vote.bls_sig = vec![0xDD, 0xEE, 0xFF, 0x00];
+        assert_eq!(
+            vote_preimage(&chain, PERMISSIONED_TAG, &vote),
+            expected_without_highest,
+            "mutable signer transport fields must stay outside the vote preimage"
+        );
+
+        vote.highest_qc = Some(QcRef {
+            height: 0x6162_6364_6566_6768,
+            view: 0x7172_7374_7576_7778,
+            epoch: 0x8182_8384_8586_8788,
+            subject_block_hash: highest_block_hash,
+            phase: Phase::Prepare,
+        });
+
+        let mut expected_with_highest = expected_without_highest;
+        *expected_with_highest
+            .last_mut()
+            .expect("highest flag should be present") = 1;
+        let highest = vote.highest_qc.expect("highest qc");
+        expected_with_highest.extend_from_slice(&highest.height.to_be_bytes());
+        expected_with_highest.extend_from_slice(&highest.view.to_be_bytes());
+        expected_with_highest.extend_from_slice(&highest.epoch.to_be_bytes());
+        expected_with_highest.extend_from_slice(highest.subject_block_hash.as_ref().as_ref());
+        expected_with_highest.push(highest.phase as u8);
+
+        assert_eq!(
+            vote_preimage(&chain, PERMISSIONED_TAG, &vote),
+            expected_with_highest
+        );
+    }
+
+    #[test]
+    fn vrf_preimages_match_formal_layout_and_exclude_signatures() {
+        let chain = ChainId::from("iroha:test:classic-vrf-preimage-layout");
+        let mut commit = VrfCommit {
+            epoch: 0x0102_0304_0506_0708,
+            commitment: [0x21; 32],
+            signer: 0x3132_3334,
+            bls_sig: vec![0xAA, 0xBB],
+        };
+        let mut reveal = VrfReveal {
+            epoch: 0x1112_1314_1516_1718,
+            reveal: [0x41; 32],
+            signer: 0x5152_5354,
+            bls_sig: vec![0xCC, 0xDD],
+        };
+
+        let mut expected_commit = Vec::new();
+        expected_commit.extend_from_slice(&consensus_domain(
+            &chain,
+            "VrfCommit",
+            b"v1",
+            PERMISSIONED_TAG,
+        ));
+        expected_commit.extend_from_slice(&commit.epoch.to_be_bytes());
+        expected_commit.extend_from_slice(&commit.signer.to_be_bytes());
+        expected_commit.extend_from_slice(&commit.commitment);
+        assert_eq!(
+            vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit),
+            expected_commit
+        );
+
+        commit.bls_sig = vec![0x10, 0x11, 0x12];
+        assert_eq!(
+            vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit),
+            expected_commit,
+            "VRF commit signatures must stay outside the commit preimage"
+        );
+
+        let mut expected_reveal = Vec::new();
+        expected_reveal.extend_from_slice(&consensus_domain(
+            &chain,
+            "VrfReveal",
+            b"v1",
+            PERMISSIONED_TAG,
+        ));
+        expected_reveal.extend_from_slice(&reveal.epoch.to_be_bytes());
+        expected_reveal.extend_from_slice(&reveal.signer.to_be_bytes());
+        expected_reveal.extend_from_slice(&reveal.reveal);
+        assert_eq!(
+            vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal),
+            expected_reveal
+        );
+        assert_ne!(
+            expected_commit, expected_reveal,
+            "VRF commit and reveal preimages must remain type-separated"
+        );
+
+        reveal.bls_sig = vec![0x20, 0x21, 0x22];
+        assert_eq!(
+            vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal),
+            expected_reveal,
+            "VRF reveal signatures must stay outside the reveal preimage"
+        );
+    }
+
+    #[test]
+    fn rbc_ready_preimage_matches_formal_layout_and_excludes_signature() {
+        let chain = ChainId::from("iroha:test:rbc-ready-preimage-layout");
+        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x31; 32]));
+        let roster_hash = iroha_crypto::Hash::prehashed([0x32; 32]);
+        let chunk_root = iroha_crypto::Hash::prehashed([0x33; 32]);
+        let mut ready = RbcReady {
+            block_hash,
+            height: 0x0102_0304_0506_0708,
+            view: 0x1112_1314_1516_1718,
+            epoch: 0x2122_2324_2526_2728,
+            roster_hash,
+            chunk_root,
+            sender: 0x4142_4344,
+            signature: vec![0xAA, 0xBB, 0xCC],
+        };
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&consensus_domain(
+            &chain,
+            "RbcReady",
+            b"v1",
+            PERMISSIONED_TAG,
+        ));
+        expected.extend_from_slice(ready.block_hash.as_ref().as_ref());
+        expected.extend_from_slice(&ready.height.to_be_bytes());
+        expected.extend_from_slice(&ready.view.to_be_bytes());
+        expected.extend_from_slice(&ready.epoch.to_be_bytes());
+        expected.extend_from_slice(ready.roster_hash.as_ref());
+        expected.extend_from_slice(ready.chunk_root.as_ref());
+        expected.extend_from_slice(&ready.sender.to_be_bytes());
+
+        assert_eq!(
+            rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready),
+            expected
+        );
+
+        ready.signature = vec![0xDD, 0xEE, 0xFF, 0x00];
+        assert_eq!(
+            rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready),
+            expected
+        );
+    }
+
+    #[test]
+    fn rbc_deliver_preimage_matches_formal_layout_and_excludes_signature() {
+        let chain = ChainId::from("iroha:test:rbc-deliver-preimage-layout");
+        let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x41; 32]));
+        let roster_hash = iroha_crypto::Hash::prehashed([0x42; 32]);
+        let chunk_root = iroha_crypto::Hash::prehashed([0x43; 32]);
+        let mut deliver = RbcDeliver {
+            block_hash,
+            height: 0x0102_0304_0506_0708,
+            view: 0x1112_1314_1516_1718,
+            epoch: 0x2122_2324_2526_2728,
+            roster_hash,
+            chunk_root,
+            sender: 0x5152_5354,
+            signature: vec![0xAA, 0xBB, 0xCC],
+            ready_signatures: vec![
+                RbcReadySignature {
+                    sender: 0x6162_6364,
+                    signature: vec![0x10, 0x11, 0x12],
+                },
+                RbcReadySignature {
+                    sender: 0x7172_7374,
+                    signature: vec![0x20, 0x21],
+                },
+            ],
+        };
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&consensus_domain(
+            &chain,
+            "RbcDeliver",
+            b"v1",
+            PERMISSIONED_TAG,
+        ));
+        expected.extend_from_slice(deliver.block_hash.as_ref().as_ref());
+        expected.extend_from_slice(&deliver.height.to_be_bytes());
+        expected.extend_from_slice(&deliver.view.to_be_bytes());
+        expected.extend_from_slice(&deliver.epoch.to_be_bytes());
+        expected.extend_from_slice(deliver.roster_hash.as_ref());
+        expected.extend_from_slice(deliver.chunk_root.as_ref());
+        expected.extend_from_slice(&deliver.sender.to_be_bytes());
+        expected.extend_from_slice(&2_u32.to_be_bytes());
+        expected.extend_from_slice(&0x6162_6364_u32.to_be_bytes());
+        expected.extend_from_slice(&3_u32.to_be_bytes());
+        expected.extend_from_slice(&[0x10, 0x11, 0x12]);
+        expected.extend_from_slice(&0x7172_7374_u32.to_be_bytes());
+        expected.extend_from_slice(&2_u32.to_be_bytes());
+        expected.extend_from_slice(&[0x20, 0x21]);
+
+        assert_eq!(
+            rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
+            expected
+        );
+
+        deliver.signature = vec![0xDD, 0xEE, 0xFF, 0x00];
+        assert_eq!(
+            rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
+            expected
+        );
+
+        deliver.ready_signatures.swap(0, 1);
+        assert_ne!(
+            rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver),
+            expected
+        );
+    }
+
+    #[test]
     fn vote_preimage_binds_chain_order() {
         let chain = ChainId::from("iroha:test:chain-order-binding");
         let block_hash = HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7u8; 32]));

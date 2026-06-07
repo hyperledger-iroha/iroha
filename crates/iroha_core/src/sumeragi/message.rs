@@ -997,6 +997,35 @@ mod tests {
         }
     }
 
+    fn sample_rbc_chunk(
+        seed: u8,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        idx: u32,
+        bytes: Vec<u8>,
+    ) -> consensus::RbcChunk {
+        consensus::RbcChunk {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed; Hash::LENGTH],
+            )),
+            height,
+            view,
+            epoch,
+            idx,
+            bytes,
+        }
+    }
+
+    fn assert_compact_matches_chunk(compact: &RbcChunkCompact, chunk: &consensus::RbcChunk) {
+        assert_eq!(compact.block_hash, chunk.block_hash);
+        assert_eq!(u64::from(compact.height), chunk.height);
+        assert_eq!(u64::from(compact.view), chunk.view);
+        assert_eq!(u64::from(compact.epoch), chunk.epoch);
+        assert_eq!(compact.idx, chunk.idx);
+        assert_eq!(compact.bytes, chunk.bytes);
+    }
+
     fn roundtrip_cached_block_message_over_network_message(
         message: BlockMessage,
     ) -> crate::NetworkMessage {
@@ -1086,6 +1115,126 @@ mod tests {
     }
 
     #[test]
+    fn block_created_frontier_wire_constructors_match_formal_gate() {
+        let kp = KeyPair::from_seed(b"frontier-wire".to_vec(), Algorithm::Ed25519);
+        let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(kp.private_key())
+            .unpack(|_| {});
+
+        let from_borrowed_new_block = BlockCreated::from(&new_block);
+        let from_owned_new_block = BlockCreated::from(new_block.clone());
+
+        assert!(
+            from_borrowed_new_block.frontier.is_none(),
+            "plain borrowed NewBlock constructors must not fabricate frontier metadata",
+        );
+        assert!(
+            from_owned_new_block.frontier.is_none(),
+            "plain owned NewBlock constructors must not fabricate frontier metadata",
+        );
+        assert_eq!(
+            from_borrowed_new_block.block.hash(),
+            from_owned_new_block.block.hash(),
+            "borrowed and owned NewBlock constructors must preserve the same block",
+        );
+
+        let signed_block = from_borrowed_new_block.block.clone();
+        let from_signed_block = BlockCreated::from(&signed_block);
+        assert!(
+            from_signed_block.frontier.is_none(),
+            "plain SignedBlock constructors must not fabricate frontier metadata",
+        );
+        assert_eq!(
+            from_signed_block.block.hash(),
+            signed_block.hash(),
+            "SignedBlock constructor must preserve the block payload",
+        );
+
+        let block_hash = signed_block.hash();
+        let parent_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; Hash::LENGTH]));
+        let highest_qc = consensus::QcRef {
+            height: 7,
+            view: 3,
+            epoch: 2,
+            subject_block_hash: parent_hash,
+            phase: consensus::Phase::Prepare,
+        };
+        let proposal = consensus::Proposal {
+            header: consensus::ConsensusBlockHeader {
+                parent_hash,
+                tx_root: Hash::prehashed([0x22; Hash::LENGTH]),
+                state_root: Hash::prehashed([0x23; Hash::LENGTH]),
+                proposer: 2,
+                height: signed_block.header().height().get(),
+                view: signed_block.header().view_change_index(),
+                epoch: 9,
+                highest_qc,
+            },
+            payload_hash: Hash::prehashed([0x24; Hash::LENGTH]),
+        };
+        let leader_signature = signed_block
+            .signatures()
+            .next()
+            .cloned()
+            .expect("sample block should carry a leader signature");
+        let rbc_init = consensus::RbcInit {
+            block_hash,
+            height: proposal.header.height,
+            view: proposal.header.view,
+            epoch: proposal.header.epoch,
+            roster: vec![PeerId::from(kp.public_key().clone())],
+            roster_hash: Hash::prehashed([0x25; Hash::LENGTH]),
+            total_chunks: 2,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            chunk_size_bytes: 16,
+            payload_size_bytes: 31,
+            data_shards: 0,
+            parity_shards: 0,
+            chunk_digests: vec![[0x26; 32], [0x27; 32]],
+            payload_hash: Hash::prehashed([0x28; Hash::LENGTH]),
+            chunk_root: Hash::prehashed([0x29; Hash::LENGTH]),
+            block_header: signed_block.header(),
+            leader_signature: leader_signature.clone(),
+        };
+
+        let frontier = BlockCreatedFrontierInfo::from_proposal_and_rbc_init(&proposal, &rbc_init);
+        assert_eq!(frontier.highest_qc, proposal.header.highest_qc);
+        assert_eq!(frontier.payload_hash, proposal.payload_hash);
+        assert_eq!(frontier.proposer, proposal.header.proposer);
+        assert_eq!(frontier.epoch, proposal.header.epoch);
+        assert_eq!(frontier.roster_hash, rbc_init.roster_hash);
+        assert_eq!(frontier.total_chunks, rbc_init.total_chunks);
+        assert_eq!(frontier.chunk_digests, rbc_init.chunk_digests);
+        assert_eq!(frontier.chunk_root, rbc_init.chunk_root);
+        assert_eq!(frontier.leader_signature, leader_signature);
+
+        let with_frontier = BlockCreated::with_frontier(signed_block.clone(), frontier.clone());
+        let preserved_frontier = with_frontier
+            .frontier
+            .as_ref()
+            .expect("with_frontier must preserve supplied metadata");
+        assert_eq!(
+            with_frontier.block.hash(),
+            signed_block.hash(),
+            "with_frontier must preserve the supplied block",
+        );
+        assert_eq!(preserved_frontier.highest_qc, frontier.highest_qc);
+        assert_eq!(preserved_frontier.payload_hash, frontier.payload_hash);
+        assert_eq!(preserved_frontier.proposer, frontier.proposer);
+        assert_eq!(preserved_frontier.epoch, frontier.epoch);
+        assert_eq!(preserved_frontier.roster_hash, frontier.roster_hash);
+        assert_eq!(preserved_frontier.total_chunks, frontier.total_chunks);
+        assert_eq!(preserved_frontier.chunk_digests, frontier.chunk_digests);
+        assert_eq!(preserved_frontier.chunk_root, frontier.chunk_root);
+        assert_eq!(
+            preserved_frontier.leader_signature,
+            frontier.leader_signature,
+        );
+    }
+
+    #[test]
     fn rbc_repair_requests_roundtrip_over_network_wrapper() {
         let init_request = BlockMessage::RbcInitRequest(sample_rbc_init_request(7));
         let chunk_request = BlockMessage::RbcChunkRequest(sample_rbc_chunk_request(11));
@@ -1151,18 +1300,25 @@ mod tests {
     #[test]
     fn block_message_priority_marks_rbc_chunk_high() {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([2u8; 32]));
-        let chunk = super::super::consensus::RbcChunk {
+        let chunk = sample_rbc_chunk(2, 1, 0, 0, 0, vec![0u8; 1]);
+        let msg = BlockMessage::RbcChunk(chunk.clone());
+        assert_eq!(msg.priority(), iroha_p2p::Priority::High);
+
+        let compact = RbcChunkCompact::try_from_chunk(&chunk).expect("chunk headers fit in u32");
+        assert_eq!(
+            BlockMessage::RbcChunkCompact(compact).priority(),
+            iroha_p2p::Priority::High
+        );
+
+        let requester = PeerId::from(KeyPair::random().public_key().clone());
+        let fetch_body = BlockMessage::FetchBlockBody(FetchBlockBody {
+            requester: requester.clone(),
             block_hash,
             height: 1,
             view: 0,
-            epoch: 0,
-            idx: 0,
-            bytes: vec![0u8; 1],
-        };
-        let msg = BlockMessage::RbcChunk(chunk);
-        assert_eq!(msg.priority(), iroha_p2p::Priority::High);
+        });
+        assert_eq!(fetch_body.priority(), iroha_p2p::Priority::High);
 
-        let requester = PeerId::from(KeyPair::random().public_key().clone());
         let fetch = BlockMessage::FetchPendingBlock(FetchPendingBlock {
             requester,
             block_hash,
@@ -1173,6 +1329,233 @@ mod tests {
             commit_qc_only: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
+    }
+
+    #[test]
+    fn block_message_priority_marks_all_variants_high_match_formal_gate() {
+        let response = sample_certified_block_fetch_response(0x90);
+        let block = response.block.clone();
+        let block_hash = block.hash();
+        let requester = PeerId::from(
+            KeyPair::from_seed(vec![0x91; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let leader_signature = block
+            .signatures()
+            .next()
+            .expect("sample block has a leader signature")
+            .clone();
+        let highest_qc = consensus::QcRef {
+            height: 3,
+            view: 1,
+            epoch: 0,
+            subject_block_hash: block_hash,
+            phase: consensus::Phase::Commit,
+        };
+        let proposal = consensus::Proposal {
+            header: consensus::ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::prehashed([0xA0; Hash::LENGTH]),
+                state_root: Hash::prehashed([0xA1; Hash::LENGTH]),
+                proposer: 0,
+                height: 4,
+                view: 2,
+                epoch: 0,
+                highest_qc,
+            },
+            payload_hash: Hash::prehashed([0xA2; Hash::LENGTH]),
+        };
+        let compact_chunk =
+            RbcChunkCompact::try_from_chunk(&sample_rbc_chunk(0x92, 4, 2, 0, 1, vec![0xFA, 0xFB]))
+                .expect("compact sample fits in u32");
+        let roster_hash = Hash::prehashed([0x93; Hash::LENGTH]);
+        let chunk_root = Hash::prehashed([0x94; Hash::LENGTH]);
+        let rbc_ready = consensus::RbcReady {
+            block_hash,
+            height: 4,
+            view: 2,
+            epoch: 0,
+            roster_hash,
+            chunk_root,
+            sender: 0,
+            signature: vec![0x95],
+        };
+        let rbc_deliver = consensus::RbcDeliver {
+            block_hash,
+            height: 4,
+            view: 2,
+            epoch: 0,
+            roster_hash,
+            chunk_root,
+            sender: 1,
+            signature: vec![0x96],
+            ready_signatures: vec![consensus::RbcReadySignature {
+                sender: 0,
+                signature: vec![0x97],
+            }],
+        };
+        let rbc_init = consensus::RbcInit {
+            block_hash,
+            height: 4,
+            view: 2,
+            epoch: 0,
+            roster: response.validator_checkpoint.validator_set.clone(),
+            roster_hash,
+            total_chunks: 1,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            chunk_size_bytes: 2,
+            payload_size_bytes: 2,
+            data_shards: 0,
+            parity_shards: 0,
+            chunk_digests: vec![[0x98; 32]],
+            payload_hash: Hash::prehashed([0x99; Hash::LENGTH]),
+            chunk_root,
+            block_header: block.header(),
+            leader_signature,
+        };
+        let fetch_request = CertifiedBlockFetchRequest {
+            requester: requester.clone(),
+            height: response.height,
+            view: response.view,
+            block_hash,
+        };
+        let fetch_proof = sample_certified_block_fetch_proof(0x9A);
+        let fetch_body = sample_certified_block_fetch_body(0x9B);
+
+        let messages = vec![
+            (
+                "BlockCreated",
+                BlockMessage::BlockCreated(BlockCreated::from(&block)),
+            ),
+            (
+                "BlockSyncUpdate",
+                BlockMessage::BlockSyncUpdate(BlockSyncUpdate::from(&block)),
+            ),
+            (
+                "FetchBlockBody",
+                BlockMessage::FetchBlockBody(FetchBlockBody {
+                    requester: requester.clone(),
+                    block_hash,
+                    height: 4,
+                    view: 2,
+                }),
+            ),
+            (
+                "BlockBodyResponse",
+                BlockMessage::BlockBodyResponse(BlockBodyResponse {
+                    block_hash,
+                    height: 4,
+                    view: 2,
+                    body: BlockBodyData::BlockCreated(BlockCreated::from(&block)),
+                }),
+            ),
+            (
+                "CertifiedBlockFetch::Request",
+                BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Request(fetch_request)),
+            ),
+            (
+                "CertifiedBlockFetch::Response",
+                BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Response(response.clone())),
+            ),
+            (
+                "CertifiedBlockFetch::Proof",
+                BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Proof(fetch_proof)),
+            ),
+            (
+                "CertifiedBlockFetch::Body",
+                BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Body(fetch_body)),
+            ),
+            (
+                "ConsensusParams",
+                BlockMessage::ConsensusParams(ConsensusParamsAdvert {
+                    collectors_k: 2,
+                    redundant_send_r: 1,
+                    membership: None,
+                }),
+            ),
+            (
+                "VrfCommit",
+                BlockMessage::VrfCommit(consensus::VrfCommit {
+                    epoch: 0,
+                    commitment: [0x9C; 32],
+                    signer: 0,
+                    bls_sig: vec![0x9D],
+                }),
+            ),
+            (
+                "VrfReveal",
+                BlockMessage::VrfReveal(consensus::VrfReveal {
+                    epoch: 0,
+                    reveal: [0x9E; 32],
+                    signer: 0,
+                    bls_sig: vec![0x9F],
+                }),
+            ),
+            (
+                "ExecWitness",
+                BlockMessage::ExecWitness(sample_exec_witness_msg(0xA0)),
+            ),
+            (
+                "RbcInitRequest",
+                BlockMessage::RbcInitRequest(sample_rbc_init_request(0xA1)),
+            ),
+            (
+                "RbcChunkRequest",
+                BlockMessage::RbcChunkRequest(sample_rbc_chunk_request(0xA2)),
+            ),
+            ("RbcInit", BlockMessage::RbcInit(rbc_init)),
+            (
+                "RbcChunk",
+                BlockMessage::RbcChunk(sample_rbc_chunk(0xA3, 4, 2, 0, 1, vec![0xA4])),
+            ),
+            (
+                "RbcChunkCompact",
+                BlockMessage::RbcChunkCompact(compact_chunk),
+            ),
+            ("RbcReady", BlockMessage::RbcReady(rbc_ready)),
+            ("RbcDeliver", BlockMessage::RbcDeliver(rbc_deliver)),
+            (
+                "FetchPendingBlock",
+                BlockMessage::FetchPendingBlock(FetchPendingBlock {
+                    requester: requester.clone(),
+                    block_hash,
+                    height: 4,
+                    view: 2,
+                    priority: Some(FetchPendingBlockPriority::Consensus),
+                    requester_roster_proof_known: Some(true),
+                    commit_qc_only: Some(false),
+                }),
+            ),
+            (
+                "KuraReplicaAdvert",
+                BlockMessage::KuraReplicaAdvert(KuraReplicaAdvert {
+                    height: 4,
+                    block_hash,
+                    payload_len: 128,
+                }),
+            ),
+            (
+                "ProposalHint",
+                BlockMessage::ProposalHint(ProposalHint {
+                    block_hash,
+                    height: 4,
+                    view: 2,
+                    highest_qc,
+                }),
+            ),
+            ("Proposal", BlockMessage::Proposal(proposal)),
+            ("QcVote", BlockMessage::QcVote(sample_qc_vote(0xA5))),
+            ("Qc", BlockMessage::Qc(sample_qc(0xA6))),
+        ];
+
+        for (variant, message) in messages {
+            assert_eq!(
+                message.priority(),
+                iroha_p2p::Priority::High,
+                "{variant} priority changed"
+            );
+        }
     }
 
     #[test]
@@ -1535,6 +1918,175 @@ mod tests {
     }
 
     #[test]
+    fn block_message_wire_matches_formal_gate() {
+        fn consensus_params(collectors_k: u16, redundant_send_r: u8) -> BlockMessage {
+            BlockMessage::ConsensusParams(ConsensusParamsAdvert {
+                collectors_k,
+                redundant_send_r,
+                membership: None,
+            })
+        }
+
+        fn assert_consensus_params(
+            label: &str,
+            message: &BlockMessage,
+            collectors_k: u16,
+            redundant_send_r: u8,
+        ) {
+            match message {
+                BlockMessage::ConsensusParams(advert) => {
+                    assert_eq!(advert.collectors_k, collectors_k, "{label} collectors_k");
+                    assert_eq!(
+                        advert.redundant_send_r, redundant_send_r,
+                        "{label} redundant_send_r"
+                    );
+                }
+                other => panic!("{label}: expected consensus params, got {other:?}"),
+            }
+        }
+
+        fn assert_rejects_frame(label: &str, bytes: Vec<u8>) {
+            assert!(
+                <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&bytes)
+                    .is_err(),
+                "{label} frame should be rejected"
+            );
+        }
+
+        const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
+
+        let wrapped = consensus_params(1, 2);
+        let alternate = consensus_params(3, 4);
+        let wrapped_encoded = BlockMessageWire::encode_message(&wrapped);
+        let alternate_encoded = BlockMessageWire::encode_message(&alternate);
+
+        assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));
+        assert_eq!(wrapped_encoded[4], norito_core::VERSION_MAJOR);
+        assert_eq!(wrapped_encoded[5], norito_core::VERSION_MINOR);
+        assert_eq!(
+            &wrapped_encoded[6..22],
+            <BlockMessage as NoritoSerialize>::schema_hash().as_slice()
+        );
+        assert_eq!(wrapped_encoded[22], norito_core::Compression::None as u8);
+        assert!(LEN_OFF + 8 <= norito_core::Header::SIZE);
+
+        let uncached = BlockMessageWire::new(wrapped.clone());
+        assert_eq!(uncached.encoded_len(), None);
+        assert_eq!(uncached.encode(), wrapped_encoded);
+        assert_eq!(
+            uncached.encoded_len(),
+            None,
+            "serializing an uncached wrapper must not install stale cache bytes"
+        );
+
+        let cached = BlockMessageWire::with_encoded(
+            Arc::new(wrapped.clone()),
+            Arc::new(alternate_encoded.clone()),
+        );
+        assert_eq!(cached.encoded_len(), Some(alternate_encoded.len()));
+        assert_eq!(
+            cached.encode(),
+            alternate_encoded,
+            "cached serialization must use the cached full frame"
+        );
+        assert_consensus_params("cached wrapper message", cached.as_message(), 1, 2);
+
+        let cached_owned = BlockMessageWire::with_encoded_owned(
+            wrapped.clone(),
+            Arc::new(wrapped_encoded.clone()),
+        );
+        assert_eq!(cached_owned.encoded_len(), Some(wrapped_encoded.len()));
+
+        let into_message = cached.clone().into_message();
+        assert_consensus_params("into_message", &into_message, 1, 2);
+
+        let mut mutated = cached_owned.clone();
+        *mutated.make_mut() = alternate.clone();
+        assert_eq!(
+            mutated.encoded_len(),
+            None,
+            "make_mut must clear cached full-frame bytes"
+        );
+        assert_consensus_params("mutated wrapper", mutated.as_message(), 3, 4);
+        assert_eq!(mutated.encode(), alternate_encoded);
+
+        let mut framed_with_trailing = wrapped_encoded.clone();
+        framed_with_trailing.extend_from_slice(&[0xAA; 7]);
+        let (decoded, consumed) =
+            <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(
+                &framed_with_trailing,
+            )
+            .expect("decode framed block message prefix");
+        assert_eq!(
+            consumed,
+            wrapped_encoded.len(),
+            "decode_from_slice must consume exactly the framed prefix"
+        );
+        assert!(
+            consumed < framed_with_trailing.len(),
+            "trailing envelope bytes must remain unconsumed"
+        );
+        assert_consensus_params("decode_from_slice message", decoded.as_message(), 1, 2);
+        assert_eq!(decoded.encoded_len(), Some(wrapped_encoded.len()));
+        assert_eq!(
+            decoded.encode(),
+            wrapped_encoded,
+            "decoded cache must preserve exactly the consumed frame"
+        );
+
+        let decoded_via_decode: BlockMessageWire =
+            Decode::decode(&mut wrapped_encoded.as_slice()).expect("decode block message wire");
+        assert_consensus_params(
+            "Decode::decode message",
+            decoded_via_decode.as_message(),
+            1,
+            2,
+        );
+        assert_eq!(
+            decoded_via_decode.encoded_len(),
+            Some(wrapped_encoded.len())
+        );
+        assert_eq!(decoded_via_decode.encode(), wrapped_encoded);
+
+        let decoded_payload =
+            decode_from_bytes::<BlockMessage>(&wrapped_encoded).expect("decode cached payload");
+        assert_consensus_params("cached payload", &decoded_payload, 1, 2);
+
+        let mut bad_magic = wrapped_encoded.clone();
+        bad_magic[0] ^= 0xFF;
+        assert_rejects_frame("bad magic", bad_magic);
+
+        let mut bad_major = wrapped_encoded.clone();
+        bad_major[4] = bad_major[4].wrapping_add(1);
+        assert_rejects_frame("bad major version", bad_major);
+
+        let mut bad_minor = wrapped_encoded.clone();
+        bad_minor[5] = bad_minor[5].wrapping_add(1);
+        assert_rejects_frame("bad minor version", bad_minor);
+
+        let mut bad_schema = wrapped_encoded.clone();
+        bad_schema[6] ^= 0x01;
+        assert_rejects_frame("bad schema hash", bad_schema);
+
+        let mut compressed = wrapped_encoded.clone();
+        compressed[22] = norito_core::Compression::Zstd as u8;
+        assert_rejects_frame("compressed frame", compressed);
+
+        let mut missing_len = wrapped_encoded.clone();
+        missing_len.truncate(norito_core::Header::SIZE - 1);
+        assert_rejects_frame("missing length", missing_len);
+
+        let mut length_overflow = wrapped_encoded.clone();
+        length_overflow[LEN_OFF..LEN_OFF + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_rejects_frame("length overflow", length_overflow);
+
+        let mut payload_unavailable = wrapped_encoded.clone();
+        let too_large_payload = u64::try_from(wrapped_encoded.len()).expect("test frame length");
+        payload_unavailable[LEN_OFF..LEN_OFF + 8].copy_from_slice(&too_large_payload.to_le_bytes());
+        assert_rejects_frame("payload unavailable", payload_unavailable);
+    }
+
+    #[test]
     fn block_message_wire_network_roundtrip_cached_qc_vote() {
         let decoded = roundtrip_cached_block_message_over_network_message(BlockMessage::QcVote(
             sample_qc_vote(0x52),
@@ -1595,14 +2147,7 @@ mod tests {
 
     #[test]
     fn rbc_chunk_compact_roundtrip_normalizes() {
-        let chunk = consensus::RbcChunk {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([4u8; 32])),
-            height: 10,
-            view: 2,
-            epoch: 3,
-            idx: 1,
-            bytes: vec![0xAB; 8],
-        };
+        let chunk = sample_rbc_chunk(4, 10, 2, 3, 1, vec![0xAB; 8]);
         let msg = BlockMessage::from_rbc_chunk(chunk.clone());
         let compact = match msg {
             BlockMessage::RbcChunkCompact(compact) => compact,
@@ -1618,16 +2163,95 @@ mod tests {
     #[test]
     fn rbc_chunk_compact_falls_back_on_large_headers() {
         let large_height = u64::from(u32::MAX) + 1;
-        let chunk = consensus::RbcChunk {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([5u8; 32])),
-            height: large_height,
-            view: 1,
-            epoch: 1,
-            idx: 2,
-            bytes: vec![0xCD; 4],
-        };
+        let chunk = sample_rbc_chunk(5, large_height, 1, 1, 2, vec![0xCD; 4]);
         let msg = BlockMessage::from_rbc_chunk(chunk.clone());
         assert!(matches!(msg, BlockMessage::RbcChunk(inner) if inner == chunk));
+    }
+
+    #[test]
+    fn rbc_chunk_compact_boundary_and_field_preservation_match_formal_gate() {
+        let max_fit = u64::from(u32::MAX);
+        let chunk = sample_rbc_chunk(
+            0xB1,
+            max_fit,
+            max_fit - 1,
+            max_fit - 2,
+            u32::MAX,
+            vec![0x00, 0x11, 0xFE, 0xFF],
+        );
+
+        let compact = RbcChunkCompact::try_from_chunk(&chunk).expect("u32 boundary values fit");
+        assert_compact_matches_chunk(&compact, &chunk);
+        assert_eq!(compact.height, u32::MAX);
+        assert_eq!(compact.view, u32::MAX - 1);
+        assert_eq!(compact.epoch, u32::MAX - 2);
+        assert_eq!(compact.idx, u32::MAX);
+
+        match BlockMessage::from_rbc_chunk(chunk.clone()) {
+            BlockMessage::RbcChunkCompact(compact) => {
+                assert_compact_matches_chunk(&compact, &chunk)
+            }
+            other => panic!("expected compact RBC chunk, got {other:?}"),
+        }
+
+        for overflow in [
+            sample_rbc_chunk(0xB2, max_fit + 1, 1, 1, 7, vec![0xA0]),
+            sample_rbc_chunk(0xB3, 1, max_fit + 1, 1, 8, vec![0xA1]),
+            sample_rbc_chunk(0xB4, 1, 1, max_fit + 1, 9, vec![0xA2]),
+        ] {
+            assert!(RbcChunkCompact::try_from_chunk(&overflow).is_none());
+            assert!(
+                matches!(BlockMessage::from_rbc_chunk(overflow.clone()), BlockMessage::RbcChunk(full) if full == overflow)
+            );
+        }
+    }
+
+    #[test]
+    fn rbc_chunk_compact_normalization_matches_formal_gate() {
+        let chunk = sample_rbc_chunk(0xC1, 33, 44, 55, 66, vec![1, 3, 5, 8, 13]);
+        let compact = RbcChunkCompact::try_from_chunk(&chunk).expect("chunk headers fit in u32");
+
+        assert_eq!(compact.clone().into_chunk(), chunk);
+        match BlockMessage::RbcChunkCompact(compact).normalize() {
+            BlockMessage::RbcChunk(full) => assert_eq!(full, chunk),
+            other => panic!("expected compact normalization to yield full chunk, got {other:?}"),
+        }
+
+        let full_chunk = sample_rbc_chunk(0xC2, u64::from(u32::MAX) + 5, 77, 88, 99, vec![0xEE]);
+        match BlockMessage::RbcChunk(full_chunk.clone()).normalize() {
+            BlockMessage::RbcChunk(normalized) => assert_eq!(normalized, full_chunk),
+            other => panic!("expected full RBC chunk to remain unchanged, got {other:?}"),
+        }
+
+        let requester = PeerId::from(
+            KeyPair::from_seed(vec![0xC3; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let fetch = FetchPendingBlock {
+            requester: requester.clone(),
+            block_hash: chunk.block_hash,
+            height: 33,
+            view: 44,
+            priority: Some(FetchPendingBlockPriority::Consensus),
+            requester_roster_proof_known: Some(true),
+            commit_qc_only: Some(false),
+        };
+        match BlockMessage::FetchPendingBlock(fetch.clone()).normalize() {
+            BlockMessage::FetchPendingBlock(normalized) => {
+                assert_eq!(normalized.requester, fetch.requester);
+                assert_eq!(normalized.block_hash, fetch.block_hash);
+                assert_eq!(normalized.height, fetch.height);
+                assert_eq!(normalized.view, fetch.view);
+                assert_eq!(normalized.priority, fetch.priority);
+                assert_eq!(
+                    normalized.requester_roster_proof_known,
+                    fetch.requester_roster_proof_known
+                );
+                assert_eq!(normalized.commit_qc_only, fetch.commit_qc_only);
+            }
+            other => panic!("expected fetch message to remain unchanged, got {other:?}"),
+        }
     }
 
     #[cfg(feature = "bls")]

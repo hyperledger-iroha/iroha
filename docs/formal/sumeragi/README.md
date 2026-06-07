@@ -41,12 +41,14 @@ arithmetic mutation configs.
   validator topology,
 - topologies of one to three validators require all validators; larger
   topologies require `floor(2 * validators / 3) + 1`,
-- the debug force-one path uses threshold one,
+- the debug force-one path uses threshold one only for local DELIVER emission,
+- inbound DELIVER acceptance keeps the protocol quorum even when debug
+  force-one is enabled,
 - READY counting uses distinct senders, so duplicate READY observations cannot
   inflate the deliver decision,
 - deliver is impossible before the distinct READY count reaches the required
   threshold.
-Its TLC cross-check exhausts the fast config and four expected-failure deliver
+Its TLC cross-check exhausts the fast config and five expected-failure deliver
 quorum mutation configs.
 
 `SumeragiRbcCausalityGate.tla` captures implementation-side RBC message
@@ -5940,6 +5942,7 @@ verification, and full networking details.
 - `SumeragiRbcDeliverQuorum_bug_under_quorum_deliver.cfg`: expected-failure under-quorum delivery mutation.
 - `SumeragiRbcDeliverQuorum_bug_wrong_commit_formula.cfg`: expected-failure commit-quorum arithmetic mutation.
 - `SumeragiRbcDeliverQuorum_bug_force_one_ignored.cfg`: expected-failure force-one debug path mutation.
+- `SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg`: expected-failure receiver-side debug force-one leakage mutation.
 - `SumeragiRbcCausalityGate.tla`: RBC INIT/chunk/READY/DELIVER causality model.
 - `SumeragiRbcCausalityGate_fast.cfg`: CI-friendly RBC causality check.
 - `SumeragiRbcCausalityGate_bug_*.cfg`: expected-failure INIT evidence, chunk integrity, READY validation, DELIVER validation, stash, duplicate, and commit-wakeup mutations.
@@ -14818,6 +14821,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-bug-duplicate-ready
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-under-quorum-deliver
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-wrong-commit-formula
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-force-one-ignored
+bash scripts/formal/sumeragi_apalache.sh rbc-bug-inbound-force-one-acceptance
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-header-hash
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-leader-signature
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-chunk-root

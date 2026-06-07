@@ -6291,7 +6291,7 @@ impl Actor {
                 ready_to_record.push((entry.sender, entry.signature.clone()));
             }
         }
-        let deliver_quorum = self.rbc_deliver_quorum(&topology);
+        let deliver_quorum = Self::rbc_protocol_deliver_quorum(&topology);
         let authoritative_known_payload = self
             .subsystems
             .da_rbc
@@ -6300,6 +6300,15 @@ impl Actor {
             .get(&key)
             .is_some_and(|session| {
                 self.rbc_session_has_authoritative_payload_for_progress(key, session)
+            });
+        let local_authoritative_payload = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| {
+                self.rbc_session_has_local_authoritative_payload_for_progress(key, session)
             });
         let delivered_payload_bytes_fallback = self
             .subsystems
@@ -6310,7 +6319,7 @@ impl Actor {
             .and_then(|session| {
                 self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
             });
-        let allow_missing_chunks = authoritative_known_payload;
+        let allow_missing_chunks = local_authoritative_payload;
         let (
             ignored,
             first_deliver,
@@ -6337,8 +6346,13 @@ impl Actor {
             }
             let _ = session
                 .sync_progress_observations(authoritative_known_payload, Some(deliver_quorum));
+            let required_ready = if local_authoritative_payload {
+                0
+            } else {
+                deliver_quorum
+            };
             Self::evaluate_rbc_deliver_outcome(
-                0,
+                required_ready,
                 session,
                 key,
                 &deliver,
@@ -6421,7 +6435,6 @@ impl Actor {
                 "dropping RBC READY entries from penalized senders"
             );
         }
-        self.maybe_emit_rbc_ready(key)?;
         if let Some(reason) = defer_reason {
             if let Some(defer_kind) = defer_kind {
                 self.record_consensus_message_handling(
@@ -6616,6 +6629,7 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
+        self.maybe_emit_rbc_ready(key)?;
         if invalidate {
             self.clear_pending_rbc(&key);
         }
