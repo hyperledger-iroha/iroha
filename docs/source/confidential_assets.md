@@ -311,7 +311,7 @@ lockstep.
   verify_timeout_ms = 750
   max_anchor_age_blocks = 10000
   max_proof_bytes_block = 1048576
-  max_verify_calls_per_tx = 4
+  max_verify_calls_per_tx = 128
   max_verify_calls_per_block = 128
   max_public_inputs = 32
   reorg_depth_bound = 10000
@@ -323,6 +323,7 @@ lockstep.
   registry_max_params_entries = 32
   registry_max_delta_per_block = 4
   ```
+  The default per-transaction verifier-call cap admits one complete production-shaped Soracloud BFV full-bootstrap execution proof batch, which can verify one proof per registered identifier slot. Keep the per-block cap aligned with the desired number of heavy confidential jobs per block.
 - Telemetry emits aggregate metrics: `confidential_proof_verified`, `confidential_verifier_latency_ms`, `confidential_proof_bytes_total`, `confidential_nullifier_spent`, `confidential_commitments_appended`, `confidential_mempool_rejected_total{reason}`, and `confidential_policy_transitions_total`, never exposing plaintext data.
 - RPC surfaces:
   - `GET /confidential/capabilities`

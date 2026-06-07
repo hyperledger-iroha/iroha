@@ -19,6 +19,8 @@ relay paths.
 Retired runtime-network families are not supported for now. Future support
 requires a new source-proof design, fresh fixtures, SDK/Torii surface review,
 and explicit governance approval rather than reviving diagnostic code paths.
+Retired runtime-network families are explicitly outside SCCP launch support for now.
+Substrate/Polkadot-style networks are explicitly outside SCCP launch support for now.
 The active launch policy is Ethereum-mainnet lane readiness. The active Ethereum launch lane
 can open from complete mainnet source-proof, source-adapter deployment,
 destination rollout, and route-canary evidence without waiting for future
@@ -3126,7 +3128,11 @@ verifier fields plus the request bundle/source-proof bytes before adding an
 envelope hash over the request hash, deployment-binding hash, and proof bytes.
 TON proof-result submission helpers rebuild this request hash before BOC
 packaging, so wallet/liteserver callers cannot pair proof bytes with a
-different SCCP bundle after the local prover returns. TON proof-request builders require
+different SCCP bundle after the local prover returns. The Rust TON proof-request
+and proof-result path now decodes `bundle_bytes` as a canonical SCCP message
+bundle, matches it to the transparent public inputs, and requires non-SORA
+source bundles to carry non-empty source-proof bytes before local proof
+generation or wrapped-result submission. TON proof-request builders require
 `sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1` with a
 non-zero source-state verifier hash before local prover invocation. They also
 reject zero/zero deployment bindings so UI/mobile provers cannot produce

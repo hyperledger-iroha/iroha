@@ -198,4 +198,13 @@ AcceptedMatchesSpec ==
       outOfBoundsSigners
     )
 
+QcSignerBitmapAdmissionExactness ==
+  /\ ExpectedLengthMatchesTopology
+  /\ ParsedMatchesSpec
+  /\ VotingCountIgnoresObservers
+  /\ ObserverPaddingCannotSatisfyQuorum
+  /\ OutOfBoundsRejected
+  /\ LengthMismatchRejected
+  /\ AcceptedMatchesSpec
+
 ====

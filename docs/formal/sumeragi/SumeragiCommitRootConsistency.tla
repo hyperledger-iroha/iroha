@@ -333,11 +333,38 @@ WrongContextCannotSatisfyRootQuorum ==
   /\ rootASigners + wrongContextSigners >= CommitQuorum(validators)
   => ~accepted
 
+WrongContextCannotSatisfyStakeQuorum ==
+  /\ mode = "Npos"
+  /\ rootBStake = 0
+  /\ ~StakeQuorum(rootAStake, totalStake)
+  /\ StakeQuorum(rootAStake + wrongContextStake, totalStake)
+  => ~accepted
+
 ValidationRootMismatchRejected ==
   validationVoteRoot # validationQcRoot => ~validated
 
 ValidatedMatchesSpec ==
   validated = (validationVoteRoot = validationQcRoot)
+
+CommitRootSelectionExact ==
+  /\ SelectedRootMatchesSpec
+  /\ SelectedEvidenceMatchesSpecRoot
+
+CommitRootQuorumExact ==
+  /\ AcceptedMatchesSpec
+  /\ MixedRootsCannotSatisfyPermissionedQuorum
+  /\ MixedRootsCannotSatisfyStakeQuorum
+  /\ WrongContextCannotSatisfyRootQuorum
+  /\ WrongContextCannotSatisfyStakeQuorum
+
+CommitRootValidationExact ==
+  /\ ValidationRootMismatchRejected
+  /\ ValidatedMatchesSpec
+
+CommitRootConsistencyExactness ==
+  /\ CommitRootSelectionExact
+  /\ CommitRootQuorumExact
+  /\ CommitRootValidationExact
 
 TlcWitnessState ==
   \/ Init

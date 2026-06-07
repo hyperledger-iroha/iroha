@@ -13766,8 +13766,15 @@ mod tests {
     }
 
     fn sample_fhe_full_bootstrap_execution_proof() -> SoracloudFheFullBootstrapExecutionProofV1 {
+        sample_fhe_full_bootstrap_execution_proof_with_statement(Hash::new(
+            b"torii-full-bootstrap-execution-proof-statement",
+        ))
+    }
+
+    fn sample_fhe_full_bootstrap_execution_proof_with_statement(
+        statement_hash: Hash,
+    ) -> SoracloudFheFullBootstrapExecutionProofV1 {
         let vk_hash = [0x63; Hash::LENGTH];
-        let statement_hash = Hash::new(b"torii-full-bootstrap-execution-proof-statement");
         let open_proof = StarkFriOpenProofV1 {
             version: 1,
             public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
@@ -17387,7 +17394,10 @@ mod tests {
         let param_set = fixture_fhe_param_set();
         let evaluation_keys = fixture_bfv_evaluation_key_bundle();
         let evaluation_key_refresh_transcript = fixture_bfv_evaluation_key_refresh_transcript();
-        let proof = sample_fhe_full_bootstrap_execution_proof();
+        let first_proof = sample_fhe_full_bootstrap_execution_proof();
+        let second_proof = sample_fhe_full_bootstrap_execution_proof_with_statement(Hash::new(
+            b"torii-full-bootstrap-execution-proof-statement-2",
+        ));
         let governance_tx_hash = Hash::new(b"governance-with-full-bootstrap-execution-proof");
         let payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
@@ -17400,7 +17410,7 @@ mod tests {
             bootstrap_key_zero_refresh_proof: None,
             full_bootstrap_material_proof: None,
             full_bootstrap_circuit_artifacts: None,
-            full_bootstrap_execution_proofs: vec![proof.clone()],
+            full_bootstrap_execution_proofs: vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash: governance_tx_hash.clone(),
         };
         let encoded =
@@ -17416,7 +17426,7 @@ mod tests {
             Option::<SoracloudFheBootstrapKeyProofV1>::None,
             Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            vec![proof],
+            vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash,
         ))
         .expect("encode canonical tuple");
@@ -17438,6 +17448,40 @@ mod tests {
         ))
         .expect("encode stripped canonical tuple");
         assert_ne!(encoded, stripped);
+
+        let swapped = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            fixture_fhe_job_spec(),
+            fixture_fhe_execution_policy(),
+            fixture_fhe_param_set(),
+            fixture_bfv_evaluation_key_bundle(),
+            fixture_bfv_evaluation_key_refresh_transcript(),
+            Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            vec![second_proof.clone(), first_proof.clone()],
+            payload.governance_tx_hash.clone(),
+        ))
+        .expect("encode swapped canonical tuple");
+        assert_ne!(encoded, swapped);
+
+        let surplus = norito::to_bytes(&(
+            payload.service_name.as_str(),
+            payload.binding_name.as_str(),
+            fixture_fhe_job_spec(),
+            fixture_fhe_execution_policy(),
+            fixture_fhe_param_set(),
+            fixture_bfv_evaluation_key_bundle(),
+            fixture_bfv_evaluation_key_refresh_transcript(),
+            Option::<SoracloudFheBootstrapKeyProofV1>::None,
+            Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
+            Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
+            vec![first_proof, second_proof.clone(), second_proof],
+            payload.governance_tx_hash,
+        ))
+        .expect("encode surplus canonical tuple");
+        assert_ne!(encoded, surplus);
     }
 
     #[test]
