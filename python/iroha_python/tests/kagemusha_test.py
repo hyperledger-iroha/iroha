@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -65,6 +67,79 @@ def _kagemusha_norito_frame_with_payload(schema_byte: int) -> bytes:
     frame[23:31] = (3).to_bytes(8, "little")
     frame[31:39] = bytes([0xB9, 0xD3, 0xA8, 0x0C, 0xCD, 0x5D, 0x13, 0x24])
     return bytes(frame)
+
+
+_TEST_CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
+_TEST_CRC64_REFLECTED_POLY = 0xC96C_5795_D787_0F42
+
+
+def _build_test_crc64_table() -> tuple[int, ...]:
+    table: list[int] = []
+    for index in range(256):
+        crc = index
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ _TEST_CRC64_REFLECTED_POLY
+            else:
+                crc >>= 1
+        table.append(crc)
+    return tuple(table)
+
+
+_TEST_CRC64_TABLE = _build_test_crc64_table()
+
+
+def _test_crc64(payload: bytes) -> int:
+    crc = _TEST_CRC64_MASK
+    for byte in payload:
+        index = (crc ^ byte) & 0xFF
+        crc = _TEST_CRC64_TABLE[index] ^ (crc >> 8)
+    return (crc ^ _TEST_CRC64_MASK) & _TEST_CRC64_MASK
+
+
+def _kagemusha_norito_frame_from_payload(schema_byte: int, payload: bytes) -> bytes:
+    frame = bytearray(_kagemusha_norito_frame(schema_byte) + bytes(payload))
+    frame[23:31] = len(payload).to_bytes(8, "little")
+    frame[31:39] = _test_crc64(payload).to_bytes(8, "little")
+    return bytes(frame)
+
+
+def _kagemusha_zk1_tlv(tag: bytes, payload: bytes) -> bytes:
+    return tag + len(payload).to_bytes(4, "little") + bytes(payload)
+
+
+def _kagemusha_lineage_verifier_key(circuit_id: str, seed: int) -> bytes:
+    return (
+        b"ZK1\x00"
+        + _kagemusha_zk1_tlv(b"IPAK", bytes([8, 0, 0, 0]))
+        + _kagemusha_zk1_tlv(b"CID1", circuit_id.encode("utf-8"))
+        + _kagemusha_zk1_tlv(b"H2VK", bytes([seed]) * 32)
+    )
+
+
+def _kagemusha_verifier_key_commitment(verifier_key: bytes) -> bytes:
+    backend = kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND.encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(b"iroha:zk:v1:vk")
+    digest.update(len(backend).to_bytes(8, "big"))
+    digest.update(backend)
+    digest.update(len(verifier_key).to_bytes(8, "big"))
+    digest.update(verifier_key)
+    return digest.digest()
+
+
+def _kagemusha_lineage_proving_key_archive(
+    circuit_id: str,
+    verifier_key: bytes,
+    seed: int,
+) -> bytes:
+    return _kagemusha_norito_frame_from_payload(
+        0x9A,
+        b"\x01\x00"
+        + circuit_id.encode("utf-8")
+        + _kagemusha_verifier_key_commitment(verifier_key)
+        + bytes([seed]) * 64,
+    )
 
 
 def _kagemusha_input_archive(schema_byte: int = 0x50) -> bytes:
@@ -464,6 +539,22 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         kagemusha.preferred_kagemusha_offline_spend_mode()
         == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     )
+
+    def unavailable_recursive_compact(
+        record_bundle: bytes, pallas_open_envelopes: bytes
+    ) -> bytes:
+        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes)
+        raise RuntimeError("recursive compact proof composition unavailable")
+
+    setattr(native, RECURSIVE_COMPACT_METHOD, unavailable_recursive_compact)
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is True
+    with pytest.raises(RuntimeError, match="proof composition unavailable"):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            record_bundle,
+            pallas_open_envelopes,
+        )
+
+    setattr(native, RECURSIVE_COMPACT_METHOD, recursive_compact)
     assert (
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             record_bundle,
@@ -551,6 +642,74 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         ),
         ("verify", verify_request),
         ("redeem", redeem_request),
+    ]
+
+
+def test_recursive_kagemusha_lineage_helpers_copy_mutable_archives_before_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+    calls: list[tuple[str, bytes, ...]] = []
+
+    def lineage_init(request: bytes, bundle: bytes) -> bytes:
+        native._reject_probe("lineage init", request, bundle)
+        calls.append(("lineage-init", request, bundle))
+        return _kagemusha_norito_frame_with_payload(0x58)
+
+    def lineage_append(
+        previous_witness: bytes,
+        request: bytes,
+        bundle: bytes,
+    ) -> bytes:
+        native._reject_probe("lineage append", previous_witness, request, bundle)
+        calls.append(("lineage-append", previous_witness, request, bundle))
+        return _kagemusha_norito_frame_with_payload(0x59)
+
+    native.kagemusha_recursive_spend_lineage_witness_from_init_result = lineage_init
+    native.kagemusha_recursive_spend_lineage_witness_append_result = lineage_append
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    init_request = bytearray(_kagemusha_input_archive(0xA1))
+    init_bundle = bytearray(_kagemusha_input_archive(0xA2))
+    previous_witness_storage = bytearray(_kagemusha_input_archive(0xA3))
+    append_request = bytearray(_kagemusha_input_archive(0xA4))
+    append_bundle = bytearray(_kagemusha_input_archive(0xA5))
+    expected_init_request = bytes(init_request)
+    expected_init_bundle = bytes(init_bundle)
+    expected_previous_witness = bytes(previous_witness_storage)
+    expected_append_request = bytes(append_request)
+    expected_append_bundle = bytes(append_bundle)
+
+    assert (
+        kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
+            init_request,
+            init_bundle,
+        )
+        == _kagemusha_norito_frame_with_payload(0x58)
+    )
+    assert (
+        kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            memoryview(previous_witness_storage),
+            append_request,
+            append_bundle,
+        )
+        == _kagemusha_norito_frame_with_payload(0x59)
+    )
+
+    init_request[6] = 0x7F
+    init_bundle[6] = 0x7F
+    previous_witness_storage[6] = 0x7F
+    append_request[6] = 0x7F
+    append_bundle[6] = 0x7F
+
+    assert calls == [
+        ("lineage-init", expected_init_request, expected_init_bundle),
+        (
+            "lineage-append",
+            expected_previous_witness,
+            expected_append_request,
+            expected_append_bundle,
+        ),
     ]
 
 
@@ -875,6 +1034,73 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
             with pytest.raises(RuntimeError, match="reject malformed probe archives"):
                 kagemusha.kagemusha_recursive_spend_verify(_kagemusha_input_archive(0x74))
 
+    vague_prover_native = _Native()
+
+    def vague_recursive_compact_prover(record: bytes, pallas: bytes) -> bytes:
+        raise RuntimeError("Kagemusha recursive compact proof unavailable")
+
+    def rejecting_recursive_compact_verify(archive: bytes) -> bool:
+        vague_prover_native._reject_probe("recursive compact verify", archive)
+        return True
+
+    setattr(
+        vague_prover_native,
+        RECURSIVE_COMPACT_METHOD,
+        vague_recursive_compact_prover,
+    )
+    setattr(
+        vague_prover_native,
+        RECURSIVE_COMPACT_VERIFY_METHOD,
+        rejecting_recursive_compact_verify,
+    )
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: vague_prover_native)
+    assert (
+        kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available()
+        is False
+    )
+    assert (
+        kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available()
+        is True
+    )
+    with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token prover"):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            _kagemusha_input_archive(0xBD),
+            _kagemusha_input_archive(0xBE),
+        )
+
+    vague_verifier_native = _Native()
+
+    def rejecting_recursive_compact_prover(record: bytes, pallas: bytes) -> bytes:
+        vague_verifier_native._reject_probe("recursive compact", record, pallas)
+        return _kagemusha_input_archive(0xBF)
+
+    def vague_recursive_compact_verify(archive: bytes) -> bool:
+        raise RuntimeError("Kagemusha recursive compact verifier unavailable")
+
+    setattr(
+        vague_verifier_native,
+        RECURSIVE_COMPACT_METHOD,
+        rejecting_recursive_compact_prover,
+    )
+    setattr(
+        vague_verifier_native,
+        RECURSIVE_COMPACT_VERIFY_METHOD,
+        vague_recursive_compact_verify,
+    )
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: vague_verifier_native)
+    assert (
+        kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available()
+        is False
+    )
+    assert (
+        kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available()
+        is False
+    )
+    with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token verifier"):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_norito_frame_with_payload(0x4B)
+        )
+
 
 def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> None:
     import iroha_python
@@ -883,6 +1109,12 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         pytest.skip("package root crypto exports are unavailable")
 
     from iroha_python import (
+        KagemushaRecursiveSpendLineageKeyArtifacts
+        as RootLineageKeyArtifacts,
+        kagemusha_recursive_spend_lineage_key_artifacts_for_append
+        as root_lineage_key_artifacts_for_append,
+        kagemusha_recursive_spend_lineage_key_artifacts_for_init
+        as root_lineage_key_artifacts_for_init,
         is_kagemusha_recursive_compact_payment_token_verifier_available
         as root_is_recursive_compact_verifier_available,
         requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output
@@ -893,6 +1125,15 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
 
     assert (
         "requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init"
+        in iroha_python.__all__
+    )
+    assert "KagemushaRecursiveSpendLineageKeyArtifacts" in iroha_python.__all__
+    assert (
+        "kagemusha_recursive_spend_lineage_key_artifacts_for_init"
+        in iroha_python.__all__
+    )
+    assert (
+        "kagemusha_recursive_spend_lineage_key_artifacts_for_append"
         in iroha_python.__all__
     )
     assert (
@@ -912,13 +1153,307 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output
     )
     assert (
+        RootLineageKeyArtifacts
+        is kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts
+    )
+    assert (
+        root_lineage_key_artifacts_for_init
+        is kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init
+    )
+    assert (
+        root_lineage_key_artifacts_for_append
+        is kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_append
+    )
+    assert (
         root_is_recursive_compact_verifier_available
         is kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available
     )
 
 
+def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
+    assert kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND == "halo2/ipa"
+    for opening_len in (2, 4, 8, 16, 32, 64, 128):
+        assert (
+            kagemusha.is_supported_kagemusha_recursive_spend_lineage_key_artifact_opening_len(
+                opening_len,
+            )
+            is True
+        )
+    for opening_len in (0, 1, 3, 65, 129, -2, 2.5, "2", True):
+        assert (
+            kagemusha.is_supported_kagemusha_recursive_spend_lineage_key_artifact_opening_len(
+                opening_len,  # type: ignore[arg-type]
+            )
+            is False
+        )
+
+    init_verifier_key = _kagemusha_lineage_verifier_key(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        0xA1,
+    )
+    init_proving_key_archive = _kagemusha_lineage_proving_key_archive(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        init_verifier_key,
+        0xA2,
+    )
+    append_verifier_key = _kagemusha_lineage_verifier_key(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        0xA3,
+    )
+    append_proving_key_archive = _kagemusha_lineage_proving_key_archive(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        append_verifier_key,
+        0xA4,
+    )
+
+    verifier_key = bytearray(init_verifier_key)
+    proving_key = bytearray(init_proving_key_archive)
+    init_artifacts = kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+        128,
+        kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        verifier_key,
+        memoryview(proving_key),
+    )
+    verifier_key[:] = b"\x00" * len(verifier_key)
+    proving_key[:] = b"\x00" * len(proving_key)
+    assert init_artifacts.proof_circuit_id == (
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    )
+    assert init_artifacts.verifier_opening_len == 128
+    assert init_artifacts.lineage_verifier_key_backend == "halo2/ipa"
+    assert init_artifacts.lineage_verifier_key == init_verifier_key
+    assert init_artifacts.lineage_proving_key_archive == init_proving_key_archive
+    assert init_artifacts.is_init_artifact is True
+    assert init_artifacts.is_append_artifact is False
+    with pytest.raises(FrozenInstanceError):
+        init_artifacts.lineage_proving_key_archive = b"mutated"  # type: ignore[misc]
+
+    append_artifacts = kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_append(
+        64,
+        kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        append_verifier_key,
+        append_proving_key_archive,
+    )
+    assert append_artifacts.proof_circuit_id == (
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+    )
+    assert append_artifacts.is_init_artifact is False
+    assert append_artifacts.is_append_artifact is True
+
+    generic_artifacts = kagemusha.kagemusha_recursive_spend_lineage_key_artifacts(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+        2,
+        kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        append_verifier_key,
+        append_proving_key_archive,
+    )
+    assert (
+        kagemusha.validate_kagemusha_recursive_spend_lineage_key_artifacts(
+            generic_artifacts,
+        )
+        == generic_artifacts
+    )
+
+    with pytest.raises(ValueError, match="lineage_verifier_key"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            append_verifier_key,
+            append_proving_key_archive,
+        )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            append_proving_key_archive,
+        )
+    with pytest.raises(ValueError, match="lineage_verifier_key"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            b"not-zk1",
+            init_proving_key_archive,
+        )
+    duplicate_cid_verifier_key = (
+        init_verifier_key
+        + _kagemusha_zk1_tlv(
+            b"CID1",
+            kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.encode(
+                "utf-8",
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="lineage_verifier_key"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            duplicate_cid_verifier_key,
+            init_proving_key_archive,
+        )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            b"not-norito",
+        )
+    missing_circuit_archive = _kagemusha_norito_frame_from_payload(
+        0x9A,
+        b"package"
+        + _kagemusha_verifier_key_commitment(init_verifier_key)
+        + bytes([0xA5]) * 64,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            missing_circuit_archive,
+        )
+    wrong_commitment_archive = _kagemusha_lineage_proving_key_archive(
+        kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        append_verifier_key,
+        0xA6,
+    )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            wrong_commitment_archive,
+        )
+    with pytest.raises(ValueError, match="lineage_proving_key_archive"):
+        kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+            128,
+            kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+            init_verifier_key,
+            _kagemusha_norito_frame(0x9A),
+        )
+
+    invalid_dataclasses = [
+        (
+            kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
+                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                128,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                b"vk",
+                b"pk",
+            ),
+            "proof_circuit_id",
+        ),
+        (
+            kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
+                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                3,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                b"vk",
+                b"pk",
+            ),
+            "verifier_opening_len",
+        ),
+        (
+            kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
+                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                128,
+                "halo2/kzg",
+                b"vk",
+                b"pk",
+            ),
+            "lineage_verifier_key",
+        ),
+        (
+            kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
+                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                128,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                b"",
+                b"pk",
+            ),
+            "lineage_verifier_key",
+        ),
+        (
+            kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
+                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                128,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                "not-bytes",  # type: ignore[arg-type]
+                b"pk",
+            ),
+            "lineage_verifier_key",
+        ),
+        (
+            kagemusha.KagemushaRecursiveSpendLineageKeyArtifacts(
+                kagemusha.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+                128,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                b"vk",
+                b"",
+            ),
+            "lineage_proving_key_archive",
+        ),
+    ]
+    for artifacts, message in invalid_dataclasses:
+        with pytest.raises(ValueError, match=message):
+            kagemusha.validate_kagemusha_recursive_spend_lineage_key_artifacts(
+                artifacts,
+            )
+    for malformed, message in (
+        (None, "lineage_key_artifacts"),
+        ("not-artifacts", "lineage_key_artifacts"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            kagemusha.validate_kagemusha_recursive_spend_lineage_key_artifacts(
+                malformed,
+            )
+    for builder_args, message in (
+        (
+            (
+                3,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                b"vk",
+                b"pk",
+            ),
+            "verifier_opening_len",
+        ),
+        ((128, "halo2/kzg", b"vk", b"pk"), "lineage_verifier_key"),
+        (
+            (
+                128,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                b"",
+                b"pk",
+            ),
+            "lineage_verifier_key",
+        ),
+        (
+            (
+                128,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                b"vk",
+                b"",
+            ),
+            "lineage_proving_key_archive",
+        ),
+        (
+            (
+                128,
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                "not-bytes",
+                b"pk",
+            ),
+            "lineage_verifier_key",
+        ),
+    ):
+        with pytest.raises(ValueError, match=message):
+            kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_init(
+                *builder_args,  # type: ignore[arg-type]
+            )
+
+
 def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION == 6
+    assert kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND == "halo2/ipa"
     assert (
         kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
         == "kagemusha-recursive-aggregation-v1"

@@ -164,6 +164,51 @@ fn overlay_restores_snapshot_on_rollback() {
 }
 
 #[test]
+fn checkpoint_restore_flushes_persisted_wsv_state() {
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "ivm_overlay_restore_flush_{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&tmp_dir).expect("tmp dir");
+    let persist_path = tmp_dir.join("state.json");
+
+    let initial = make_tlv(PointerType::NoritoBytes, b"1");
+    let updated = make_tlv(PointerType::NoritoBytes, b"9");
+    let mut wsv =
+        MockWorldStateView::with_state_store(persist_path.clone()).expect("persisted WSV");
+    wsv.sc_set("counter", initial).expect("seed durable state");
+    let mut host = WsvHost::new_with_subject(wsv, sample_account(), HashMap::new());
+    let snapshot = host.checkpoint().expect("checkpoint captured");
+
+    host.wsv
+        .sc_set("counter", updated)
+        .expect("persist updated state");
+    let reloaded =
+        MockWorldStateView::with_state_store(persist_path.clone()).expect("reload updated state");
+    let stored = reloaded.sc_get("counter").expect("updated persisted state");
+    let tlv = validate_tlv_bytes(&stored).expect("updated TLV");
+    assert_eq!(tlv.payload, b"9");
+
+    assert!(host.restore(snapshot.as_ref()));
+    let stored = host.wsv.sc_get("counter").expect("restored host state");
+    let tlv = validate_tlv_bytes(&stored).expect("restored host TLV");
+    assert_eq!(tlv.payload, b"1");
+
+    let reloaded =
+        MockWorldStateView::with_state_store(persist_path.clone()).expect("reload restored state");
+    let stored = reloaded
+        .sc_get("counter")
+        .expect("restored persisted state");
+    let tlv = validate_tlv_bytes(&stored).expect("restored persisted TLV");
+    assert_eq!(tlv.payload, b"1");
+
+    let _ = fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
 fn overlay_flush_errors_surface_and_reset_overlay() {
     let tmp_dir = std::env::temp_dir().join(format!(
         "ivm_overlay_flush_err_{}",

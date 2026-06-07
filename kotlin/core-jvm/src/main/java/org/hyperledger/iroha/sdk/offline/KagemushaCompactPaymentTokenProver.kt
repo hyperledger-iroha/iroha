@@ -24,24 +24,33 @@ class KagemushaCompactPaymentTokenProver private constructor() {
         fun isNativeAvailable(): Boolean = nativeAvailable
 
         @JvmStatic
-        fun proveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive: ByteArray): ByteArray {
-            requireNativeInput(recordBundleArchive, "recordBundleArchive")
+        fun proveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive: ByteArray?): ByteArray {
+            val recordBundle = ownedNativeInput(recordBundleArchive, "recordBundleArchive")
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
-            val tokenArchive = nativeProveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive)
+            val tokenArchive = nativeProveVerifiedCompactPaymentTokenWithRecords(recordBundle)
             return requireNativeOutput(
                 tokenArchive,
                 "nativeProveVerifiedCompactPaymentTokenWithRecords",
             )
         }
 
-        internal fun requireNativeInput(archive: ByteArray, archiveName: String) {
-            require(archive.isNotEmpty()) { "$archiveName must not be empty" }
+        internal fun ownedNativeInput(archiveInput: ByteArray?, archiveName: String): ByteArray {
+            val archive = requireNativeInput(archiveInput, archiveName)
+            return archive.copyOf()
+        }
+
+        internal fun requireNativeInput(archive: ByteArray?, archiveName: String): ByteArray {
+            require(archive != null && archive.isNotEmpty()) { "$archiveName must not be empty" }
+            require(archive.size <= NATIVE_ARCHIVE_MAX_BYTES) {
+                "$archiveName must not exceed $NATIVE_ARCHIVE_MAX_BYTES bytes"
+            }
             require(isValidNoritoArchive(archive)) {
                 "$archiveName must be a valid Norito archive"
             }
             require(hasNonEmptyNoritoPayload(archive)) {
                 "$archiveName must contain a non-empty Norito payload"
             }
+            return archive
         }
 
         private fun loadLibrary(): Boolean =
@@ -141,8 +150,8 @@ class KagemushaCompactPaymentTokenProver private constructor() {
             return crc64(output, payloadOffset, output.size - payloadOffset) == expectedCrc
         }
 
-        internal fun hasNonEmptyNoritoPayload(output: ByteArray): Boolean =
-            isValidNoritoArchive(output) && readLongLittleEndian(output, 23) > 0
+        internal fun hasNonEmptyNoritoPayload(output: ByteArray?): Boolean =
+            output != null && isValidNoritoArchive(output) && readLongLittleEndian(output, 23) > 0
 
         private fun buildCrc64Table(): LongArray {
             val table = LongArray(256)

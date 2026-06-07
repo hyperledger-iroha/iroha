@@ -195,7 +195,6 @@ const SCCP_FINALITY_MODEL_VALUES = new Set([
   "SolanaFinalizedSlot",
   "TonMasterchain",
   "TronDpos",
-  "SubstrateGrandpa",
 ]);
 const SCCP_PROOF_SECURITY_MODEL_VALUES = new Set(["RecursiveZk"]);
 const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["CryptographicProof"]);
@@ -204,7 +203,6 @@ const SCCP_VERIFIER_TARGET_VALUES = new Set([
   "SolanaProgram",
   "TonContract",
   "TronContract",
-  "SubstrateRuntime",
 ]);
 const SCCP_DESTINATION_VERIFIER_PLAN_VALUES = new Set([
   "Unknown",
@@ -213,7 +211,6 @@ const SCCP_DESTINATION_VERIFIER_PLAN_VALUES = new Set([
   "TonContractNativeRecursive",
   "TronContractNativeRecursive",
   "TronContractGroth16Bn254",
-  "SubstrateRuntimeNativeRecursive",
 ]);
 const SCCP_HUB_MESSAGE_KIND_VALUES = new Set([
   "Burn",
@@ -224,7 +221,7 @@ const SCCP_HUB_MESSAGE_KIND_VALUES = new Set([
   "RouteActivate",
   "Transfer",
 ]);
-const SCCP_CHAIN_FAMILY_VALUES = new Set(["Evm", "Solana", "Ton", "Tron", "Substrate"]);
+const SCCP_CHAIN_FAMILY_VALUES = new Set(["Evm", "Solana", "Ton", "Tron"]);
 const SCCP_MESSAGE_PAYLOAD_KIND_VALUES = new Set(["AssetRegister", "RouteActivate", "Transfer"]);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
@@ -14043,7 +14040,6 @@ function normalizeSccpPlatformSubmissionPayloadRecord(value, context) {
     TronContractCall: "tron_contract_call",
     SolanaProgramInstruction: "solana_program_instruction",
     TonInternalMessage: "ton_internal_message",
-    SubstrateRuntimeCall: "substrate_runtime_call",
   };
   const enumKey = enumKeys[0];
   const platform = platformByEnumKey[enumKey];
@@ -14105,21 +14101,6 @@ function normalizeSccpPlatformSubmissionPayload(value, context) {
           proofContextHash: normalizeHex32String(
             payload.proof_context_hash,
             `${context}.payload.proof_context_hash`,
-          ),
-        },
-      };
-    case "substrate_runtime_call":
-      return {
-        kind: platform,
-        value: {
-          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
-          publicInputsBytes: normalizeArbitraryHex(
-            payload.public_inputs_bytes,
-            `${context}.payload.public_inputs_bytes`,
-          ),
-          bundleBytes: normalizeArbitraryHex(
-            payload.bundle_bytes,
-            `${context}.payload.bundle_bytes`,
           ),
         },
       };

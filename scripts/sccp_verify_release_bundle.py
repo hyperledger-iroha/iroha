@@ -48,9 +48,6 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         "pytests/scripts/sccp_solana_live_evidence_test.py",
         "pytests/scripts/sccp_solana_source_state_evidence_test.py",
-        "pytests/scripts/sccp_substrate_destination_evidence_test.py",
-        "pytests/scripts/sccp_substrate_live_evidence_test.py",
-        "pytests/scripts/sccp_substrate_source_evidence_test.py",
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         "pytests/scripts/sccp_ton_live_evidence_test.py",
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
@@ -118,9 +115,6 @@ SCCP_DOMAIN_BSC = 2
 SCCP_DOMAIN_SOL = 3
 SCCP_DOMAIN_TON = 4
 SCCP_DOMAIN_TRON = 5
-SCCP_DOMAIN_SORA_KUSAMA = 6
-SCCP_DOMAIN_SORA_POLKADOT = 7
-SCCP_DOMAIN_SORA2 = 8
 ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
 ACTIVE_LAUNCH_CHAIN = "eth"
 ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
@@ -148,8 +142,6 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 ];""",
-            "pub const SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1: &str =",
-            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
         ),
     ),
     (
@@ -162,13 +154,6 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 )""",
-            """SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(
-    domain
-    for domain in SCCP_CORE_REMOTE_DOMAINS
-    if domain not in SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS
-)""",
-            "SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (",
-            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
         ),
     ),
     (
@@ -188,9 +173,6 @@ ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_SOL,
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
-    SCCP_DOMAIN_SORA_KUSAMA,
-    SCCP_DOMAIN_SORA_POLKADOT,
-    SCCP_DOMAIN_SORA2,
 )
 ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = (
     SCCP_DOMAIN_ETH,
@@ -199,23 +181,13 @@ ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 )
-ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS = tuple(
-    domain
-    for domain in ALL_LANES_REQUIRED_DOMAINS
-    if domain not in ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
-)
-ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER = (
-    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
-)
+ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS: tuple[int, ...] = ()
 ALL_LANES_CHAIN_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "eth",
     SCCP_DOMAIN_BSC: "bsc",
     SCCP_DOMAIN_SOL: "sol",
     SCCP_DOMAIN_TON: "ton",
     SCCP_DOMAIN_TRON: "tron",
-    SCCP_DOMAIN_SORA_KUSAMA: "sora-kusama",
-    SCCP_DOMAIN_SORA_POLKADOT: "sora-polkadot",
-    SCCP_DOMAIN_SORA2: "sora2",
 }
 ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "sccp:eth:route-allowlist:ethereum-mainnet:v1",
@@ -223,9 +195,6 @@ ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: "sccp:sol:route-allowlist:solana-mainnet-beta:v1",
     SCCP_DOMAIN_TON: "sccp:ton:route-allowlist:ton-mainnet:v1",
     SCCP_DOMAIN_TRON: "sccp:tron:route-allowlist:tron-mainnet:v1",
-    SCCP_DOMAIN_SORA_KUSAMA: "sccp:sora-kusama:route-allowlist:runtime:v1",
-    SCCP_DOMAIN_SORA_POLKADOT: "sccp:sora-polkadot:route-allowlist:runtime:v1",
-    SCCP_DOMAIN_SORA2: "sccp:sora2:route-allowlist:runtime:v1",
 }
 EVM_EXPECTED_RPC_CHAIN_IDS = {
     SCCP_DOMAIN_ETH: 1,
@@ -2880,6 +2849,19 @@ ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS = (
     "active BSC launch lane",
     "with the first-release BSC-mainnet launch policy",
 )
+SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
+    (
+        "docs/source/bridge_proofs.md",
+        (
+            "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`",
+            "the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`)",
+            "the same pattern applies to supported `bsc`, `sol`, `ton`, and `tron`",
+            "canonical supported launch-domain key (`eth`,",
+            "`evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`)",
+        ),
+    ),
+)
+SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS = ()
 ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
         "crates/iroha_core/src/smartcontracts/isi/world.rs",
@@ -4065,48 +4047,6 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "TonSccpProver.buildSubmission",
         ),
     },
-    "substrate": {
-        "js-sdk": (
-            "buildSubstrateSccpProofRequest",
-            "buildSubstrateSccpRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "witnessProvider",
-            "proveFn",
-            "buildSubstrateSccpSubmission",
-        ),
-        "python-sdk": (
-            "build_substrate_sccp_proof_request",
-            "build_substrate_sccp_runtime_storage_proof_request",
-            "SubstrateSccpProver",
-            "witness_provider",
-            "prove",
-            "build_substrate_sccp_submission",
-        ),
-        "swift-sdk": (
-            "buildSubstrateSccpProofRequest",
-            "buildSubstrateSccpRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpWitnessProvider",
-            "SubstrateSccpProver.ProveFunction",
-            "buildSubstrateSccpSubmission",
-        ),
-        "kotlin-sdk": (
-            "SccpSubstrate.buildProofRequest",
-            "SccpSourceProofs.buildSubstrateRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpWitnessProvider",
-            "SubstrateSccpProofEngine",
-            "SccpSubstrate.buildSubmission",
-        ),
-        "java-android": (
-            "SubstrateSccpProver.buildProofRequest",
-            "SourceSccpProofs.buildSubstrateRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpProver.WitnessProvider",
-            "SubstrateSccpProver.ProofEngine",
-            "SubstrateSccpProver.buildSubmission",
-        ),
-    },
 }
 RELEASE_CHECKLIST_KEYS = {"ready", "items"}
 RELEASE_CHECKLIST_ITEM_KEYS = {"id", "title", "ready", "blockers"}
@@ -4177,17 +4117,11 @@ ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
         "ton_full_light_client_gate_hash",
     },
     SCCP_DOMAIN_TRON: {"tron_dpos_source_gate_hash"},
-    SCCP_DOMAIN_SORA_KUSAMA: {"substrate_runtime_storage_gate_hash"},
-    SCCP_DOMAIN_SORA_POLKADOT: {"substrate_runtime_storage_gate_hash"},
-    SCCP_DOMAIN_SORA2: {"substrate_runtime_storage_gate_hash"},
 }
 ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: "solana_full_light_client_gate_hash",
     SCCP_DOMAIN_TON: "ton_full_light_client_gate_hash",
     SCCP_DOMAIN_TRON: "tron_dpos_source_gate_hash",
-    SCCP_DOMAIN_SORA_KUSAMA: "substrate_runtime_storage_gate_hash",
-    SCCP_DOMAIN_SORA_POLKADOT: "substrate_runtime_storage_gate_hash",
-    SCCP_DOMAIN_SORA2: "substrate_runtime_storage_gate_hash",
 }
 ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS = {
     "destination_binding_hash",
@@ -4208,9 +4142,6 @@ ALL_LANES_EVM_DESTINATION_DOMAINS = {SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC}
 ALL_LANES_STATIC_DESTINATION_DOMAINS = {
     SCCP_DOMAIN_SOL,
     SCCP_DOMAIN_TON,
-    SCCP_DOMAIN_SORA_KUSAMA,
-    SCCP_DOMAIN_SORA_POLKADOT,
-    SCCP_DOMAIN_SORA2,
 }
 ALL_LANES_ROUTE_ALLOWLIST_KEYS = {
     "route_allowlist_hash",
@@ -4276,21 +4207,12 @@ ALL_LANES_TON_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
     "ton_last_transaction_hash",
     "ton_last_transaction_lt",
 }
-ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
-    "substrate_finalized_head",
-    "substrate_runtime_code_hash",
-    "substrate_runtime_spec_version",
-    "substrate_runtime_transaction_version",
-}
 ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: ALL_LANES_EVM_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_BSC: ALL_LANES_EVM_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_SOL: ALL_LANES_SOLANA_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_TON: ALL_LANES_TON_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_TRON: ALL_LANES_TRON_ROUTE_CANARY_KEYS,
-    SCCP_DOMAIN_SORA_KUSAMA: ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS,
-    SCCP_DOMAIN_SORA_POLKADOT: ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS,
-    SCCP_DOMAIN_SORA2: ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS,
 }
 ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "evm_message_proof_accepted_transaction",
@@ -4298,9 +4220,6 @@ ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: "solana_live_programdata_snapshot",
     SCCP_DOMAIN_TON: "ton_live_account_snapshot",
     SCCP_DOMAIN_TRON: "tron_message_proof_accepted_transaction",
-    SCCP_DOMAIN_SORA_KUSAMA: "substrate_finalized_runtime_snapshot",
-    SCCP_DOMAIN_SORA_POLKADOT: "substrate_finalized_runtime_snapshot",
-    SCCP_DOMAIN_SORA2: "substrate_finalized_runtime_snapshot",
 }
 
 
@@ -5239,6 +5158,36 @@ def _ethereum_launch_policy_documentation_inventory_errors(
     if forbidden_markers is None:
         forbidden_markers = ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS
     label = "Ethereum mainnet launch-policy documentation"
+    errors = _source_marker_inventory_errors(inventory, label=label)
+    for raw_path, _markers in inventory:
+        path = Path(raw_path)
+        display_path = str(path)
+        if not path.is_absolute():
+            display_path = path.as_posix()
+            path = ROOT / path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for marker in forbidden_markers:
+            if marker in source:
+                errors.append(
+                    f"{label} source inventory {display_path} contains stale marker: {marker}"
+                )
+    return errors
+
+
+def _sccp_public_discovery_documentation_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_markers: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public SCCP discovery documentation."""
+
+    if inventory is None:
+        inventory = SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS
+    if forbidden_markers is None:
+        forbidden_markers = SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS
+    label = "SCCP public discovery documentation"
     errors = _source_marker_inventory_errors(inventory, label=label)
     for raw_path, _markers in inventory:
         path = Path(raw_path)
@@ -9675,71 +9624,6 @@ def _all_lanes_route_canary_schema_errors(
                 byte_length=32,
             )
         )
-    elif domain in (
-        SCCP_DOMAIN_SORA_KUSAMA,
-        SCCP_DOMAIN_SORA_POLKADOT,
-        SCCP_DOMAIN_SORA2,
-    ):
-        for field in ("substrate_finalized_head", "substrate_runtime_code_hash"):
-            errors.extend(
-                _nonzero_fixed_hex_field_errors(
-                    label,
-                    route_canary,
-                    field,
-                    byte_length=32,
-                    type_label="bytes32",
-                )
-            )
-        for field in (
-            "substrate_runtime_spec_version",
-            "substrate_runtime_transaction_version",
-        ):
-            errors.extend(
-                _decimal_text_field_errors(
-                    label,
-                    route_canary,
-                    field,
-                    positive=False,
-                )
-            )
-        substrate_hash_fields = (
-            "substrate_finalized_head",
-            "substrate_runtime_code_hash",
-            "evidence_hash",
-        )
-        governed_hash_fields = []
-        source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
-            governed_hash_fields.extend(
-                (
-                    (field, source_hashes.get(field))
-                    for field in (
-                        "source_verifier_material_hash",
-                        "source_adapter_engine_deployment_hash",
-                    )
-                )
-            )
-        if isinstance(route_allowlist, dict):
-            governed_hash_fields.append(
-                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
-            )
-        if isinstance(destination_binding, dict):
-            governed_hash_fields.append(
-                (
-                    "destination_binding_hash",
-                    destination_binding.get("destination_binding_hash"),
-                )
-            )
-        governed_hash_fields.extend(
-            (field, route_canary.get(field)) for field in substrate_hash_fields
-        )
-        errors.extend(
-            _distinct_nonzero_hex_field_errors(
-                f"{label} hash role",
-                tuple(governed_hash_fields),
-                byte_length=32,
-            )
-        )
     return errors
 
 
@@ -9791,20 +9675,6 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         blockers = lane.get("blockers")
         if domain == ACTIVE_LAUNCH_DOMAIN and isinstance(blockers, list) and blockers:
             errors.append(f"{lane_label} blockers must be empty")
-        if domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS:
-            if lane.get("production_ready") is not False:
-                errors.append(
-                    f"{lane_label} production_ready must be false for unsupported "
-                    "diagnostic launch domains"
-                )
-            if (
-                isinstance(blockers, list)
-                and ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER not in blockers
-            ):
-                errors.append(
-                    f"{lane_label} blockers must include the unsupported "
-                    "launch-scope blocker"
-                )
         records = lane.get("records")
         if isinstance(records, dict):
             records_label = f"{lane_label} records"
@@ -9827,21 +9697,8 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         if (
             domain != ACTIVE_LAUNCH_DOMAIN
             and lane.get("production_ready") is False
-            and not (
-                domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS and records_complete
-            )
         ):
             continue
-        if (
-            domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
-            and records_complete
-            and isinstance(blockers, list)
-            and blockers != [ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER]
-        ):
-            errors.append(
-                f"{lane_label} blockers must contain only the unsupported "
-                "launch-scope blocker when diagnostic evidence is complete"
-            )
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
             source_hashes_label = f"{lane_label} source_record_hashes"
@@ -10899,6 +10756,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_evm_source_adapter_deployment_gate_inventory_errors())
     errors.extend(_ethereum_launch_policy_selector_inventory_errors())
     errors.extend(_ethereum_launch_policy_documentation_inventory_errors())
+    errors.extend(_sccp_public_discovery_documentation_inventory_errors())
     errors.extend(_ethereum_core_range_finality_binding_inventory_errors())
     errors.extend(_ethereum_core_message_replay_guard_inventory_errors())
     errors.extend(_ethereum_torii_pinned_message_proof_inventory_errors())

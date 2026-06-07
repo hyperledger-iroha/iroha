@@ -166,8 +166,7 @@ I18НИ00000061Х.
 - FHE башҡарыу сәйәсәте:
   - I18НИ00000104Х.
   - I18НИ00000105Х.
-  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
-    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
+  - Bootstrap-capable policies (`max_bootstrap_count > 0`) must bind exactly the statement class used by their bootstrap key material: `bootstrap_key_zero_refresh_proof_statement_digest` for `RefreshOnlyV1`, or `full_bootstrap_material_proof_statement_digest` for `FullBootstrapV1`. Policies with `max_bootstrap_count = 0` must omit both fields.
   - параметрҙар йыйылмаһы бәйләү `(param_set, version)` тура килергә тейеш.
   - `max_multiplication_depth` параметрҙар ҡуйылған тәрәнлектән артмаҫҡа тейеш.
   - сәйәсәт ҡабул итеү `Proposed` йәки `Withdrawn` параметрҙары ҡуйылған йәшәү циклын кире ҡаға.

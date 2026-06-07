@@ -53,6 +53,10 @@ const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE = (() => {
   return archive;
 })();
 const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
+const KAGEMUSHA_ZK1_MAGIC = Buffer.from([0x5a, 0x4b, 0x31, 0x00]);
+const KAGEMUSHA_ZK1_TLV_CID1 = Buffer.from("CID1", "ascii");
+const KAGEMUSHA_ZK1_TLV_IPAK = Buffer.from("IPAK", "ascii");
+const KAGEMUSHA_ZK1_TLV_H2VK = Buffer.from("H2VK", "ascii");
 const PRIVACY_CRC64_TABLE = (() => {
   const table = new Array(256);
   for (let index = 0; index < 256; index += 1) {
@@ -829,8 +833,7 @@ function hasKagemushaRecursiveCompactPaymentTokenNative(native) {
     abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION ||
     typeof native
       .kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes !==
-      "function" ||
-    typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"
+      "function"
   ) {
     return false;
   }
@@ -840,10 +843,22 @@ function hasKagemushaRecursiveCompactPaymentTokenNative(native) {
         KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
         KAGEMUSHA_NATIVE_PROBE_ARCHIVE,
       ),
-    ) &&
-    expectKagemushaNativeProbeRejection(() =>
-      native.kagemushaVerifyRecursiveCompactPaymentToken(KAGEMUSHA_NATIVE_PROBE_ARCHIVE),
-    )
+    ) && hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native)
+  );
+}
+
+function hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native) {
+  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  if (
+    !native ||
+    !Number.isInteger(abiVersion) ||
+    abiVersion < KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION ||
+    typeof native.kagemushaVerifyRecursiveCompactPaymentToken !== "function"
+  ) {
+    return false;
+  }
+  return expectKagemushaNativeProbeRejection(() =>
+    native.kagemushaVerifyRecursiveCompactPaymentToken(KAGEMUSHA_NATIVE_PROBE_ARCHIVE),
   );
 }
 
@@ -904,7 +919,11 @@ function kagemushaRecursiveSpendBridgeAbiVersion(native) {
 const KAGEMUSHA_NATIVE_PROBE_ARCHIVE = Buffer.from([0]);
 
 function isExpectedKagemushaNativeProbeRejection(error) {
-  return error instanceof Error && /Kagemusha/i.test(error.message);
+  return (
+    error instanceof Error &&
+    /Kagemusha/i.test(error.message) &&
+    /\b(?:archive|Norito|probe)\b/i.test(error.message)
+  );
 }
 
 function expectKagemushaNativeProbeRejection(probe) {
@@ -951,6 +970,7 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
@@ -1031,6 +1051,247 @@ export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProo
     outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
     outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
+}
+
+export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+  verifierOpeningLen,
+) {
+  return [2, 4, 8, 16, 32, 64, 128].includes(verifierOpeningLen);
+}
+
+export function kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+  verifierOpeningLen,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  return kagemushaRecursiveSpendLineageKeyArtifacts(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    verifierOpeningLen,
+    lineageVerifierKeyBackend,
+    lineageVerifierKey,
+    lineageProvingKeyArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+  verifierOpeningLen,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  return kagemushaRecursiveSpendLineageKeyArtifacts(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    verifierOpeningLen,
+    lineageVerifierKeyBackend,
+    lineageVerifierKey,
+    lineageProvingKeyArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendLineageKeyArtifacts(
+  proofCircuitId,
+  verifierOpeningLen,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  return validateKagemushaRecursiveSpendLineageKeyArtifacts({
+    proofCircuitId,
+    verifierOpeningLen,
+    lineageVerifierKeyBackend,
+    lineageVerifierKey: kagemushaLineageKeyArtifactBytes(
+      lineageVerifierKey,
+      "lineage_verifier_key",
+    ),
+    lineageProvingKeyArchive: kagemushaLineageKeyArtifactBytes(
+      lineageProvingKeyArchive,
+      "lineage_proving_key_archive",
+    ),
+  });
+}
+
+export function validateKagemushaRecursiveSpendLineageKeyArtifacts(artifacts) {
+  if (artifacts === undefined || artifacts === null || typeof artifacts !== "object") {
+    throw new TypeError("lineage_key_artifacts");
+  }
+  if (
+    artifacts.proofCircuitId !==
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 &&
+    artifacts.proofCircuitId !==
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  ) {
+    throw new TypeError("proof_circuit_id");
+  }
+  if (!isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+    artifacts.verifierOpeningLen,
+  )) {
+    throw new TypeError("verifier_opening_len");
+  }
+  const lineageVerifierKey = kagemushaLineageKeyArtifactBytes(
+    artifacts.lineageVerifierKey,
+    "lineage_verifier_key",
+  );
+  const lineageProvingKeyArchive = kagemushaLineageKeyArtifactBytes(
+    artifacts.lineageProvingKeyArchive,
+    "lineage_proving_key_archive",
+  );
+  if (
+    artifacts.lineageVerifierKeyBackend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND ||
+    lineageVerifierKey.length === 0
+  ) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  if (lineageProvingKeyArchive.length === 0) {
+    throw new TypeError("lineage_proving_key_archive");
+  }
+  validateKagemushaRecursiveSpendLineageKeyArtifactPackageBinding(
+    artifacts.proofCircuitId,
+    artifacts.lineageVerifierKeyBackend,
+    lineageVerifierKey,
+    lineageProvingKeyArchive,
+  );
+  const storedLineageVerifierKey = Buffer.from(lineageVerifierKey);
+  const storedLineageProvingKeyArchive = Buffer.from(lineageProvingKeyArchive);
+  return Object.freeze({
+    proofCircuitId: artifacts.proofCircuitId,
+    verifierOpeningLen: artifacts.verifierOpeningLen,
+    lineageVerifierKeyBackend: artifacts.lineageVerifierKeyBackend,
+    get lineageVerifierKey() {
+      return Buffer.from(storedLineageVerifierKey);
+    },
+    get lineageProvingKeyArchive() {
+      return Buffer.from(storedLineageProvingKeyArchive);
+    },
+    isInitArtifact:
+      artifacts.proofCircuitId ===
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    isAppendArtifact:
+      artifacts.proofCircuitId ===
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  });
+}
+
+function kagemushaLineageKeyArtifactBytes(value, name) {
+  if (value === undefined || value === null) {
+    return Buffer.alloc(0);
+  }
+  if (Buffer.isBuffer(value)) {
+    return Buffer.from(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(value));
+  }
+  throw new TypeError(name);
+}
+
+function validateKagemushaRecursiveSpendLineageKeyArtifactPackageBinding(
+  proofCircuitId,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  const verifierCircuitId = kagemushaLineageVerifierKeyEnvelopeCircuitId(
+    lineageVerifierKey,
+  );
+  if (verifierCircuitId !== proofCircuitId) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  const archivePayload = kagemushaLineageProvingKeyArchivePayload(
+    lineageProvingKeyArchive,
+  );
+  const circuitIdBytes = Buffer.from(proofCircuitId, "utf8");
+  const verifierKeyCommitment = kagemushaVerifyingKeyCommitment(
+    lineageVerifierKeyBackend,
+    lineageVerifierKey,
+  );
+  if (
+    !archivePayload.includes(circuitIdBytes) ||
+    !archivePayload.includes(verifierKeyCommitment)
+  ) {
+    throw new TypeError("lineage_proving_key_archive");
+  }
+}
+
+function kagemushaLineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey) {
+  if (
+    lineageVerifierKey.length < KAGEMUSHA_ZK1_MAGIC.length ||
+    !lineageVerifierKey.subarray(0, KAGEMUSHA_ZK1_MAGIC.length).equals(KAGEMUSHA_ZK1_MAGIC)
+  ) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  let offset = KAGEMUSHA_ZK1_MAGIC.length;
+  let circuitId = null;
+  let sawIpaK = false;
+  let sawH2Vk = false;
+  while (offset < lineageVerifierKey.length) {
+    if (offset + 8 > lineageVerifierKey.length) {
+      throw new TypeError("lineage_verifier_key");
+    }
+    const tag = lineageVerifierKey.subarray(offset, offset + 4);
+    const payloadLength = lineageVerifierKey.readUInt32LE(offset + 4);
+    const payloadStart = offset + 8;
+    const payloadEnd = payloadStart + payloadLength;
+    if (payloadEnd > lineageVerifierKey.length) {
+      throw new TypeError("lineage_verifier_key");
+    }
+    const payload = lineageVerifierKey.subarray(payloadStart, payloadEnd);
+    if (tag.equals(KAGEMUSHA_ZK1_TLV_CID1)) {
+      if (circuitId !== null || payload.some((byte) => byte < 0x20 || byte > 0x7e)) {
+        throw new TypeError("lineage_verifier_key");
+      }
+      circuitId = payload.toString("utf8").trim();
+      if (circuitId.length === 0) {
+        throw new TypeError("lineage_verifier_key");
+      }
+    } else if (tag.equals(KAGEMUSHA_ZK1_TLV_IPAK)) {
+      if (sawIpaK || payload.length !== 4) {
+        throw new TypeError("lineage_verifier_key");
+      }
+      sawIpaK = true;
+    } else if (tag.equals(KAGEMUSHA_ZK1_TLV_H2VK)) {
+      if (sawH2Vk || payload.length === 0) {
+        throw new TypeError("lineage_verifier_key");
+      }
+      sawH2Vk = true;
+    } else {
+      throw new TypeError("lineage_verifier_key");
+    }
+    offset = payloadEnd;
+  }
+  if (circuitId === null || !sawIpaK || !sawH2Vk) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  return circuitId;
+}
+
+function kagemushaLineageProvingKeyArchivePayload(lineageProvingKeyArchive) {
+  try {
+    return assertKagemushaNoritoArchive(
+      lineageProvingKeyArchive,
+      "lineage_proving_key_archive",
+    );
+  } catch {
+    throw new TypeError("lineage_proving_key_archive");
+  }
+}
+
+function kagemushaVerifyingKeyCommitment(lineageVerifierKeyBackend, lineageVerifierKey) {
+  const backend = Buffer.from(lineageVerifierKeyBackend, "utf8");
+  const backendLength = Buffer.alloc(8);
+  backendLength.writeBigUInt64BE(BigInt(backend.length));
+  const verifierKeyLength = Buffer.alloc(8);
+  verifierKeyLength.writeBigUInt64BE(BigInt(lineageVerifierKey.length));
+  return createHash("sha256")
+    .update("iroha:zk:v1:vk")
+    .update(backendLength)
+    .update(backend)
+    .update(verifierKeyLength)
+    .update(lineageVerifierKey)
+    .digest();
 }
 
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit() {
@@ -1170,7 +1431,7 @@ function ensureKagemushaRecursiveSpendNative(native, operation) {
 }
 
 function callKagemushaRecursiveSpendNative(operation, requestArchive, archiveName = "requestArchive") {
-  const request = toBuffer(requestArchive, archiveName);
+  const request = toOwnedBuffer(requestArchive, archiveName);
   if (request.length === 0) {
     throw new Error(`${archiveName} must not be empty`);
   }
@@ -1262,6 +1523,7 @@ function assertKagemushaNoritoArchive(
   if (privacyCrc64(payload) !== output.readBigUInt64LE(31)) {
     fail();
   }
+  return payload;
 }
 
 export function isKagemushaRecursiveSpendNativeAvailable() {
@@ -1275,6 +1537,14 @@ export function isKagemushaRecursiveSpendNativeAvailable() {
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable() {
   try {
     return hasKagemushaRecursiveCompactPaymentTokenNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
+export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable() {
+  try {
+    return hasKagemushaRecursiveCompactPaymentTokenVerifierNative(resolveNativeBinding());
   } catch {
     return false;
   }
@@ -1336,12 +1606,12 @@ export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
   requestArchive,
   bundleArchive,
 ) {
-  const request = toBuffer(requestArchive, "requestArchive");
+  const request = toOwnedBuffer(requestArchive, "requestArchive");
   if (request.length === 0) {
     throw new Error("requestArchive must not be empty");
   }
   assertKagemushaNoritoArchive(request, "requestArchive");
-  const bundle = toBuffer(bundleArchive, "bundleArchive");
+  const bundle = toOwnedBuffer(bundleArchive, "bundleArchive");
   if (bundle.length === 0) {
     throw new Error("bundleArchive must not be empty");
   }
@@ -1370,17 +1640,17 @@ export function kagemushaRecursiveSpendLineageWitnessAppendResult(
   requestArchive,
   bundleArchive,
 ) {
-  const previousWitness = toBuffer(previousWitnessArchive, "previousWitnessArchive");
+  const previousWitness = toOwnedBuffer(previousWitnessArchive, "previousWitnessArchive");
   if (previousWitness.length === 0) {
     throw new Error("previousWitnessArchive must not be empty");
   }
   assertKagemushaNoritoArchive(previousWitness, "previousWitnessArchive");
-  const request = toBuffer(requestArchive, "requestArchive");
+  const request = toOwnedBuffer(requestArchive, "requestArchive");
   if (request.length === 0) {
     throw new Error("requestArchive must not be empty");
   }
   assertKagemushaNoritoArchive(request, "requestArchive");
-  const bundle = toBuffer(bundleArchive, "bundleArchive");
+  const bundle = toOwnedBuffer(bundleArchive, "bundleArchive");
   if (bundle.length === 0) {
     throw new Error("bundleArchive must not be empty");
   }
@@ -1420,7 +1690,7 @@ export function kagemushaRecursiveSpendRedeem(requestArchive) {
 }
 
 export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive) {
-  const recordBundle = toBuffer(recordBundleArchive, "recordBundleArchive");
+  const recordBundle = toOwnedBuffer(recordBundleArchive, "recordBundleArchive");
   if (recordBundle.length === 0) {
     throw new Error("recordBundleArchive must not be empty");
   }
@@ -1442,12 +1712,12 @@ export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecords
   recordBundleArchive,
   pallasOpenEnvelopesArchive,
 ) {
-  const recordBundle = toBuffer(recordBundleArchive, "recordBundleArchive");
+  const recordBundle = toOwnedBuffer(recordBundleArchive, "recordBundleArchive");
   if (recordBundle.length === 0) {
     throw new Error("recordBundleArchive must not be empty");
   }
   assertKagemushaNoritoArchive(recordBundle, "recordBundleArchive");
-  const pallasOpenEnvelopes = toBuffer(
+  const pallasOpenEnvelopes = toOwnedBuffer(
     pallasOpenEnvelopesArchive,
     "pallasOpenEnvelopesArchive",
   );
@@ -1476,12 +1746,12 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
   recordBundleArchive,
   pallasOpenEnvelopesArchive,
 ) {
-  const recordBundle = toBuffer(recordBundleArchive, "recordBundleArchive");
+  const recordBundle = toOwnedBuffer(recordBundleArchive, "recordBundleArchive");
   if (recordBundle.length === 0) {
     throw new Error("recordBundleArchive must not be empty");
   }
   assertKagemushaNoritoArchive(recordBundle, "recordBundleArchive");
-  const pallasOpenEnvelopes = toBuffer(
+  const pallasOpenEnvelopes = toOwnedBuffer(
     pallasOpenEnvelopesArchive,
     "pallasOpenEnvelopesArchive",
   );
@@ -1507,15 +1777,15 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
 }
 
 export function kagemushaVerifyRecursiveCompactPaymentToken(compactTokenArchive) {
-  const compactToken = toBuffer(compactTokenArchive, "compactTokenArchive");
+  const compactToken = toOwnedBuffer(compactTokenArchive, "compactTokenArchive");
   if (compactToken.length === 0) {
     throw new Error("compactTokenArchive must not be empty");
   }
   assertKagemushaNoritoArchive(compactToken, "compactTokenArchive");
   const native = resolveNativeBinding();
-  if (!hasKagemushaRecursiveCompactPaymentTokenNative(native)) {
+  if (!hasKagemushaRecursiveCompactPaymentTokenVerifierNative(native)) {
     throw new Error(
-      "recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with compact prover and verifier symbols",
+      "recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with the compact verifier symbol",
     );
   }
   const result = native.kagemushaVerifyRecursiveCompactPaymentToken(compactToken);
@@ -1898,6 +2168,10 @@ function toBuffer(value, name) {
     return Buffer.from(value);
   }
   throw new TypeError(`${name} must be a Buffer, string, or ArrayBuffer view`);
+}
+
+function toOwnedBuffer(value, name) {
+  return Buffer.from(toBuffer(value, name));
 }
 
 function requiredString(value, name) {

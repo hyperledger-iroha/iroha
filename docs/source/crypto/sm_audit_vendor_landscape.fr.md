@@ -39,7 +39,6 @@ cohérent.
 ## Groupe NCC (Services de cryptographie APAC)
 
 - Engagements documentés : examens de code gm/T (SM) pour paiement régional
-  fournisseurs de réseaux et de HSM ; critiques antérieures de Rust pour Parity Substrate, Polkadot,
   et les composants Balance.
 - Points forts : large banc APAC avec reporting bilingue, capacité à combiner
   vérifications de processus de type conformité avec examen approfondi du code.

@@ -333,9 +333,6 @@ phase_evidence_scripts() {
     pytests/scripts/sccp_solana_destination_evidence_test.py
     pytests/scripts/sccp_solana_live_evidence_test.py
     pytests/scripts/sccp_solana_source_state_evidence_test.py
-    pytests/scripts/sccp_substrate_destination_evidence_test.py
-    pytests/scripts/sccp_substrate_live_evidence_test.py
-    pytests/scripts/sccp_substrate_source_evidence_test.py
     pytests/scripts/sccp_ton_destination_evidence_test.py
     pytests/scripts/sccp_ton_live_evidence_test.py
     pytests/scripts/sccp_ton_source_state_evidence_test.py
@@ -385,7 +382,7 @@ phase_java_android() {
   java_home="$(resolve_java_home)"
   android_home="$(resolve_android_home)"
   android_sdk_root="${ANDROID_SDK_ROOT:-$android_home}"
-  android_harness_mains="org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests"
+  android_harness_mains="org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests"
   run_java_version_check "$java_home"
   run_in_dir "$ROOT/java/iroha_android" \
     env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "PATH=$java_home/bin:$PATH" \

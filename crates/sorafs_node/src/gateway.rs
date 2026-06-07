@@ -649,7 +649,8 @@ fn build_por_proof(
             public_key.len()
         ));
     }
-    let signature = Signature::new(signing_key, proof_digest.as_ref());
+    let signature = Signature::try_new(signing_key, proof_digest.as_ref())
+        .wrap_err("failed to sign gateway PoR proof")?;
     por_proof.signature = AdvertSignature {
         algorithm: SignatureAlgorithm::Ed25519,
         public_key: public_key.to_vec(),

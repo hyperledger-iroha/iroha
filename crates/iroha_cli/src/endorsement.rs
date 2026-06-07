@@ -187,7 +187,8 @@ fn build_endorsement(args: &PrepareArgs) -> Result<DomainEndorsement> {
             .map_err(|err| eyre!("failed to parse signer key: {err}"))?;
         let kp = KeyPair::from_private_key(private.clone())
             .wrap_err("failed to derive keypair from private key")?;
-        let signature = Signature::new(&private, body_hash.as_ref());
+        let signature = Signature::try_new(&private, body_hash.as_ref())
+            .wrap_err("failed to sign endorsement body")?;
         endorsement
             .signatures
             .push(iroha::data_model::nexus::DomainEndorsementSignature {
@@ -323,6 +324,13 @@ mod tests {
         };
         let endorsement = build_endorsement(&args).expect("build endorsement");
         assert_eq!(endorsement.signatures.len(), 2);
+        let body_hash = endorsement.body_hash();
+        for signature in &endorsement.signatures {
+            signature
+                .signature
+                .verify(&signature.signer, body_hash.as_ref())
+                .expect("endorsement signature should verify");
+        }
         assert!(
             endorsement
                 .scope

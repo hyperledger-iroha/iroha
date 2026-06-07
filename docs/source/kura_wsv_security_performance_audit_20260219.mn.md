@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### Үйлдвэрлэлийн WSV
 
 - Одоо байгаа хамрах хүрээ:
-  - маргааныг буцаах үйлдэл: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - шаталсан арын хэсгийн аюулгүй байдлын түгжээ: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - маргааныг буцаах үйлдэл: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - шаталсан арын хэсгийн аюулгүй байдлын түгжээ: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Цоорхой:
   - Дэлхийн хүнд үүрэг даалгаврын үед хүлээн зөвшөөрөгдөх дээд хязгаарыг батлах тоон маргааны тест байхгүй
   - DA курсорын дэвшилтийн инвариантууд гэнэт эвдэрсэн тохиолдолд сандрахгүй ажиллах регрессийн тест байхгүй
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## Санал болгож буй туршилтын нэмэлтүүд1. `kura_writer_io_failures_do_not_panic` (нэгж, гэмтлийн тарилга)
 2. `kura_budget_check_scales_with_pending_depth` (гүйцэтгэлийн регресс)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (интеграци/төгс)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (мөргөлдөөний регресс)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (мөргөлдөөний регресс)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (тэсвэртэй байдал)
 6. `mock_wsv_admin_alias_requires_permissions` (аюулгүй байдлын регресс)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS хамгаалалт)

@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -8,12 +8,139 @@ track detailed unfinished engineering work.
 
 ## SCCP launch-scope note
 
-- Substrate/Polkadot-family networks are not supported in the current SCCP
-  launch scope, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and
-  SORA2. Existing Substrate-family runtime wrappers, evidence helpers, and
-  relay notes are diagnostic/backlog material only; they should not be treated
-  as remaining release blockers or advertised as production network support
-  unless governance explicitly re-opens that scope.
+The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Backlog
+notes for unsupported network families are diagnostic only; they should not be
+treated as release blockers or advertised as production network support unless
+governance explicitly re-opens that scope.
+
+Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
+trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
+versions in evidence and production-readiness gates. Schema-critical integer
+metadata such as versions, receipt status codes, and notary record counts reject
+JSON boolean aliases before evidence can be archived, and bounded child-process
+output byte caps reject boolean aliases before verifier subprocesses run.
+Regular-file and rail payload byte caps now also reject boolean or non-integer
+aliases before filesystem metadata is inspected.
+Archived child-command evidence rejects value-taking flags whose separate or
+equals-form values are empty or another flag token, keeping canary command
+evidence unambiguous before production archiving.
+Direct ISO CLI path preflights now also treat missing, empty, following
+`--flag`, or `--path-flag=--flag` path values as missing before any file or
+network work.
+Live rail-gateway `--torii-base-url` and audit-notary `--endpoint` flags now
+also reject missing, empty, or flag-looking URL values before argparse parsing.
+Direct ISO numeric CLI preflights now reject malformed, empty, flag-looking, or
+secret-looking numeric values before argparse can echo operator-provided input.
+All ISO operator entry points now also reject secret-looking raw CLI tokens
+before argparse can echo unknown arguments; the scanner covers bearer tokens,
+private keys, passwords/passphrases, API/access/session keys, client secrets,
+cookies, and Iroha signatures.
+Secret scanning now also checks repeated percent-decoded forms, so encoded or
+double-encoded secret-looking key/value material is rejected in CLI paths,
+unknown JSON keys, recursive JSON values, compact summary paths, and remote
+response previews/errors without echoing the decoded material.
+ISO URL path validators now also reject secret-looking key/value material in
+literal, percent-encoded, or double-encoded path segments before live network
+delivery, archived evidence ingestion, or readiness rollup.
+Local path, raw CLI, summary-path, artifact-path, and URL-path validators now
+also reject narrow identifier-style secret path material such as
+`token-*-secret` and strong key markers without treating ordinary token-file
+operator paths as secret-bearing by name alone.
+ISO URL port parser failures now report only label-level invalid-port
+diagnostics instead of including parser exception text that may contain the raw
+operator-provided port string.
+ISO URL host validators now reject secret-looking hostname labels, and non-port
+URL parser failures use label-only diagnostics before malformed URL text can be
+echoed by parser exceptions.
+XSD profile-catalog validation now recursively rejects secret-looking strings
+and identifier-style values before rail, signature-policy, reference-dataset,
+address-mode, profile-id, or version diagnostics can echo catalog-provided
+values.
+XSD manifest schema and fixture `payload_root` values now reject secret-looking
+material before namespace/root mismatch diagnostics can echo manifest-provided
+payload names.
+Checked-in XSD `targetNamespace` attributes now also reject secret-looking
+material before schema namespace mismatch diagnostics can echo schema-provided
+attribute values.
+XSD and XML payload identifiers, schema-root attribute names, and unsupported
+foreign child namespaces now use label-only secret-looking diagnostics instead
+of echoing schema-provided names or namespace URIs.
+XML fixture contents are scanned before optional `xmllint` validation, and
+secret-looking validator output is redacted before it can be reflected in
+XSD preflight diagnostics.
+Secret-looking field-name markers now also normalize hyphenated
+`private-key` and underscore-form `x_iroha_signature` spellings across ISO
+validators, and receipt JSON secret-field checks recurse through nested objects
+and arrays before receipt semantics are evaluated.
+All ISO JSON duplicate-key hooks now report only that a duplicate key exists,
+without echoing the repeated key name.
+Secret-looking unknown JSON field names are also rejected with label-only
+unknown-key diagnostics while ordinary unknown-field typos still list the
+field names for operator ergonomics.
+Direct ISO boolean CLI flags reject attached `--flag=value` spellings and
+separate non-option values before argparse can echo the value or reinterpret
+the option.
+Evidence and production-readiness context flags reject missing, empty,
+flag-looking, or secret-looking provider/environment values before argparse,
+summary loading, or mismatch diagnostics can reflect them.
+Canary runbook provider/environment labels now reject secret-looking
+identifier-style strings before plan-only output or executed summaries can
+preserve them.
+Trust-bundle `--max-source-age-days` now rejects missing, empty, flag-looking,
+malformed, or secret-looking freshness budgets before argparse or bundle reads.
+Trust-bundle profile IDs, rails, environments, embedded signature policies,
+source authority/version strings, DER labels, and recursively scanned field
+names reject secret-looking identifiers before trust summaries or profile
+overrides can persist them.
+Trust-bundle SHA-256 pins, declared DER digests, and certificate policy OIDs
+also reject secret-looking marker strings before canonical SHA/OID diagnostics.
+Archived evidence and readiness rollups apply the same no-echo identifier check
+to compact canary provider/environment fields, evidence policy context, trust
+profile IDs/rails/environments, trust embedded-signature policies,
+profile-override policies, trust source authority/version strings, and archived
+trust DER labels before release summaries can preserve those values.
+Archived evidence and readiness SHA-256 fields, including trust bundle digests,
+profile-override pins, and receipt payload/anchor/index digests, reject the same
+markers before digest-shape diagnostics or blockers can preserve them.
+Rail sidecar `profile` and `rail_message_id` identifiers, plus archived rail
+receipt `profile` and `rail_message_id` values, now reject secret-looking
+identifier-style strings before network delivery, receipt emission, receipt
+verification, or receipt-summary rollup.
+Rail sidecar `message_type` and `payload_sha256` values, and archived rail
+receipt `message_type` values, also apply no-echo secret-looking checks before
+unsupported-type, digest-mismatch, or receipt-summary diagnostics can preserve
+operator-provided marker strings.
+Receipt verifier, evidence, and readiness `receipt_kind` values reject
+secret-looking identifier-style markers before unsupported-kind diagnostics or
+blockers can preserve forged archive values.
+Archived canary stage names in evidence and readiness rollups also reject
+secret-looking identifier-style markers before unsupported-stage, ordering, or
+stage-window diagnostics can preserve forged values.
+The live rail-gateway, audit-notary, canary, and XSD fixture tools also reject
+secret-looking key/value material in local output paths before those paths can
+be persisted into receipts or archived summaries.
+The receipt verifier scans raw receipt strings for secret-looking material
+before version or receipt-kind dispatch, so malformed receipt kinds cannot echo
+runtime tokens in unsupported-kind diagnostics.
+Recursive trust-bundle, receipt, evidence, and readiness secret-material
+scanners now report label-only forbidden-field failures, and receipt value
+secret checks no longer echo the receipt field name that carried the rejected
+material; those recursive scanners use the same expanded secret marker set for
+secret-looking field names and values.
+Rail and notary adapters also redact failed remote response previews and
+receipt errors when upstreams return token, password, private-key, or cookie
+material, and the receipt verifier rejects archived previews/errors containing
+the same marker set.
+Live rail sidecars now run the same recursive secret-material scan on known
+fields before unsupported message type, profile, payload digest, or
+rail-message-id validation can echo operator-provided values.
+Duplicate record, list, digest, OID, archived receipt-reuse, and trust-material
+diagnostics now report field/index labels without echoing the rejected duplicate
+value.
+Rail-gateway and audit-notary bearer-token file failures now also report the
+credential input label instead of echoing runtime token file paths.
+Remaining production work still depends on operator-supplied live rail evidence,
+redistributable schemas, and official trust/revocation bundles.
 
 ## FHE/RAM-LFE first-release follow-ups
 
@@ -73,12 +200,86 @@ track detailed unfinished engineering work.
   version, public-input schema hash, gas schedule, or active inline key
   material drift from the governed v1 profile, moving those rollout failures
   to `RegisterVerifyingKey`/`UpdateVerifyingKey` admission. BFV bootstrap keys
-  now carry an explicit `RefreshOnlyV1` mode, and reserved full-bootstrap mode
-  fails closed until real bootstrapping circuit material exists, so the current
-  refresh bridge cannot be mislabeled as full bootstrapping. Bundle
-  validation/digesting applies the same mode gate before transcript-bound
-  bootstrap proof statements can be produced. Remaining production work is the
-  full BFV bootstrapping path. Direct crypto
+  now carry an explicit `RefreshOnlyV1` mode, and `FullBootstrapV1` keys carry
+  versioned circuit/key-material commitments that bind the canonical circuit id,
+  registered BFV parameter digest, RNS modulus-chain digest, key-switch
+  decomposition-chain digest, bootstrap artifact digests, and proof
+  public-input schema/prover-key/verifier-key digests. The material validator
+  rejects zero commitments, duplicate artifact/proof commitments, and artifact
+  or proof commitments that reuse registered profile digests, so each governed
+  digest role remains domain-separated at admission. Bundle admission
+  and digesting bind that material, while refresh/proof/execution paths still
+  fail closed because the full BFV bootstrap evaluator is not implemented, so
+  the current refresh bridge cannot be mislabeled as full bootstrapping. Direct
+  key-authorized refresh execution, bootstrap output-bound helpers, and
+  Soracloud exact/bounded bootstrap execution now share the same mode-aware
+  request preflight, so reserved full-bootstrap keys are rejected before
+  round-count, bound-capacity, ciphertext-shape, or refresh-key entry errors.
+  Bundle validation/digesting applies the same public metadata preflight before
+  the mode/material gate and before transcript-bound bootstrap proof statements
+  can be produced. The crypto layer also exposes a domain-separated
+  full-bootstrap material proof-statement digest that binds the parameter set,
+  public key, evaluation-key bundle digest, bootstrap-key metadata, and
+  material digest for governed prover inventories. The data-model refresh
+  transcript wrapper can derive the same full-bootstrap material statement for
+  manifest callers, and execution policies now require bootstrap-capable
+  bundles to bind exactly one bootstrap statement class: zero-refresh for
+  `RefreshOnlyV1`, or full material for `FullBootstrapV1`. Full-bootstrap
+  refresh transcript digesting omits deterministic zero-refresh bootstrap
+  transcript seeds, and Core rejects missing, mismatched, stale, or cross-mode
+  policy statement bindings before execution. The data model now also exposes a
+  distinct full-bootstrap material proof attachment with canonical
+  STARK/`OpenVerifyEnvelope` circuit id, public-input schema, byte bounds,
+  verifier-key commitment, statement public input, and envelope-hash checks, so
+  governed material proofs no longer reuse the zero-refresh bootstrap proof
+  envelope. `RunSoracloudFheJob` and Torii signed FHE job requests now carry
+  an optional distinct full-bootstrap material proof attachment, provenance
+  signs it, and Core requires it for policy-bound full-bootstrap jobs before
+  dispatching through the active Soracloud verifier record or preverified-proof
+  cache path. Runtime admission rejects absent, mismatched, non-bootstrap, and
+  unverified fake full-material proofs, and
+  `RegisterVerifyingKey`/`UpdateVerifyingKey` admission rejects canonical
+  full-material verifier-profile drift before job execution. Job admission now
+  also requires the material proof schema digest and verifier-key digest to
+  match the canonical Soracloud proof schema and proof attachment verifier
+  commitment through the BFV crypto proof-profile validator, and rejects
+  supplied full-material proof attachments that omit `vk_commitment` at the
+  material/profile gate before backend verifier lookup. The Rust, Swift,
+  Kotlin/JVM, and Java Android shared Soracloud BFV operation-fixture validators
+  now pin the full-bootstrap material/profile digest, verifier-key commitment,
+  and statement vector so SDK/release validation can reject fixture drift before
+  the executable evaluator lands. Full-mode exact
+  and bounded runtime bootstrap paths now use dedicated crypto preflight
+  helpers that validate governed material commitments, registered profile
+  digests, ciphertext shape, and exact/bounded metadata before returning the
+  current unavailable-evaluator error. Crypto now also exposes a typed
+  full-bootstrap artifact bundle validator/digest and artifact-aware execution
+  preflight that bind concrete evaluator/proof-profile bytes to those governed
+  commitments. Each artifact byte field is now a Norito role/profile envelope
+  that declares the canonical circuit id, registered parameter/RNS/decomposition
+  digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
+  and empty-payload artifact attachments fail before the unavailable evaluator
+  boundary. Coefficient-to-slot and slot-to-coefficient artifacts now carry
+  typed diagonal packed-slot linear transforms, and crypto exposes exact and
+  bounded deterministic evaluators for those transforms through the registered
+  RNS paths. The blind-rotation artifact now carries canonical packed-slot
+  rotation schedules bound to the governed accumulator artifact. The
+  sample-extraction artifact now carries typed source/output ciphertext shape
+  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
+  bad-component-count, or out-of-range payloads. The accumulator artifact now
+  carries typed packed-slot test-vector material and rejects opaque,
+  wrong-slot-count, malformed, or all-zero accumulator payloads. Crypto now also
+  exposes a domain-separated full-bootstrap execution proof statement digest
+  that validates and binds the public key, governed bootstrap key/material,
+  concrete artifact bundle, input/output ciphertexts, exact or bounded proof
+  mode, and input/output bound metadata for the future verifier.
+  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts, provenance
+  signs them, and Core routes exact/bounded full-mode jobs through
+  artifact-aware preflight before the current unavailable-evaluator error.
+  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
+  Remaining production work is the executable full BFV bootstrapping evaluator
+  and the real prover/verifier artifacts and implementation.
+  Direct crypto
   refresh-transcript validation/digesting and Soracloud transcript digesting
   now also preflight the advertised BFV public-key shape
   before evaluation-key bundle validation, so malformed transcript key material
@@ -176,13 +377,20 @@ track detailed unfinished engineering work.
   bridge that decomposes ciphertext components as centered residues,
   reconstructs signed negacyclic products before `t/q` scale-and-rounding, and
   relinearizes the scaled quadratic component through the RNS digit/key-switch
-  path while matching the scalar bounded-noise multiplication output. Rounded
-  Galois key switching and packed `RotateLeft` now also have RNS exact bridge
+  path while matching the scalar bounded-noise multiplication output. The RNS
+  chain now also exposes an explicit exact scale-round helper for centered RNS
+  product polynomials at the rounded BFV `t/q` boundary, and rounded RNS
+  ciphertext multiplication uses that helper for direct product components
+  plus a centered two-product sum helper for `c1` cross terms, with exact
+  product-sum coverage rejecting aliasing before scale-and-rounding.
+  Rounded Galois key switching and packed `RotateLeft` now also have RNS exact bridge
   entry points that match the scalar bounded-noise schedule and reject
   too-narrow chains. Outer-slot rotation and bootstrap refresh material can now
   also be generated and publicly transcript-validated with rounded
   bounded-noise encrypted-zero ciphertexts, refreshed through scalar or exact
-  RNS addition, and propagated with centered-noise output bounds. Evaluation-key
+  RNS addition, routed through registered target-limb RNS basis-extension
+  wrappers for bounded production Bootstrap execution, and propagated with
+  centered-noise output bounds. Evaluation-key
   bundles can now validate and digest the bounded-noise rotation/bootstrap
   transcript inventory under a separate domain from the exact-lift refresh
   path, and owner diagnostics can validate bounded relin/Galois key-switch
@@ -250,7 +458,10 @@ track detailed unfinished engineering work.
   bounded-noise Multiply, Galois key-switch, and packed `RotateLeft` fallback
   helpers now also have registered production wrappers, so both
   exact-reconstruction and target-limb basis-extension paths derive canonical
-  evaluator chains before inspecting caller-controlled key material.
+  evaluator chains before inspecting caller-controlled key material. Bounded
+  Bootstrap refresh now also has direct and registered target-limb
+  basis-extension wrappers, and Soracloud bounded Bootstrap execution uses the
+  registered wrapper instead of the older direct registered refresh add.
   Bounded-noise RNS packed-selector products now also route through a bounded
   plaintext-polynomial RNS helper with a registered production wrapper, so
   packed `RotateLeft` mask multiplication shares the same rounded-capacity
@@ -451,8 +662,8 @@ track detailed unfinished engineering work.
   before max-total admission checks.
   The production
   bounded-noise admission circuit/prover
-  rollout, broader target-limb BFV-RNS evaluator hardening, and full
-  bootstrapping circuit/key material remain pending.
+  rollout, broader target-limb BFV-RNS evaluator hardening, and executable
+  full-bootstrap evaluator plus verifier/prover implementation remain pending.
   Registered RNS chain selection now also preflights exact-addition and exact
   negacyclic-product coverage before exposing the chain or its production digest. Public RNS
   exact evaluator entry points now also preflight their required chain coverage
@@ -505,17 +716,24 @@ track detailed unfinished engineering work.
   bootstrap key ids containing only ASCII alphanumeric, `.`, `_`, or `-` bytes.
   The crypto layer now also exposes and validates a
   registered RAM-LFE v1 BFV RNS coefficient-modulus chain with bounded,
-  strictly increasing odd-prime, NTT-friendly, pairwise-coprime limbs and a
-  checked product that covers the current ciphertext modulus, plus a stable
-  domain-separated chain digest for governance and release-vector binding. The
-  shared RNS validator now also validates the BFV parameter set itself, so
-  direct exact-lift and exact `Z_q` coverage checks fail closed on malformed
-  parameter profiles before inspecting chain arithmetic bounds. The same chain
-  now supports checked limb-major polynomial decomposition and CRT
+  strictly increasing odd-prime, NTT-friendly, pairwise-coprime limbs, bound
+  primitive `2n`-th negacyclic NTT roots for the registered RAM-LFE profile,
+  and a checked product that covers the current ciphertext modulus, plus a
+  stable domain-separated chain digest for governance and release-vector
+  binding. The shared RNS validator now also validates the BFV parameter set
+  itself, so direct exact-lift and exact `Z_q` coverage checks fail closed on
+  malformed parameter profiles before inspecting chain arithmetic bounds, and
+  enforces bounded concrete root support for every validated limb. The
+  registered chain selector validates that the root table is limb-aligned
+  before exposing production RNS chains. The same chain now supports checked
+  limb-major polynomial decomposition and CRT
   reconstruction, rejecting malformed limb counts, limb lengths, unreduced
   residues, and source coefficients outside the ciphertext modulus; it also
   has deterministic scalar residue addition and per-limb NTT-backed
   negacyclic multiplication with a scalar fallback in `Z_Q[x] / (x^n + 1)`.
+  Generic primitive-root discovery for non-registered limbs is bounded, so
+  unsupported caller-supplied primes fall back or fail closed instead of
+  running an unbounded candidate scan.
   The shared Soracloud operation fixture now binds the registered RNS
   descriptor/digest plus sample
   decomposition/reconstruction, residue addition, and negacyclic
@@ -536,7 +754,11 @@ track detailed unfinished engineering work.
   now uses the same registered exact RNS bridge for Add, Multiply, packed and
   outer `RotateLeft`, and bounded Bootstrap refresh rounds, so the shared
   operation vectors cover the production job path rather than scalar-only
-  fallbacks. The deterministic BFV baseline now also has
+  fallbacks. Bounded target-limb basis-extension wrappers now share a single
+  rounded-capacity plus decomposition/evaluator prefix preflight, and Bootstrap
+  refresh rejects structurally valid non-prefix decomposition chains before
+  malformed refresh keys or ciphertexts can mask corridor errors. The
+  deterministic BFV baseline now also has
   packed-polynomial Galois automorphism keys that switch `sigma_k(s)`
   ciphertexts back to the original secret key after applying `x -> x^k`, with
   regressions covering canonical odd powers, malformed key rejection,
@@ -654,13 +876,15 @@ track detailed unfinished engineering work.
   `bfv-default` RAM-LFE BFV runtime descriptor and reject descriptor drift in
   core admission. Parameter-set descriptors now also carry the canonical
   domain-separated registered BFV RNS modulus-chain digest, and core admission
-  rejects RNS descriptor drift before FHE jobs can run. The execution policy now
-  also carries the canonical evaluation-key bundle digest from the shared
-  operation fixture, and `RunSoracloudFheJob` rejects structurally valid but
-  ungoverned key material before output state is emitted. Shared release
-  vectors still need to cover the full BFV-RNS evaluator and full
-  bootstrapping circuit/key material beyond the current encrypted-zero
-  round-refresh bundles.
+  rejects RNS descriptor drift before FHE jobs can run; the crypto-side
+  registered selector also checks the concrete negacyclic NTT root table before
+  exposing that chain or digest. The execution policy now also carries the
+  canonical evaluation-key bundle digest from the shared operation fixture, and
+  `RunSoracloudFheJob` rejects structurally valid but ungoverned key material
+  before output state is emitted. Shared release vectors still need to cover
+  the full BFV-RNS evaluator and executable full-bootstrap evaluator/proof
+  material beyond the current encrypted-zero round-refresh bundles and
+  data-model full-bootstrap material proof envelope.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
   checks into the next full workspace and SDK corridor. The `iroha_cli
   --all-targets` strict clippy gate now covers the governance-instruction, IVM
@@ -2405,8 +2629,10 @@ track detailed unfinished engineering work.
 		  complete child-process stdout/stderr previews for every executed canary
 		  stage, rejects timed-out stages,
 		  and timeout-bounded direct receipt archive verification covering canary
-		  receipt digests, receipt kinds, successful status metadata, and
-		  kind-specific compact receipt metadata by default,
+		  receipt digests, receipt filenames, receipt kinds, successful status
+		  metadata, kind-specific compact receipt metadata, and explicit rejection
+		  of rail default-profile fallback unless the local override is recorded by
+		  the receipt verifier,
 	  requires exact expected `--provider` and `--environment` CLI context and
 	  records that context in the digest-bound evidence policy for readiness
 	  rechecking, requires explicit freshness budgets for canary, trust-summary,
@@ -2426,9 +2652,12 @@ track detailed unfinished engineering work.
 	  rejects stale digest-correct archive inputs, rejects repeated or copied
   canary/trust summaries by path and `summary_sha256`,
   requires canary summaries to prove they were generated with
-  `--require-explicit-policy`, rejects duplicate archived trust profile IDs and
-  bundle digests across trust summaries, rejects non-canonical archived trust profile IDs or unknown
-  rail IDs, rejects forged trust profile overrides whose id/rail/policy,
+  `--require-explicit-policy`, rejects duplicate compact receipt paths/digests,
+  duplicate archived trust profile IDs, and bundle digests across summaries with
+  label-only diagnostics, rejects non-canonical archived trust profile IDs or unknown
+  rail IDs, requires each canary rail receipt profile to have matching compact
+  trust material for the same profile ID and environment, with same-rail binding
+  for built-in rail-named profiles, rejects forged trust profile overrides whose id/rail/policy,
   pin/OID/CRL/OCSP counts, canonical OIDs, DER summary digests, DER byte
   lengths, bounded canonical base64 DER SEQUENCE blobs, or trusted/revoked pin
   overlap no longer match the trust-bundle verifier output,
@@ -2474,11 +2703,11 @@ track detailed unfinished engineering work.
   local-only child command flags in either `--flag` or `--flag=value` form, including the notary adapter's
   `--allow-missing-record-sources` diagnostic override, unsupported child
   command flags outside the expected rail/notary/receipt-verifier CLI surfaces,
-  duplicate singleton child command flags, boolean child command flags spelled
-  with `=value`, non-positive or non-finite numeric child command flag values,
-  non-canonical child command path values, control-bearing or whitespace-padded
-  child command entries, missing required child command inputs, whitespace-padded
-  strings or paths, non-canonical canary
+  duplicate singleton child command flags, boolean child command flags using
+  attached or separate values, non-positive or non-finite numeric child command
+  flag values, non-canonical child command path values, control-bearing or
+  whitespace-padded child command entries, missing required child command
+  inputs, whitespace-padded strings or paths, non-canonical canary
   rail/notary `receipt_dir` values,
 	  rail/notary `receipt_dir` values that do not match the child command's single
 	  `--receipt-dir`, verify-stage commands that omit generated rail/notary
@@ -2504,11 +2733,15 @@ track detailed unfinished engineering work.
   their checked-in XSDs, so the `--require-fixture-for-schema` strict flag
   passes; the schema-backed strict flag still rejects the current
   official-package gaps until the remaining securities/collateral/legacy-return
-	  XSDs are checked in. Optional manifest/profile fields are optional only when
-	  omitted; present `null` reviewed reasons, trust/revocation material lists,
-	  booleans, numeric caps, business-service arrays, or amount minor-unit arrays
-	  fail before a digest-bound XSD summary can be emitted. Required and optional
-	  manifest/profile-catalog strings now reject ASCII control characters before
+  XSDs are checked in. `--require-profile-schema-backed-versions` now uses
+  the default `DEFAULT_PROFILES_JSON` catalog when no `--profile-catalog`
+  override is supplied, so the release gate fails directly on the current
+  profile-advertised schema gaps.
+  Optional manifest/profile fields are optional only when
+  omitted; present `null` reviewed reasons, trust/revocation material lists,
+  booleans, numeric caps, business-service arrays, or amount minor-unit arrays
+  fail before a digest-bound XSD summary can be emitted. Required and optional
+  manifest/profile-catalog strings now reject ASCII control characters before
 	  summary emission, including reviewed gap reasons. Readiness also rejects
 	  archived reviewed gap reasons that are present but empty or non-string
 	  instead of treating them as absent, blocks schema-backed archived fixtures
@@ -2609,9 +2842,15 @@ track detailed unfinished engineering work.
   evidence summary and receipts, include the accepted evidence in
   `scripts/iso_production_readiness.py`, and document rail-specific file-drop,
   retry, and acknowledgement handling.
-- Add official MDR/XSD fixture coverage beyond the current live-profile
-  `pacs.008`/`pacs.009` and checked-in lifecycle fixture corridors, make
-  the strict `scripts/iso_xsd_fixture_verify.py` schema-backed release flag
+- Add redistributable official MDR/XSD fixture coverage for the remaining
+  profile-advertised gaps beyond the current schema-backed payment and
+  cancellation corridor. `pacs.004.001.09` is now checked in and validated;
+  remaining blockers include `pacs.002.001.12`, `pacs.008.001.10`, and
+  `pacs.009.001.10` (available public candidates inspected so far carry
+  restricted redistribution terms and are now recorded as blocked sources in
+  the fixture manifest) plus the securities and collateral lifecycle packages.
+  Make the strict
+  `scripts/iso_xsd_fixture_verify.py` schema-backed release flag
   (`--require-schema-backed-fixtures`) pass,
   make the aggregate `scripts/iso_production_readiness.py` gate pass without
   diagnostic overrides, and keep broadening Torii tests for
@@ -3145,7 +3384,6 @@ track detailed unfinished engineering work.
     rendering, and telemetry peer compatibility handling.
   - Completed 2026-06-06: Torii's configured SCCP all-lanes launch diagnostic
     now uses the shared supported launch-domain set (ETH, BSC, Solana, TON,
-    TRON) instead of the full core diagnostic-domain list. Substrate/SORA2
     configured material remains explicitly tested as out of launch scope, and
     `cargo test -p iroha_torii --lib --features app_api -- --nocapture` is
     green with `2309` passed and `2` ignored.

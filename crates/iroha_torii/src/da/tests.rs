@@ -1685,7 +1685,8 @@ fn build_receipt_includes_pdp_commitment() {
         encoded.clone(),
         rent_quote,
         DaStripeLayout::default(),
-    );
+    )
+    .expect("build receipt");
     assert_eq!(receipt.pdp_commitment, Some(encoded));
     assert_eq!(receipt.rent_quote, rent_quote);
 }
@@ -1705,7 +1706,8 @@ fn build_receipt_signs_with_operator_key() {
         Vec::new(),
         DaRentQuote::default(),
         DaStripeLayout::default(),
-    );
+    )
+    .expect("build receipt");
     let mut unsigned = receipt.clone();
     unsigned.operator_signature = Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER);
     let unsigned_bytes = to_bytes(&unsigned).expect("encode unsigned receipt");
@@ -1755,7 +1757,8 @@ fn build_receipt_computes_chunk_root_from_payload() {
         encoded_commitment,
         manifest.manifest.rent_quote,
         stripe_layout,
-    );
+    )
+    .expect("build receipt");
     assert_eq!(receipt.chunk_root, manifest.chunk_root);
     assert_eq!(
         manifest.chunk_root,
@@ -1859,7 +1862,8 @@ fn build_receipt_prefers_chunk_root_from_manifest() {
         encoded_commitment,
         manifest.manifest.rent_quote,
         stripe_layout,
-    );
+    )
+    .expect("build receipt");
     assert_eq!(receipt.chunk_root, manifest_chunk_root);
 }
 
@@ -2025,7 +2029,8 @@ fn build_da_commitment_record_reflects_artifacts() {
         pdp_bytes.clone(),
         manifest.manifest.rent_quote,
         stripe_layout,
-    );
+    )
+    .expect("build receipt");
     let record = build_da_commitment_record(
         &request,
         &manifest,
@@ -2084,7 +2089,8 @@ fn build_da_commitment_record_sets_kzg_commitment_for_kzg_lane() {
         pdp_bytes.clone(),
         manifest.manifest.rent_quote,
         stripe_layout,
-    );
+    )
+    .expect("build receipt");
     let record = build_da_commitment_record(
         &request,
         &manifest,
@@ -2133,7 +2139,8 @@ fn persist_da_commitment_record_writes_and_is_idempotent() {
         pdp_bytes.clone(),
         manifest.manifest.rent_quote,
         stripe_layout,
-    );
+    )
+    .expect("build receipt");
     let record = build_da_commitment_record(
         &request,
         &manifest,
@@ -2206,7 +2213,8 @@ fn persist_da_commitment_schedule_entry_writes_bundle() {
         pdp_bytes.clone(),
         manifest.manifest.rent_quote,
         stripe_layout,
-    );
+    )
+    .expect("build receipt");
     let record = build_da_commitment_record(
         &request,
         &manifest,

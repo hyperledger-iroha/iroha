@@ -9,10 +9,10 @@ This slice models `cached_slot_effective_quorum_timeout(...)`,
 `cached_slot_timeout_hysteresis_remaining(...)`. Near-commit-quorum payload
 repair can shorten the cached-slot timeout only when one more precommit vote
 would satisfy quorum, local payload data is missing, and neither consensus
-queue nor RBC backpressure is active. Repeated NPoS cached-slot timeouts are
-damped by a bounded hysteresis factor derived from the previous timeout
-streak, while permissioned mode, zero timeout, missing history, wrong height,
-and non-advancing views never wait.
+queue nor RBC backpressure is active. Repeated NPoS cached-slot timeouts record
+a saturating u8 streak and are damped by a bounded hysteresis factor derived
+from that previous timeout streak, while permissioned mode, zero timeout,
+missing history, wrong height, and non-advancing views never wait.
 ***************************************************************************)
 
 CONSTANT
@@ -63,6 +63,7 @@ HysteresisCases == {
   "hysteresis_streak1_before",
   "hysteresis_streak2_before",
   "hysteresis_streak3_before",
+  "hysteresis_streak_max_before",
   "hysteresis_boundary",
   "hysteresis_after"
 }
@@ -91,7 +92,8 @@ HysteresisBeforeCases == {
   "hysteresis_streak0_before",
   "hysteresis_streak1_before",
   "hysteresis_streak2_before",
-  "hysteresis_streak3_before"
+  "hysteresis_streak3_before",
+  "hysteresis_streak_max_before"
 }
 
 HysteresisBoundaryCases == {"hysteresis_boundary"}
@@ -104,6 +106,7 @@ Streak0Cases == {"hysteresis_streak0_before", "hysteresis_boundary",
 Streak1Cases == {"hysteresis_streak1_before"}
 Streak2Cases == {"hysteresis_streak2_before"}
 Streak3Cases == {"hysteresis_streak3_before"}
+StreakMaxCases == {"hysteresis_streak_max_before"}
 
 SpecUsesFastTimeout(c) == c \in NearFastEligibleCases
 
@@ -119,12 +122,13 @@ SpecNextStreak(c) ==
   ELSE IF c \in Streak1Cases THEN 2
   ELSE IF c \in Streak2Cases THEN 3
   ELSE IF c \in Streak3Cases THEN 4
+  ELSE IF c \in StreakMaxCases THEN 255
   ELSE 0
 
 SpecHysteresisFactor(c) ==
   IF c \in Streak0Cases THEN 2
   ELSE IF c \in Streak1Cases THEN 3
-  ELSE IF c \in (Streak2Cases \union Streak3Cases) THEN 4
+  ELSE IF c \in (Streak2Cases \union Streak3Cases \union StreakMaxCases) THEN 4
   ELSE 0
 
 ActualUsesFastTimeout(c) ==
@@ -181,14 +185,16 @@ ActualHysteresisWait(c) ==
      /\ Bug = "after_still_waits"
 
 ActualNextStreak(c) ==
-  IF Bug = "skip_streak_increment" /\ c \in HysteresisValidCases THEN 0
+  IF Bug = "streak_overflow_wraps" /\ c \in StreakMaxCases THEN 0
+  ELSE IF Bug = "skip_streak_increment" /\ c \in HysteresisValidCases THEN 0
   ELSE SpecNextStreak(c)
 
 ActualHysteresisFactor(c) ==
   IF Bug = "wrong_factor_streak0" /\ c \in Streak0Cases THEN 1
   ELSE IF Bug = "wrong_factor_streak1" /\ c \in Streak1Cases THEN 2
   ELSE IF Bug = "wrong_factor_streak2" /\ c \in Streak2Cases THEN 3
-  ELSE IF Bug = "streak_not_capped_for_factor" /\ c \in Streak3Cases THEN 5
+  ELSE IF Bug = "streak_not_capped_for_factor"
+    /\ c \in (Streak3Cases \union StreakMaxCases) THEN 5
   ELSE SpecHysteresisFactor(c)
 
 Init ==
@@ -221,7 +227,7 @@ TypeInvariant ==
   /\ returns_base_timeout \in BOOLEAN
   /\ returns_shorter_near_timeout \in BOOLEAN
   /\ hysteresis_wait \in BOOLEAN
-  /\ next_streak \in 0..4
+  /\ next_streak \in 0..255
   /\ hysteresis_factor \in 0..5
 
 CasePartitionExact ==
@@ -238,7 +244,7 @@ CasePartitionExact ==
        \union HysteresisAfterCases
   /\ HysteresisValidCases =
        Streak0Cases \union Streak1Cases \union Streak2Cases
-       \union Streak3Cases
+       \union Streak3Cases \union StreakMaxCases
 
 FastTimeoutMatchesSpec ==
   candidate = "none" \/ uses_fast_timeout = SpecUsesFastTimeout(candidate)
@@ -306,8 +312,13 @@ StreakOneUsesThreeTimeoutFactor ==
   candidate \in Streak1Cases => hysteresis_factor = 3
 
 StreakTwoAndAboveUseCappedFourTimeoutFactor ==
-  candidate \in (Streak2Cases \union Streak3Cases) =>
+  candidate \in (Streak2Cases \union Streak3Cases \union StreakMaxCases) =>
     hysteresis_factor = 4
+
+MaxStreakSaturatesAndCapsFactor ==
+  candidate \in StreakMaxCases =>
+    /\ next_streak = 255
+    /\ hysteresis_factor = 4
 
 Safety ==
   /\ CasePartitionExact
@@ -329,6 +340,7 @@ Safety ==
   /\ StreakZeroUsesTwoTimeoutFactor
   /\ StreakOneUsesThreeTimeoutFactor
   /\ StreakTwoAndAboveUseCappedFourTimeoutFactor
+  /\ MaxStreakSaturatesAndCapsFactor
 
 =============================================================================
 ====

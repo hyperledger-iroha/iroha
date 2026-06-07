@@ -64,11 +64,23 @@ pub struct TransactionSubmissionReceipt {
 }
 
 impl TransactionSubmissionReceipt {
+    /// Fallibly create a signed receipt from the payload.
+    ///
+    /// # Errors
+    /// Returns any backend signing error from `iroha_crypto`.
+    pub fn try_sign(
+        payload: TransactionSubmissionReceiptPayload,
+        key_pair: &KeyPair,
+    ) -> Result<Self, iroha_crypto::Error> {
+        let signature = Signature::try_new(key_pair.private_key(), &payload.signing_bytes())?;
+        Ok(Self { payload, signature })
+    }
+
     /// Create a signed receipt from the payload.
     #[must_use]
     pub fn sign(payload: TransactionSubmissionReceiptPayload, key_pair: &KeyPair) -> Self {
-        let signature = Signature::new(key_pair.private_key(), &payload.signing_bytes());
-        Self { payload, signature }
+        Self::try_sign(payload, key_pair)
+            .expect("signing should succeed for a valid receipt key and payload")
     }
 
     /// Verify the receipt signature against the payload signer.
@@ -100,6 +112,9 @@ mod tests {
             submitted_at_height: 7,
             signer: key_pair.public_key().clone(),
         };
+        let receipt = TransactionSubmissionReceipt::try_sign(payload.clone(), &key_pair)
+            .expect("sign receipt");
+        assert!(receipt.verify().is_ok());
         let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
         assert!(receipt.verify().is_ok());
     }

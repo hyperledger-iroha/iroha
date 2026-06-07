@@ -334,10 +334,13 @@ impl FrontierSlot {
         }
         self.phase = FrontierSlotPhase::ValidateBody;
         self.record_progress(now);
+        self.sync_compat_fields();
     }
 
     pub(super) fn take_pending_requesters(&mut self) -> BTreeSet<PeerId> {
-        std::mem::take(&mut self.repair_state.pending_requesters)
+        let pending_requesters = std::mem::take(&mut self.repair_state.pending_requesters);
+        self.sync_compat_fields();
+        pending_requesters
     }
 
     pub(super) fn note_local_vote_emitted(&mut self) {
@@ -861,6 +864,7 @@ impl FrontierSlot {
             }
         }
 
+        self.sync_compat_fields();
         actions
     }
 }

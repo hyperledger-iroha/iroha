@@ -20,15 +20,6 @@ public let sccpBscMainnetNetworkId =
 /// SCCP domain id for TRON.
 public let sccpDomainTron: UInt32 = 5
 
-/// SCCP domain id for SORA Kusama.
-public let sccpDomainSoraKusama: UInt32 = 6
-
-/// SCCP domain id for SORA Polkadot.
-public let sccpDomainSoraPolkadot: UInt32 = 7
-
-/// SCCP domain id for SORA2.
-public let sccpDomainSora2: UInt32 = 8
-
 /// OpenVerify circuit id used by every SCCP source-adapter verifier profile.
 public let sccpSourceAdapterOpenVerifyCircuitIdV1 = "sccp-source-adapter-v1"
 
@@ -42,10 +33,6 @@ private let sccpEvmDestinationBindingLabelV1 =
     Data("iroha:sccp:evm-destination-binding:v1".utf8)
 private let sccpTronDestinationBindingLabelV1 =
     Data("iroha:sccp:tron-destination-binding:v1".utf8)
-
-/// OpenVerify circuit id used by Substrate runtime-storage source-state proofs.
-public let sccpSubstrateRuntimeStorageOpenVerifyCircuitIdV1 =
-    "sccp-substrate-runtime-storage-v1"
 
 /// Solana Tower replay verifier id used by audited full light-client deployments.
 public let sccpSolanaMainnetTowerReplayVerifierIdV1 =
@@ -98,23 +85,6 @@ private let sccpBscMaxValidatorSetPayloadBytes = 1 + 4 + sccpBscMaxParliaValidat
 private let sccpBscParliaEpochLengthBlocks: UInt64 = 200
 private let sccpTronMaxRawHeaderBytes = 16 * 1024
 private let sccpTronMaxReceiptValueBytes = 16 * 1024
-private let sccpSubstrateMaxAuthorities = 2048
-private let sccpSubstrateMaxAuthoritySetPayloadBytes = 1 + 4 + sccpSubstrateMaxAuthorities * (32 + 8)
-private let sccpSubstrateSystemEventsStorageKey = try! sourceProofBytesFromHex32(
-    "0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7",
-    field: "systemEventsStorageKey"
-)
-private let sccpSubstrateRuntimeStorageFastpqParameterSetV1 = "fastpq-lane-balanced"
-private let sccpSubstrateRuntimeStorageProofPublicInputsPrefixV1 =
-    "sccp:substrate:runtime-storage-proof-public-inputs:v1"
-private let sccpSubstrateRuntimeStorageFastpqDsidPrefixV1 =
-    "sccp:substrate:runtime-storage:fastpq:dsid:v1"
-private let sccpSubstrateRuntimeStorageFastpqStatementKeyV1 =
-    "sccp:substrate:runtime-storage:v1:statement"
-private let sccpSubstrateRuntimeStorageFastpqContextKeyV1 =
-    "sccp:substrate:runtime-storage:v1:context"
-private let sccpSubstrateRuntimeStorageFastpqStorageKeyV1 =
-    "sccp:substrate:runtime-storage:v1:storage-key"
 private let sccpTronMaxTransactionBytes = 64 * 1024
 private let sccpTronMaxTransactionMerkleBranchNodes = 64
 private let sccpTronSourceCallSignatures = 1
@@ -166,45 +136,6 @@ public struct EvmReceiptTrieProof: Equatable {
     public let receiptRlp: String
     public let receiptTrieKey: String
     public let receiptTrieProofNodes: [Data]
-}
-
-/// FastPQ public inputs used by Substrate runtime-storage source-state proofs.
-public struct SubstrateSccpRuntimeStorageFastpqPublicInputs: Equatable {
-    public let dsid: String
-    public let slot: String
-    public let oldRoot: String
-    public let newRoot: String
-    public let permRoot: String
-    public let txSetHash: String
-}
-
-/// FastPQ metadata transition used by Substrate runtime-storage source-state proofs.
-public struct SubstrateSccpRuntimeStorageFastpqTransition: Equatable {
-    public let key: String
-    public let operation: String
-    public let oldValue: String
-    public let newValue: String
-}
-
-/// Deterministic proof request for a mobile Substrate runtime-storage prover.
-public struct SubstrateSccpRuntimeStorageProofRequest: Equatable {
-    public let version: UInt8
-    public let proofFamily: String
-    public let circuitId: String
-    public let parameterSet: String
-    public let sourceDomain: UInt32
-    public let finalizedBlockNumber: String
-    public let grandpaSetId: String
-    public let sourceStateVerifierId: String
-    public let sourceStateVerifierHash: String
-    public let runtimeStorageProofPublicInputsHash: String
-    public let storageProofHash: String
-    public let statementBytes: Data
-    public let verificationContextBytes: Data
-    public let schemaDescriptor: Data
-    public let publicInputColumns: [[String]]
-    public let fastpqPublicInputs: SubstrateSccpRuntimeStorageFastpqPublicInputs
-    public let fastpqTransitions: [SubstrateSccpRuntimeStorageFastpqTransition]
 }
 
 /// One BSC ValidatorSet storage-slot proof transcript entry.
@@ -4344,914 +4275,6 @@ public func tronWitnessScheduleTransitionSealHash(sourceDomain: UInt32,
     )
 }
 
-/// Canonical Substrate storage-proof transcript bytes checked by the SCCP source adapter.
-public func canonicalSubstrateSccpStorageProofBytes(sourceDomain: UInt32,
-                                                    sourceEventDigest: String,
-                                                    sourceEventLeafIndex: UInt64,
-                                                    finalizedBlockNumber: UInt64,
-                                                    grandpaSetId: UInt64,
-                                                    blockHash: String,
-                                                    authoritySetHash: String,
-                                                    eventsRoot: String,
-                                                    inclusionBranch: [Data]) throws -> Data {
-    var out = Data()
-    out.append(1)
-    sourceProofAppendU32Le(sourceDomain, to: &out)
-    try out.append(sourceProofNonZeroBytesFromHex32(sourceEventDigest, field: "sourceEventDigest"))
-    out.append(sccpSubstrateSystemEventsStorageKey)
-    sourceProofAppendU64Le(sourceEventLeafIndex, to: &out)
-    sourceProofAppendU64Le(finalizedBlockNumber, to: &out)
-    sourceProofAppendU64Le(grandpaSetId, to: &out)
-    try out.append(sourceProofBytesFromHex32(blockHash, field: "blockHash"))
-    try out.append(sourceProofBytesFromHex32(authoritySetHash, field: "authoritySetHash"))
-    try out.append(sourceProofBytesFromHex32(eventsRoot, field: "eventsRoot"))
-    try sourceProofAppendBranch(inclusionBranch, to: &out)
-    return out
-}
-
-/// Hash of the canonical Substrate storage-proof transcript checked by the source adapter.
-public func substrateSccpStorageProofHash(sourceDomain: UInt32,
-                                          sourceEventDigest: String,
-                                          sourceEventLeafIndex: UInt64,
-                                          finalizedBlockNumber: UInt64,
-                                          grandpaSetId: UInt64,
-                                          blockHash: String,
-                                          authoritySetHash: String,
-                                          eventsRoot: String,
-                                          inclusionBranch: [Data]) throws -> String {
-    try sourceProofHashHex(
-        prefix: "sccp:substrate:storage-proof:v1",
-        payload: canonicalSubstrateSccpStorageProofBytes(
-            sourceDomain: sourceDomain,
-            sourceEventDigest: sourceEventDigest,
-            sourceEventLeafIndex: sourceEventLeafIndex,
-            finalizedBlockNumber: finalizedBlockNumber,
-            grandpaSetId: grandpaSetId,
-            blockHash: blockHash,
-            authoritySetHash: authoritySetHash,
-            eventsRoot: eventsRoot,
-            inclusionBranch: inclusionBranch
-        )
-    )
-}
-
-private func isSubstrateRuntimeStorageSourceDomain(_ sourceDomain: UInt32) -> Bool {
-    sourceDomain == sccpDomainSoraKusama ||
-        sourceDomain == sccpDomainSoraPolkadot ||
-        sourceDomain == sccpDomainSora2
-}
-
-private let sccpSourceMaterialTonTemplateSourceStateVerifierHashV1 =
-    "0x540205f876591604ccf39f72a051ac5e82647c9e48dbd48cb129d2543971a34f"
-private let sccpSourceMaterialTonTemplateComponentHashesV1: [(String, String)] = [
-    ("sourceTrustAnchorHash", "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c"),
-    ("consensusVerifierHash", "0xb0225e16477ea3420f7d0de76b87b6e99a43ab97f445d8565a384d4b655bc473"),
-    ("messageInclusionVerifierHash", "0x89254256421c15da8c92842c7d6f448ef6c1d5ca1e2a173754643425fcee6353"),
-    ("sourceStateVerifierHash", sccpSourceMaterialTonTemplateSourceStateVerifierHashV1),
-    ("finalityPolicyHash", "0x50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43"),
-]
-private let sccpSourceMaterialSolanaTemplateComponentHashesV1: [(String, String)] = [
-    ("sourceTrustAnchorHash", "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3"),
-    ("consensusVerifierHash", "0x97ea89019e6c79305d06dfc27640ee14a6b42ba6eaf86e1835ee9b433dba48ba"),
-    ("messageInclusionVerifierHash", "0xb8358bfef1e428a6a7e9115687cb2b88d9c21dad4021bea3e11d43489eb3dcb0"),
-    ("sourceStateVerifierHash", sccpSolanaTemplateSourceStateVerifierHashV1),
-    ("finalityPolicyHash", "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56"),
-]
-private let sccpSourceMaterialTronTemplateComponentHashesV1: [(String, String)] = [
-    ("sourceTrustAnchorHash", "0x3550934cbdfe49449ec4aa383dcea7674541fedf66ab6159b1ed2f2c0be4755c"),
-    ("consensusVerifierHash", "0x8a1de96a869b2f28f197a7835597f17cf77ff45f7cbb77da2f7c48e87df8c5ea"),
-    ("messageInclusionVerifierHash", "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc"),
-    ("finalityPolicyHash", "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864"),
-]
-private let sccpEthSourceBridgeConfigLabelV1 =
-    Data("iroha:sccp:eth-source-bridge-config:v1".utf8)
-private let sccpTronSourceBridgeConfigLabelV1 =
-    Data("iroha:sccp:tron-source-bridge-config:v1".utf8)
-
-private func rejectTonTemplateSourceMaterialComponent(
-    _ value: Data,
-    field: String,
-    sourceDomain: UInt32
-) throws {
-    guard sourceDomain == sccpDomainTon else {
-        return
-    }
-    for (templateField, templateHash) in sccpSourceMaterialTonTemplateComponentHashesV1
-        where templateField == field {
-        if let templateBytes = try? sourceProofBytesFromHex32(templateHash, field: field),
-           value == templateBytes {
-            throw SccpSourceProofHashError.invalidSourceMaterial(field)
-        }
-    }
-}
-
-private func rejectSolanaTemplateSourceMaterialComponent(
-    _ value: Data,
-    field: String,
-    sourceDomain: UInt32
-) throws {
-    guard sourceDomain == sccpDomainSolana else {
-        return
-    }
-    for (templateField, templateHash) in sccpSourceMaterialSolanaTemplateComponentHashesV1
-        where templateField == field {
-        if let templateBytes = try? sourceProofBytesFromHex32(templateHash, field: field),
-           value == templateBytes {
-            throw SccpSourceProofHashError.invalidSourceMaterial(field)
-        }
-    }
-}
-
-private func rejectTronTemplateSourceMaterialComponent(
-    _ value: Data,
-    field: String,
-    sourceDomain: UInt32
-) throws {
-    guard sourceDomain == sccpDomainTron else {
-        return
-    }
-    for (templateField, templateHash) in sccpSourceMaterialTronTemplateComponentHashesV1
-        where templateField == field {
-        if let templateBytes = try? sourceProofBytesFromHex32(templateHash, field: field),
-           value == templateBytes {
-            throw SccpSourceProofHashError.invalidSourceMaterial(field)
-        }
-    }
-}
-
-private func sourceProofAbiWordAddress20(_ value: Data) -> Data {
-    var out = Data(repeating: 0, count: 32)
-    out.replaceSubrange(12..<32, with: value)
-    return out
-}
-
-private func tronSourceBridgeConfigHash(sourceDomain: UInt32,
-                                        bridgeAddress: Data,
-                                        networkId: Data,
-                                        ownerAddress: Data) -> Data {
-    var payload = Data(irohaKeccak256(sccpTronSourceBridgeConfigLabelV1))
-    payload.append(sourceProofAbiWordAddress20(bridgeAddress))
-    payload.append(networkId)
-    sourceProofAppendAbiU32(sourceDomain, to: &payload)
-    sourceProofAppendAbiU32(sccpDomainSora, to: &payload)
-    payload.append(sourceProofAbiWordAddress20(ownerAddress))
-    return Data(irohaKeccak256(payload))
-}
-
-private func ethSourceBridgeConfigHash(sourceDomain: UInt32,
-                                       bridgeAddress: Data,
-                                       networkId: Data,
-                                       codeHash: Data) -> Data {
-    var payload = Data(irohaKeccak256(sccpEthSourceBridgeConfigLabelV1))
-    payload.append(sourceProofAbiWordAddress20(bridgeAddress))
-    payload.append(networkId)
-    sourceProofAppendAbiU32(sourceDomain, to: &payload)
-    sourceProofAppendAbiU32(sccpDomainSora, to: &payload)
-    payload.append(codeHash)
-    return Data(irohaKeccak256(payload))
-}
-
-private func substrateTemplateSourceStateVerifierHash(sourceDomain: UInt32) -> String? {
-    switch sourceDomain {
-    case sccpDomainSoraKusama:
-        return "0xaf2d28b3e07447239f28e90ce4fdee7e6cd3778c087eaeda7170781eb4b76b9c"
-    case sccpDomainSoraPolkadot:
-        return "0x664576f1a2409099c3b7dba82512c8757501f2869aedda0e45f858572b940b5d"
-    case sccpDomainSora2:
-        return "0x20509eb56524c727b6d028cc6b43f10c17048d31b92d5a96d41c0512d16267ef"
-    default:
-        return nil
-    }
-}
-
-private func substrateRuntimeStorageSourceMaterial(
-    sourceDomain: UInt32,
-    sourceTrustAnchorHash: String,
-    consensusVerifierHash: String,
-    messageInclusionVerifierHash: String,
-    finalityPolicyHash: String,
-    sourceStateVerifierHash: String
-) throws -> SccpNormalizedSourceMaterial {
-    guard isSubstrateRuntimeStorageSourceDomain(sourceDomain) else {
-        throw SccpSourceProofHashError.unsupportedSourceAdapterDomain("sourceDomain")
-    }
-    let material = try normalizeSccpSourceMaterial(
-        sourceDomain: sourceDomain,
-        sourceTrustAnchorHash: sourceTrustAnchorHash,
-        consensusVerifierHash: consensusVerifierHash,
-        messageInclusionVerifierHash: messageInclusionVerifierHash,
-        finalityPolicyHash: finalityPolicyHash,
-        sourceStateVerifierHash: sourceStateVerifierHash,
-        bridgeAddress: nil,
-        sourceBridgeEmitterCodeHash: nil,
-        networkId: nil,
-        ownerAddress: nil,
-        configHash: nil
-    )
-    guard !material.profile.sourceStateVerifierId.isEmpty,
-          material.sourceStateVerifierHash.contains(where: { $0 != 0 }) else {
-        throw SccpSourceProofHashError.invalidSourceMaterial("sourceStateVerifierHash")
-    }
-    if let templateHash = substrateTemplateSourceStateVerifierHash(sourceDomain: sourceDomain),
-       let templateBytes = try? sourceProofBytesFromHex32(templateHash, field: "sourceStateVerifierHash"),
-       material.sourceStateVerifierHash == templateBytes {
-        throw SccpSourceProofHashError.invalidSourceMaterial("sourceStateVerifierHash")
-    }
-    return material
-}
-
-private func sourceProofWordU32Le(_ value: UInt32) -> Data {
-    var out = Data(repeating: 0, count: 32)
-    var word = Data()
-    sourceProofAppendU32Le(value, to: &word)
-    out.replaceSubrange(0..<4, with: word)
-    return out
-}
-
-private func sourceProofWordU64Le(_ value: UInt64) -> Data {
-    var out = Data(repeating: 0, count: 32)
-    var word = Data()
-    sourceProofAppendU64Le(value, to: &word)
-    out.replaceSubrange(0..<8, with: word)
-    return out
-}
-
-/// Canonical OpenVerify statement bytes for a Substrate runtime-storage source-state proof.
-public func canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
-    sourceDomain: UInt32,
-    sourceEventDigest: String,
-    sourceEventLeafIndex: UInt64,
-    finalizedBlockNumber: UInt64,
-    grandpaSetId: UInt64,
-    blockHash: String,
-    authoritySetHash: String,
-    eventsRoot: String,
-    storageProofHash: String? = nil,
-    inclusionBranch: [Data]
-) throws -> Data {
-    guard isSubstrateRuntimeStorageSourceDomain(sourceDomain) else {
-        throw SccpSourceProofHashError.unsupportedSourceAdapterDomain("sourceDomain")
-    }
-    let statement = try canonicalSubstrateSccpStorageProofBytes(
-        sourceDomain: sourceDomain,
-        sourceEventDigest: sourceEventDigest,
-        sourceEventLeafIndex: sourceEventLeafIndex,
-        finalizedBlockNumber: finalizedBlockNumber,
-        grandpaSetId: grandpaSetId,
-        blockHash: blockHash,
-        authoritySetHash: authoritySetHash,
-        eventsRoot: eventsRoot,
-        inclusionBranch: inclusionBranch
-    )
-    if let storageProofHash {
-        let actual = try sourceProofHashHex(prefix: "sccp:substrate:storage-proof:v1", payload: statement)
-        let expected = "0x" + (try sourceProofBytesFromHex32(storageProofHash, field: "storageProofHash")).hexEncodedString()
-        guard actual == expected else {
-            throw SccpSourceProofHashError.invalidSourceMaterial("storageProofHash")
-        }
-    }
-    return statement
-}
-
-/// Hash of Substrate runtime-storage OpenVerify public inputs.
-public func substrateSccpRuntimeStorageProofPublicInputsHash(
-    sourceDomain: UInt32,
-    sourceEventDigest: String,
-    sourceEventLeafIndex: UInt64,
-    finalizedBlockNumber: UInt64,
-    grandpaSetId: UInt64,
-    blockHash: String,
-    authoritySetHash: String,
-    eventsRoot: String,
-    storageProofHash: String? = nil,
-    inclusionBranch: [Data]
-) throws -> String {
-    try sourceProofHashHex(
-        prefix: sccpSubstrateRuntimeStorageProofPublicInputsPrefixV1,
-        payload: canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
-            sourceDomain: sourceDomain,
-            sourceEventDigest: sourceEventDigest,
-            sourceEventLeafIndex: sourceEventLeafIndex,
-            finalizedBlockNumber: finalizedBlockNumber,
-            grandpaSetId: grandpaSetId,
-            blockHash: blockHash,
-            authoritySetHash: authoritySetHash,
-            eventsRoot: eventsRoot,
-            storageProofHash: storageProofHash,
-            inclusionBranch: inclusionBranch
-        )
-    )
-}
-
-/// OpenVerify context bytes binding Substrate runtime-storage proofs to governed verifier material.
-public func canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
-    sourceDomain: UInt32,
-    sourceEventDigest: String,
-    sourceEventLeafIndex: UInt64,
-    finalizedBlockNumber: UInt64,
-    grandpaSetId: UInt64,
-    blockHash: String,
-    authoritySetHash: String,
-    eventsRoot: String,
-    sourceTrustAnchorHash: String,
-    consensusVerifierHash: String,
-    messageInclusionVerifierHash: String,
-    finalityPolicyHash: String,
-    sourceStateVerifierHash: String,
-    storageProofHash: String? = nil,
-    inclusionBranch: [Data]
-) throws -> Data {
-    let material = try substrateRuntimeStorageSourceMaterial(
-        sourceDomain: sourceDomain,
-        sourceTrustAnchorHash: sourceTrustAnchorHash,
-        consensusVerifierHash: consensusVerifierHash,
-        messageInclusionVerifierHash: messageInclusionVerifierHash,
-        finalityPolicyHash: finalityPolicyHash,
-        sourceStateVerifierHash: sourceStateVerifierHash
-    )
-    var out = Data()
-    out.append(1)
-    sourceProofAppendDataVector(Data(sccpSubstrateRuntimeStorageOpenVerifyCircuitIdV1.utf8), to: &out)
-    sourceProofAppendDataVector(Data(sccpSubstrateRuntimeStorageFastpqParameterSetV1.utf8), to: &out)
-    sourceProofAppendDataVector(Data(material.profile.sourceStateVerifierId.utf8), to: &out)
-    out.append(material.sourceStateVerifierHash)
-    sourceProofAppendDataVector(Data(material.profile.sourceTrustAnchorId.utf8), to: &out)
-    out.append(material.sourceTrustAnchorHash)
-    sourceProofAppendDataVector(Data(material.profile.consensusVerifierId.utf8), to: &out)
-    out.append(material.consensusVerifierHash)
-    sourceProofAppendDataVector(Data(material.profile.messageInclusionVerifierId.utf8), to: &out)
-    out.append(material.messageInclusionVerifierHash)
-    sourceProofAppendDataVector(Data(material.profile.finalityPolicyId.utf8), to: &out)
-    out.append(material.finalityPolicyHash)
-    try out.append(sourceProofBytesFromHex32(
-        substrateSccpRuntimeStorageProofPublicInputsHash(
-            sourceDomain: sourceDomain,
-            sourceEventDigest: sourceEventDigest,
-            sourceEventLeafIndex: sourceEventLeafIndex,
-            finalizedBlockNumber: finalizedBlockNumber,
-            grandpaSetId: grandpaSetId,
-            blockHash: blockHash,
-            authoritySetHash: authoritySetHash,
-            eventsRoot: eventsRoot,
-            storageProofHash: storageProofHash,
-            inclusionBranch: inclusionBranch
-        ),
-        field: "runtimeStorageProofPublicInputsHash"
-    ))
-    return out
-}
-
-/// OpenVerify public-input columns for Substrate runtime-storage proofs.
-public func substrateSccpRuntimeStoragePublicInputColumns(
-    sourceDomain: UInt32,
-    sourceEventDigest: String,
-    sourceEventLeafIndex: UInt64,
-    finalizedBlockNumber: UInt64,
-    grandpaSetId: UInt64,
-    blockHash: String,
-    authoritySetHash: String,
-    eventsRoot: String,
-    storageProofHash: String? = nil,
-    inclusionBranch: [Data]
-) throws -> [[String]] {
-    let computedStorageProofHash = try substrateSccpStorageProofHash(
-        sourceDomain: sourceDomain,
-        sourceEventDigest: sourceEventDigest,
-        sourceEventLeafIndex: sourceEventLeafIndex,
-        finalizedBlockNumber: finalizedBlockNumber,
-        grandpaSetId: grandpaSetId,
-        blockHash: blockHash,
-        authoritySetHash: authoritySetHash,
-        eventsRoot: eventsRoot,
-        inclusionBranch: inclusionBranch
-    )
-    if let storageProofHash {
-        let supplied = "0x" + (try sourceProofBytesFromHex32(storageProofHash, field: "storageProofHash")).hexEncodedString()
-        guard supplied == computedStorageProofHash else {
-            throw SccpSourceProofHashError.invalidSourceMaterial("storageProofHash")
-        }
-    }
-    return [
-        ["0x" + sourceProofWordU32Le(sourceDomain).hexEncodedString()],
-        ["0x" + sourceProofWordU64Le(finalizedBlockNumber).hexEncodedString()],
-        ["0x" + sourceProofWordU64Le(grandpaSetId).hexEncodedString()],
-        ["0x" + (try sourceProofBytesFromHex32(blockHash, field: "blockHash")).hexEncodedString()],
-        ["0x" + (try sourceProofBytesFromHex32(authoritySetHash, field: "authoritySetHash")).hexEncodedString()],
-        ["0x" + (try sourceProofBytesFromHex32(eventsRoot, field: "eventsRoot")).hexEncodedString()],
-        [computedStorageProofHash],
-        ["0x" + (try sourceProofBytesFromHex32(sourceEventDigest, field: "sourceEventDigest")).hexEncodedString()],
-        ["0x" + sccpSubstrateSystemEventsStorageKey.hexEncodedString()],
-        ["0x" + sourceProofWordU64Le(sourceEventLeafIndex).hexEncodedString()],
-        [try substrateSccpRuntimeStorageProofPublicInputsHash(
-            sourceDomain: sourceDomain,
-            sourceEventDigest: sourceEventDigest,
-            sourceEventLeafIndex: sourceEventLeafIndex,
-            finalizedBlockNumber: finalizedBlockNumber,
-            grandpaSetId: grandpaSetId,
-            blockHash: blockHash,
-            authoritySetHash: authoritySetHash,
-            eventsRoot: eventsRoot,
-            storageProofHash: computedStorageProofHash,
-            inclusionBranch: inclusionBranch
-        )]
-    ]
-}
-
-/// OpenVerify schema descriptor for Substrate runtime-storage proofs.
-public func substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(sourceDomain: UInt32) throws -> Data {
-    guard isSubstrateRuntimeStorageSourceDomain(sourceDomain) else {
-        throw SccpSourceProofHashError.unsupportedSourceAdapterDomain("sourceDomain")
-    }
-    let adapterProfile = try sccpSourceAdapterVerifierProfile(sourceDomain: sourceDomain)
-    var out = Data()
-    out.append(1)
-    sourceProofAppendDataVector(Data(sccpSubstrateRuntimeStorageOpenVerifyCircuitIdV1.utf8), to: &out)
-    sourceProofAppendDataVector(Data(sccpSubstrateRuntimeStorageFastpqParameterSetV1.utf8), to: &out)
-    sourceProofAppendDataVector(Data(adapterProfile.chain.utf8), to: &out)
-    sourceProofAppendU32Le(sourceDomain, to: &out)
-    for requiredInput in [
-        "source_domain",
-        "finalized_block_number",
-        "grandpa_set_id",
-        "block_hash",
-        "authority_set_hash",
-        "events_root",
-        "storage_proof_hash",
-        "source_event_digest",
-        "system_events_storage_key",
-        "source_event_leaf_index",
-        "runtime_storage_proof_public_inputs_hash"
-    ] {
-        sourceProofAppendDataVector(Data(requiredInput.utf8), to: &out)
-    }
-    return out
-}
-
-/// Deterministic Substrate runtime-storage proof request for mobile prover engines.
-public func buildSubstrateSccpRuntimeStorageProofRequest(
-    sourceDomain: UInt32,
-    sourceEventDigest: String,
-    sourceEventLeafIndex: UInt64,
-    finalizedBlockNumber: UInt64,
-    grandpaSetId: UInt64,
-    blockHash: String,
-    authoritySetHash: String,
-    eventsRoot: String,
-    sourceTrustAnchorHash: String,
-    consensusVerifierHash: String,
-    messageInclusionVerifierHash: String,
-    finalityPolicyHash: String,
-    sourceStateVerifierHash: String,
-    storageProofHash: String? = nil,
-    inclusionBranch: [Data]
-) throws -> SubstrateSccpRuntimeStorageProofRequest {
-    let material = try substrateRuntimeStorageSourceMaterial(
-        sourceDomain: sourceDomain,
-        sourceTrustAnchorHash: sourceTrustAnchorHash,
-        consensusVerifierHash: consensusVerifierHash,
-        messageInclusionVerifierHash: messageInclusionVerifierHash,
-        finalityPolicyHash: finalityPolicyHash,
-        sourceStateVerifierHash: sourceStateVerifierHash
-    )
-    let statement = try canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
-        sourceDomain: sourceDomain,
-        sourceEventDigest: sourceEventDigest,
-        sourceEventLeafIndex: sourceEventLeafIndex,
-        finalizedBlockNumber: finalizedBlockNumber,
-        grandpaSetId: grandpaSetId,
-        blockHash: blockHash,
-        authoritySetHash: authoritySetHash,
-        eventsRoot: eventsRoot,
-        storageProofHash: storageProofHash,
-        inclusionBranch: inclusionBranch
-    )
-    let computedStorageProofHash = try sourceProofHashHex(prefix: "sccp:substrate:storage-proof:v1", payload: statement)
-    let publicInputsHash = try substrateSccpRuntimeStorageProofPublicInputsHash(
-        sourceDomain: sourceDomain,
-        sourceEventDigest: sourceEventDigest,
-        sourceEventLeafIndex: sourceEventLeafIndex,
-        finalizedBlockNumber: finalizedBlockNumber,
-        grandpaSetId: grandpaSetId,
-        blockHash: blockHash,
-        authoritySetHash: authoritySetHash,
-        eventsRoot: eventsRoot,
-        storageProofHash: computedStorageProofHash,
-        inclusionBranch: inclusionBranch
-    )
-    let context = try canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
-        sourceDomain: sourceDomain,
-        sourceEventDigest: sourceEventDigest,
-        sourceEventLeafIndex: sourceEventLeafIndex,
-        finalizedBlockNumber: finalizedBlockNumber,
-        grandpaSetId: grandpaSetId,
-        blockHash: blockHash,
-        authoritySetHash: authoritySetHash,
-        eventsRoot: eventsRoot,
-        sourceTrustAnchorHash: sourceTrustAnchorHash,
-        consensusVerifierHash: consensusVerifierHash,
-        messageInclusionVerifierHash: messageInclusionVerifierHash,
-        finalityPolicyHash: finalityPolicyHash,
-        sourceStateVerifierHash: sourceStateVerifierHash,
-        storageProofHash: computedStorageProofHash,
-        inclusionBranch: inclusionBranch
-    )
-    let publicInputsHashBytes = try sourceProofBytesFromHex32(publicInputsHash, field: "runtimeStorageProofPublicInputsHash")
-    var dsidPreimage = Data(sccpSubstrateRuntimeStorageFastpqDsidPrefixV1.utf8)
-    dsidPreimage.append(publicInputsHashBytes)
-    let dsid = Data(Blake2b.hash256(dsidPreimage).prefix(16))
-    let transitions = [
-        SubstrateSccpRuntimeStorageFastpqTransition(
-            key: sccpSubstrateRuntimeStorageFastpqStatementKeyV1,
-            operation: "meta_set",
-            oldValue: "0x",
-            newValue: "0x" + statement.hexEncodedString()
-        ),
-        SubstrateSccpRuntimeStorageFastpqTransition(
-            key: sccpSubstrateRuntimeStorageFastpqContextKeyV1,
-            operation: "meta_set",
-            oldValue: "0x",
-            newValue: "0x" + context.hexEncodedString()
-        ),
-        SubstrateSccpRuntimeStorageFastpqTransition(
-            key: sccpSubstrateRuntimeStorageFastpqStorageKeyV1,
-            operation: "meta_set",
-            oldValue: "0x",
-            newValue: "0x" + sccpSubstrateSystemEventsStorageKey.hexEncodedString()
-        )
-    ].sorted { $0.key < $1.key }
-    return SubstrateSccpRuntimeStorageProofRequest(
-        version: 1,
-        proofFamily: sccpStarkFriProofFamilyV1,
-        circuitId: sccpSubstrateRuntimeStorageOpenVerifyCircuitIdV1,
-        parameterSet: sccpSubstrateRuntimeStorageFastpqParameterSetV1,
-        sourceDomain: sourceDomain,
-        finalizedBlockNumber: String(finalizedBlockNumber),
-        grandpaSetId: String(grandpaSetId),
-        sourceStateVerifierId: material.profile.sourceStateVerifierId,
-        sourceStateVerifierHash: "0x" + material.sourceStateVerifierHash.hexEncodedString(),
-        runtimeStorageProofPublicInputsHash: publicInputsHash,
-        storageProofHash: computedStorageProofHash,
-        statementBytes: statement,
-        verificationContextBytes: context,
-        schemaDescriptor: try substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(sourceDomain: sourceDomain),
-        publicInputColumns: try substrateSccpRuntimeStoragePublicInputColumns(
-            sourceDomain: sourceDomain,
-            sourceEventDigest: sourceEventDigest,
-            sourceEventLeafIndex: sourceEventLeafIndex,
-            finalizedBlockNumber: finalizedBlockNumber,
-            grandpaSetId: grandpaSetId,
-            blockHash: blockHash,
-            authoritySetHash: authoritySetHash,
-            eventsRoot: eventsRoot,
-            storageProofHash: computedStorageProofHash,
-            inclusionBranch: inclusionBranch
-        ),
-        fastpqPublicInputs: SubstrateSccpRuntimeStorageFastpqPublicInputs(
-            dsid: "0x" + dsid.hexEncodedString(),
-            slot: String(finalizedBlockNumber),
-            oldRoot: "0x" + (try sourceProofBytesFromHex32(authoritySetHash, field: "authoritySetHash")).hexEncodedString(),
-            newRoot: "0x" + (try sourceProofBytesFromHex32(blockHash, field: "blockHash")).hexEncodedString(),
-            permRoot: "0x" + (try sourceProofBytesFromHex32(eventsRoot, field: "eventsRoot")).hexEncodedString(),
-            txSetHash: publicInputsHash
-        ),
-        fastpqTransitions: transitions
-    )
-}
-
-/// Canonical Substrate GRANDPA authority-set payload bytes checked by transition proofs.
-public func canonicalSubstrateAuthoritySetPayloadBytes(authorityPublicKeys: [String],
-                                                       authorityWeights: [UInt64]) throws -> Data {
-    guard !authorityPublicKeys.isEmpty, authorityPublicKeys.count == authorityWeights.count else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys")
-    }
-    guard authorityPublicKeys.count <= sccpSubstrateMaxAuthorities else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys")
-    }
-    var out = Data()
-    out.append(1)
-    sourceProofAppendU32Le(UInt32(authorityPublicKeys.count), to: &out)
-    var seenPublicKeys = Set<String>()
-    for (index, pair) in zip(authorityPublicKeys, authorityWeights).enumerated() {
-        let publicKey = try sourceProofBytesFromHex32(pair.0, field: "authorityPublicKeys[\(index)]")
-        guard publicKey.contains(where: { $0 != 0 }) else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys[\(index)]")
-        }
-        let publicKeyHex = publicKey.hexEncodedString()
-        guard seenPublicKeys.insert(publicKeyHex).inserted else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys[\(index)]")
-        }
-        guard pair.1 != 0 else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityWeights[\(index)]")
-        }
-        out.append(publicKey)
-        sourceProofAppendU64Le(pair.1, to: &out)
-    }
-    return out
-}
-
-/// Hash of the canonical Substrate GRANDPA authority-set transition payload.
-public func substrateAuthoritySetPayloadHash(payload: Data) throws -> String {
-    try sourceProofValidateSubstrateAuthoritySetPayload(payload)
-    return try sourceProofHashHex(prefix: "sccp:substrate:authority-set-payload:v1", payload: payload)
-}
-
-/// Hash of the canonical Substrate GRANDPA authority-set transition payload.
-public func substrateAuthoritySetPayloadHash(authorityPublicKeys: [String],
-                                             authorityWeights: [UInt64]) throws -> String {
-    try substrateAuthoritySetPayloadHash(
-        payload: canonicalSubstrateAuthoritySetPayloadBytes(
-            authorityPublicKeys: authorityPublicKeys,
-            authorityWeights: authorityWeights
-        )
-    )
-}
-
-/// SCCP Substrate authority-set hash derived from a canonical authority-set payload.
-public func substrateAuthoritySetHashFromPayload(payload: Data) throws -> String {
-    try sourceProofValidateSubstrateAuthoritySetPayload(payload)
-    return try sourceProofHashHex(prefix: "sccp:substrate:authority-set:v1", payload: payload)
-}
-
-/// SCCP Substrate authority-set hash derived from a canonical authority-set payload.
-public func substrateAuthoritySetHashFromPayload(authorityPublicKeys: [String],
-                                                 authorityWeights: [UInt64]) throws -> String {
-    try substrateAuthoritySetHashFromPayload(
-        payload: canonicalSubstrateAuthoritySetPayloadBytes(
-            authorityPublicKeys: authorityPublicKeys,
-            authorityWeights: authorityWeights
-        )
-    )
-}
-
-/// Canonical Substrate authority-set transition message bytes.
-public func canonicalSubstrateAuthoritySetTransitionMessageBytes(sourceDomain: UInt32,
-                                                                 fromGrandpaSetId: UInt64,
-                                                                 toGrandpaSetId: UInt64,
-                                                                 transitionBlockNumber: UInt64,
-                                                                 transitionBlockHash: String,
-                                                                 parentAuthoritySetHash: String,
-                                                                 nextAuthoritySetHash: String,
-                                                                 nextAuthoritySetPayloadHash: String) throws -> Data {
-    var out = Data()
-    out.append(1)
-    sourceProofAppendU32Le(sourceDomain, to: &out)
-    sourceProofAppendU64Le(fromGrandpaSetId, to: &out)
-    sourceProofAppendU64Le(toGrandpaSetId, to: &out)
-    sourceProofAppendU64Le(transitionBlockNumber, to: &out)
-    try out.append(sourceProofBytesFromHex32(transitionBlockHash, field: "transitionBlockHash"))
-    try out.append(sourceProofBytesFromHex32(parentAuthoritySetHash, field: "parentAuthoritySetHash"))
-    try out.append(sourceProofBytesFromHex32(nextAuthoritySetHash, field: "nextAuthoritySetHash"))
-    try out.append(sourceProofBytesFromHex32(nextAuthoritySetPayloadHash, field: "nextAuthoritySetPayloadHash"))
-    return out
-}
-
-/// Hash of the canonical Substrate authority-set transition message transcript.
-public func substrateAuthoritySetTransitionMessageHash(sourceDomain: UInt32,
-                                                       fromGrandpaSetId: UInt64,
-                                                       toGrandpaSetId: UInt64,
-                                                       transitionBlockNumber: UInt64,
-                                                       transitionBlockHash: String,
-                                                       parentAuthoritySetHash: String,
-                                                       nextAuthoritySetHash: String,
-                                                       nextAuthoritySetPayloadHash: String) throws -> String {
-    try sourceProofHashHex(
-        prefix: "sccp:substrate:authority-set-transition-message:v1",
-        payload: canonicalSubstrateAuthoritySetTransitionMessageBytes(
-            sourceDomain: sourceDomain,
-            fromGrandpaSetId: fromGrandpaSetId,
-            toGrandpaSetId: toGrandpaSetId,
-            transitionBlockNumber: transitionBlockNumber,
-            transitionBlockHash: transitionBlockHash,
-            parentAuthoritySetHash: parentAuthoritySetHash,
-            nextAuthoritySetHash: nextAuthoritySetHash,
-            nextAuthoritySetPayloadHash: nextAuthoritySetPayloadHash
-        )
-    )
-}
-
-/// Canonical Substrate GRANDPA justification proof bytes.
-public func canonicalSubstrateGrandpaJustificationProofBytes(version: UInt8 = 1,
-                                                             totalWeight: UInt64,
-                                                             signedWeight: UInt64,
-                                                             precommitMessageHash: String,
-                                                             authorityPublicKeys: [String],
-                                                             authorityWeights: [UInt64],
-                                                             signersBitmap: Data,
-                                                             signatures: [Data]) throws -> Data {
-    guard version == 1 else {
-        throw SccpSourceProofHashError.invalidValidatorSet("Substrate GRANDPA justification version")
-    }
-    guard !authorityPublicKeys.isEmpty, authorityPublicKeys.count == authorityWeights.count else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys")
-    }
-    guard authorityPublicKeys.count <= sccpSubstrateMaxAuthorities else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys")
-    }
-    guard signatures.count <= sccpSubstrateMaxAuthorities else {
-        throw SccpSourceProofHashError.invalidValidatorSet("signatures")
-    }
-    let precommitMessageHashBytes = try sourceProofBytesFromHex32(precommitMessageHash, field: "precommitMessageHash")
-    var authorityPublicKeyBytes: [Data] = []
-    var seenPublicKeys = Set<String>()
-    for (index, publicKey) in authorityPublicKeys.enumerated() {
-        let publicKeyBytes = try sourceProofBytesFromHex32(publicKey, field: "authorityPublicKeys[\(index)]")
-        guard publicKeyBytes.contains(where: { $0 != 0 }) else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys[\(index)]")
-        }
-        guard seenPublicKeys.insert(publicKeyBytes.hexEncodedString()).inserted else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys[\(index)]")
-        }
-        authorityPublicKeyBytes.append(publicKeyBytes)
-    }
-    var normalizedWeights: [UInt64] = []
-    var computedTotalWeight: UInt64 = 0
-    for (index, weight) in authorityWeights.enumerated() {
-        guard weight != 0 else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityWeights[\(index)]")
-        }
-        let addition = computedTotalWeight.addingReportingOverflow(weight)
-        guard !addition.overflow else {
-            throw SccpSourceProofHashError.invalidValidatorSet("totalWeight")
-        }
-        computedTotalWeight = addition.partialValue
-        normalizedWeights.append(weight)
-    }
-    guard totalWeight == computedTotalWeight else {
-        throw SccpSourceProofHashError.invalidValidatorSet("totalWeight")
-    }
-    guard signersBitmap.count == (authorityPublicKeyBytes.count + 7) / 8 else {
-        throw SccpSourceProofHashError.invalidValidatorSet("signersBitmap")
-    }
-    var signerIndices: [Int] = []
-    for (byteIndex, value) in signersBitmap.enumerated() {
-        for bit in 0..<8 where ((Int(value) >> bit) & 1) == 1 {
-            let signerIndex = byteIndex * 8 + bit
-            guard signerIndex < authorityPublicKeyBytes.count else {
-                throw SccpSourceProofHashError.invalidValidatorSet("signersBitmap")
-            }
-            signerIndices.append(signerIndex)
-        }
-    }
-    guard !signerIndices.isEmpty else {
-        throw SccpSourceProofHashError.invalidValidatorSet("signersBitmap")
-    }
-    guard signatures.count == signerIndices.count else {
-        throw SccpSourceProofHashError.invalidValidatorSet("signatures")
-    }
-    var computedSignedWeight: UInt64 = 0
-    for signerIndex in signerIndices {
-        let addition = computedSignedWeight.addingReportingOverflow(normalizedWeights[signerIndex])
-        guard !addition.overflow else {
-            throw SccpSourceProofHashError.invalidValidatorSet("signedWeight")
-        }
-        computedSignedWeight = addition.partialValue
-    }
-    guard signedWeight == computedSignedWeight else {
-        throw SccpSourceProofHashError.invalidValidatorSet("signedWeight")
-    }
-    let floorTwoThirds = (totalWeight / 3) * 2 + ((totalWeight % 3) * 2) / 3
-    guard signedWeight > floorTwoThirds else {
-        throw SccpSourceProofHashError.invalidValidatorSet("signedWeight")
-    }
-    for (index, signature) in signatures.enumerated() {
-        guard signature.count == 64 else {
-            throw SccpSourceProofHashError.invalidValidatorSet("signatures[\(index)]")
-        }
-        guard signature.contains(where: { $0 != 0 }) else {
-            throw SccpSourceProofHashError.invalidValidatorSet("signatures[\(index)]")
-        }
-    }
-    var out = Data()
-    out.append(version)
-    sourceProofAppendU64Le(totalWeight, to: &out)
-    sourceProofAppendU64Le(signedWeight, to: &out)
-    out.append(precommitMessageHashBytes)
-    sourceProofAppendU32Le(UInt32(authorityPublicKeyBytes.count), to: &out)
-    for publicKeyBytes in authorityPublicKeyBytes {
-        sourceProofAppendDataVector(publicKeyBytes, to: &out)
-    }
-    sourceProofAppendU32Le(UInt32(normalizedWeights.count), to: &out)
-    for weight in normalizedWeights {
-        sourceProofAppendU64Le(weight, to: &out)
-    }
-    sourceProofAppendDataVector(signersBitmap, to: &out)
-    sourceProofAppendU32Le(UInt32(signatures.count), to: &out)
-    for signature in signatures {
-        sourceProofAppendDataVector(signature, to: &out)
-    }
-    return out
-}
-
-/// Canonical Substrate authority-set transition justification bytes.
-public func canonicalSubstrateAuthoritySetTransitionJustificationBytes(version: UInt8 = 1,
-                                                                       sourceDomain: UInt32,
-                                                                       fromGrandpaSetId: UInt64,
-                                                                       toGrandpaSetId: UInt64,
-                                                                       transitionBlockNumber: UInt64,
-                                                                       transitionBlockHash: String,
-                                                                       parentAuthoritySetHash: String,
-                                                                       nextAuthoritySetHash: String,
-                                                                       nextAuthoritySetPayload: Data,
-                                                                       nextAuthoritySetPayloadHash: String,
-                                                                       transitionMessageHash: String,
-                                                                       proofVersion: UInt8 = 1,
-                                                                       totalWeight: UInt64,
-                                                                       signedWeight: UInt64,
-                                                                       authorityPublicKeys: [String],
-                                                                       authorityWeights: [UInt64],
-                                                                       signersBitmap: Data,
-                                                                       signatures: [Data]) throws -> Data {
-    guard version == 1 else {
-        throw SccpSourceProofHashError.invalidValidatorSet("Substrate authority-set transition justification version")
-    }
-    let derivedPayloadHash = try substrateAuthoritySetPayloadHash(payload: nextAuthoritySetPayload)
-    guard derivedPayloadHash.lowercased() == nextAuthoritySetPayloadHash.lowercased() else {
-        throw SccpSourceProofHashError.invalidValidatorSet("nextAuthoritySetPayloadHash")
-    }
-    let derivedNextHash = try substrateAuthoritySetHashFromPayload(payload: nextAuthoritySetPayload)
-    guard derivedNextHash.lowercased() == nextAuthoritySetHash.lowercased() else {
-        throw SccpSourceProofHashError.invalidValidatorSet("nextAuthoritySetHash")
-    }
-    let derivedParentHash = try substrateAuthoritySetHashFromPayload(
-        authorityPublicKeys: authorityPublicKeys,
-        authorityWeights: authorityWeights
-    )
-    guard derivedParentHash.lowercased() == parentAuthoritySetHash.lowercased() else {
-        throw SccpSourceProofHashError.invalidValidatorSet("parentAuthoritySetHash")
-    }
-
-    var out = Data()
-    out.append(version)
-    sourceProofAppendU32Le(sourceDomain, to: &out)
-    sourceProofAppendU64Le(fromGrandpaSetId, to: &out)
-    sourceProofAppendU64Le(toGrandpaSetId, to: &out)
-    sourceProofAppendU64Le(transitionBlockNumber, to: &out)
-    try out.append(sourceProofBytesFromHex32(transitionBlockHash, field: "transitionBlockHash"))
-    try out.append(sourceProofBytesFromHex32(parentAuthoritySetHash, field: "parentAuthoritySetHash"))
-    try out.append(sourceProofBytesFromHex32(nextAuthoritySetHash, field: "nextAuthoritySetHash"))
-    sourceProofAppendDataVector(nextAuthoritySetPayload, to: &out)
-    try out.append(sourceProofBytesFromHex32(nextAuthoritySetPayloadHash, field: "nextAuthoritySetPayloadHash"))
-    try out.append(sourceProofBytesFromHex32(transitionMessageHash, field: "transitionMessageHash"))
-    try out.append(sourceProofBytesFromHex32(derivedParentHash, field: "parentAuthoritySetHash"))
-    try out.append(
-        canonicalSubstrateGrandpaJustificationProofBytes(
-            version: proofVersion,
-            totalWeight: totalWeight,
-            signedWeight: signedWeight,
-            precommitMessageHash: transitionMessageHash,
-            authorityPublicKeys: authorityPublicKeys,
-            authorityWeights: authorityWeights,
-            signersBitmap: signersBitmap,
-            signatures: signatures
-        )
-    )
-    return out
-}
-
-/// Hash of the canonical Substrate authority-set transition justification transcript.
-public func substrateAuthoritySetTransitionJustificationHash(version: UInt8 = 1,
-                                                             sourceDomain: UInt32,
-                                                             fromGrandpaSetId: UInt64,
-                                                             toGrandpaSetId: UInt64,
-                                                             transitionBlockNumber: UInt64,
-                                                             transitionBlockHash: String,
-                                                             parentAuthoritySetHash: String,
-                                                             nextAuthoritySetHash: String,
-                                                             nextAuthoritySetPayload: Data,
-                                                             nextAuthoritySetPayloadHash: String,
-                                                             transitionMessageHash: String,
-                                                             proofVersion: UInt8 = 1,
-                                                             totalWeight: UInt64,
-                                                             signedWeight: UInt64,
-                                                             authorityPublicKeys: [String],
-                                                             authorityWeights: [UInt64],
-                                                             signersBitmap: Data,
-                                                             signatures: [Data]) throws -> String {
-    try sourceProofHashHex(
-        prefix: "sccp:substrate:authority-set-transition-justification:v1",
-        payload: canonicalSubstrateAuthoritySetTransitionJustificationBytes(
-            version: version,
-            sourceDomain: sourceDomain,
-            fromGrandpaSetId: fromGrandpaSetId,
-            toGrandpaSetId: toGrandpaSetId,
-            transitionBlockNumber: transitionBlockNumber,
-            transitionBlockHash: transitionBlockHash,
-            parentAuthoritySetHash: parentAuthoritySetHash,
-            nextAuthoritySetHash: nextAuthoritySetHash,
-            nextAuthoritySetPayload: nextAuthoritySetPayload,
-            nextAuthoritySetPayloadHash: nextAuthoritySetPayloadHash,
-            transitionMessageHash: transitionMessageHash,
-            proofVersion: proofVersion,
-            totalWeight: totalWeight,
-            signedWeight: signedWeight,
-            authorityPublicKeys: authorityPublicKeys,
-            authorityWeights: authorityWeights,
-            signersBitmap: signersBitmap,
-            signatures: signatures
-        )
-    )
-}
-
 private func sourceProofAppendBranch(_ branch: [Data], to out: inout Data, requireNonEmpty: Bool = false) throws {
     if requireNonEmpty && branch.isEmpty {
         throw SccpSourceProofHashError.invalidBranch("inclusionBranch")
@@ -5279,12 +4302,6 @@ private func sccpSourceAdapterVerifierProfile(
         return ("ton", 4, 4)
     case sccpDomainTron:
         return ("tron", 5, 5)
-    case sccpDomainSoraKusama:
-        return ("sora-kusama", 6, 6)
-    case sccpDomainSoraPolkadot:
-        return ("sora-polkadot", 6, 6)
-    case sccpDomainSora2:
-        return ("sora2", 6, 6)
     default:
         throw SccpSourceProofHashError.unsupportedSourceAdapterDomain("sourceDomain")
     }
@@ -5315,30 +4332,6 @@ private func sccpDestinationBindingProfile(
             "sccp:0:4:ton:ton-contract-v1:3",
             "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
             "ton-contract-v1"
-        )
-    case sccpDomainSoraKusama:
-        return (
-            5,
-            5,
-            "sccp:0:6:sora-kusama:substrate-runtime-v1:5",
-            "iroha:sccp:bridge-proof:message:stark-fri:v1:sora-kusama",
-            "substrate-runtime-v1"
-        )
-    case sccpDomainSoraPolkadot:
-        return (
-            5,
-            5,
-            "sccp:0:7:sora-polkadot:substrate-runtime-v1:5",
-            "iroha:sccp:bridge-proof:message:stark-fri:v1:sora-polkadot",
-            "substrate-runtime-v1"
-        )
-    case sccpDomainSora2:
-        return (
-            5,
-            5,
-            "sccp:0:8:sora2:substrate-runtime-v1:5",
-            "iroha:sccp:bridge-proof:message:stark-fri:v1:sora2",
-            "substrate-runtime-v1"
         )
     default:
         throw SccpSourceProofHashError.unsupportedDestinationBindingDomain("targetDomain")
@@ -5447,51 +4440,113 @@ private func sccpSourceRecordProfile(sourceDomain: UInt32) throws -> SccpSourceR
             requiresSourceBridge: true,
             requiresSourceBridgeConfig: true
         )
-    case sccpDomainSoraKusama:
-        return SccpSourceRecordProfile(
-            chain: adapterProfile.chain,
-            proofPlan: adapterProfile.proofPlan,
-            finalityModel: adapterProfile.finalityModel,
-            sourceTrustAnchorId: "sccp:sora-kusama:source-trust-anchor:grandpa-authority-set:v1",
-            consensusVerifierId: "sccp:sora-kusama:consensus-verifier:grandpa-finalized-header:v1",
-            messageInclusionVerifierId: "sccp:sora-kusama:message-inclusion-verifier:events-storage-proof:v1",
-            finalityPolicyId: "sccp:sora-kusama:finality-policy:grandpa-finality:v1",
-            sourceStateVerifierId: "sccp:sora-kusama:source-state-verifier:runtime-storage-proof:v1",
-            sourceBridgeEmitterId: "",
-            requiresSourceBridge: false,
-            requiresSourceBridgeConfig: false
-        )
-    case sccpDomainSoraPolkadot:
-        return SccpSourceRecordProfile(
-            chain: adapterProfile.chain,
-            proofPlan: adapterProfile.proofPlan,
-            finalityModel: adapterProfile.finalityModel,
-            sourceTrustAnchorId: "sccp:sora-polkadot:source-trust-anchor:grandpa-authority-set:v1",
-            consensusVerifierId: "sccp:sora-polkadot:consensus-verifier:grandpa-finalized-header:v1",
-            messageInclusionVerifierId: "sccp:sora-polkadot:message-inclusion-verifier:events-storage-proof:v1",
-            finalityPolicyId: "sccp:sora-polkadot:finality-policy:grandpa-finality:v1",
-            sourceStateVerifierId: "sccp:sora-polkadot:source-state-verifier:runtime-storage-proof:v1",
-            sourceBridgeEmitterId: "",
-            requiresSourceBridge: false,
-            requiresSourceBridgeConfig: false
-        )
-    case sccpDomainSora2:
-        return SccpSourceRecordProfile(
-            chain: adapterProfile.chain,
-            proofPlan: adapterProfile.proofPlan,
-            finalityModel: adapterProfile.finalityModel,
-            sourceTrustAnchorId: "sccp:sora2:source-trust-anchor:grandpa-authority-set:v1",
-            consensusVerifierId: "sccp:sora2:consensus-verifier:grandpa-finalized-header:v1",
-            messageInclusionVerifierId: "sccp:sora2:message-inclusion-verifier:events-storage-proof:v1",
-            finalityPolicyId: "sccp:sora2:finality-policy:grandpa-finality:v1",
-            sourceStateVerifierId: "sccp:sora2:source-state-verifier:runtime-storage-proof:v1",
-            sourceBridgeEmitterId: "",
-            requiresSourceBridge: false,
-            requiresSourceBridgeConfig: false
-        )
     default:
         throw SccpSourceProofHashError.unsupportedSourceAdapterDomain("sourceDomain")
     }
+}
+
+private let sccpSourceMaterialTonTemplateSourceStateVerifierHashV1 =
+    "0x540205f876591604ccf39f72a051ac5e82647c9e48dbd48cb129d2543971a34f"
+private let sccpSourceMaterialTonTemplateComponentHashesV1: [(String, String)] = [
+    ("sourceTrustAnchorHash", "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c"),
+    ("consensusVerifierHash", "0xb0225e16477ea3420f7d0de76b87b6e99a43ab97f445d8565a384d4b655bc473"),
+    ("messageInclusionVerifierHash", "0x89254256421c15da8c92842c7d6f448ef6c1d5ca1e2a173754643425fcee6353"),
+    ("sourceStateVerifierHash", sccpSourceMaterialTonTemplateSourceStateVerifierHashV1),
+    ("finalityPolicyHash", "0x50044ee6db0eb0cdef097e69406b6c30d3406d8f784e8ba34e9b923b38bd0c43"),
+]
+private let sccpSourceMaterialSolanaTemplateComponentHashesV1: [(String, String)] = [
+    ("sourceTrustAnchorHash", "0x113bdb7601d84f2098daec386346a7123857d181b3ac5bd23df50fa9e1b2cbe3"),
+    ("consensusVerifierHash", "0x97ea89019e6c79305d06dfc27640ee14a6b42ba6eaf86e1835ee9b433dba48ba"),
+    ("messageInclusionVerifierHash", "0xb8358bfef1e428a6a7e9115687cb2b88d9c21dad4021bea3e11d43489eb3dcb0"),
+    ("sourceStateVerifierHash", sccpSolanaTemplateSourceStateVerifierHashV1),
+    ("finalityPolicyHash", "0x9df7ea90cf1bbba036788b14804f63f4be1e908390be89524fd4486f74344f56"),
+]
+private let sccpSourceMaterialTronTemplateComponentHashesV1: [(String, String)] = [
+    ("sourceTrustAnchorHash", "0x3550934cbdfe49449ec4aa383dcea7674541fedf66ab6159b1ed2f2c0be4755c"),
+    ("consensusVerifierHash", "0x8a1de96a869b2f28f197a7835597f17cf77ff45f7cbb77da2f7c48e87df8c5ea"),
+    ("messageInclusionVerifierHash", "0xf39db56474b288680ad9561389cca7a841bd1fd223719255324705e1038fcacc"),
+    ("finalityPolicyHash", "0xad5a6a4f200e070400b5aaa1b7976c639e67571eb711eb6f69d01e3615423864"),
+]
+private let sccpEthSourceBridgeConfigLabelV1 =
+    Data("iroha:sccp:eth-source-bridge-config:v1".utf8)
+private let sccpTronSourceBridgeConfigLabelV1 =
+    Data("iroha:sccp:tron-source-bridge-config:v1".utf8)
+
+private func rejectTonTemplateSourceMaterialComponent(
+    _ value: Data,
+    field: String,
+    sourceDomain: UInt32
+) throws {
+    guard sourceDomain == sccpDomainTon else {
+        return
+    }
+    for (templateField, templateHash) in sccpSourceMaterialTonTemplateComponentHashesV1
+        where templateField == field {
+        if let templateBytes = try? sourceProofBytesFromHex32(templateHash, field: field),
+           value == templateBytes {
+            throw SccpSourceProofHashError.invalidSourceMaterial(field)
+        }
+    }
+}
+
+private func rejectSolanaTemplateSourceMaterialComponent(
+    _ value: Data,
+    field: String,
+    sourceDomain: UInt32
+) throws {
+    guard sourceDomain == sccpDomainSolana else {
+        return
+    }
+    for (templateField, templateHash) in sccpSourceMaterialSolanaTemplateComponentHashesV1
+        where templateField == field {
+        if let templateBytes = try? sourceProofBytesFromHex32(templateHash, field: field),
+           value == templateBytes {
+            throw SccpSourceProofHashError.invalidSourceMaterial(field)
+        }
+    }
+}
+
+private func rejectTronTemplateSourceMaterialComponent(
+    _ value: Data,
+    field: String,
+    sourceDomain: UInt32
+) throws {
+    guard sourceDomain == sccpDomainTron else {
+        return
+    }
+    for (templateField, templateHash) in sccpSourceMaterialTronTemplateComponentHashesV1
+        where templateField == field {
+        if let templateBytes = try? sourceProofBytesFromHex32(templateHash, field: field),
+           value == templateBytes {
+            throw SccpSourceProofHashError.invalidSourceMaterial(field)
+        }
+    }
+}
+
+private func tronSourceBridgeConfigHash(sourceDomain: UInt32,
+                                        bridgeAddress: Data,
+                                        networkId: Data,
+                                        ownerAddress: Data) -> Data {
+    var payload = Data(irohaKeccak256(sccpTronSourceBridgeConfigLabelV1))
+    sourceProofAppendAbiAddress20(bridgeAddress, to: &payload)
+    payload.append(networkId)
+    sourceProofAppendAbiU32(sourceDomain, to: &payload)
+    sourceProofAppendAbiU32(sccpDomainSora, to: &payload)
+    sourceProofAppendAbiAddress20(ownerAddress, to: &payload)
+    return Data(irohaKeccak256(payload))
+}
+
+private func ethSourceBridgeConfigHash(sourceDomain: UInt32,
+                                       bridgeAddress: Data,
+                                       networkId: Data,
+                                       codeHash: Data) -> Data {
+    var payload = Data(irohaKeccak256(sccpEthSourceBridgeConfigLabelV1))
+    sourceProofAppendAbiAddress20(bridgeAddress, to: &payload)
+    payload.append(networkId)
+    sourceProofAppendAbiU32(sourceDomain, to: &payload)
+    sourceProofAppendAbiU32(sccpDomainSora, to: &payload)
+    payload.append(codeHash)
+    return Data(irohaKeccak256(payload))
 }
 
 private func normalizeSccpSourceMaterial(
@@ -6107,42 +5162,7 @@ private func sourceProofValidateEthSyncCommitteePayload(_ payload: Data) throws 
     }
 }
 
-private func sourceProofValidateSubstrateAuthoritySetPayload(_ payload: Data) throws {
-    guard payload.count <= sccpSubstrateMaxAuthoritySetPayloadBytes else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authoritySetPayload")
-    }
-    let bytes = [UInt8](payload)
-    var cursor = 0
-    guard !bytes.isEmpty, bytes[cursor] == 1 else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authoritySetPayload")
-    }
-    cursor += 1
-    let count = Int(try sourceProofReadU32Le(bytes, cursor: &cursor))
-    guard count > 0, count <= sccpSubstrateMaxAuthorities, bytes.count - cursor == count * 40 else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authoritySetPayload")
-    }
-    var seenPublicKeys = Set<String>()
-    for index in 0..<count {
-        guard cursor + 32 <= bytes.count else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys[\(index)]")
-        }
-        let publicKey = Data(bytes[cursor..<cursor + 32])
-        cursor += 32
-        guard publicKey.contains(where: { $0 != 0 }) else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys[\(index)]")
-        }
-        guard seenPublicKeys.insert(publicKey.hexEncodedString()).inserted else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityPublicKeys[\(index)]")
-        }
-        let weight = try sourceProofReadU64Le(bytes, cursor: &cursor)
-        guard weight != 0 else {
-            throw SccpSourceProofHashError.invalidValidatorSet("authorityWeights[\(index)]")
-        }
-    }
-    guard cursor == bytes.count else {
-        throw SccpSourceProofHashError.invalidValidatorSet("authoritySetPayload")
-    }
-}
+
 
 private let sourceProofBscParliaExtraVanityBytes = 32
 private let sourceProofBscParliaExtraSealBytes = 65

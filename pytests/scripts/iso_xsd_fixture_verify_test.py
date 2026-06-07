@@ -60,6 +60,23 @@ def source_provenance(message_id, payload_root):
     }
 
 
+def blocked_schema_source(message_id="barr.001.001.01"):
+    return {
+        "message_def_id": message_id,
+        "source": {
+            "repository": "https://github.com/example/iso20022-blocked",
+            "commit": "89abcdef0123456789abcdef0123456789abcdef",
+            "path": f"xsd/{message_id}.xsd",
+            "sha256": "1" * 64,
+        },
+        "reason": "Candidate carries redistribution restrictions.",
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+        ],
+    }
+
+
 def rewrite_schema(root, message_id, content, *, manifest_path=None):
     schema_path = root / "xsd" / "iso" / f"{message_id}.xsd"
     schema_path.write_text(content, encoding="utf-8")
@@ -156,6 +173,236 @@ def run_verify(argv):
 
 
 class IsoXsdFixtureVerifyTest(unittest.TestCase):
+    def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
+        cases = (
+            ("password_xsd_unknown_secret", "xsd_unknown_secret"),
+            ("%70assword_xsd_unknown_leak", "xsd_unknown_leak"),
+            ("private-key_xsd_unknown_leak", "xsd_unknown_leak"),
+        )
+        for unknown_key, hidden in cases:
+            with self.subTest(unknown_key=unknown_key):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._reject_unknown_keys(
+                        {unknown_key: "redacted"}, set(), "manifest"
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("contains unknown keys", message)
+                self.assertNotIn("password", message)
+                self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_output_cli_path_flags_reject_flag_like_values(self):
+        cases = (
+            ["--summary-out"],
+            ["--summary-out", ""],
+            ["--summary-out", "--require-fixture-for-schema"],
+            ["--summary-out="],
+            ["--summary-out=--require-fixture-for-schema"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(
+                    VERIFIER.FixtureManifestError,
+                    "--summary-out requires a path value",
+                ):
+                    VERIFIER._preflight_output_cli_paths(argv, {"--summary-out"})
+
+    def test_output_cli_paths_reject_encoded_secret_material_without_echo(self):
+        cases = (
+            ("token=xsd-path-leak.summary.json", "token=xsd-path-leak"),
+            ("token%3Dxsd-path-leak.summary.json", "token=xsd-path-leak"),
+            ("%70assword%253Dxsd-path-leak.summary.json", "password=xsd-path-leak"),
+            ("token-xsd-path-secret.summary.json", "token-xsd-path-secret"),
+        )
+        for raw_path, decoded_secret in cases:
+            with self.subTest(raw_path=raw_path):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._preflight_output_cli_paths(
+                        ["--summary-out", raw_path], {"--summary-out"}
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(raw_path, message)
+                self.assertNotIn(decoded_secret, message)
+                self.assertNotIn("xsd-path-leak", message)
+
+    def test_boolean_cli_flags_reject_values_without_echo(self):
+        cases = (
+            (["--validate-xml-schema=true"], "--validate-xml-schema", "--validate-xml-schema=true"),
+            (
+                ["--require-profile-schema-backed-versions", "true"],
+                "--require-profile-schema-backed-versions",
+                "true",
+            ),
+        )
+        for argv, flag, rejected in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"{flag} does not take a value", stderr)
+                self.assertNotIn(rejected, stderr)
+
+    def test_numeric_cli_flags_reject_malformed_values_without_echo(self):
+        cases = (
+            ["--xmllint-timeout-secs", "token=xsd-secret"],
+            ["--xmllint-timeout-secs=token=xsd-secret"],
+            ["--xmllint-timeout-secs", "--summary-out"],
+            ["--xmllint-timeout-secs="],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("numeric value", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("xsd-secret", stderr)
+
+    def test_raw_cli_secret_like_values_rejected_without_echo(self):
+        cases = (
+            ["--private-key=xsd-secret"],
+            ["token=xsd-secret"],
+            ["password=xsd-secret"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("secret-looking", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("password=", stderr)
+                self.assertNotIn("xsd-secret", stderr)
+
+    def test_profile_catalog_secret_material_is_rejected_without_echo(self):
+        def base_catalog():
+            return [
+                {
+                    "id": "minimal-profile",
+                    "rail": "generic-iso20022",
+                    "embedded_signature_policy": "record-only",
+                    "required_reference_datasets": [],
+                    "message_profiles": [
+                        {
+                            "message_type": "fooo.001",
+                            "direction": "inbound",
+                            "versions": ["fooo.001.001.01"],
+                            "structured_address_mode": "permissive",
+                        }
+                    ],
+                }
+            ]
+
+        cases = (
+            ("rail", lambda catalog: catalog[0].__setitem__("rail", "token=xsd-profile-secret")),
+            (
+                "policy",
+                lambda catalog: catalog[0].__setitem__(
+                    "embedded_signature_policy",
+                    "%70assword%253Dxsd-profile-secret",
+                ),
+            ),
+            (
+                "dataset",
+                lambda catalog: catalog[0].__setitem__(
+                    "required_reference_datasets",
+                    ["client_secret=xsd-profile-secret"],
+                ),
+            ),
+            (
+                "address",
+                lambda catalog: catalog[0]["message_profiles"][0].__setitem__(
+                    "structured_address_mode",
+                    "api_key=xsd-profile-secret",
+                ),
+            ),
+            (
+                "version",
+                lambda catalog: catalog[0]["message_profiles"][0].__setitem__(
+                    "versions",
+                    ["session_key=xsd-profile-secret"],
+                ),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    catalog = base_catalog()
+                    mutate(catalog)
+                    profile_catalog = write_profile_catalog(root / "profiles.rs", catalog=catalog)
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--manifest",
+                            str(manifest_path),
+                            "--profile-catalog",
+                            str(profile_catalog),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("password=", stderr)
+                    self.assertNotIn("client_secret=", stderr)
+                    self.assertNotIn("api_key=", stderr)
+                    self.assertNotIn("session_key=", stderr)
+                    self.assertNotIn("xsd-profile-secret", stderr)
+
+    def test_profile_catalog_secret_looking_identifiers_are_rejected_without_echo(self):
+        catalog = [
+            {
+                "id": "token_xsd_profile_secret",
+                "rail": "generic-iso20022",
+                "embedded_signature_policy": "record-only",
+                "required_reference_datasets": [],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "structured_address_mode": "permissive",
+                    }
+                ],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(root / "profiles.rs", catalog=catalog)
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("secret-looking material", stderr)
+            self.assertNotIn("token_xsd_profile_secret", stderr)
+
+    def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "fixture_manifest.json"
+            path.write_text("{}\n", encoding="utf-8")
+
+            for limit in (True, "64"):
+                with self.subTest(limit=limit):
+                    with self.assertRaisesRegex(
+                        VERIFIER.FixtureManifestError,
+                        "max file bytes must be a positive integer",
+                    ):
+                        VERIFIER._read_regular_file(path, max_bytes=limit)
+
     def test_checked_in_manifest_passes_and_records_reviewed_gaps(self):
         with tempfile.TemporaryDirectory() as raw_root:
             summary_out = Path(raw_root) / "summary.json"
@@ -172,9 +419,10 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
-            self.assertEqual(summary["verified_schemas"], 6)
+            self.assertEqual(summary["version"], VERIFIER.SUMMARY_VERSION)
+            self.assertEqual(summary["verified_schemas"], 7)
             self.assertEqual(summary["verified_fixtures"], 11)
-            self.assertEqual(summary["schema_backed_fixtures"], 6)
+            self.assertEqual(summary["schema_backed_fixtures"], 7)
             self.assertEqual(
                 summary["manifest_sha256"],
                 VERIFIER.sha256_hex(
@@ -187,12 +435,19 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     ).read_bytes()
                 ),
             )
-            self.assertEqual(len(summary["missing_schema_fixtures"]), 5)
+            self.assertEqual(len(summary["missing_schema_fixtures"]), 4)
             missing_schema_ids = sorted(
                 entry["message_def_id"] for entry in summary["missing_schema_fixtures"]
             )
             self.assertIn("colr.012.001.05", missing_schema_ids)
             self.assertNotIn("colr.007.001.08", missing_schema_ids)
+            self.assertEqual(summary["blocked_schema_source_count"], 3)
+            self.assertEqual(
+                sorted(
+                    entry["message_def_id"] for entry in summary["blocked_schema_sources"]
+                ),
+                ["pacs.002.001.12", "pacs.008.001.10", "pacs.009.001.10"],
+            )
             self.assertEqual(summary["schema_only_entries"], [])
             self.assertEqual(json.loads(summary_out.read_text(encoding="utf-8")), summary)
             self.assertEqual(summary_out.stat().st_mode & 0o077, 0)
@@ -255,6 +510,91 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
                     self.assertNotIn("token=", stderr)
+                    self.assertNotIn(secret, stderr)
+
+    def test_secret_looking_manifest_summary_strings_are_rejected_without_echo(self):
+        cases = [
+            (
+                lambda body: body["schemas"][0].update(
+                    {"path": "iso/token=xsd-schema-secret/fooo.001.001.01.xsd"}
+                ),
+                "schemas[0].path must not contain secret-looking material",
+                "xsd-schema-secret",
+            ),
+            (
+                lambda body: body["fixtures"][0].update(
+                    {"path": "../token=xsd-fixture-secret/foo_fixture.xml"}
+                ),
+                "fixtures[0].path must not contain secret-looking material",
+                "xsd-fixture-secret",
+            ),
+            (
+                lambda body: body["schemas"][0]["source"].update(
+                    {"path": "xsd/token=xsd-source-secret/fooo.001.001.01.xsd"}
+                ),
+                "schemas[0].source.path must not contain secret-looking material",
+                "xsd-source-secret",
+            ),
+            (
+                lambda body: body["schemas"][0].update(
+                    {"payload_root": "token_xsd_schema_payload_secret"}
+                ),
+                "schemas[0].payload_root must not contain secret-looking material",
+                "token_xsd_schema_payload_secret",
+            ),
+            (
+                lambda body: body["fixtures"][0].update(
+                    {"payload_root": "%70assword%253Dxsd-fixture-payload-secret"}
+                ),
+                "fixtures[0].payload_root must not contain secret-looking material",
+                "xsd-fixture-payload-secret",
+            ),
+            (
+                lambda body: (
+                    body["fixtures"][0].pop("schema"),
+                    body["fixtures"][0].update(
+                        {
+                            "missing_schema_reason": (
+                                "Reviewed gap token=xsd-missing-reason-secret"
+                            )
+                        }
+                    ),
+                ),
+                "fixtures[0].missing_schema_reason must not contain secret-looking material",
+                "xsd-missing-reason-secret",
+            ),
+            (
+                lambda body: body.update(
+                    {
+                        "blocked_schema_sources": [
+                            {
+                                **blocked_schema_source(),
+                                "reason": (
+                                    "Blocked candidate Authorization: xsd-blocked-reason-secret"
+                                ),
+                            }
+                        ]
+                    }
+                ),
+                "blocked_schema_sources[0].reason must not contain secret-looking material",
+                "xsd-blocked-reason-secret",
+            ),
+        ]
+        for mutate, expected, secret in cases:
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest = minimal_manifest()
+                    mutate(manifest)
+                    manifest_path = write_minimal_tree(root, manifest)
+
+                    rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("Authorization:", stderr)
                     self.assertNotIn(secret, stderr)
 
     def test_symlinked_summary_output_is_rejected(self):
@@ -530,6 +870,32 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 summary["profile_catalog"]["catalog_json_sha256"],
                 VERIFIER.sha256_hex(catalog_json.encode("utf-8")),
             )
+
+    def test_strict_profile_schema_backed_versions_uses_default_catalog(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(root / "profiles.rs")
+            original_default = VERIFIER.DEFAULT_PROFILE_CATALOG
+            VERIFIER.DEFAULT_PROFILE_CATALOG = profile_catalog
+            try:
+                rc, stdout, stderr = run_verify(
+                    [
+                        "--manifest",
+                        str(manifest_path),
+                        "--require-profile-schema-backed-versions",
+                    ]
+                )
+            finally:
+                VERIFIER.DEFAULT_PROFILE_CATALOG = original_default
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertTrue(summary["strict"]["require_profile_schema_backed_versions"])
+            self.assertEqual(summary["profile_catalog"]["path"], str(profile_catalog))
+            self.assertEqual(summary["profile_checked_versions"], 1)
+            self.assertEqual(summary["profile_schema_backed_versions"], 1)
+            self.assertEqual(summary["missing_profile_schema_versions"], [])
 
     def test_profile_catalog_loader_ignores_commented_or_string_spoofs(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1345,6 +1711,45 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_profile_catalog_duplicate_strings_do_not_echo_secret_material(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(
+                root / "profiles.rs",
+                catalog=[
+                    {
+                        "id": "minimal-profile",
+                        "message_profiles": [
+                            {
+                                "message_type": "fooo.001",
+                                "direction": "inbound",
+                                "versions": ["fooo.001.001.01"],
+                                "business_services": [
+                                    "token=xsd-duplicate-secret",
+                                    "token=xsd-duplicate-secret",
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("business_services[0] contains secret-looking material", stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("xsd-duplicate-secret", stderr)
+
     def test_checked_in_profile_catalog_records_advertised_schema_gaps(self):
         with tempfile.TemporaryDirectory() as raw_root:
             summary_out = Path(raw_root) / "summary.json"
@@ -1366,13 +1771,13 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 entry["message_def_id"]
                 for entry in summary["missing_profile_schema_versions"]
             }
-            self.assertIn("pacs.004.001.09", missing_ids)
+            self.assertNotIn("pacs.004.001.09", missing_ids)
             self.assertIn("pacs.002.001.12", missing_ids)
             self.assertNotIn("camt.056.001.09", missing_ids)
             self.assertGreater(summary["profile_checked_versions"], 0)
             self.assertGreater(summary["profile_schema_backed_versions"], 0)
-            self.assertEqual(summary["profile_schema_backed_versions"], 26)
-            self.assertEqual(len(summary["missing_profile_schema_versions"]), 29)
+            self.assertEqual(summary["profile_schema_backed_versions"], 31)
+            self.assertEqual(len(summary["missing_profile_schema_versions"]), 24)
 
     def test_xml_schema_validation_bounds_xmllint_output(self):
         cases = [
@@ -1407,6 +1812,47 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                 self.assertEqual(rc, 2)
                 self.assertIn(expected, stderr)
+
+    def test_xmllint_failure_output_redacts_secret_material_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            original_which = VERIFIER.shutil.which
+            original_run = VERIFIER._run_command_bounded
+            VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+            VERIFIER._run_command_bounded = lambda *_args, **_kwargs: (
+                1,
+                "",
+                False,
+                "schema validator echoed token=xmllint-secret",
+                False,
+                False,
+            )
+            try:
+                rc, stdout, stderr = run_verify(
+                    ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                )
+            finally:
+                VERIFIER.shutil.which = original_which
+                VERIFIER._run_command_bounded = original_run
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("failed XML schema validation", stderr)
+            self.assertIn("xmllint output redacted", stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("xmllint-secret", stderr)
+
+    def test_boolean_xmllint_output_limit_is_rejected(self):
+        with self.assertRaisesRegex(
+            VERIFIER.FixtureManifestError,
+            "output limit bytes must be positive",
+        ):
+            VERIFIER._run_command_bounded(
+                [sys.executable, "-c", "print('ok')"],
+                True,
+                1.0,
+            )
 
     def test_xml_schema_validation_bounds_xmllint_runtime(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1589,6 +2035,173 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_secret_looking_schema_target_namespace_is_rejected_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            rewrite_schema(
+                root,
+                "fooo.001.001.01",
+                xsd_text("fooo.001.001.01", "FooPayload").replace(
+                    'targetNamespace="urn:iso:std:iso:20022:tech:xsd:fooo.001.001.01"',
+                    'targetNamespace="urn:iso:std:iso:20022:tech:xsd:token_xsd_namespace_secret"',
+                    1,
+                ),
+                manifest_path=manifest_path,
+            )
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("targetNamespace must not contain secret-looking material", stderr)
+            self.assertNotIn("token_xsd_namespace_secret", stderr)
+
+    def test_secret_looking_fixture_xml_content_is_rejected_without_echo(self):
+        cases = [
+            (
+                "namespace",
+                lambda xml: xml.replace(
+                    "urn:iso:std:iso:20022:tech:xsd:fooo.001.001.01",
+                    "urn:iso:std:iso:20022:tech:xsd:token_xsd_fixture_namespace_secret",
+                    1,
+                ),
+                "token_xsd_fixture_namespace_secret",
+            ),
+            (
+                "nested_element",
+                lambda xml: xml.replace(
+                    "<payload:FooPayload/>",
+                    "<payload:FooPayload><payload:token_xsd_nested_secret/></payload:FooPayload>",
+                    1,
+                ),
+                "token_xsd_nested_secret",
+            ),
+            (
+                "nested_attribute",
+                lambda xml: xml.replace(
+                    "<payload:FooPayload/>",
+                    (
+                        "<payload:FooPayload>"
+                        '<payload:Nested token-secret="redacted"/>'
+                        "</payload:FooPayload>"
+                    ),
+                    1,
+                ),
+                "token-secret",
+            ),
+            (
+                "nested_text",
+                lambda xml: xml.replace(
+                    "<payload:FooPayload/>",
+                    "<payload:FooPayload>token=xsd-fixture-text-secret</payload:FooPayload>",
+                    1,
+                ),
+                "xsd-fixture-text-secret",
+            ),
+        ]
+        for case_name, mutate, secret in cases:
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    (root / "foo_fixture.xml").write_text(
+                        mutate(fixture_xml("fooo.001.001.01", "FooPayload")),
+                        encoding="utf-8",
+                    )
+
+                    rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn(secret, stderr)
+
+    def test_secret_looking_schema_and_fixture_payload_roots_are_rejected_without_echo(self):
+        cases = [
+            (
+                "schema_payload_name",
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
+                    xsd_text("fooo.001.001.01", "FooPayload").replace(
+                        '<xs:element name="FooPayload" type="FooPayload"/>',
+                        '<xs:element name="token_xsd_schema_payload_secret" type="FooPayload"/>',
+                        1,
+                    ),
+                    manifest_path=manifest_path,
+                ),
+                "Document payload element name must not contain secret-looking material",
+                "token_xsd_schema_payload_secret",
+            ),
+            (
+                "schema_payload_type",
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
+                    xsd_text("fooo.001.001.01", "FooPayload").replace(
+                        '<xs:element name="FooPayload" type="FooPayload"/>',
+                        '<xs:element name="FooPayload" type="token_xsd_schema_type_secret"/>',
+                        1,
+                    ),
+                    manifest_path=manifest_path,
+                ),
+                "Document payload element type must not contain secret-looking material",
+                "token_xsd_schema_type_secret",
+            ),
+            (
+                "fixture_payload_root",
+                lambda root, _manifest_path: (root / "foo_fixture.xml").write_text(
+                    fixture_xml("fooo.001.001.01", "FooPayload").replace(
+                        "FooPayload",
+                        "token_xsd_fixture_payload_secret",
+                        1,
+                    ),
+                    encoding="utf-8",
+                ),
+                "XML fixture[0] element must not contain secret-looking material",
+                "token_xsd_fixture_payload_secret",
+            ),
+        ]
+        for case_name, mutate, message, secret in cases:
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    mutate(root, manifest_path)
+
+                    rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(secret, stderr)
+
+    def test_secret_looking_schema_attribute_names_are_rejected_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            rewrite_schema(
+                root,
+                "fooo.001.001.01",
+                xsd_text("fooo.001.001.01", "FooPayload").replace(
+                    'targetNamespace="urn:iso:std:iso:20022:tech:xsd:fooo.001.001.01">',
+                    (
+                        'targetNamespace="urn:iso:std:iso:20022:tech:xsd:fooo.001.001.01"\n'
+                        '           token-secret="operator-value">'
+                    ),
+                    1,
+                ),
+                manifest_path=manifest_path,
+            )
+
+            rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("unexpected attributes", stderr)
+            self.assertNotIn("token-secret", stderr)
 
     def test_schema_document_declarations_must_be_unambiguous(self):
         prefixed_document_type = xsd_text("fooo.001.001.01", "FooPayload").replace(
@@ -1915,6 +2528,58 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_secret_looking_schema_foreign_child_namespaces_are_rejected_without_echo(self):
+        base_schema = xsd_text("fooo.001.001.01", "FooPayload").replace(
+            'xmlns:xs="http://www.w3.org/2001/XMLSchema"',
+            (
+                'xmlns:xs="http://www.w3.org/2001/XMLSchema"\n'
+                '           xmlns:evil="urn:example:token=foreign-child-secret"'
+            ),
+            1,
+        )
+        cases = [
+            (
+                "schema_root",
+                base_schema.replace(
+                    '  <xs:element name="Document" type="Document"/>',
+                    '  <evil:metadata/>\n  <xs:element name="Document" type="Document"/>',
+                    1,
+                ),
+                "xs:schema contains unsupported foreign child",
+            ),
+            (
+                "nested_document",
+                base_schema.replace(
+                    '  <xs:complexType name="Document">\n    <xs:sequence>',
+                    (
+                        '  <xs:complexType name="Document">\n'
+                        '    <evil:metadata/>\n'
+                        '    <xs:sequence>'
+                    ),
+                    1,
+                ),
+                "Document complex type contains unsupported child",
+            ),
+        ]
+        for case_name, content, message in cases:
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    rewrite_schema(
+                        root,
+                        "fooo.001.001.01",
+                        content,
+                        manifest_path=manifest_path,
+                    )
+
+                    rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn("token=foreign-child-secret", stderr)
+
     def test_restricted_schema_redistribution_terms_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2071,6 +2736,103 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_blocked_schema_source_provenance_and_markers_are_rejected(self):
+        cases = []
+
+        unknown_key = minimal_manifest()
+        unknown_key["blocked_schema_sources"] = [blocked_schema_source()]
+        unknown_key["blocked_schema_sources"][0]["unexpected"] = True
+        cases.append((unknown_key, "unknown keys"))
+
+        bad_repository = minimal_manifest()
+        bad_repository["blocked_schema_sources"] = [blocked_schema_source()]
+        bad_repository["blocked_schema_sources"][0]["source"]["repository"] = (
+            "https://github.com/example/iso20022-blocked.git"
+        )
+        cases.append((bad_repository, "repository must be a canonical"))
+
+        bad_commit = minimal_manifest()
+        bad_commit["blocked_schema_sources"] = [blocked_schema_source()]
+        bad_commit["blocked_schema_sources"][0]["source"]["commit"] = (
+            "89abcdef0123456789abcdef0123456789abcdeZ"
+        )
+        cases.append((bad_commit, "commit must be a lowercase 40-hex"))
+
+        mismatched_filename = minimal_manifest()
+        mismatched_filename["blocked_schema_sources"] = [blocked_schema_source()]
+        mismatched_filename["blocked_schema_sources"][0]["source"]["path"] = (
+            "xsd/other.001.001.01.xsd"
+        )
+        cases.append((mismatched_filename, "filename must match message_def_id"))
+
+        bad_sha = minimal_manifest()
+        bad_sha["blocked_schema_sources"] = [blocked_schema_source()]
+        bad_sha["blocked_schema_sources"][0]["source"]["sha256"] = "not-a-digest"
+        cases.append((bad_sha, "sha256 must be a lowercase SHA-256 digest"))
+
+        empty_markers = minimal_manifest()
+        empty_markers["blocked_schema_sources"] = [blocked_schema_source()]
+        empty_markers["blocked_schema_sources"][0]["restriction_markers"] = []
+        cases.append((empty_markers, "restriction_markers must not be empty"))
+
+        unsupported_marker = minimal_manifest()
+        unsupported_marker["blocked_schema_sources"] = [blocked_schema_source()]
+        unsupported_marker["blocked_schema_sources"][0]["restriction_markers"] = [
+            "unknown-license-marker"
+        ]
+        cases.append((unsupported_marker, "must be one of"))
+
+        duplicate_marker = minimal_manifest()
+        duplicate_marker["blocked_schema_sources"] = [blocked_schema_source()]
+        duplicate_marker["blocked_schema_sources"][0]["restriction_markers"] = [
+            "swift-copyright-header",
+            "swift-copyright-header",
+        ]
+        cases.append((duplicate_marker, "duplicates"))
+
+        blocked_checked_in_schema = minimal_manifest()
+        blocked_checked_in_schema["blocked_schema_sources"] = [
+            blocked_schema_source("fooo.001.001.01")
+        ]
+        cases.append((blocked_checked_in_schema, "already checked-in schema"))
+
+        duplicate_candidate_digest = minimal_manifest()
+        duplicate_candidate_digest["blocked_schema_sources"] = [
+            blocked_schema_source("barr.001.001.01"),
+            blocked_schema_source("barr.001.001.02"),
+        ]
+        duplicate_candidate_digest["blocked_schema_sources"][1]["source"]["path"] = (
+            "xsd/barr.001.001.02.xsd"
+        )
+        cases.append((duplicate_candidate_digest, "duplicate candidate SHA-256 values"))
+
+        for manifest, message in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, manifest)
+
+                    rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_profile_catalog_rejects_blocked_source_without_current_gap(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            manifest["blocked_schema_sources"] = [blocked_schema_source()]
+            manifest_path = write_minimal_tree(root, manifest)
+            profile_catalog = write_profile_catalog(root / "profiles.rs")
+
+            rc, _stdout, stderr = run_verify(
+                ["--manifest", str(manifest_path), "--profile-catalog", str(profile_catalog)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("blocked_schema_sources includes barr.001.001.01", stderr)
+            self.assertIn("without a current missing schema/profile gap", stderr)
 
     def test_fixture_namespace_payload_root_and_document_root_drift_are_rejected(self):
         for xml, message in [
@@ -2282,7 +3044,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             manifest_path = root / "xsd" / "fixture_manifest.json"
             manifest_path.parent.mkdir(parents=True)
             manifest_path.write_text(
-                '{"version":1,"version":1,"schemas":[],"fixtures":[]}\n',
+                '{"version":1,"token=xsd-duplicate-key-secret":1,"token=xsd-duplicate-key-secret":2,"schemas":[],"fixtures":[]}\n',
                 encoding="utf-8",
             )
 
@@ -2290,6 +3052,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
+            self.assertNotIn("xsd-duplicate-key-secret", stderr)
 
     def test_non_finite_manifest_json_numbers_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2305,6 +3068,21 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("non-finite numeric constant NaN", stderr)
+
+    def test_boolean_manifest_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = root / "xsd" / "fixture_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                '{"version":true,"schemas":[],"fixtures":[]}\n',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn(".version must be 1", stderr)
 
     def test_manifest_json_surrogate_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

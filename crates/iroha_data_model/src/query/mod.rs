@@ -109,6 +109,39 @@ mod signature_tests {
             norito::core::decode_from_bytes(&inner_encoded).expect("decode inner signature");
         assert_eq!(inner_decoded, signature);
     }
+
+    #[test]
+    fn query_request_try_sign_matches_compatibility_sign() {
+        let key_pair =
+            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let make_payload = || {
+            let authority = AccountId::new(key_pair.public_key().clone());
+            let cursor = ForwardCursor {
+                query: "cursor-try-sign".to_owned(),
+                cursor: NonZeroU64::new(1).expect("nonzero"),
+                gas_budget: Some(5),
+            };
+            QueryRequestWithAuthority {
+                authority,
+                request: QueryRequest::Continue(cursor),
+            }
+        };
+
+        let fallible = make_payload()
+            .try_sign(&key_pair)
+            .expect("query signing should succeed");
+        let compatibility = make_payload().sign(&key_pair);
+
+        let fallible_bytes = norito::to_bytes(&fallible).expect("encode fallible signed query");
+        let compatibility_bytes =
+            norito::to_bytes(&compatibility).expect("encode compatibility signed query");
+        assert_eq!(fallible_bytes, compatibility_bytes);
+
+        let QuerySignature(signature) = &fallible.signature;
+        signature
+            .verify(key_pair.public_key(), &fallible.payload)
+            .expect("query signature should verify");
+    }
 }
 
 impl iroha_version::codec::EncodeVersioned for SignedQuery {
@@ -2234,16 +2267,31 @@ impl QueryRequestWithAuthority {
         (self.authority, self.request)
     }
 
+    /// Sign this [`QueryRequestWithAuthority`], creating a [`SignedQuery`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured signature backend cannot sign the
+    /// query payload with the supplied key pair.
+    #[inline]
+    pub fn try_sign(
+        self,
+        key_pair: &iroha_crypto::KeyPair,
+    ) -> Result<SignedQuery, iroha_crypto::Error> {
+        let signature = SignatureOf::try_new(key_pair.private_key(), &self)?;
+
+        Ok(SignedQuery {
+            signature: QuerySignature(signature),
+            payload: self,
+        })
+    }
+
     /// Sign this [`QueryRequestWithAuthority`], creating a [`SignedQuery`]
     #[inline]
     #[must_use]
     pub fn sign(self, key_pair: &iroha_crypto::KeyPair) -> SignedQuery {
-        let signature = SignatureOf::new(key_pair.private_key(), &self);
-
-        SignedQuery {
-            signature: QuerySignature(signature),
-            payload: self,
-        }
+        self.try_sign(key_pair)
+            .expect("signing should succeed for a valid key pair and query request")
     }
 }
 

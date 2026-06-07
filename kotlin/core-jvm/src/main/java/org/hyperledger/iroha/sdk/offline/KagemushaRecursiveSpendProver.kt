@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.security.MessageDigest
+
 /** Native recursive Kagemusha spend ABI-6 bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
@@ -47,6 +49,10 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private val MALFORMED_NATIVE_PROBE_ARCHIVE = byteArrayOf(0x00)
+        private val KAGEMUSHA_ZK1_MAGIC = byteArrayOf(0x5a, 0x4b, 0x31, 0x00)
+        private val KAGEMUSHA_ZK1_TLV_CID1 = "CID1".toByteArray(Charsets.US_ASCII)
+        private val KAGEMUSHA_ZK1_TLV_IPAK = "IPAK".toByteArray(Charsets.US_ASCII)
+        private val KAGEMUSHA_ZK1_TLV_H2VK = "H2VK".toByteArray(Charsets.US_ASCII)
         private val nativeAvailable: Boolean = loadLibrary()
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
@@ -113,9 +119,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun lineageKeyArtifactsForInit(
             verifierOpeningLen: Int,
-            lineageVerifierKeyBackend: String,
-            lineageVerifierKey: ByteArray,
-            lineageProvingKeyArchive: ByteArray,
+            lineageVerifierKeyBackend: String?,
+            lineageVerifierKey: ByteArray?,
+            lineageProvingKeyArchive: ByteArray?,
         ): LineageKeyArtifacts =
             lineageKeyArtifacts(
                 RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
@@ -128,9 +134,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun lineageKeyArtifactsForAppend(
             verifierOpeningLen: Int,
-            lineageVerifierKeyBackend: String,
-            lineageVerifierKey: ByteArray,
-            lineageProvingKeyArchive: ByteArray,
+            lineageVerifierKeyBackend: String?,
+            lineageVerifierKey: ByteArray?,
+            lineageProvingKeyArchive: ByteArray?,
         ): LineageKeyArtifacts =
             lineageKeyArtifacts(
                 RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
@@ -141,43 +147,234 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
 
         @JvmStatic
-        fun validateLineageKeyArtifacts(artifacts: LineageKeyArtifacts): LineageKeyArtifacts {
+        fun validateLineageKeyArtifacts(artifacts: LineageKeyArtifacts?): LineageKeyArtifacts {
+            require(artifacts != null) { "lineage_key_artifacts" }
+            validateLineageKeyArtifactFields(
+                artifacts.proofCircuitId,
+                artifacts.verifierOpeningLen,
+                artifacts.lineageVerifierKeyBackend,
+                artifacts.lineageVerifierKey(),
+                artifacts.lineageProvingKeyArchive(),
+            )
+            return artifacts
+        }
+
+        private fun validateLineageKeyArtifactFields(
+            proofCircuitId: String?,
+            verifierOpeningLen: Int,
+            lineageVerifierKeyBackend: String?,
+            lineageVerifierKey: ByteArray?,
+            lineageProvingKeyArchive: ByteArray?,
+        ) {
             require(
-                artifacts.proofCircuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
-                    artifacts.proofCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                proofCircuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+                    proofCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             ) {
                 "proof_circuit_id"
             }
-            require(isSupportedLineageKeyArtifactOpeningLen(artifacts.verifierOpeningLen)) {
+            require(isSupportedLineageKeyArtifactOpeningLen(verifierOpeningLen)) {
                 "verifier_opening_len"
             }
-            require(artifacts.lineageVerifierKeyBackend == RECURSIVE_AGGREGATION_PROOF_BACKEND) {
+            require(lineageVerifierKeyBackend == RECURSIVE_AGGREGATION_PROOF_BACKEND) {
                 "lineage_verifier_key"
             }
-            require(artifacts.lineageVerifierKey().isNotEmpty()) { "lineage_verifier_key" }
-            require(artifacts.lineageProvingKeyArchive().isNotEmpty()) {
+            require(lineageVerifierKey != null && lineageVerifierKey.isNotEmpty()) {
+                "lineage_verifier_key"
+            }
+            require(lineageProvingKeyArchive != null && lineageProvingKeyArchive.isNotEmpty()) {
                 "lineage_proving_key_archive"
             }
-            return artifacts
+            validateLineageKeyArtifactPackageBinding(
+                proofCircuitId,
+                lineageVerifierKeyBackend,
+                lineageVerifierKey,
+                lineageProvingKeyArchive,
+            )
+        }
+
+        private fun validateLineageKeyArtifactPackageBinding(
+            proofCircuitId: String,
+            lineageVerifierKeyBackend: String,
+            lineageVerifierKey: ByteArray,
+            lineageProvingKeyArchive: ByteArray,
+        ) {
+            val verifierCircuitId = lineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey)
+            require(verifierCircuitId == proofCircuitId) {
+                "lineage_verifier_key"
+            }
+            val archivePayload = lineageProvingKeyArchivePayload(lineageProvingKeyArchive)
+            val circuitIdBytes = proofCircuitId.toByteArray(Charsets.UTF_8)
+            val verifierKeyCommitment =
+                verifyingKeyCommitment(lineageVerifierKeyBackend, lineageVerifierKey)
+            require(
+                archivePayload.indexOfSlice(circuitIdBytes) >= 0 &&
+                    archivePayload.indexOfSlice(verifierKeyCommitment) >= 0,
+            ) {
+                "lineage_proving_key_archive"
+            }
+        }
+
+        private fun lineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey: ByteArray): String {
+            require(lineageVerifierKey.startsWithBytes(KAGEMUSHA_ZK1_MAGIC)) {
+                "lineage_verifier_key"
+            }
+            var offset = KAGEMUSHA_ZK1_MAGIC.size
+            var circuitId: String? = null
+            var sawIpaK = false
+            var sawH2Vk = false
+            while (offset < lineageVerifierKey.size) {
+                require(offset + 8 <= lineageVerifierKey.size) {
+                    "lineage_verifier_key"
+                }
+                val tag = lineageVerifierKey.copyOfRange(offset, offset + 4)
+                val payloadLength = readIntLittleEndian(lineageVerifierKey, offset + 4)
+                val payloadStart = offset + 8
+                val payloadEndLong = payloadStart.toLong() + payloadLength.toLong()
+                require(payloadLength >= 0 && payloadEndLong <= lineageVerifierKey.size.toLong()) {
+                    "lineage_verifier_key"
+                }
+                val payloadEnd = payloadEndLong.toInt()
+                val payload = lineageVerifierKey.copyOfRange(payloadStart, payloadEnd)
+                when {
+                    tag.contentEquals(KAGEMUSHA_ZK1_TLV_CID1) -> {
+                        require(
+                            circuitId == null &&
+                                payload.isNotEmpty() &&
+                                payload.all { byte ->
+                                    val value = byte.toInt() and 0xff
+                                    value in 0x20..0x7e
+                                },
+                        ) {
+                            "lineage_verifier_key"
+                        }
+                        val decoded = payload.toString(Charsets.UTF_8).trim()
+                        require(decoded.isNotEmpty()) {
+                            "lineage_verifier_key"
+                        }
+                        circuitId = decoded
+                    }
+                    tag.contentEquals(KAGEMUSHA_ZK1_TLV_IPAK) -> {
+                        require(!sawIpaK && payload.size == 4) {
+                            "lineage_verifier_key"
+                        }
+                        sawIpaK = true
+                    }
+                    tag.contentEquals(KAGEMUSHA_ZK1_TLV_H2VK) -> {
+                        require(!sawH2Vk && payload.isNotEmpty()) {
+                            "lineage_verifier_key"
+                        }
+                        sawH2Vk = true
+                    }
+                    else -> throw IllegalArgumentException("lineage_verifier_key")
+                }
+                offset = payloadEnd
+            }
+            require(circuitId != null && sawIpaK && sawH2Vk) {
+                "lineage_verifier_key"
+            }
+            return circuitId
+        }
+
+        private fun lineageProvingKeyArchivePayload(lineageProvingKeyArchive: ByteArray): ByteArray {
+            require(
+                KagemushaCompactPaymentTokenProver.isValidNoritoArchive(lineageProvingKeyArchive) &&
+                    KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(lineageProvingKeyArchive),
+            ) {
+                "lineage_proving_key_archive"
+            }
+            val payloadLength = readLongLittleEndian(lineageProvingKeyArchive, 23)
+            require(payloadLength > 0 && payloadLength <= Int.MAX_VALUE.toLong()) {
+                "lineage_proving_key_archive"
+            }
+            val payloadOffset = lineageProvingKeyArchive.size - payloadLength.toInt()
+            return lineageProvingKeyArchive.copyOfRange(payloadOffset, lineageProvingKeyArchive.size)
+        }
+
+        private fun verifyingKeyCommitment(
+            lineageVerifierKeyBackend: String,
+            lineageVerifierKey: ByteArray,
+        ): ByteArray {
+            val backend = lineageVerifierKeyBackend.toByteArray(Charsets.UTF_8)
+            val digest = MessageDigest.getInstance("SHA-256")
+            digest.update("iroha:zk:v1:vk".toByteArray(Charsets.US_ASCII))
+            digest.update(longBigEndian(backend.size.toLong()))
+            digest.update(backend)
+            digest.update(longBigEndian(lineageVerifierKey.size.toLong()))
+            digest.update(lineageVerifierKey)
+            return digest.digest()
+        }
+
+        private fun readIntLittleEndian(bytes: ByteArray, offset: Int): Int {
+            require(offset >= 0 && offset + 4 <= bytes.size) {
+                "lineage_verifier_key"
+            }
+            return (bytes[offset].toInt() and 0xff) or
+                ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+                ((bytes[offset + 2].toInt() and 0xff) shl 16) or
+                ((bytes[offset + 3].toInt() and 0xff) shl 24)
+        }
+
+        private fun readLongLittleEndian(bytes: ByteArray, offset: Int): Long {
+            var value = 0L
+            for (index in 0 until 8) {
+                value = value or ((bytes[offset + index].toLong() and 0xffL) shl (index * 8))
+            }
+            return value
+        }
+
+        private fun longBigEndian(value: Long): ByteArray {
+            val output = ByteArray(8)
+            for (index in output.indices) {
+                output[index] = ((value ushr ((7 - index) * 8)) and 0xff).toByte()
+            }
+            return output
+        }
+
+        private fun ByteArray.startsWithBytes(prefix: ByteArray): Boolean =
+            size >= prefix.size && copyOfRange(0, prefix.size).contentEquals(prefix)
+
+        private fun ByteArray.indexOfSlice(needle: ByteArray): Int {
+            if (needle.isEmpty() || needle.size > size) {
+                return -1
+            }
+            for (offset in 0..(size - needle.size)) {
+                var matched = true
+                for (index in needle.indices) {
+                    if (this[offset + index] != needle[index]) {
+                        matched = false
+                        break
+                    }
+                }
+                if (matched) {
+                    return offset
+                }
+            }
+            return -1
         }
 
         @JvmStatic
         fun lineageKeyArtifacts(
-            proofCircuitId: String,
+            proofCircuitId: String?,
             verifierOpeningLen: Int,
-            lineageVerifierKeyBackend: String,
-            lineageVerifierKey: ByteArray,
-            lineageProvingKeyArchive: ByteArray,
-        ): LineageKeyArtifacts =
-            validateLineageKeyArtifacts(
-                LineageKeyArtifacts(
-                    proofCircuitId,
-                    verifierOpeningLen,
-                    lineageVerifierKeyBackend,
-                    lineageVerifierKey,
-                    lineageProvingKeyArchive,
-                ),
+            lineageVerifierKeyBackend: String?,
+            lineageVerifierKey: ByteArray?,
+            lineageProvingKeyArchive: ByteArray?,
+        ): LineageKeyArtifacts {
+            validateLineageKeyArtifactFields(
+                proofCircuitId,
+                verifierOpeningLen,
+                lineageVerifierKeyBackend,
+                lineageVerifierKey,
+                lineageProvingKeyArchive,
             )
+            return LineageKeyArtifacts(
+                proofCircuitId!!,
+                verifierOpeningLen,
+                lineageVerifierKeyBackend!!,
+                lineageVerifierKey!!,
+                lineageProvingKeyArchive!!,
+            )
+        }
 
         @JvmStatic
         fun requiresLineageKeyArtifactsForInit(): Boolean = true
@@ -285,23 +482,23 @@ class KagemushaRecursiveSpendProver private constructor() {
                 previousHopCount >= 1
 
         @JvmStatic
-        fun initSpend(requestArchive: ByteArray): ByteArray =
+        fun initSpend(requestArchive: ByteArray?): ByteArray =
             call("init", requestArchive, ::nativeInitSpend)
 
         @JvmStatic
-        fun appendSpend(requestArchive: ByteArray): ByteArray =
+        fun appendSpend(requestArchive: ByteArray?): ByteArray =
             call("append", requestArchive, ::nativeAppendSpend)
 
         @JvmStatic
-        fun transitionProfileInit(requestArchive: ByteArray): ByteArray =
+        fun transitionProfileInit(requestArchive: ByteArray?): ByteArray =
             call("transition profile init", requestArchive, ::nativeTransitionProfileInit)
 
         @JvmStatic
-        fun transitionProfileAppend(requestArchive: ByteArray): ByteArray =
+        fun transitionProfileAppend(requestArchive: ByteArray?): ByteArray =
             call("transition profile append", requestArchive, ::nativeTransitionProfileAppend)
 
         @JvmStatic
-        fun lineageAppendBoundary(profileArchive: ByteArray): ByteArray =
+        fun lineageAppendBoundary(profileArchive: ByteArray?): ByteArray =
             callArchive(
                 "lineage append boundary",
                 "profileArchive",
@@ -311,8 +508,8 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun lineageWitnessFromInitResult(
-            requestArchive: ByteArray,
-            bundleArchive: ByteArray,
+            requestArchive: ByteArray?,
+            bundleArchive: ByteArray?,
         ): ByteArray =
             call(
                 "lineage witness from init result",
@@ -323,9 +520,9 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun lineageWitnessAppendResult(
-            previousWitnessArchive: ByteArray,
-            requestArchive: ByteArray,
-            bundleArchive: ByteArray,
+            previousWitnessArchive: ByteArray?,
+            requestArchive: ByteArray?,
+            bundleArchive: ByteArray?,
         ): ByteArray =
             call(
                 "lineage witness append result",
@@ -336,16 +533,16 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
 
         @JvmStatic
-        fun verifySpend(requestArchive: ByteArray): ByteArray =
+        fun verifySpend(requestArchive: ByteArray?): ByteArray =
             call("verify", requestArchive, ::nativeVerifySpend)
 
         @JvmStatic
-        fun redeemSpend(requestArchive: ByteArray): ByteArray =
+        fun redeemSpend(requestArchive: ByteArray?): ByteArray =
             call("redeem", requestArchive, ::nativeRedeemSpend)
 
         private fun call(
             label: String,
-            requestArchive: ByteArray,
+            requestArchive: ByteArray?,
             nativeCall: (ByteArray) -> ByteArray?,
         ): ByteArray =
             callArchive(label, "requestArchive", requestArchive, nativeCall)
@@ -353,54 +550,63 @@ class KagemushaRecursiveSpendProver private constructor() {
         private fun callArchive(
             label: String,
             archiveName: String,
-            archive: ByteArray,
+            archive: ByteArray?,
             nativeCall: (ByteArray) -> ByteArray?,
         ): ByteArray {
-            requireNativeInput(archive, archiveName)
+            val ownedArchive = ownedNativeInput(archive, archiveName)
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
-            val output = nativeCall(archive)
+            val output = nativeCall(ownedArchive)
             return requireRecursiveSpendOutput(output, label)
         }
 
         private fun call(
             label: String,
-            requestArchive: ByteArray,
-            bundleArchive: ByteArray,
+            requestArchive: ByteArray?,
+            bundleArchive: ByteArray?,
             nativeCall: (ByteArray, ByteArray) -> ByteArray?,
         ): ByteArray {
-            requireNativeInput(requestArchive, "requestArchive")
-            requireNativeInput(bundleArchive, "bundleArchive")
+            val request = ownedNativeInput(requestArchive, "requestArchive")
+            val bundle = ownedNativeInput(bundleArchive, "bundleArchive")
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
-            val output = nativeCall(requestArchive, bundleArchive)
+            val output = nativeCall(request, bundle)
             return requireRecursiveSpendOutput(output, label)
         }
 
         private fun call(
             label: String,
-            previousWitnessArchive: ByteArray,
-            requestArchive: ByteArray,
-            bundleArchive: ByteArray,
+            previousWitnessArchive: ByteArray?,
+            requestArchive: ByteArray?,
+            bundleArchive: ByteArray?,
             nativeCall: (ByteArray, ByteArray, ByteArray) -> ByteArray?,
         ): ByteArray {
-            requireNativeInput(previousWitnessArchive, "previousWitnessArchive")
-            requireNativeInput(requestArchive, "requestArchive")
-            requireNativeInput(bundleArchive, "bundleArchive")
+            val previousWitness = ownedNativeInput(previousWitnessArchive, "previousWitnessArchive")
+            val request = ownedNativeInput(requestArchive, "requestArchive")
+            val bundle = ownedNativeInput(bundleArchive, "bundleArchive")
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
-            val output = nativeCall(previousWitnessArchive, requestArchive, bundleArchive)
+            val output = nativeCall(previousWitness, request, bundle)
             return requireRecursiveSpendOutput(output, label)
         }
 
         internal fun requireRecursiveSpendOutput(output: ByteArray?, label: String): ByteArray =
             requireNativeOutput(output, "native $label")
 
-        private fun requireNativeInput(archive: ByteArray, archiveName: String) {
-            require(archive.isNotEmpty()) { "$archiveName must not be empty" }
+        internal fun ownedNativeInput(archiveInput: ByteArray?, archiveName: String): ByteArray {
+            val archive = requireNativeInput(archiveInput, archiveName)
+            return archive.copyOf()
+        }
+
+        private fun requireNativeInput(archive: ByteArray?, archiveName: String): ByteArray {
+            require(archive != null && archive.isNotEmpty()) { "$archiveName must not be empty" }
+            require(archive.size <= NATIVE_ARCHIVE_MAX_BYTES) {
+                "$archiveName must not exceed $NATIVE_ARCHIVE_MAX_BYTES bytes"
+            }
             require(KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)) {
                 "$archiveName must be a valid Norito archive"
             }
             require(KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)) {
                 "$archiveName must contain a non-empty Norito payload"
             }
+            return archive
         }
 
         private fun requireNativeOutput(output: ByteArray?, label: String): ByteArray {

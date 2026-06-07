@@ -36,6 +36,7 @@ fn kotodama_revoke_role_denies_mint() {
     // VM + host with bootstrap permissions
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -77,6 +78,7 @@ fn kotodama_delete_role_prevents_grant() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -117,6 +119,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -167,6 +170,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

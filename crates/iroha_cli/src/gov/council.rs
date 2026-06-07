@@ -961,16 +961,21 @@ mod tests {
             .expect("candidate generation should derive account key");
         let candidate = candidates.first().expect("one candidate");
         let expected_seed = iroha_crypto::Hash::new(b"node0@wonderland");
-        let expected_key_pair = KeyPair::try_from_seed(
-            expected_seed.as_ref().to_vec(),
-            Algorithm::Ed25519,
-        )
-        .expect("expected account key pair");
+        let expected_key_pair =
+            KeyPair::try_from_seed(expected_seed.as_ref().to_vec(), Algorithm::Ed25519)
+                .expect("expected account key pair");
         let expected_account = AccountId::new(expected_key_pair.public_key().clone()).to_string();
 
-        assert_eq!(candidate["account_id"].as_str(), Some(expected_account.as_str()));
+        assert_eq!(
+            candidate["account_id"].as_str(),
+            Some(expected_account.as_str())
+        );
         assert_eq!(candidate["variant"].as_str(), Some("Normal"));
-        assert!(candidate["pk_b64"].as_str().is_some_and(|value| !value.is_empty()));
+        assert!(
+            candidate["pk_b64"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
         assert!(
             candidate["proof_b64"]
                 .as_str()

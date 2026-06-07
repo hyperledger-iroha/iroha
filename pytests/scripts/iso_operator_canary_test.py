@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import copy
 import importlib.util
@@ -40,6 +41,204 @@ def load_summary(stdout):
 
 
 class IsoOperatorCanaryTest(unittest.TestCase):
+    def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
+        cases = (
+            ("password_canary_unknown_secret", "canary_unknown_secret"),
+            ("%70assword_canary_unknown_leak", "canary_unknown_leak"),
+            ("private-key_canary_unknown_leak", "canary_unknown_leak"),
+        )
+        for unknown_key, hidden in cases:
+            with self.subTest(unknown_key=unknown_key):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._reject_unknown_keys({unknown_key: "redacted"}, set(), "runbook")
+
+                message = str(caught.exception)
+                self.assertIn("contains unknown keys", message)
+                self.assertNotIn("password", message)
+                self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_output_cli_path_flags_reject_flag_like_values(self):
+        cases = (
+            ["--summary-out"],
+            ["--summary-out", ""],
+            ["--summary-out", "--plan-only"],
+            ["--summary-out="],
+            ["--summary-out=--plan-only"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(
+                    CANARY.CanaryError,
+                    "--summary-out requires a path value",
+                ):
+                    CANARY._preflight_output_cli_paths(argv, {"--summary-out"})
+
+    def test_output_cli_paths_reject_encoded_secret_material_without_echo(self):
+        cases = (
+            ("token=canary-path-leak.summary.json", "token=canary-path-leak"),
+            ("token%3Dcanary-path-leak.summary.json", "token=canary-path-leak"),
+            ("%70assword%253Dcanary-path-leak.summary.json", "password=canary-path-leak"),
+            ("token-canary-path-secret.summary.json", "token-canary-path-secret"),
+        )
+        for raw_path, decoded_secret in cases:
+            with self.subTest(raw_path=raw_path):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._preflight_output_cli_paths(
+                        ["--summary-out", raw_path], {"--summary-out"}
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(raw_path, message)
+                self.assertNotIn(decoded_secret, message)
+                self.assertNotIn("canary-path-leak", message)
+
+    def test_endpoint_urls_reject_secret_path_without_echo(self):
+        cases = (
+            "https://torii.example.invalid/base/token=canary-url-secret",
+            "https://torii.example.invalid/base/token-canary-url-secret",
+            "https://torii.example.invalid/base/token%3Dcanary-url-secret",
+            "https://torii.example.invalid/base/token%253Dcanary-url-secret",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._validate_endpoint_url(
+                        url,
+                        "rail.torii_base_url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(url, message)
+                self.assertNotIn("token=", message)
+                self.assertNotIn("canary-url-secret", message)
+
+    def test_endpoint_urls_reject_secret_host_and_parser_errors_without_echo(self):
+        cases = (
+            (
+                "https://token-canary-host-secret.torii.example.invalid/base",
+                "secret-looking material",
+            ),
+            ("https://[token-canary-host-secret/base", "is not a valid URL"),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._validate_endpoint_url(
+                        url,
+                        "rail.torii_base_url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(url, message)
+                self.assertNotIn("token-canary-host-secret", message)
+
+    def test_boolean_cli_flags_reject_values_without_echo(self):
+        cases = (
+            (["--plan-only=true"], "--plan-only", "--plan-only=true"),
+            (
+                ["--require-explicit-policy", "true"],
+                "--require-explicit-policy",
+                "true",
+            ),
+        )
+        for argv, flag, rejected in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_canary(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"{flag} does not take a value", stderr)
+                self.assertNotIn(rejected, stderr)
+
+    def test_numeric_cli_flags_reject_malformed_values_without_echo(self):
+        cases = (
+            ["--output-limit-bytes", "token=canary-secret"],
+            ["--output-limit-bytes=token=canary-secret"],
+            ["--stage-timeout-secs", "--summary-out"],
+            ["--stage-timeout-secs="],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_canary(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("numeric value", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("canary-secret", stderr)
+
+    def test_raw_cli_secret_like_values_rejected_without_echo(self):
+        cases = (
+            ["--private-key=canary-secret"],
+            ["token=canary-secret"],
+            ["password=canary-secret"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_canary(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("secret-looking", stderr)
+                self.assertNotIn("password=", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("canary-secret", stderr)
+
+    def test_secret_looking_runbook_identities_are_rejected_without_echo(self):
+        cases = (
+            (
+                "provider",
+                "token-canary-provider-secret",
+                "config.provider must not contain secret-looking material",
+                "canary-provider-secret",
+            ),
+            (
+                "environment",
+                "session-key-canary-environment-secret",
+                "config.environment must not contain secret-looking material",
+                "canary-environment-secret",
+            ),
+        )
+        for key, secret_value, message, hidden in cases:
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    body = {
+                        "provider": "local-bank",
+                        "environment": "ci",
+                        "rail": {
+                            "inbox_dir": "missing-inbox",
+                            "torii_base_url": "https://torii.example.invalid",
+                        },
+                    }
+                    body[key] = secret_value
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(secret_value, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "canary.json"
+            path.write_text("{}\n", encoding="utf-8")
+
+            for limit in (True, "64"):
+                with self.subTest(limit=limit):
+                    with self.assertRaisesRegex(
+                        CANARY.CanaryError,
+                        "max file bytes must be a positive integer",
+                    ):
+                        CANARY._read_regular_file(path, max_bytes=limit)
+
     def test_runs_rail_notary_and_verifies_generated_receipts(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -89,6 +288,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertEqual(len(notary_requests), 1)
             self.assertTrue(summary_out.exists())
             summary = load_summary(stdout)
+            self.assertEqual(summary["version"], CANARY.CANARY_SUMMARY_VERSION)
             self.assertTrue(summary["ok"])
             self.assertEqual(summary["provider"], "local-bank")
             self.assertFalse(summary["policy"]["require_explicit_policy"])
@@ -137,6 +337,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertFalse((root / "missing-inbox").exists())
             self.assertFalse((root / "missing-export").exists())
             summary = load_summary(stdout)
+            self.assertEqual(summary["version"], CANARY.CANARY_SUMMARY_VERSION)
             self.assertTrue(summary["ok"])
             self.assertTrue(summary["plan_only"])
             self.assertEqual(
@@ -147,6 +348,47 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertIn("<runtime-token-file>", planned_text)
             self.assertNotIn("secrets/torii.bearer", planned_text)
             self.assertNotIn("secrets/notary.bearer", planned_text)
+
+    def test_boolean_output_limit_is_rejected_before_execution(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            inbox = root / "inbox"
+            inbox.mkdir()
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": str(inbox),
+                        "torii_base_url": "http://127.0.0.1:1",
+                        "allow_insecure_http": True,
+                    },
+                },
+            )
+            args = argparse.Namespace(
+                config=config,
+                require_explicit_policy=False,
+                output_limit_bytes=True,
+                stage_timeout_secs=1.0,
+                summary_out=None,
+                plan_only=True,
+            )
+
+            with self.assertRaisesRegex(
+                CANARY.CanaryError,
+                "--output-limit-bytes must be positive",
+            ):
+                CANARY.run(args)
+            with self.assertRaisesRegex(
+                CANARY.CanaryError,
+                "output limit bytes must be positive",
+            ):
+                CANARY._run_command_bounded(
+                    [sys.executable, "-c", "print('ok')"],
+                    True,
+                    1.0,
+                )
 
     def test_redacts_equals_form_bearer_token_arguments(self):
         redacted = CANARY._redacted_command(
@@ -184,6 +426,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 )
                 self.assertEqual(rc, 0, stderr)
                 summary = load_summary(stdout)
+                self.assertEqual(summary["version"], CANARY.CANARY_SUMMARY_VERSION)
                 self.assertTrue(summary["ok"])
                 self.assertTrue(summary["plan_only"])
                 self.assertTrue(summary["policy"]["require_explicit_policy"])
@@ -519,6 +762,68 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             self.assertTrue(stage["stdout_truncated"])
             self.assertTrue(stage["stderr_truncated"])
 
+    def test_secret_looking_child_output_is_rejected_before_summary_write(self):
+        cases = [
+            (
+                "stdout",
+                "sys.stdout.write('accepted token=canary-child-secret')",
+                "stdout_preview contains secret-looking material",
+            ),
+            (
+                "stderr",
+                "sys.stderr.write('Authorization: Bearer canary-child-secret')",
+                "stderr_preview contains secret-looking material",
+            ),
+        ]
+        for stream, write_line, message in cases:
+            with self.subTest(stream=stream):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    script_dir = root / "scripts"
+                    script_dir.mkdir()
+                    fake_rail = script_dir / "iso_rail_gateway_adapter.py"
+                    fake_rail.write_text(
+                        "\n".join(
+                            [
+                                "import sys",
+                                write_line,
+                            ]
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    inbox = root / "inbox"
+                    inbox.mkdir()
+                    summary_out = root / "summary" / "canary.summary.json"
+                    config = write_config(
+                        root,
+                        {
+                            "provider": "local-bank",
+                            "environment": "ci",
+                            "rail": {
+                                "inbox_dir": str(inbox),
+                                "torii_base_url": "https://torii.example.invalid",
+                            },
+                            "verify": {"enabled": False},
+                        },
+                    )
+                    original_script_dir = CANARY.SCRIPT_DIR
+                    CANARY.SCRIPT_DIR = script_dir
+                    try:
+                        rc, stdout, stderr = run_canary(
+                            ["--config", str(config), "--summary-out", str(summary_out)]
+                        )
+                    finally:
+                        CANARY.SCRIPT_DIR = original_script_dir
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertFalse(summary_out.exists())
+                    self.assertIn(message, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("Authorization:", stderr)
+                    self.assertNotIn("canary-child-secret", stderr)
+
     def test_child_stage_timeout_is_bounded_and_recorded(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -635,6 +940,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "skip_on_stage_failure": True,
                     "allow_failed": False,
                     "allow_insecure_http": False,
+                    "allow_default_profile": False,
                     "require_source_files": True,
                 },
             }
@@ -646,6 +952,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 ("notary", "allow_insecure_http"),
                 ("notary", "dry_run"),
                 ("verify", "allow_failed"),
+                ("verify", "allow_default_profile"),
                 ("verify", "allow_insecure_http"),
                 ("verify", "enabled"),
                 ("verify", "include_stage_receipts"),
@@ -688,7 +995,9 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             config = root / "canary.json"
             config.write_text(
                 (
-                    '{"provider":"local-bank","provider":"other-bank",'
+                    '{"provider":"local-bank",'
+                    '"token=canary-duplicate-key-secret":1,'
+                    '"token=canary-duplicate-key-secret":2,'
                     '"environment":"ci",'
                     '"rail":{"inbox_dir":"inbox",'
                     '"torii_base_url":"https://torii.example.invalid"}}\n'
@@ -700,6 +1009,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
+            self.assertNotIn("canary-duplicate-key-secret", stderr)
 
     def test_non_finite_runbook_json_numbers_are_rejected_before_planning(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1415,6 +1725,30 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_rejected_runbook_url_does_not_echo_secret_query(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            secret_url = "https://torii.example.invalid?token=canary-url-secret"
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": secret_url,
+                    },
+                },
+            )
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("params, query, or fragment", stderr)
+            self.assertNotIn(secret_url, stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("canary-url-secret", stderr)
+
     def test_duplicate_runbook_evidence_inputs_are_rejected_before_planning(self):
         cases = [
             (
@@ -1489,6 +1823,33 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_duplicate_runbook_paths_do_not_echo_secret_segments(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            secret_receipt = "receipts/token=canary-duplicate-secret.receipt.json"
+            config = write_config(
+                root,
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "dry_run": True,
+                    },
+                    "verify": {
+                        "include_stage_receipts": False,
+                        "receipts": [secret_receipt, secret_receipt],
+                    },
+                },
+            )
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("verify.receipts[1] duplicates verify.receipts[0]", stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("canary-duplicate-secret", stderr)
 
     def test_relative_paths_cannot_escape_runbook_directory(self):
         with tempfile.TemporaryDirectory() as raw_root:

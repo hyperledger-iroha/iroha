@@ -650,15 +650,13 @@ fn fill_random<R: TryCryptoRng>(
 }
 
 fn encode_base64_url_no_pad(bytes: &[u8]) -> String {
-    let Some(encoded_len) = base64::encoded_len(bytes.len(), false) else {
-        return String::new();
-    };
+    let encoded_len =
+        base64::encoded_len(bytes.len(), false).expect("proof token base64 length fits usize");
     let mut buffer = vec![0u8; encoded_len];
-    let Ok(written) = base64::Engine::encode_slice(&URL_SAFE_NO_PAD, bytes, &mut buffer) else {
-        return String::new();
-    };
+    let written = base64::Engine::encode_slice(&URL_SAFE_NO_PAD, bytes, &mut buffer)
+        .expect("proof token base64 buffer is pre-sized");
     buffer.truncate(written);
-    String::from_utf8(buffer).unwrap_or_default()
+    buffer.into_iter().map(char::from).collect()
 }
 
 fn decode_base64_url_no_pad(s: &str) -> Result<Vec<u8>, DecodeError> {

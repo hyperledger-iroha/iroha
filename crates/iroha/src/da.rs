@@ -602,15 +602,16 @@ pub fn build_da_request(
     metadata: ExtraMetadata,
     key_pair: &KeyPair,
     manifest_bytes: Option<Vec<u8>>,
-) -> DaIngestRequest {
+) -> Result<DaIngestRequest> {
     let client_blob_id = params.client_blob_id.unwrap_or_else(|| {
         let mut hasher = Hasher::new();
         hasher.update(&payload_bytes);
         BlobDigest::from_hash(hasher.finalize())
     });
     let submitter = key_pair.public_key().clone();
-    let signature = Signature::new(key_pair.private_key(), &payload_bytes);
-    DaIngestRequest {
+    let signature = Signature::try_new(key_pair.private_key(), &payload_bytes)
+        .wrap_err("failed to sign DA ingest request payload")?;
+    Ok(DaIngestRequest {
         client_blob_id,
         lane_id: params.lane_id,
         epoch: params.epoch,
@@ -627,7 +628,7 @@ pub fn build_da_request(
         metadata,
         submitter,
         signature,
-    }
+    })
 }
 
 /// Sampling and verification controls for `PoR` proof generation.
@@ -1296,7 +1297,8 @@ mod tests {
             ExtraMetadata { items: Vec::new() },
             &key_pair,
             None,
-        );
+        )
+        .expect("build DA request");
         let mut hasher = Hasher::new();
         hasher.update(&payload);
         let expected = BlobDigest::from_hash(hasher.finalize());
@@ -1315,7 +1317,8 @@ mod tests {
             ExtraMetadata { items: Vec::new() },
             &key_pair,
             None,
-        );
+        )
+        .expect("build DA request");
         assert_eq!(request.client_blob_id, override_digest);
         assert_eq!(request.chunk_size, params.chunk_size);
     }

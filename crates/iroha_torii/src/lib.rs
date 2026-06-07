@@ -12275,8 +12275,22 @@ fn transaction_submission_response(
             submitted_at_height,
             signer: app.da_receipt_signer.public_key().clone(),
         };
-        let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
-        utils::respond_with_status_and_format(StatusCode::ACCEPTED, receipt, format)
+        match TransactionSubmissionReceipt::try_sign(payload, &app.da_receipt_signer) {
+            Ok(receipt) => {
+                utils::respond_with_status_and_format(StatusCode::ACCEPTED, receipt, format)
+            }
+            Err(err) => {
+                let envelope = ErrorEnvelope::new(
+                    "transaction_submission_receipt_signing_failed",
+                    format!("failed to sign transaction submission receipt: {err}"),
+                );
+                utils::respond_with_status_and_format(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    envelope,
+                    format,
+                )
+            }
+        }
     };
     if let Ok(header) = HeaderValue::from_str(&tx_hash_header) {
         response.headers_mut().insert(
@@ -26177,49 +26191,6 @@ async fn handler_sccp_message_proof(
     )
 }
 
-async fn handler_sccp_message_runtime_envelope(
-    State(app): State<SharedAppState>,
-    axum::extract::Path(message_id): axum::extract::Path<String>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sccp/proofs/message/{message_id}/runtime-scale",
-        app.api_token_enforced(),
-    );
-    rate_limit_requests(&app, &key).await?;
-    #[cfg(feature = "telemetry")]
-    if let Some(api_token) = token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            &api_token,
-            "v1/sccp/proofs/message/runtime-scale",
-        );
-    }
-    Ok(
-        routing::handle_v1_sccp_message_runtime_envelope(app.state.as_ref(), message_id)
-            .await?
-            .into_response(),
-    )
-}
-
 async fn handler_sccp_message_artifact(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
@@ -35750,10 +35721,6 @@ impl Torii {
                 .route(
                     "/v1/sccp/proofs/message/{message_id}",
                     get(handler_sccp_message_proof),
-                )
-                .route(
-                    "/v1/sccp/proofs/message/{message_id}/runtime-scale",
-                    get(handler_sccp_message_runtime_envelope),
                 )
                 .route(
                     "/v1/sccp/artifacts/message/{message_id}",
@@ -49696,18 +49663,6 @@ pub(crate) mod tests_runtime_handlers {
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
-        let runtime_err = routing::handle_v1_sccp_message_runtime_envelope(
-            app.state.as_ref(),
-            hex::encode(bundle.commitment.message_id),
-        )
-        .await
-        .expect_err("unsigned SORA-origin runtime export must require signed Nexus finality");
-        assert!(query_conversion_message(&runtime_err).is_some_and(|message| {
-            message.contains(
-                "SCCP SORA-origin message bundle Nexus finality proof failed cryptographic verification",
-            )
-        }));
-
         routing::clear_sccp_bundles_for_tests();
     }
 
@@ -49745,7 +49700,7 @@ pub(crate) mod tests_runtime_handlers {
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             nonce: 12,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
@@ -49753,10 +49708,10 @@ pub(crate) mod tests_runtime_handlers {
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: b"sora2:alice".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:sora2:xor".to_vec(),
+            route_id: b"nexus:eth:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload.clone());
 
@@ -49782,18 +49737,6 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(decoded.payload, payload);
         assert_eq!(decoded.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
-
-        let runtime_err = routing::handle_v1_sccp_message_runtime_envelope(
-            app.state.as_ref(),
-            hex::encode(message_id),
-        )
-        .await
-        .expect_err("unsigned SORA-origin runtime export must require signed Nexus finality");
-        assert!(query_conversion_message(&runtime_err).is_some_and(|message| {
-            message.contains(
-                "SCCP SORA-origin message bundle Nexus finality proof failed cryptographic verification",
-            )
-        }));
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -50015,20 +49958,11 @@ pub(crate) mod tests_runtime_handlers {
             decoded_json.message_proof_path,
             "/v1/sccp/artifacts/message/{message_id}"
         );
-        assert!(decoded_json.runtime_proof_family.is_none());
-        assert!(decoded_json.runtime_verifier_backend.is_none());
-        assert!(decoded_json.message_runtime_bundle_path.is_none());
         assert_eq!(
             decoded_json.message_job_path,
             "/v1/sccp/jobs/message/{message_id}"
         );
         assert_eq!(decoded_json.proof_manifest_path, "/v1/sccp/manifests");
-        assert!(decoded_json.counterparties.iter().all(|entry| {
-            entry.chain != "substrate"
-                && entry.chain != "sora-kusama"
-                && entry.chain != "sora-polkadot"
-                && entry.chain != "sora2"
-        }));
         let ton = decoded_json
             .counterparties
             .iter()
@@ -50074,18 +50008,6 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             decoded_norito.message_proof_path,
             decoded_json.message_proof_path
-        );
-        assert_eq!(
-            decoded_norito.runtime_proof_family,
-            decoded_json.runtime_proof_family
-        );
-        assert_eq!(
-            decoded_norito.runtime_verifier_backend,
-            decoded_json.runtime_verifier_backend
-        );
-        assert_eq!(
-            decoded_norito.message_runtime_bundle_path,
-            decoded_json.message_runtime_bundle_path
         );
         assert_eq!(
             decoded_norito.message_job_path,
@@ -50568,7 +50490,7 @@ pub(crate) mod tests_runtime_handlers {
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             nonce: 11,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
@@ -50576,10 +50498,10 @@ pub(crate) mod tests_runtime_handlers {
             amount: 5,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: b"sora2:alice".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"sora:sora2:xor".to_vec(),
+            route_id: b"sora:eth:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         let bundle_response = match routing::handle_v1_sccp_message_bundle(

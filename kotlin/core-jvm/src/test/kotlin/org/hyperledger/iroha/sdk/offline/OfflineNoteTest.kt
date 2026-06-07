@@ -133,10 +133,15 @@ class OfflineNoteTest {
 
     @Test
     fun kagemushaRecordBackedNativeProverValidatesInput() {
+        val oversizedArchive = ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1)
         val empty = assertFailsWith<IllegalArgumentException> {
             KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(ByteArray(0))
         }
         assertTrue(empty.message.orEmpty().contains("recordBundleArchive must not be empty"))
+        val oversized = assertFailsWith<IllegalArgumentException> {
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(oversizedArchive)
+        }
+        assertTrue(oversized.message.orEmpty().contains("recordBundleArchive must not exceed"))
         val malformed = assertFailsWith<IllegalArgumentException> {
             KagemushaCompactPaymentTokenProver
                 .proveVerifiedCompactPaymentTokenWithRecords(byteArrayOf(0x01, 0x02))
@@ -150,8 +155,49 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun kagemushaRecordBackedNativeProversRejectJavaNullsWithStableFieldMarkers() {
+        val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
+        val compactNull = assertFailsWith<IllegalArgumentException> {
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(null)
+        }
+        assertTrue(compactNull.message.orEmpty().contains("recordBundleArchive must not be empty"))
+        val aggregationRecordNull = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    null,
+                    validArchive,
+                )
+        }
+        assertTrue(aggregationRecordNull.message.orEmpty().contains("recordBundleArchive must not be empty"))
+        val aggregationPallasNull = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    null,
+                )
+        }
+        assertTrue(aggregationPallasNull.message.orEmpty().contains("pallasOpenEnvelopesArchive must not be empty"))
+    }
+
+    @Test
+    fun kagemushaCompactNativeInputCopiesBeforeDispatch() {
+        val archive = kagemushaNoritoFrameWithPayload(0x4c)
+        val expected = archive.copyOf()
+        val ownedArchive = KagemushaCompactPaymentTokenProver.ownedNativeInput(
+            archive,
+            "recordBundleArchive",
+        )
+
+        archive[6] = 0x7f.toByte()
+
+        assertFalse(ownedArchive === archive)
+        assertContentEquals(expected, ownedArchive)
+    }
+
+    @Test
     fun kagemushaRecursiveAggregationNativeProverValidatesInput() {
         val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
+        val oversizedArchive = ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1)
         val emptyRecord = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
@@ -168,6 +214,22 @@ class OfflineNoteTest {
                 )
         }
         assertTrue(emptyPallas.message.orEmpty().contains("pallasOpenEnvelopesArchive must not be empty"))
+        val oversizedRecord = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    oversizedArchive,
+                    validArchive,
+                )
+        }
+        assertTrue(oversizedRecord.message.orEmpty().contains("recordBundleArchive must not exceed"))
+        val oversizedPallas = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    oversizedArchive,
+                )
+        }
+        assertTrue(oversizedPallas.message.orEmpty().contains("pallasOpenEnvelopesArchive must not exceed"))
         val malformedRecord = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(

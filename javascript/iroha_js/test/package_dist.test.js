@@ -11,7 +11,6 @@ import {
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_SOL,
   SCCP_DOMAIN_SORA,
-  SCCP_DOMAIN_SORA_KUSAMA,
   SCCP_DOMAIN_TON,
   SCCP_DOMAIN_TRON,
   SCCP_ETH_MAINNET_EVM_CHAIN_ID,
@@ -26,14 +25,13 @@ import {
   SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES,
   SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1,
   SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
-  SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
-  SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
@@ -59,6 +57,8 @@ import {
   isKagemushaCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
+  isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable,
+  isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
   isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
@@ -67,6 +67,10 @@ import {
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaOfflineSpendModeForCapabilities,
+  kagemushaRecursiveSpendLineageKeyArtifacts,
+  kagemushaRecursiveSpendLineageKeyArtifactsForAppend,
+  kagemushaRecursiveSpendLineageKeyArtifactsForInit,
+  validateKagemushaRecursiveSpendLineageKeyArtifacts,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit,
   requiresKagemushaRecursiveSpendLineageWitnessForRedeem,
@@ -158,9 +162,6 @@ import {
   buildSolanaSccpFullLightClientAuditProofRequests,
   buildSolanaSccpSubmission,
   wrapSolanaSccpSourceStateVerificationProof,
-  buildSubstrateSccpProofRequest,
-  buildSubstrateSccpSubmission,
-  wrapSubstrateSccpProofResult,
   buildTonSccpProofRequest,
   buildTonSccpSubmission,
   buildTonShardStateProofRequest,
@@ -218,12 +219,6 @@ import {
   ethMainnetSyncCommitteePeriodForSlot,
   ethSyncCommitteePayloadHash,
   ethSyncCommitteeHashFromPayload,
-  buildSubstrateSccpRuntimeStorageProofRequest,
-  canonicalSubstrateAuthoritySetPayloadBytes,
-  canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes,
-  canonicalSubstrateSccpStorageProofBytes,
-  substrateSccpRuntimeStorageProofPublicInputsHash,
-  canonicalSubstrateAuthoritySetTransitionMessageBytes,
   canonicalSolanaSccpBankForkBytes,
   canonicalSolanaSccpRouteCanaryEvidenceBytes,
   canonicalSolanaSccpAccountsLtHashCommitmentBytes,
@@ -318,10 +313,6 @@ import {
   solanaSccpStakeHistoryHash,
   solanaSccpTowerLockoutHash,
   solanaSccpTowerReplayHash,
-  substrateAuthoritySetHashFromPayload,
-  substrateAuthoritySetPayloadHash,
-  substrateAuthoritySetTransitionMessageHash,
-  SubstrateSccpProver,
   tonMasterchainBlockMessageHash,
   tonMasterchainConfigLeafHash,
   tonMasterchainConfigProofHash,
@@ -373,6 +364,83 @@ function privacyNoritoFrameWithPayload(schemaByte) {
   frame.writeBigUInt64LE(3n, 23);
   Buffer.from([0xb9, 0xd3, 0xa8, 0x0c, 0xcd, 0x5d, 0x13, 0x24]).copy(frame, 31);
   return frame;
+}
+
+const TEST_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const TEST_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
+const TEST_CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ TEST_CRC64_REFLECTED_POLY
+          : crc >> 1n;
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
+
+function testCrc64(payload) {
+  let crc = TEST_CRC64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = TEST_CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ TEST_CRC64_MASK);
+}
+
+function privacyNoritoFrameFromPayload(schemaByte, payload) {
+  const payloadBuffer = Buffer.from(payload);
+  const frame = Buffer.concat([privacyNoritoFrame(schemaByte), payloadBuffer]);
+  frame.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  frame.writeBigUInt64LE(testCrc64(payloadBuffer), 31);
+  return frame;
+}
+
+function kagemushaZk1Tlv(tag, payload) {
+  const payloadBuffer = Buffer.from(payload);
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(payloadBuffer.length);
+  return Buffer.concat([Buffer.from(tag, "ascii"), length, payloadBuffer]);
+}
+
+function kagemushaLineageVerifierKey(circuitId, seed) {
+  return Buffer.concat([
+    Buffer.from([0x5a, 0x4b, 0x31, 0x00]),
+    kagemushaZk1Tlv("IPAK", Buffer.from([8, 0, 0, 0])),
+    kagemushaZk1Tlv("CID1", Buffer.from(circuitId, "utf8")),
+    kagemushaZk1Tlv("H2VK", Buffer.alloc(32, seed)),
+  ]);
+}
+
+function kagemushaVerifierKeyCommitment(verifierKey) {
+  const backend = Buffer.from(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "utf8");
+  const backendLength = Buffer.alloc(8);
+  backendLength.writeBigUInt64BE(BigInt(backend.length));
+  const verifierKeyLength = Buffer.alloc(8);
+  verifierKeyLength.writeBigUInt64BE(BigInt(verifierKey.length));
+  return createHash("sha256")
+    .update("iroha:zk:v1:vk")
+    .update(backendLength)
+    .update(backend)
+    .update(verifierKeyLength)
+    .update(verifierKey)
+    .digest();
+}
+
+function kagemushaLineageProvingKeyArchive(circuitId, verifierKey, seed) {
+  return privacyNoritoFrameFromPayload(
+    0x9a,
+    Buffer.concat([
+      Buffer.from([1, 0]),
+      Buffer.from(circuitId, "utf8"),
+      kagemushaVerifierKeyCommitment(verifierKey),
+      Buffer.alloc(64, seed),
+    ]),
+  );
 }
 
 function privacyNoritoFrameWithPadding(schemaByte, paddingLength) {
@@ -841,6 +909,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
@@ -865,6 +934,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "canAppendKagemushaRecursiveSpendWitnesslessLineage",
     "isKagemushaRecursiveSpendLineageProofCircuitId",
     "isKagemushaRecursiveSpendLineageAppendOutputCircuitId",
+    "isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen",
+    "kagemushaRecursiveSpendLineageKeyArtifactsForInit",
+    "kagemushaRecursiveSpendLineageKeyArtifactsForAppend",
+    "kagemushaRecursiveSpendLineageKeyArtifacts",
+    "validateKagemushaRecursiveSpendLineageKeyArtifacts",
     "requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit",
     "requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput",
     "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId",
@@ -879,6 +953,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "isKagemushaCompactPaymentTokenNativeAvailable",
     "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
+    "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
     "isKagemushaRecursiveSpendNativeAvailable",
     "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
     "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
@@ -905,6 +980,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION, 7);
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "halo2/ipa");
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     "kagemusha-recursive-aggregation-v1",
@@ -1060,6 +1136,161 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     true,
   );
   assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), true);
+  for (const openingLen of [2, 4, 8, 16, 32, 64, 128]) {
+    assert.equal(
+      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen),
+      true,
+    );
+  }
+  for (const openingLen of [0, 1, 3, 65, 129, -2, 2.5, Number.NaN, "2", true]) {
+    assert.equal(
+      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen),
+      false,
+    );
+  }
+  const verifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0xe7,
+  );
+  const provingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    verifierKey,
+    0xe8,
+  );
+  const expectedVerifierKey = Buffer.from(verifierKey);
+  const expectedProvingKey = Buffer.from(provingKey);
+  const initArtifacts = kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+    128,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    verifierKey,
+    provingKey,
+  );
+  verifierKey.fill(0);
+  provingKey.fill(0);
+  assert.equal(
+    initArtifacts.proofCircuitId,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(initArtifacts.verifierOpeningLen, 128);
+  assert.equal(initArtifacts.lineageVerifierKeyBackend, "halo2/ipa");
+  assert.deepEqual(initArtifacts.lineageVerifierKey, expectedVerifierKey);
+  assert.deepEqual(initArtifacts.lineageProvingKeyArchive, expectedProvingKey);
+  assert.equal(initArtifacts.isInitArtifact, true);
+  assert.equal(initArtifacts.isAppendArtifact, false);
+  const appendVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    0xa7,
+  );
+  const appendProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    appendVerifierKey,
+    0xa8,
+  );
+  const appendArtifacts = kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+    64,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    appendVerifierKey,
+    appendProvingKey,
+  );
+  assert.equal(
+    appendArtifacts.proofCircuitId,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(appendArtifacts.isInitArtifact, false);
+  assert.equal(appendArtifacts.isAppendArtifact, true);
+  const genericArtifacts = kagemushaRecursiveSpendLineageKeyArtifacts(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    2,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    appendVerifierKey,
+    appendProvingKey,
+  );
+  assert.equal(genericArtifacts.verifierOpeningLen, 2);
+  assert.deepEqual(
+    validateKagemushaRecursiveSpendLineageKeyArtifacts(genericArtifacts),
+    genericArtifacts,
+  );
+  const directVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0x11,
+  );
+  const directProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    directVerifierKey,
+    0x12,
+  );
+  const directArtifacts = validateKagemushaRecursiveSpendLineageKeyArtifacts({
+    ...initArtifacts,
+    lineageVerifierKey: directVerifierKey,
+    lineageProvingKeyArchive: directProvingKey,
+  });
+  directVerifierKey.fill(0);
+  directProvingKey.fill(0);
+  assert.deepEqual(
+    directArtifacts.lineageVerifierKey,
+    kagemushaLineageVerifierKey(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      0x11,
+    ),
+  );
+  assert.deepEqual(
+    directArtifacts.lineageProvingKeyArchive,
+    kagemushaLineageProvingKeyArchive(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      kagemushaLineageVerifierKey(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        0x11,
+      ),
+      0x12,
+    ),
+  );
+  const exposedVerifierKey = directArtifacts.lineageVerifierKey;
+  const exposedProvingKey = directArtifacts.lineageProvingKeyArchive;
+  exposedVerifierKey[0] = 0;
+  exposedProvingKey[0] = 0;
+  assert.equal(directArtifacts.lineageVerifierKey[0], 0x5a);
+  assert.equal(directArtifacts.lineageProvingKeyArchive[0], 0x4e);
+  assert.notStrictEqual(
+    directArtifacts.lineageVerifierKey,
+    directArtifacts.lineageVerifierKey,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        appendVerifierKey,
+        expectedProvingKey,
+      ),
+    /lineage_verifier_key/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        expectedVerifierKey,
+        appendProvingKey,
+      ),
+    /lineage_proving_key_archive/,
+  );
+  for (const malformed of [
+    [null, /lineage_key_artifacts/],
+    [{ ...initArtifacts, proofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 }, /proof_circuit_id/],
+    [{ ...initArtifacts, proofCircuitId: "unknown-kagemusha-recursive-spend-circuit" }, /proof_circuit_id/],
+    [{ ...initArtifacts, verifierOpeningLen: 3 }, /verifier_opening_len/],
+    [{ ...initArtifacts, verifierOpeningLen: true }, /verifier_opening_len/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/kzg" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKey: Buffer.alloc(0) }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageProvingKeyArchive: Buffer.alloc(0) }, /lineage_proving_key_archive/],
+    [{ ...initArtifacts, lineageVerifierKey: "not-bytes" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageProvingKeyArchive: "not-bytes" }, /lineage_proving_key_archive/],
+  ]) {
+    assert.throws(
+      () => validateKagemushaRecursiveSpendLineageKeyArtifacts(malformed[0]),
+      malformed[1],
+    );
+  }
   assert.equal(
     requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -1482,6 +1713,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "boolean",
   );
   assert.equal(typeof isKagemushaRecursiveSpendNativeAvailable(), "boolean");
+  assert.equal(
+    typeof isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
+    "boolean",
+  );
   assert.equal(typeof kagemushaVerifyRecursiveCompactPaymentToken, "function");
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(
@@ -1569,6 +1804,10 @@ test("package dist Kagemusha recursive spend availability rejects coerced ABI ve
 
       assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
       assert.equal(isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false);
+      assert.equal(
+        isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
+        false,
+      );
     }
   } finally {
     if (previous === undefined) {
@@ -2880,6 +3119,25 @@ test("package declarations mark privacy capability metadata readonly", () => {
   }
 });
 
+test("package declarations mark Kagemusha lineage key artifacts readonly", () => {
+  const artifacts = declarationInterface(
+    "KagemushaRecursiveSpendLineageKeyArtifacts",
+  );
+  assert.match(artifacts, /readonly proofCircuitId:/);
+  assert.match(
+    artifacts,
+    /readonly verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;/,
+  );
+  assert.match(
+    artifacts,
+    /readonly lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND;/,
+  );
+  assert.match(artifacts, /readonly lineageVerifierKey: Buffer;/);
+  assert.match(artifacts, /readonly lineageProvingKeyArchive: Buffer;/);
+  assert.match(artifacts, /readonly isInitArtifact: boolean;/);
+  assert.match(artifacts, /readonly isAppendArtifact: boolean;/);
+});
+
 test("package declarations do not advertise privacy production metadata inputs", () => {
   for (const name of [
     "PrivacyProofEnvelopeInput",
@@ -2968,10 +3226,6 @@ test("package declarations mark SCCP FastPQ proof requests readonly", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface SubstrateSccpRuntimeStorageProofRequest[\s\S]*readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;[\s\S]*readonly fastpqTransitions: ReadonlyArray<[\s\S]*Readonly<SubstrateSccpRuntimeStorageFastpqTransition>[\s\S]*>;/,
-  );
-  assert.match(
-    DECLARATIONS_TEXT,
     /export interface EvmSccpBridgeProofSubmitPayloadInput[\s\S]*submission\?: EvmSccpSubmission;[\s\S]*destinationBinding\?: EvmSccpDestinationBindingInput;[\s\S]*export function buildEvmSccpBridgeProofSubmitPayload\([\s\S]*\): ToriiBridgeProofSubmitPayload;/,
   );
   assert.match(
@@ -2985,7 +3239,6 @@ test("package declarations expose SCCP proof-result request bytes", () => {
     "TonSccpProofResult",
     "EvmSccpProofResult",
     "TronSccpProofResult",
-    "SubstrateSccpProofResult",
   ]) {
     assert.match(
       DECLARATIONS_TEXT,
@@ -3028,7 +3281,6 @@ test("package declarations expose SCCP local-prover result metadata", () => {
     ["TonSccpProveResult", "TonSccpProveFn"],
     ["EvmSccpProveResult", "EvmSccpProveFn"],
     ["TronSccpProveResult", "TronSccpProveFn"],
-    ["SubstrateSccpProveResult", "SubstrateSccpProveFn"],
     ["SolanaSccpProveResult", "SolanaSccpProveFn"],
   ]) {
     assert.match(
@@ -3048,7 +3300,6 @@ test("package declarations expose SCCP local-prover result metadata", () => {
   for (const resultType of [
     "EvmSccpProveResult",
     "TronSccpProveResult",
-    "SubstrateSccpProveResult",
   ]) {
     assert.match(
       DECLARATIONS_TEXT,
@@ -3091,10 +3342,6 @@ test("package declarations expose SCCP local-prover result metadata", () => {
     DECLARATIONS_TEXT,
     /export interface TonSccpProveResult[\s\S]*requestHash\?: string;[\s\S]*sourceAdapterDeploymentBindingHash\?: string;[\s\S]*envelopeHash\?: string;/,
   );
-  assert.match(
-    DECLARATIONS_TEXT,
-    /export interface SubstrateSccpProveResult[\s\S]*requestHash\?: string;[\s\S]*envelopeHash\?: string;/,
-  );
 });
 
 test("package declarations expose SCCP witness-provider hooks for portal provers", () => {
@@ -3126,7 +3373,6 @@ test("package declarations expose SCCP witness-provider hooks for portal provers
     ["Ton", "TonSccpProofRequestInput"],
     ["Evm", "EvmSccpProofRequestInput"],
     ["Tron", "TronSccpProofRequestInput"],
-    ["Substrate", "SubstrateSccpProofRequestInput"],
     ["Solana", "SolanaSccpWitnessInput"],
   ]) {
     assert.match(
@@ -4801,137 +5047,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
 });
 
-test("package dist entrypoint exports SCCP Substrate runtime proof helpers", async () => {
-  const publicInputs = {
-    version: 1,
-    message_id: `0x${"11".repeat(32)}`,
-    payload_hash: `0x${"22".repeat(32)}`,
-    target_domain: SCCP_DOMAIN_SORA_KUSAMA,
-    commitment_root: `0x${"33".repeat(32)}`,
-    finality_height: "19",
-    finality_block_hash: `0x${"44".repeat(32)}`,
-  };
-  const input = {
-    public_inputs: publicInputs,
-    bundle_bytes: new Uint8Array([5, 6, 7]),
-    source_proof_bytes: new Uint8Array([9, 10]),
-    source_domain: SCCP_DOMAIN_SORA,
-    statement_hash: `0x${"55".repeat(32)}`,
-    destination_binding_hash: `0x${"66".repeat(32)}`,
-  };
-  const request = buildSubstrateSccpProofRequest(input);
-
-  assert.equal(request.backend, SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1);
-  assert.equal(request.targetDomain, SCCP_DOMAIN_SORA_KUSAMA);
-  assert.match(request.requestHash, /^0x[0-9a-f]{64}$/u);
-  assert.equal(Object.isFrozen(request), true);
-  const exposedBundleBytes = request.bundleBytes;
-  exposedBundleBytes[0] = 99;
-  assert.equal(request.bundleBytes[0], 5);
-  assert.notEqual(
-    request.requestHash,
-    buildSubstrateSccpProofRequest({
-      ...input,
-      bundle_bytes: new Uint8Array([5, 6, 7, 9]),
-    }).requestHash,
-  );
-  assert.throws(
-    () =>
-      buildSubstrateSccpProofRequest({
-        ...input,
-        bundle_bytes: new Uint8Array([0, 0]),
-      }),
-    /bundleBytes must not be all zero/,
-  );
-  assert.throws(
-    () =>
-      buildSubstrateSccpProofRequest({
-        ...input,
-        bundle_bytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
-      }),
-    /bundleBytes must be at most/,
-  );
-
-  const prover = new SubstrateSccpProver({
-    prove: (callbackRequest) => {
-      assert.equal(callbackRequest.requestHash, request.requestHash);
-      return { proofBytes: new Uint8Array([1, 2, 3]) };
-    },
-  });
-  const result = await prover.prove(input);
-  assert.equal(result.requestHash, request.requestHash);
-  const submission = buildSubstrateSccpSubmission({ proofResult: result });
-  assert.equal(submission.requestHash, request.requestHash);
-  assert.equal(submission.envelopeEncoding, SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1);
-  assert.equal(wrapSubstrateSccpProofResult([1, 2, 3], request).requestHash, request.requestHash);
-  assert.throws(
-    () =>
-      buildSubstrateSccpSubmission({
-        proofResult: null,
-        proofBytes: new Uint8Array([1, 2, 3]),
-        publicInputs,
-        bundleBytes: new Uint8Array([5, 6, 7]),
-        sourceProofBytes: new Uint8Array([9, 10]),
-        sourceDomain: SCCP_DOMAIN_SORA,
-        statementHash: `0x${"55".repeat(32)}`,
-        destinationBindingHash: `0x${"66".repeat(32)}`,
-      }),
-    /proofResult must be a wrapped Substrate SCCP proof result/,
-  );
-  assert.throws(
-    () =>
-      buildSubstrateSccpSubmission({
-        proofBytes: new Uint8Array([1, 2, 3]),
-        publicInputs,
-        bundleBytes: new Uint8Array([5, 6, 7]),
-        sourceProofBytes: new Uint8Array([9, 10]),
-        sourceDomain: SCCP_DOMAIN_SORA,
-        statementHash: `0x${"55".repeat(32)}`,
-        destinationBindingHash: `0x${"66".repeat(32)}`,
-      }),
-    /sourceProofBytes requires proofResult for request-bound submission/,
-  );
-  assert.throws(
-    () =>
-      wrapSubstrateSccpProofResult(
-        new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
-        request,
-    ),
-    /at most/,
-  );
-  assert.throws(
-    () =>
-      buildSubstrateSccpSubmission({
-        publicInputs,
-        proofBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
-        bundleBytes: new Uint8Array([5, 6, 7]),
-        sourceProofBytes: new Uint8Array(),
-        sourceDomain: SCCP_DOMAIN_SORA,
-        statementHash: `0x${"55".repeat(32)}`,
-        destinationBindingHash: `0x${"66".repeat(32)}`,
-      }),
-    /at most/,
-  );
-  assert.throws(
-    () =>
-      buildSubstrateSccpSubmission({
-        publicInputs,
-        proofBytes: new Uint8Array([1]),
-        bundleBytes: new Uint8Array([0, 0]),
-        sourceProofBytes: new Uint8Array([9, 10]),
-        sourceDomain: SCCP_DOMAIN_SORA,
-        statementHash: `0x${"55".repeat(32)}`,
-        destinationBindingHash: `0x${"66".repeat(32)}`,
-      }),
-    /bundleBytes must not be all zero/,
-  );
-  assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/u);
-  const exposedProofBytes = result.proofBytes;
-  exposedProofBytes[0] = 99;
-  assert.equal(result.proofBytes[0], 1);
-});
-
-test("package dist entrypoint exports SCCP TON proof wrapper", () => {
+ test("package dist entrypoint exports SCCP TON proof wrapper", () => {
   const publicInputs = {
     version: 1,
     message_id: `0x${"11".repeat(32)}`,
@@ -5422,80 +5538,7 @@ test("package dist entrypoint exports TON masterchain signature helpers", () => 
   );
 });
 
-test("package dist entrypoint exports Substrate authority-set payload helpers", () => {
-  const payload = canonicalSubstrateAuthoritySetPayloadBytes({
-    authorityPublicKeys: [`0x${"11".repeat(32)}`, `0x${"22".repeat(32)}`],
-    authorityWeights: [1n, 2n],
-  });
-
-  assert.equal(
-    Buffer.from(payload).toString("hex"),
-    `0102000000${"11".repeat(32)}0100000000000000${"22".repeat(32)}0200000000000000`,
-  );
-  assert.equal(
-    substrateAuthoritySetPayloadHash(payload),
-    "0xdedc4ebe5f91162a5029cb67f88cdbbf94c2bf2b9d0d373bd3e670321565cc16",
-  );
-  assert.equal(
-    substrateAuthoritySetHashFromPayload(payload),
-    "0xde84b8b7a5409c0f2cff1191173d6caa681d902b35e42669106ec6ea3193a117",
-  );
-
-  const nextPayload = canonicalSubstrateAuthoritySetPayloadBytes({
-    authorityPublicKeys: [`0x${"aa".repeat(32)}`, `0x${"bb".repeat(32)}`, `0x${"cc".repeat(32)}`],
-    authorityWeights: [13n, 17n, 19n],
-  });
-  const message = {
-    sourceDomain: 6,
-    fromGrandpaSetId: 41n,
-    toGrandpaSetId: 42n,
-    transitionBlockNumber: 9001n,
-    transitionBlockHash: `0x${"44".repeat(32)}`,
-    parentAuthoritySetHash: "0xb2efd5d86304ea728a8a9ed4013aab8f3e10c0cf862e859c9cade55e660934ef",
-    nextAuthoritySetHash: substrateAuthoritySetHashFromPayload(nextPayload),
-    nextAuthoritySetPayloadHash: substrateAuthoritySetPayloadHash(nextPayload),
-  };
-  assert.equal(canonicalSubstrateAuthoritySetTransitionMessageBytes(message).length, 157);
-  assert.equal(
-    substrateAuthoritySetTransitionMessageHash(message),
-    "0x60589333bf798bf592b2642d0fbac39b4e9305576cd2ebe9dd1f448a97a0596b",
-  );
-});
-
-test("package dist entrypoint exports Substrate runtime-storage proof request helpers", () => {
-  const input = {
-    sourceDomain: 6,
-    sourceEventDigest: `0x${"34".repeat(32)}`,
-    sourceEventLeafIndex: 0n,
-    finalizedBlockNumber: 31n,
-    grandpaSetId: 32n,
-    blockHash: `0x${"aa".repeat(32)}`,
-    authoritySetHash: `0x${"cc".repeat(32)}`,
-    eventsRoot: `0x${"bb".repeat(32)}`,
-    inclusionBranch: [`0x${"ee".repeat(32)}`],
-    sourceTrustAnchorHash: `0x${"aa".repeat(32)}`,
-    consensusVerifierHash: `0x${"bb".repeat(32)}`,
-    messageInclusionVerifierHash: `0x${"cc".repeat(32)}`,
-    finalityPolicyHash: `0x${"dd".repeat(32)}`,
-    sourceStateVerifierHash: `0x${"12".repeat(32)}`,
-  };
-
-  assert.equal(
-    Buffer.from(canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(input)).toString("hex"),
-    Buffer.from(canonicalSubstrateSccpStorageProofBytes(input)).toString("hex"),
-  );
-  const publicInputsHash = substrateSccpRuntimeStorageProofPublicInputsHash(input);
-  const request = buildSubstrateSccpRuntimeStorageProofRequest(input);
-  assert.equal(Object.isFrozen(request), true);
-  assert.equal(Object.isFrozen(request.publicInputColumns), true);
-  assert.equal(Object.isFrozen(request.fastpqPublicInputs), true);
-  assert.equal(Object.isFrozen(request.fastpqTransitions), true);
-  assert.equal(request.runtimeStorageProofPublicInputsHash, publicInputsHash);
-  assert.equal(request.fastpqPublicInputs.slot, "31");
-  assert.equal(request.fastpqTransitions[0].key, "sccp:substrate:runtime-storage:v1:context");
-});
-
-test("package dist entrypoint exports TRON witness-schedule payload helpers", () => {
+  test("package dist entrypoint exports TRON witness-schedule payload helpers", () => {
   const payload = canonicalTronWitnessSchedulePayloadBytes({
     witnessAddresses: [`0x41${"11".repeat(20)}`, `0x41${"22".repeat(20)}`],
     witnessWeights: [1n, 2n],

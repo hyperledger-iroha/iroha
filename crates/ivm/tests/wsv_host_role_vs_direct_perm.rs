@@ -75,6 +75,8 @@ fn role_vs_direct_permission_for_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
+    wsv.grant_permission(&alice, PermissionToken::ManageRoles);
+    wsv.grant_permission(&alice, PermissionToken::ManagePermissions);
     let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

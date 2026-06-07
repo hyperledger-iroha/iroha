@@ -1,0 +1,383 @@
+"""Build Reserved-lineage production proof evidence JSON for Kagemusha."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+from pathlib import Path
+import sys
+import tempfile
+from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import check_android_device_lab_slot as device_lab  # noqa: E402
+import kagemusha_production_readiness as readiness  # noqa: E402
+
+
+DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND = (
+    readiness.expected_lineage_proof_command(
+        readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+    )
+)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _secret_path_error(path: str | None, label: str) -> str | None:
+    if path is not None and device_lab.SECRET_RE.search(path):
+        return f"{label} must not contain secret-looking material"
+    return None
+
+
+def _validate_command(command: str) -> list[str]:
+    return readiness.validate_lineage_proof_command(
+        command, readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+    )
+
+
+def _validate_elapsed_seconds(value: float) -> list[str]:
+    if not math.isfinite(value) or value <= 0:
+        return ["--elapsed-seconds must be a positive finite number"]
+    return []
+
+
+def _validate_generated_at_utc(value: str) -> list[str]:
+    if device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
+        return ["--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ"]
+    return []
+
+
+def _validate_proof_log(path: Path) -> tuple[str | None, list[str]]:
+    return readiness.validate_lineage_proof_log(
+        path, readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
+    )
+
+
+def build_evidence(
+    *,
+    artifact_dir: Path,
+    proof_log: Path,
+    command: str,
+    elapsed_seconds: float,
+    generated_at_utc: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Build a Reserved-lineage proof evidence document from local artifacts."""
+
+    errors = validate_lineage_input_paths(artifact_dir, proof_log)
+    if errors:
+        return None, errors
+
+    errors.extend(_validate_generated_at_utc(generated_at_utc))
+    generated_at, timestamp_error = readiness.parse_utc_timestamp(
+        generated_at_utc,
+        "--generated-at-utc",
+    )
+    if timestamp_error is not None:
+        errors.append(timestamp_error["message"])
+    errors.extend(_validate_command(command))
+    errors.extend(_validate_elapsed_seconds(elapsed_seconds))
+
+    artifact_digests: dict[str, str] = {}
+    for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS:
+        path = artifact_dir / artifact
+        file_errors = readiness.validate_lineage_local_file(
+            path,
+            f"lineage artifact {artifact}",
+        )
+        if file_errors:
+            if file_errors == [f"lineage artifact {artifact} is missing"]:
+                errors.append(f"missing lineage artifact {artifact}")
+            else:
+                errors.extend(file_errors)
+            continue
+        artifact_digests[artifact] = _sha256_file(path)
+
+    proof_log_digest, proof_log_errors = _validate_proof_log(proof_log)
+    errors.extend(proof_log_errors)
+
+    if errors:
+        return None, errors
+
+    assert generated_at is not None
+    assert proof_log_digest is not None
+    return (
+        {
+            "schema": readiness.LINEAGE_PROOF_EVIDENCE_SCHEMA,
+            "generated_at_utc": generated_at.isoformat().replace("+00:00", "Z"),
+            "opening_len": readiness.EXPECTED_LINEAGE_PROOF_OPENING_LEN,
+            "ipa_k": readiness.EXPECTED_LINEAGE_PROOF_IPA_K,
+            "verifier_backend": readiness.EXPECTED_LINEAGE_PROOF_BACKEND,
+            "verifier_witness_profile": readiness.EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE,
+            "record_archive_proof_runtime_keygen_env": "unset",
+            "circuit_ids": dict(readiness.EXPECTED_LINEAGE_CIRCUIT_IDS),
+            "artifacts": artifact_digests,
+            "tests": {
+                "record_archive_proof": {
+                    "name": readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"],
+                    "status": "passed",
+                    "ignored": True,
+                    "command": command,
+                    "elapsed_seconds": elapsed_seconds,
+                    "log_path": readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                        "record_archive_proof"
+                    ],
+                    "log_sha256": proof_log_digest,
+                }
+            }
+        },
+        [],
+    )
+
+
+def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> list[str]:
+    """Return readiness-validator blocker messages for a generated evidence document."""
+
+    secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
+    if secret_error is not None:
+        return [secret_error]
+    pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)
+    if pre_create_dir_errors:
+        return pre_create_dir_errors
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    post_create_dir_errors = validate_artifact_dir_path(artifact_dir)
+    if post_create_dir_errors:
+        return post_create_dir_errors
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=artifact_dir,
+        prefix=".lineage-proof-evidence-",
+        suffix=".json",
+        delete=False,
+    ) as handle:
+        path = Path(handle.name)
+        handle.write(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    try:
+        result = readiness.check_lineage_proof_evidence(
+            path, require_canonical_filename=False
+        )
+    finally:
+        path.unlink(missing_ok=True)
+    return [item["message"] for item in result["blockers"]]
+
+
+def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
+    """Reject artifact directories that could alias external release bytes."""
+
+    secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
+    if secret_error is not None:
+        return [secret_error]
+    if artifact_dir.is_symlink():
+        return ["--artifact-dir must not be a symlink"]
+    ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        artifact_dir,
+        "--artifact-dir ancestor directory",
+    )
+    if ancestor_errors:
+        return ancestor_errors
+    if artifact_dir.exists() and not artifact_dir.is_dir():
+        return ["--artifact-dir must be a directory"]
+    return []
+
+
+def validate_lineage_input_paths(artifact_dir: Path, proof_log: Path) -> list[str]:
+    """Reject detached or aliased lineage proof inputs before reading bytes."""
+
+    errors = validate_artifact_dir_path(artifact_dir)
+    proof_log_secret_error = _secret_path_error(str(proof_log), "--proof-log")
+    if proof_log_secret_error is not None:
+        errors.append(proof_log_secret_error)
+    if errors:
+        return errors
+    proof_log_ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        proof_log,
+        "--proof-log ancestor directory",
+    )
+    if proof_log_ancestor_errors:
+        return proof_log_ancestor_errors
+    expected_proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+        "record_archive_proof"
+    ]
+    if (
+        proof_log.name != expected_proof_log_name
+        or proof_log.parent.resolve() != artifact_dir.resolve()
+    ):
+        return [
+            "--proof-log must be written directly under --artifact-dir as "
+            f"{expected_proof_log_name}"
+        ]
+    return []
+
+
+def preflight_output_path(path: Path, label: str) -> list[str]:
+    """Reject aliased output paths before evidence inputs are read."""
+
+    secret_error = _secret_path_error(str(path), label)
+    if secret_error is not None:
+        return [secret_error]
+    parent = path.parent
+    if parent.exists():
+        if parent.is_symlink():
+            return [f"{label} parent directory must not be a symlink"]
+        if not parent.is_dir():
+            return [f"{label} parent must be a directory"]
+    output_ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        path,
+        f"{label} ancestor directory",
+    )
+    if output_ancestor_errors:
+        return output_ancestor_errors
+    if not parent.exists():
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return [f"{label} parent directory could not be created"]
+    if path.exists():
+        if path.is_symlink():
+            return [f"{label} must not be a symlink"]
+        if not path.is_file():
+            return [f"{label} must be a regular file"]
+        try:
+            link_count = path.stat().st_nlink
+        except OSError:
+            return [f"{label} hardlink metadata could not be read"]
+        if link_count > 1:
+            return [f"{label} must not be hardlinked"]
+    return []
+
+
+def validate_output_path(path: Path, label: str) -> list[str]:
+    """Reject output paths that could overwrite aliased local files."""
+
+    secret_error = _secret_path_error(str(path), label)
+    if secret_error is not None:
+        return [secret_error]
+    errors = preflight_output_path(path, label)
+    if errors:
+        return errors
+    parent = path.parent
+    if not parent.exists():
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return [f"{label} parent directory could not be created"]
+    return preflight_output_path(path, label)
+
+
+def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
+    errors = validate_output_path(path, "--out")
+    if errors:
+        return errors
+    path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return []
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Build Kagemusha Reserved-lineage production proof evidence JSON."
+    )
+    parser.add_argument(
+        "--artifact-dir",
+        default="artifacts/kagemusha",
+        help="Directory containing lineage-init/lineage-append key packages and records.",
+    )
+    parser.add_argument(
+        "--proof-log",
+        required=True,
+        help="Captured stdout/stderr log from the production ignored record-archive proof run.",
+    )
+    parser.add_argument(
+        "--command",
+        default=DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+        help="Exact command used to run the production ignored record-archive proof test.",
+    )
+    parser.add_argument(
+        "--elapsed-seconds",
+        required=True,
+        type=float,
+        help="Wall-clock seconds consumed by the production proof run.",
+    )
+    parser.add_argument(
+        "--generated-at-utc",
+        default=readiness.utc_now(),
+        help="Canonical ISO-8601 UTC timestamp for the evidence document.",
+    )
+    parser.add_argument(
+        "--out",
+        default=readiness.DEFAULT_LINEAGE_PROOF_EVIDENCE_PATH,
+        help="Output evidence JSON path.",
+    )
+    args = parser.parse_args(argv)
+
+    path_errors = [
+        error
+        for error in (
+            _secret_path_error(args.artifact_dir, "--artifact-dir"),
+            _secret_path_error(args.proof_log, "--proof-log"),
+            _secret_path_error(args.out, "--out"),
+        )
+        if error is not None
+    ]
+    if path_errors:
+        for error in path_errors:
+            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    artifact_dir = Path(args.artifact_dir)
+    proof_log = Path(args.proof_log)
+    out_path = Path(args.out)
+    path_errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))
+    if out_path.resolve().parent != artifact_dir.resolve():
+        path_errors.append("--out must be written directly under --artifact-dir")
+    if out_path.name != readiness.LINEAGE_PROOF_EVIDENCE_FILENAME:
+        path_errors.append(
+            f"--out must be named {readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}"
+        )
+    early_output_errors = preflight_output_path(out_path, "--out")
+    path_errors.extend(early_output_errors)
+    if path_errors:
+        for error in path_errors:
+            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    evidence, errors = build_evidence(
+        artifact_dir=artifact_dir,
+        proof_log=proof_log,
+        command=args.command,
+        elapsed_seconds=args.elapsed_seconds,
+        generated_at_utc=args.generated_at_utc,
+    )
+    if errors:
+        for error in errors:
+            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    assert evidence is not None
+    validation_errors = validate_evidence_document(evidence, artifact_dir)
+    if validation_errors:
+        for error in validation_errors:
+            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+        return 1
+
+    write_errors = write_evidence(out_path, evidence)
+    if write_errors:
+        for error in write_errors:
+            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+        return 1
+    print("[kagemusha-lineage-proof-evidence] wrote evidence")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

@@ -2,7 +2,7 @@
 // Purpose: compile, deploy, configure, and evidence-check the BSC testnet
 // contracts for the TAIRA XOR SCCP bridge without persisting operator keys.
 // Safe default: no transaction is broadcast unless the command includes
-// `--broadcast true --confirm-testnet taira_bsc_xor`.
+// `--broadcast true --bsc-network testnet --confirm-network taira_bsc_xor:testnet`.
 //
 // Prerequisites:
 // - Node.js 18+.
@@ -11,10 +11,25 @@
 //   variable such as SCCP_BSC_DEPLOYER_PRIVATE_KEY.
 import { createRequire } from "node:module";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import { keccak_256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha3.js";
+import {
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+  parseBscTestnetNativeEvmProverParityFixture,
+  parseBscMainnetNativeEvmProverParityFixture,
+  parseBscTestnetNativeEvmProverSelfTestFixture,
+  parseBscMainnetNativeEvmProverSelfTestFixture,
+  validateBscTestnetNativeEvmProverBundle,
+  validateBscMainnetNativeEvmProverBundle,
+  verifyBscTestnetNativeEvmProverArtifactsFromBundle,
+  verifyBscMainnetNativeEvmProverArtifactsFromBundle,
+} from "../javascript/iroha_js/src/sccp.js";
 
 const requireFromScript = createRequire(import.meta.url);
 const requireFromCwd = createRequire(`${resolve("noop.js")}`);
@@ -32,6 +47,32 @@ export const BSC_TESTNET_NETWORK_ID_HEX =
   "0x0000000000000000000000000000000000000000000000000000000000000061";
 export const DEFAULT_BSC_RPC_URL =
   "https://data-seed-prebsc-1-s1.bnbchain.org:8545";
+export const BSC_MAINNET_CHAIN_ID_HEX = "0x38";
+export const BSC_MAINNET_NETWORK_ID_HEX =
+  "0x0000000000000000000000000000000000000000000000000000000000000038";
+export const DEFAULT_BSC_MAINNET_RPC_URL = "https://bsc-dataseed.bnbchain.org";
+export const BSC_NETWORK_PROFILES = Object.freeze({
+  testnet: Object.freeze({
+    key: "testnet",
+    chain: "bsc-testnet",
+    label: "BSC testnet",
+    confirmNetwork: `${ROUTE_ID}:testnet`,
+    chainIdHex: BSC_TESTNET_CHAIN_ID_HEX,
+    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    defaultRpcUrl: DEFAULT_BSC_RPC_URL,
+    explorerUrl: "https://testnet.bscscan.com",
+  }),
+  mainnet: Object.freeze({
+    key: "mainnet",
+    chain: "bsc-mainnet",
+    label: "BSC mainnet",
+    confirmNetwork: `${ROUTE_ID}:mainnet`,
+    chainIdHex: BSC_MAINNET_CHAIN_ID_HEX,
+    networkIdHex: BSC_MAINNET_NETWORK_ID_HEX,
+    defaultRpcUrl: DEFAULT_BSC_MAINNET_RPC_URL,
+    explorerUrl: "https://bscscan.com",
+  }),
+});
 export const BSC_EVM_GROTH16_BACKEND = "evm-groth16-bn254-v1";
 export const SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1";
 export const SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES = new Set([
@@ -60,6 +101,11 @@ export const DEFAULT_ROUTE_CONFIG_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-route.torii.toml";
 export const DEFAULT_ROUTE_FULL_CONFIG_OUT =
   "artifacts/sccp-bsc/taira-bsc-xor-route.full-taira-config.toml";
+export const DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT =
+  "artifacts/sccp-bsc/bsc-testnet-native-evm-prover-bundle.json";
+export const DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT =
+  "artifacts/sccp-bsc/native-prover";
+export const CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT = "artifacts/sccp-bsc";
 export const DEFAULT_PRIVATE_KEY_ENV = "SCCP_BSC_DEPLOYER_PRIVATE_KEY";
 
 const DESTINATION_BINDING_LABEL = "iroha:sccp:evm-destination-binding:v1";
@@ -90,6 +136,42 @@ const DIAGNOSTIC_FLAG_KEYS = [
   "diagnostic_verifier_material",
   "diagnostic",
 ];
+const NATIVE_EVM_PROVER_BUNDLE_KEYS = Object.freeze([
+  "nativeEvmProverBundle",
+  "native_evm_prover_bundle",
+  "bscNativeEvmProverBundle",
+  "bsc_native_evm_prover_bundle",
+  "nativeProverBundle",
+  "native_prover_bundle",
+  "proverBundle",
+  "prover_bundle",
+]);
+const NATIVE_EVM_PROVER_AUDIT_OPTION_KEYS = Object.freeze({
+  circuit_security_audit: [
+    "audit-circuit-security",
+    "audit-circuit-security-audit",
+  ],
+  native_implementation_audit: [
+    "audit-native-implementation",
+    "audit-native-implementation-audit",
+  ],
+  reproducible_build_attestation: [
+    "audit-reproducible-build",
+    "audit-reproducible-build-attestation",
+  ],
+  cross_sdk_fixture_parity: [
+    "audit-cross-sdk-fixture-parity",
+    "audit-cross-sdk-parity",
+  ],
+  native_prover_self_test: [
+    "audit-native-prover-self-test",
+    "audit-self-test",
+  ],
+  no_wasm_no_remote_scan: [
+    "audit-no-wasm-no-remote-scan",
+    "audit-no-wasm-scan",
+  ],
+});
 
 const CONTRACT_SOURCES = Object.freeze({
   "contracts/evm/sccp/ISccpMessageVerifier.sol": repoPath(
@@ -182,6 +264,7 @@ function usage() {
   node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --verifier <verifier-key.json> --broadcast true --confirm-testnet ${CONFIRMATION_TEXT} [--allow-diagnostic-verifier true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --cross-sdk-fixture-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-fixture-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
 
@@ -189,8 +272,9 @@ Required optional packages for compile/deploy/evidence: solc and ethers. The
 contract smoke NODE_PATH can be reused after scripts/sccp_evm_contract_smoke.sh
 has installed its temporary dependencies, or install equivalent local packages.
 
-This helper writes only public deployment evidence. It reads deployer key
-material only from the named environment variable at runtime and never writes it.`;
+This helper writes only public deployment evidence and public prover-bundle
+metadata. It reads deployer key material only from the named environment
+variable at runtime and never writes it.`;
 }
 
 const trim = (value) => String(value ?? "").trim();
@@ -216,6 +300,98 @@ function parseArgs(argv) {
 
 const parseBoolean = (value) =>
   ["1", "true", "yes", "on"].includes(trim(value).toLowerCase());
+
+export function normalizeBscNetworkProfile(value = "testnet") {
+  const normalized = trim(value || "testnet").toLowerCase().replace(/_/gu, "-");
+  if (
+    !normalized ||
+    ["testnet", "bsc-testnet", "chapel", "bsc-chapel"].includes(normalized)
+  ) {
+    return BSC_NETWORK_PROFILES.testnet;
+  }
+  if (
+    ["mainnet", "bsc-mainnet", "bnb-mainnet", "bsc"].includes(normalized)
+  ) {
+    return BSC_NETWORK_PROFILES.mainnet;
+  }
+  throw new Error("--bsc-network must be testnet or mainnet.");
+}
+
+const bscNetworkProfileFromOptions = (options = {}) =>
+  normalizeBscNetworkProfile(
+    options["bsc-network"] ??
+      options.network ??
+      process.env.SCCP_BSC_NETWORK ??
+      "testnet",
+  );
+
+function requireBscNetworkConfirmation(options, profile, action) {
+  const modern = trim(options["confirm-network"]);
+  const legacyTestnet = trim(options["confirm-testnet"]);
+  if (modern !== profile.confirmNetwork) {
+    if (
+      profile.key === "testnet" &&
+      !modern &&
+      legacyTestnet === CONFIRMATION_TEXT
+    ) {
+      return;
+    }
+    throw new Error(
+      `${action} requires --confirm-network ${profile.confirmNetwork}.`,
+    );
+  }
+  if (profile.key === "mainnet" && !parseBoolean(options["confirm-mainnet"])) {
+    throw new Error(`${action} requires --confirm-mainnet true.`);
+  }
+}
+
+const defaultBscRpcUrl = (profile) => profile.defaultRpcUrl;
+
+const defaultDeploymentEvidenceOut = (profile) =>
+  profile.key === "mainnet"
+    ? "artifacts/sccp-bsc/taira-bsc-mainnet-xor-deployment.evidence.json"
+    : DEFAULT_EVIDENCE_OUT;
+
+const bscNativeProverBundleId = (profile) =>
+  profile.key === "mainnet"
+    ? SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1
+    : SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+
+const validateBscNativeEvmProverBundleForProfile = (
+  bundle,
+  profile,
+  options = {},
+) =>
+  profile.key === "mainnet"
+    ? validateBscMainnetNativeEvmProverBundle(bundle, options)
+    : validateBscTestnetNativeEvmProverBundle(bundle, options);
+
+const parseBscNativeProverParityFixtureForProfile = (
+  fixture,
+  descriptor,
+  profile,
+) =>
+  profile.key === "mainnet"
+    ? parseBscMainnetNativeEvmProverParityFixture(fixture, descriptor)
+    : parseBscTestnetNativeEvmProverParityFixture(fixture, descriptor);
+
+const parseBscNativeProverSelfTestFixtureForProfile = (
+  fixture,
+  descriptor,
+  profile,
+) =>
+  profile.key === "mainnet"
+    ? parseBscMainnetNativeEvmProverSelfTestFixture(fixture, descriptor)
+    : parseBscTestnetNativeEvmProverSelfTestFixture(fixture, descriptor);
+
+const verifyBscNativeEvmProverArtifactsFromBundleForProfile = (
+  input,
+  options,
+  profile,
+) =>
+  profile.key === "mainnet"
+    ? verifyBscMainnetNativeEvmProverArtifactsFromBundle(input, options)
+    : verifyBscTestnetNativeEvmProverArtifactsFromBundle(input, options);
 
 function bytesToHex(bytes, prefix = true) {
   const hex = Array.from(bytes, (byte) =>
@@ -521,7 +697,10 @@ export function isSmokeFixtureGroth16VerifierMaterial(material) {
   }
 }
 
-export function normalizeVerifierMaterial(material) {
+export function normalizeVerifierMaterial(
+  material,
+  profile = BSC_NETWORK_PROFILES.testnet,
+) {
   if (!material || typeof material !== "object" || Array.isArray(material)) {
     throw new Error("verifier material must be a JSON object.");
   }
@@ -532,11 +711,11 @@ export function normalizeVerifierMaterial(material) {
     throw new Error("proofFamily must be stark-fri-v1 for BSC SCCP.");
   }
   const networkId = normalizeHex32(
-    material.networkId ?? BSC_TESTNET_NETWORK_ID_HEX,
+    material.networkId ?? profile.networkIdHex,
     "networkId",
   );
-  if (networkId !== BSC_TESTNET_NETWORK_ID_HEX) {
-    throw new Error("networkId must be BSC testnet for taira_bsc_xor.");
+  if (networkId !== profile.networkIdHex) {
+    throw new Error(`networkId must be ${profile.label} for ${ROUTE_ID}.`);
   }
   const sourceDomain = normalizeUint32(
     material.sourceDomain ?? SCCP_DOMAIN_SORA,
@@ -690,6 +869,181 @@ function diagnosticFlagReason(record, pathName) {
   return "";
 }
 
+function uniqueNonEmpty(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function pathIsWithin(candidatePath, rootPath) {
+  const relativePath = relative(rootPath, candidatePath);
+  return (
+    relativePath === "" ||
+    (relativePath &&
+      !relativePath.startsWith("..") &&
+      !isAbsolute(relativePath))
+  );
+}
+
+export function isCanonicalBscProductionArtifactPath(pathName) {
+  const resolvedPath = resolve(pathName);
+  return [
+    resolve(CANONICAL_BSC_PRODUCTION_ARTIFACT_ROOT),
+    repoPath("artifacts", "sccp-bsc"),
+  ].some((rootPath) => pathIsWithin(resolvedPath, rootPath));
+}
+
+function routeManifestProductionProblems(record, label) {
+  if (!isRecord(record) || record.schema !== ROUTE_MANIFEST_SCHEMA) {
+    return [];
+  }
+  const problems = [];
+  let route = null;
+  try {
+    route = normalizeRouteManifestForConfig(record);
+  } catch (error) {
+    problems.push(
+      `${label} failed production route validation: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const productionReady = record.productionReady === true;
+  if (!productionReady) {
+    problems.push(`${label} is not productionReady true`);
+  }
+  if (route) {
+    if (route.disabledReason) {
+      problems.push(`${label} carries disabledReason`);
+    }
+    if (!route.proofArtifactHash || !route.provingKeyHash) {
+      problems.push(`${label} is missing proofArtifactHash or provingKeyHash`);
+    }
+    if (!route.nativeEvmProverBundle) {
+      problems.push(`${label} is missing nativeEvmProverBundle`);
+    }
+    if (!route.postDeployLiveEvidence?.fullTomlReady) {
+      problems.push(`${label} is missing full postDeployLiveEvidence`);
+    }
+  }
+  return uniqueNonEmpty(problems);
+}
+
+function nativeProverBundleProductionProblems(record, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const schema = readFirstString(record, "schema");
+  const bundleId = readFirstString(record, "bundleId", "bundle_id");
+  if (
+    schema !== SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1 &&
+    bundleId !== SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 &&
+    bundleId !== SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1
+  ) {
+    return [];
+  }
+
+  const problems = [];
+  let descriptor = null;
+  const profile =
+    bundleId === SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 ||
+    readFirstString(record, "chain") === "bsc-mainnet"
+      ? BSC_NETWORK_PROFILES.mainnet
+      : BSC_NETWORK_PROFILES.testnet;
+  try {
+    descriptor = validateBscNativeEvmProverBundleForProfile(record, profile);
+  } catch (error) {
+    problems.push(
+      `${label} failed BSC native EVM prover bundle validation: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const verifierKeyHash =
+    descriptor?.verifierKeyHash ??
+    readConsistentNormalizedString(
+      [
+        {
+          record,
+          keys: ["verifierKeyHash", "verifier_key_hash"],
+          pathName: label,
+        },
+      ],
+      `${label} verifierKeyHash`,
+      (value, fieldLabel) => normalizeHex32(value, fieldLabel),
+    );
+  if (verifierKeyHash && isKnownDiagnosticBscVerifierKeyHash(verifierKeyHash)) {
+    problems.push(
+      `${label} verifierKeyHash=${verifierKeyHash} is a known diagnostic BSC verifier key hash`,
+    );
+  }
+  return uniqueNonEmpty(problems);
+}
+
+function bscDiagnosticProductionMaterialReasons(record, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const rollout = readFirstRecord(
+    record,
+    "destinationRollout",
+    "destination_rollout",
+  );
+  const binding = readFirstRecord(
+    record,
+    "destinationBinding",
+    "destination_binding",
+  );
+  const verifierKeyHash = readConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["verifierKeyHash", "verifier_key_hash"],
+        pathName: label,
+      },
+      {
+        record: rollout,
+        keys: ["verifierKeyHash", "verifier_key_hash"],
+        pathName: `${label}.destinationRollout`,
+      },
+    ],
+    `${label} verifierKeyHash`,
+    (value, fieldLabel) => normalizeHex32(value, fieldLabel),
+  );
+  return uniqueNonEmpty([
+    diagnosticFlagReason(record, label),
+    diagnosticFlagReason(rollout, `${label}.destinationRollout`),
+    diagnosticFlagReason(binding, `${label}.destinationBinding`),
+    verifierKeyHash && isKnownDiagnosticBscVerifierKeyHash(verifierKeyHash)
+      ? `${label} verifierKeyHash=${verifierKeyHash} is a known diagnostic BSC verifier key hash`
+      : "",
+  ]);
+}
+
+export function bscCanonicalProductionOutputProblems(
+  pathName,
+  value,
+  label = "BSC production material",
+) {
+  if (!isCanonicalBscProductionArtifactPath(pathName)) {
+    return [];
+  }
+  return uniqueNonEmpty([
+    ...nativeProverBundleProductionProblems(value, label),
+    ...bscDiagnosticProductionMaterialReasons(value, label),
+    ...routeManifestProductionProblems(value, label),
+  ]);
+}
+
+function assertBscCanonicalProductionOutputSafe(pathName, value, label) {
+  const problems = bscCanonicalProductionOutputProblems(pathName, value, label);
+  if (problems.length > 0) {
+    throw new Error(
+      `${label} cannot be written to canonical BSC production artifact path ${resolve(
+        pathName,
+      )}: ${problems.join("; ")}. Write draft or diagnostic material under output/sccp-bsc-production/ or regenerate with production verifier, proof, native-prover, and live readback material.`,
+    );
+  }
+}
+
 function normalizeNonEmptyText(value, label) {
   const normalized = trim(value);
   if (!normalized) {
@@ -811,13 +1165,15 @@ export function validateBscReadbackEvidence({
   bindingHash,
   verifierCodeHash,
   verifierKeyHash,
+  bscNetwork = "testnet",
 }) {
+  const profile = normalizeBscNetworkProfile(bscNetwork);
   if (!isRecord(readback)) {
     throw new Error("BSC contract readback must be an object.");
   }
-  if (String(readback.chainIdHex).toLowerCase() !== BSC_TESTNET_CHAIN_ID_HEX) {
+  if (String(readback.chainIdHex).toLowerCase() !== profile.chainIdHex) {
     throw new Error(
-      "BSC contract readback must report BSC testnet chain id 0x61.",
+      `BSC contract readback must report ${profile.label} chain id ${profile.chainIdHex}.`,
     );
   }
   const codePresent = isRecord(readback.codePresent)
@@ -881,9 +1237,9 @@ export function validateBscReadbackEvidence({
   }
   if (
     normalizeHex32(readback.bridgeNetworkId, "bridgeNetworkId") !==
-    BSC_TESTNET_NETWORK_ID_HEX
+    profile.networkIdHex
   ) {
-    throw new Error("BSC readback bridge network id must be BSC testnet.");
+    throw new Error(`BSC readback bridge network id must be ${profile.label}.`);
   }
   if (
     readback.bridgeSourceDomain !== SCCP_DOMAIN_SORA ||
@@ -953,6 +1309,458 @@ async function writeTextNoSecrets(pathName, value, mode = 0o644) {
   await writeFile(temp, value, { mode });
   await rename(temp, resolved);
   return resolved;
+}
+
+function optionValue(options, names) {
+  for (const name of Array.isArray(names) ? names : [names]) {
+    if (options[name] !== undefined) {
+      return options[name];
+    }
+  }
+  return undefined;
+}
+
+function requiredOption(options, names, label) {
+  const value = optionValue(options, names);
+  if (value === undefined || value === null || trim(value) === "") {
+    const display = Array.isArray(names) ? names[0] : names;
+    throw new Error(`${label} requires --${display}.`);
+  }
+  return value;
+}
+
+function artifactRootPath(value) {
+  return resolve(trim(value) || DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT);
+}
+
+function relativePosixPath(root, target, label) {
+  const relativePath = relative(root, target);
+  if (
+    !relativePath ||
+    relativePath.startsWith("..") ||
+    isAbsolute(relativePath)
+  ) {
+    throw new Error(`${label} must stay under artifact-root.`);
+  }
+  return relativePath.split(/[\\/]+/u).join("/");
+}
+
+async function readArtifactUnderRoot(root, value, label) {
+  const text = normalizeNonEmptyText(value, label);
+  const target = isAbsolute(text) ? resolve(text) : resolve(root, text);
+  const pathName = relativePosixPath(root, target, label);
+  let bytes;
+  try {
+    bytes = await readFile(target);
+  } catch (error) {
+    throw new Error(`${label} could not be read: ${error.message}`);
+  }
+  if (bytes.length === 0) {
+    throw new Error(`${label} must not be empty.`);
+  }
+  return {
+    absolutePath: target,
+    path: pathName,
+    bytes,
+    sha256: bytesToHex(sha256(new Uint8Array(bytes))),
+    sizeBytes: bytes.length,
+  };
+}
+
+async function normalizeAuditHashOrFile(root, value, label) {
+  const text = normalizeNonEmptyText(value, label);
+  if (/^(?:0x)?[0-9a-f]{64}$/iu.test(text)) {
+    return normalizeHex32(text, label);
+  }
+  if (text.startsWith("0x")) {
+    throw new Error(`${label} must be a 32-byte hex hash or artifact file.`);
+  }
+  return (await readArtifactUnderRoot(root, text, label)).sha256;
+}
+
+async function readNativeProverAuditHashes(
+  root,
+  options,
+  { parityFixture, selfTestFixture } = {},
+) {
+  const entries = [];
+  for (const [key, optionNames] of Object.entries(
+    NATIVE_EVM_PROVER_AUDIT_OPTION_KEYS,
+  )) {
+    const derived =
+      key === "cross_sdk_fixture_parity"
+        ? parityFixture?.sha256
+        : key === "native_prover_self_test"
+          ? selfTestFixture?.sha256
+          : null;
+    const raw = optionValue(options, optionNames);
+    if (derived && (raw === undefined || raw === null || trim(raw) === "")) {
+      entries.push([key, derived]);
+      continue;
+    }
+    const normalized = await normalizeAuditHashOrFile(
+      root,
+      requiredOption(options, optionNames, `auditHashes.${key}`),
+      `auditHashes.${key}`,
+    );
+    if (derived && normalized !== derived) {
+      throw new Error(`auditHashes.${key} must match the artifact sha256.`);
+    }
+    entries.push([key, normalized]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function extractBscBundleRouteBinding(record, label) {
+  if (!isRecord(record)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  const destinationRollout =
+    readFirstRecord(record, "destinationRollout", "destination_rollout") ?? {};
+  const destinationBinding =
+    readFirstRecord(record, "destinationBinding", "destination_binding") ?? {};
+  const routeId = readRequiredString(record, ["routeId", "route_id"], label);
+  if (routeId !== ROUTE_ID) {
+    throw new Error(`${label} routeId must be ${ROUTE_ID}.`);
+  }
+  const assetKey = readRequiredString(record, ["assetKey", "asset_key"], label);
+  if (assetKey !== ASSET_KEY) {
+    throw new Error(`${label} assetKey must be ${ASSET_KEY}.`);
+  }
+  const profile = normalizeBscNetworkProfile(
+    readFirstString(record, "chain") ||
+      readFirstString(record, "bscNetwork", "bsc_network", "network") ||
+      "testnet",
+  );
+  const networkIdHex = readConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["networkIdHex", "network_id_hex"],
+        pathName: label,
+      },
+      {
+        record: destinationRollout,
+        keys: ["destinationNetworkId", "destination_network_id"],
+        pathName: `${label} destinationRollout`,
+      },
+      {
+        record: destinationBinding,
+        keys: ["networkIdHex", "network_id_hex"],
+        pathName: `${label} destinationBinding`,
+      },
+    ],
+    `${label} networkIdHex`,
+    (value, fieldLabel) => normalizeHex32(value, fieldLabel),
+  );
+  if (networkIdHex && networkIdHex !== profile.networkIdHex) {
+    throw new Error(`${label} networkIdHex must be ${profile.label}.`);
+  }
+  const verifierKeyHash = readRequiredConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["verifierKeyHash", "verifier_key_hash"],
+        pathName: label,
+      },
+      {
+        record: destinationRollout,
+        keys: ["verifierKeyHash", "verifier_key_hash"],
+        pathName: `${label} destinationRollout`,
+      },
+    ],
+    `${label} verifierKeyHash`,
+    (value, fieldLabel) => normalizeHex32(value, fieldLabel),
+  );
+  if (isKnownDiagnosticBscVerifierKeyHash(verifierKeyHash)) {
+    throw new Error(
+      `${label} verifierKeyHash is a known diagnostic BSC verifier key hash.`,
+    );
+  }
+  const destinationBindingHash = readRequiredConsistentNormalizedString(
+    [
+      {
+        record,
+        keys: ["destinationBindingHash", "destination_binding_hash"],
+        pathName: label,
+      },
+      {
+        record: destinationRollout,
+        keys: ["destinationBindingHash", "destination_binding_hash"],
+        pathName: `${label} destinationRollout`,
+      },
+      {
+        record: destinationBinding,
+        keys: ["bindingHash", "binding_hash"],
+        pathName: `${label} destinationBinding`,
+      },
+    ],
+    `${label} destinationBindingHash`,
+    (value, fieldLabel) => normalizeHex32(value, fieldLabel),
+  );
+  const optionalRouteHash = (fieldLabel, keys) =>
+    readConsistentNormalizedString(
+      [
+        { record, keys, pathName: label },
+        {
+          record: destinationRollout,
+          keys,
+          pathName: `${label} destinationRollout`,
+        },
+      ],
+      `${label} ${fieldLabel}`,
+      (value, hashLabel) => normalizeHex32(value, hashLabel),
+    ) || null;
+  return {
+    routeId,
+    assetKey,
+    bscNetwork: profile.key,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
+    verifierKeyHash,
+    destinationBindingHash,
+    proofArtifactHash: optionalRouteHash("proofArtifactHash", [
+      "proofArtifactHash",
+      "proof_artifact_hash",
+      "proverArtifactHash",
+      "prover_artifact_hash",
+      "circuitArtifactHash",
+      "circuit_artifact_hash",
+    ]),
+    provingKeyHash: optionalRouteHash("provingKeyHash", [
+      "provingKeyHash",
+      "proving_key_hash",
+    ]),
+  };
+}
+
+async function readBscBundleRouteBinding(options) {
+  const routeManifestPath =
+    options["route-manifest"] ?? options.manifest ?? null;
+  const evidencePath =
+    options.evidence ?? options["deployment-evidence"] ?? null;
+  if (routeManifestPath && evidencePath) {
+    throw new Error(
+      "native-prover-bundle accepts either --route-manifest or --deployment-evidence, not both.",
+    );
+  }
+  if (!routeManifestPath && !evidencePath) {
+    throw new Error(
+      "native-prover-bundle requires --route-manifest or --deployment-evidence.",
+    );
+  }
+  const label = routeManifestPath ? "route manifest" : "deployment evidence";
+  const pathName = routeManifestPath ?? evidencePath;
+  const record = await readJson(pathName, `BSC ${label}`);
+  return {
+    record,
+    path: resolve(pathName),
+    kind: routeManifestPath ? "route-manifest" : "deployment-evidence",
+    binding: extractBscBundleRouteBinding(record, `BSC ${label}`),
+  };
+}
+
+function sdkImplementationOptionName(sdk) {
+  return `${sdk}-implementation`;
+}
+
+function buildNativeEvmProverBundleObject({
+  routeBinding,
+  proofArtifact,
+  provingKey,
+  verifierKey,
+  parityFixture,
+  selfTestFixture,
+  sdkArtifacts,
+  auditHashes,
+}) {
+  return {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundle_id: bscNativeProverBundleId(
+      BSC_NETWORK_PROFILES[routeBinding.bscNetwork],
+    ),
+    domain: SCCP_DOMAIN_BSC,
+    chain: routeBinding.chain,
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact: proofArtifact.path,
+    proof_artifact_hash: proofArtifact.sha256,
+    proving_key: provingKey.path,
+    proving_key_hash: provingKey.sha256,
+    verifier_key: verifierKey.path,
+    verifier_key_hash: verifierKey.sha256,
+    destination_binding_hash: routeBinding.destinationBindingHash,
+    no_wasm: true,
+    remote_prover_required: false,
+    browser_implementation: "pure-typescript",
+    cross_sdk_fixture_parity_artifact: parityFixture.path,
+    native_prover_self_test_artifact: selfTestFixture.path,
+    native_sdk_artifacts: sdkArtifacts.map((artifact) => ({
+      sdk: artifact.sdk,
+      implementation: artifact.implementation,
+      prover_artifact_hash: proofArtifact.sha256,
+      proving_key_hash: provingKey.sha256,
+      implementation_artifact: artifact.path,
+      implementation_hash: artifact.sha256,
+    })),
+    audit_hashes: auditHashes,
+  };
+}
+
+function attachNativeProverBundleToManifest(manifest, bundle) {
+  const destinationRollout = {
+    ...(isRecord(manifest.destinationRollout)
+      ? manifest.destinationRollout
+      : {}),
+    proofArtifactHash: bundle.proof_artifact_hash,
+    provingKeyHash: bundle.proving_key_hash,
+    nativeEvmProverBundle: bundle,
+  };
+  return {
+    ...manifest,
+    proofArtifactHash: bundle.proof_artifact_hash,
+    provingKeyHash: bundle.proving_key_hash,
+    nativeEvmProverBundle: bundle,
+    destinationRollout,
+  };
+}
+
+export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
+  const root = artifactRootPath(
+    options["artifact-root"] ?? DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT,
+  );
+  const routeSource = await readBscBundleRouteBinding(options);
+  const proofArtifact = await readArtifactUnderRoot(
+    root,
+    requiredOption(options, "proof-artifact", "proof artifact"),
+    "proof artifact",
+  );
+  const provingKey = await readArtifactUnderRoot(
+    root,
+    requiredOption(options, "proving-key", "proving key"),
+    "proving key",
+  );
+  const verifierKey = await readArtifactUnderRoot(
+    root,
+    requiredOption(options, "verifier-key", "verifier key"),
+    "verifier key",
+  );
+  const parityFixture = await readArtifactUnderRoot(
+    root,
+    requiredOption(
+      options,
+      ["cross-sdk-fixture-parity", "parity-fixture"],
+      "cross-SDK fixture parity artifact",
+    ),
+    "cross-SDK fixture parity artifact",
+  );
+  const selfTestFixture = await readArtifactUnderRoot(
+    root,
+    requiredOption(
+      options,
+      ["native-prover-self-test", "self-test"],
+      "native prover self-test artifact",
+    ),
+    "native prover self-test artifact",
+  );
+  const sdkArtifacts = [];
+  for (const [sdk, implementation] of Object.entries(
+    SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  )) {
+    const optionName = sdkImplementationOptionName(sdk);
+    const artifact = await readArtifactUnderRoot(
+      root,
+      requiredOption(options, optionName, `${sdk} implementation artifact`),
+      `${sdk} implementation artifact`,
+    );
+    sdkArtifacts.push({ ...artifact, sdk, implementation });
+  }
+  const auditHashes = await readNativeProverAuditHashes(root, options, {
+    parityFixture,
+    selfTestFixture,
+  });
+  const binding = routeSource.binding;
+  const profile = BSC_NETWORK_PROFILES[binding.bscNetwork];
+  if (binding.proofArtifactHash && binding.proofArtifactHash !== proofArtifact.sha256) {
+    throw new Error(
+      "proof artifact hash does not match route/deployment evidence.",
+    );
+  }
+  if (binding.provingKeyHash && binding.provingKeyHash !== provingKey.sha256) {
+    throw new Error(
+      "proving key hash does not match route/deployment evidence.",
+    );
+  }
+  if (binding.verifierKeyHash !== verifierKey.sha256) {
+    throw new Error(
+      "verifier key hash does not match route/deployment evidence.",
+    );
+  }
+  const bundle = buildNativeEvmProverBundleObject({
+    routeBinding: binding,
+    proofArtifact,
+    provingKey,
+    verifierKey,
+    parityFixture,
+    selfTestFixture,
+    sdkArtifacts,
+    auditHashes,
+  });
+  const descriptor = validateBscNativeEvmProverBundleForProfile(bundle, profile, {
+    expectedDestinationBindingHash: binding.destinationBindingHash,
+  });
+  parseBscNativeProverParityFixtureForProfile(
+    parityFixture.bytes.toString("utf8"),
+    descriptor,
+    profile,
+  );
+  parseBscNativeProverSelfTestFixtureForProfile(
+    selfTestFixture.bytes.toString("utf8"),
+    descriptor,
+    profile,
+  );
+  const bytesByPath = new Map([
+    [proofArtifact.path, proofArtifact.bytes],
+    [provingKey.path, provingKey.bytes],
+    [verifierKey.path, verifierKey.bytes],
+    [parityFixture.path, parityFixture.bytes],
+    [selfTestFixture.path, selfTestFixture.bytes],
+    ...sdkArtifacts.map((artifact) => [artifact.path, artifact.bytes]),
+  ]);
+  const verifiedSdks = [];
+  for (const artifact of sdkArtifacts) {
+    await verifyBscNativeEvmProverArtifactsFromBundleForProfile(
+      {
+        nativeProverBundle: descriptor,
+        sdk: artifact.sdk,
+        artifactResolver(pathName) {
+          return bytesByPath.get(pathName);
+        },
+      },
+      { expectedDestinationBindingHash: binding.destinationBindingHash },
+      profile,
+    );
+    verifiedSdks.push(artifact.sdk);
+  }
+  return {
+    bundle,
+    descriptor,
+    routeSource,
+    artifactRoot: root,
+    artifacts: {
+      proofArtifact,
+      provingKey,
+      verifierKey,
+      parityFixture,
+      selfTestFixture,
+      sdkArtifacts,
+    },
+    verifiedSdks,
+    attachedRouteManifest:
+      routeSource.kind === "route-manifest"
+        ? attachNativeProverBundleToManifest(routeSource.record, bundle)
+        : null,
+  };
 }
 
 async function compileBscContracts({ writeOut = null } = {}) {
@@ -1127,7 +1935,9 @@ export function buildDeploymentEvidence({
   verifierCodeHash,
   verifierKeyHash,
   readback,
+  bscNetwork = "testnet",
 }) {
+  const profile = normalizeBscNetworkProfile(bscNetwork);
   const addresses = {
     token: normalizeEvmAddress(tokenAddress, "token address"),
     bridge: normalizeEvmAddress(bridgeAddress, "bridge address"),
@@ -1147,6 +1957,7 @@ export function buildDeploymentEvidence({
   const codeHash = normalizeHex32(verifierCodeHash, "verifierCodeHash");
   const keyHash = normalizeHex32(verifierKeyHash, "verifierKeyHash");
   const bindingHash = bscDestinationBindingHash({
+    networkId: profile.networkIdHex,
     verifierAddress: addresses.verifier,
     bridgeAddress: addresses.bridge,
     verifierCodeHash: codeHash,
@@ -1158,8 +1969,10 @@ export function buildDeploymentEvidence({
     bindingHash,
     verifierCodeHash: codeHash,
     verifierKeyHash: keyHash,
+    bscNetwork: profile.key,
   });
   const bindingKey = bscDestinationBindingKey({
+    networkId: profile.networkIdHex,
     verifierAddress: addresses.verifier,
     bridgeAddress: addresses.bridge,
     verifierCodeHash: codeHash,
@@ -1169,17 +1982,17 @@ export function buildDeploymentEvidence({
     schema: DEPLOYMENT_EVIDENCE_SCHEMA,
     routeId: ROUTE_ID,
     assetKey: ASSET_KEY,
-    bscNetwork: "testnet",
-    chain: "bsc-testnet",
-    chainIdHex: BSC_TESTNET_CHAIN_ID_HEX,
-    networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+    bscNetwork: profile.key,
+    chain: profile.chain,
+    chainIdHex: profile.chainIdHex,
+    networkIdHex: profile.networkIdHex,
     bscBridgeAddress: addresses.bridge,
     bscTokenAddress: addresses.token,
     sccpBscSourceBridgeAddress: addresses.sourceBridge,
     bscVerifierAddress: addresses.verifier,
     destinationRollout: {
       version: 1,
-      destinationNetworkId: BSC_TESTNET_NETWORK_ID_HEX,
+      destinationNetworkId: profile.networkIdHex,
       sourceDomain: SCCP_DOMAIN_SORA,
       targetDomain: SCCP_DOMAIN_BSC,
       verifierIdentity: addresses.verifier,
@@ -1195,7 +2008,7 @@ export function buildDeploymentEvidence({
       version: 1,
       sourceDomain: SCCP_DOMAIN_SORA,
       targetDomain: SCCP_DOMAIN_BSC,
-      networkIdHex: BSC_TESTNET_NETWORK_ID_HEX,
+      networkIdHex: profile.networkIdHex,
       key: bindingKey,
       bindingHash,
     },
@@ -1222,16 +2035,15 @@ function normalizeVerifierKeyRefText(value, label) {
 }
 
 function normalizeBscTestnetKey(value, label) {
-  const normalized = trim(value || "testnet").toLowerCase();
-  if (
-    normalized === "testnet" ||
-    normalized === "bsc-testnet" ||
-    normalized === "chapel" ||
-    normalized === "bsc-chapel"
-  ) {
-    return "testnet";
+  try {
+    return normalizeBscNetworkProfile(value).key;
+  } catch (error) {
+    throw new Error(
+      `${label} must be BSC testnet or BSC mainnet: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
-  throw new Error(`${label} must be BSC testnet.`);
 }
 
 function readRequiredString(record, keys, label) {
@@ -1280,6 +2092,24 @@ function collectStringEntries(record, keys, pathName) {
         key,
         path: `${pathName}.${key}`,
         value: value.trim(),
+      });
+    }
+  }
+  return entries;
+}
+
+function collectRecordEntries(record, keys, pathName) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const entries = [];
+  for (const key of keys) {
+    const value = record[key];
+    if (isRecord(value)) {
+      entries.push({
+        key,
+        path: `${pathName}.${key}`,
+        value,
       });
     }
   }
@@ -1364,6 +2194,86 @@ function routeConfigRequiredRecord(value, label) {
   return value;
 }
 
+function normalizeBscRouteNativeEvmProverBundle({
+  record,
+  destinationRollout,
+  productionReady,
+  verifierKeyHash,
+  proofArtifactHash,
+  provingKeyHash,
+  destinationBindingHash,
+  bscProfile = BSC_NETWORK_PROFILES.testnet,
+}) {
+  const entries = [
+    ...collectRecordEntries(
+      record,
+      NATIVE_EVM_PROVER_BUNDLE_KEYS,
+      "route manifest",
+    ),
+    ...collectRecordEntries(
+      destinationRollout,
+      NATIVE_EVM_PROVER_BUNDLE_KEYS,
+      "route manifest destinationRollout",
+    ),
+  ];
+  if (entries.length === 0) {
+    if (productionReady) {
+      throw new Error(
+        "route manifest productionReady requires nativeEvmProverBundle.",
+      );
+    }
+    return null;
+  }
+
+  let selected = null;
+  let selectedJson = "";
+  for (const entry of entries) {
+    let normalized;
+    try {
+      normalized = validateBscNativeEvmProverBundleForProfile(
+        entry.value,
+        bscProfile,
+        {
+          expectedDestinationBindingHash: destinationBindingHash,
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `${entry.path} failed BSC SDK validation: ${error instanceof Error ? error.message : String(error)}.`,
+      );
+    }
+    if (normalized.verifierKeyHash !== verifierKeyHash) {
+      throw new Error(
+        `${entry.path} verifierKeyHash must match route manifest verifierKeyHash.`,
+      );
+    }
+    if (
+      proofArtifactHash &&
+      normalized.proofArtifactHash !== proofArtifactHash
+    ) {
+      throw new Error(
+        `${entry.path} proofArtifactHash must match route manifest proofArtifactHash.`,
+      );
+    }
+    if (provingKeyHash && normalized.provingKeyHash !== provingKeyHash) {
+      throw new Error(
+        `${entry.path} provingKeyHash must match route manifest provingKeyHash.`,
+      );
+    }
+
+    const normalizedJson = JSON.stringify(normalized);
+    if (selected && selectedJson !== normalizedJson) {
+      throw new Error(
+        `route manifest nativeEvmProverBundle aliases disagree: ${selected.path} does not match ${entry.path}.`,
+      );
+    }
+    selected = { path: entry.path, value: normalized };
+    selectedJson = normalizedJson;
+  }
+
+  return selected.value;
+}
+
 function normalizeRouteManifestForConfig(manifest) {
   const record = routeConfigRequiredRecord(manifest, "route manifest");
   if (record.schema !== ROUTE_MANIFEST_SCHEMA) {
@@ -1416,21 +2326,24 @@ function normalizeRouteManifestForConfig(manifest) {
       "testnet",
     "route manifest bscNetwork",
   );
+  const bscProfile = BSC_NETWORK_PROFILES[bscNetwork];
   const chain = readRequiredString(
     record,
     ["chain"],
     "route manifest chain",
   ).toLowerCase();
-  if (chain !== "bsc-testnet") {
-    throw new Error("route manifest chain must be bsc-testnet.");
+  if (chain !== bscProfile.chain) {
+    throw new Error(`route manifest chain must be ${bscProfile.chain}.`);
   }
   const chainIdHex = readRequiredString(
     record,
     ["chainIdHex", "chain_id_hex"],
     "route manifest chainIdHex",
   ).toLowerCase();
-  if (chainIdHex !== BSC_TESTNET_CHAIN_ID_HEX) {
-    throw new Error("route manifest chainIdHex must be BSC testnet 0x61.");
+  if (chainIdHex !== bscProfile.chainIdHex) {
+    throw new Error(
+      `route manifest chainIdHex must be ${bscProfile.label} ${bscProfile.chainIdHex}.`,
+    );
   }
   const networkIdHex = readRequiredConsistentNormalizedString(
     [
@@ -1453,8 +2366,8 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest networkIdHex",
     (value, label) => normalizeHex32(value, label),
   );
-  if (networkIdHex !== BSC_TESTNET_NETWORK_ID_HEX) {
-    throw new Error("route manifest networkIdHex must be BSC testnet.");
+  if (networkIdHex !== bscProfile.networkIdHex) {
+    throw new Error(`route manifest networkIdHex must be ${bscProfile.label}.`);
   }
 
   const counterpartyDomain = normalizeUint32(
@@ -1775,6 +2688,16 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
   roleSeparatedHashes[2][1] = destinationBindingHash;
+  const nativeEvmProverBundle = normalizeBscRouteNativeEvmProverBundle({
+    record,
+    destinationRollout,
+    productionReady,
+    verifierKeyHash,
+    proofArtifactHash,
+    provingKeyHash,
+    destinationBindingHash,
+    bscProfile,
+  });
   const seenRouteHashes = new Map();
   for (const [label, value] of roleSeparatedHashes.filter(([, value]) =>
     Boolean(value),
@@ -1990,7 +2913,7 @@ function normalizeRouteManifestForConfig(manifest) {
     routeId,
     assetKey,
     bscNetwork,
-    legacyTronNetwork: "bsc-testnet",
+    legacyTronNetwork: chain,
     chain,
     chainIdHex,
     counterpartyDomain,
@@ -2010,6 +2933,7 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierKeyHash,
     proofArtifactHash,
     provingKeyHash,
+    nativeEvmProverBundle,
     destinationBindingKey,
     destinationBindingHash,
     settlementAssetDefinitionId,
@@ -2073,7 +2997,7 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
   }
   const lines = [
     "# Generated by scripts/sccp_bsc_taira_xor_deploy.mjs route-config.",
-    "# Merge this overlay into the TAIRA Torii/Iroha runtime config for BSC testnet smoke.",
+    `# Merge this overlay into the TAIRA Torii/Iroha runtime config for ${route.chain} smoke.`,
     "# Generic BSC address fields are emitted with legacy TRON mirrors for mixed-version nodes.",
     "[zk]",
     `sccp_allow_unready_transparent_proofs = ${allowUnready ? "true" : "false"}`,
@@ -2261,19 +3185,19 @@ async function commandCompile(options) {
 }
 
 async function commandDeploy(options) {
+  const profile = bscNetworkProfileFromOptions(options);
   if (!parseBoolean(options.broadcast)) {
     throw new Error(
-      "deploy requires --broadcast true and --confirm-testnet taira_bsc_xor.",
+      `deploy requires --broadcast true and --confirm-network ${profile.confirmNetwork}.`,
     );
   }
-  if (options["confirm-testnet"] !== CONFIRMATION_TEXT) {
-    throw new Error(`deploy requires --confirm-testnet ${CONFIRMATION_TEXT}.`);
-  }
+  requireBscNetworkConfirmation(options, profile, "deploy");
   if (!options.verifier) {
     throw new Error("deploy requires --verifier <verifier-key.json>.");
   }
   const verifierMaterial = normalizeVerifierMaterial(
     await readJson(options.verifier),
+    profile,
   );
   if (verifierMaterial.fixtureShaped) {
     throw new Error(
@@ -2293,15 +3217,21 @@ async function commandDeploy(options) {
     process.env[privateKeyEnv],
     privateKeyEnv,
   );
-  const rpcUrl = normalizeBscRpcUrl(options["rpc-url"] ?? DEFAULT_BSC_RPC_URL, {
-    allowLocal: parseBoolean(options["allow-local-rpc"]),
-  });
+  const rpcUrl = normalizeBscRpcUrl(
+    options["rpc-url"] ?? defaultBscRpcUrl(profile),
+    {
+      allowLocal: parseBoolean(options["allow-local-rpc"]),
+    },
+  );
   const ethers = requireOptionalPackage("ethers");
-  const provider = new ethers.JsonRpcProvider(rpcUrl, 97);
+  const provider = new ethers.JsonRpcProvider(
+    rpcUrl,
+    BigInt(profile.chainIdHex),
+  );
   const network = await provider.getNetwork();
-  if (network.chainId !== 97n) {
+  if (network.chainId !== BigInt(profile.chainIdHex)) {
     throw new Error(
-      `BSC RPC must report chain id 97; received ${network.chainId}.`,
+      `BSC RPC must report ${profile.label} chain id ${profile.chainIdHex}; received ${network.chainId}.`,
     );
   }
   const wallet = new ethers.Wallet(privateKey, provider);
@@ -2327,7 +3257,7 @@ async function commandDeploy(options) {
     ethers,
     signer,
     artifacts.sourceBridge,
-    [BSC_TESTNET_NETWORK_ID_HEX, SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA],
+    [profile.networkIdHex, SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA],
   );
   const token = await deployContract(ethers, signer, artifacts.token, []);
   const routeIdHash = keccakTextHex(ROUTE_ID);
@@ -2340,7 +3270,7 @@ async function commandDeploy(options) {
     verifierMaterial.expectedVerifierKeyHash,
     BSC_EVM_GROTH16_BACKEND,
     SCCP_PROOF_FAMILY_STARK_FRI,
-    BSC_TESTNET_NETWORK_ID_HEX,
+    profile.networkIdHex,
     SCCP_DOMAIN_SORA,
     SCCP_DOMAIN_BSC,
     routeIdHash,
@@ -2374,8 +3304,14 @@ async function commandDeploy(options) {
     verifierCodeHash,
     verifierKeyHash: verifierMaterial.expectedVerifierKeyHash,
     readback,
+    bscNetwork: profile.key,
   });
-  const out = resolve(options.out ?? DEFAULT_EVIDENCE_OUT);
+  const out = resolve(options.out ?? defaultDeploymentEvidenceOut(profile));
+  assertBscCanonicalProductionOutputSafe(
+    out,
+    evidence,
+    "BSC deployment evidence",
+  );
   await writeJsonNoSecrets(out, {
     ...evidence,
     deploymentTransactions: {
@@ -2402,16 +3338,23 @@ async function commandDeploy(options) {
 }
 
 async function commandEvidence(options) {
+  const profile = bscNetworkProfileFromOptions(options);
   for (const key of ["token", "bridge", "source-bridge", "verifier"]) {
     if (!options[key]) {
       throw new Error(`evidence requires --${key} <address>.`);
     }
   }
-  const rpcUrl = normalizeBscRpcUrl(options["rpc-url"] ?? DEFAULT_BSC_RPC_URL, {
-    allowLocal: parseBoolean(options["allow-local-rpc"]),
-  });
+  const rpcUrl = normalizeBscRpcUrl(
+    options["rpc-url"] ?? defaultBscRpcUrl(profile),
+    {
+      allowLocal: parseBoolean(options["allow-local-rpc"]),
+    },
+  );
   const ethers = requireOptionalPackage("ethers");
-  const provider = new ethers.JsonRpcProvider(rpcUrl, 97);
+  const provider = new ethers.JsonRpcProvider(
+    rpcUrl,
+    BigInt(profile.chainIdHex),
+  );
   const readback = await fetchReadback(ethers, provider, {
     tokenAddress: options.token,
     bridgeAddress: options.bridge,
@@ -2426,8 +3369,14 @@ async function commandEvidence(options) {
     verifierCodeHash: readback.bridgeVerifierCodeHash,
     verifierKeyHash: readback.bridgeVerifierKeyHash,
     readback,
+    bscNetwork: profile.key,
   });
-  const out = resolve(options.out ?? DEFAULT_EVIDENCE_OUT);
+  const out = resolve(options.out ?? defaultDeploymentEvidenceOut(profile));
+  assertBscCanonicalProductionOutputSafe(
+    out,
+    evidence,
+    "BSC deployment evidence",
+  );
   await writeJsonNoSecrets(out, evidence);
   return {
     ok: true,
@@ -2449,11 +3398,16 @@ async function commandRouteConfig(options) {
         options,
       )
     : buildBscTairaXorRouteConfigToml(manifest, options);
-  const out = await writeTextNoSecrets(
+  const outPath =
     options.out ??
-      (baseConfigPath
-        ? DEFAULT_ROUTE_FULL_CONFIG_OUT
-        : DEFAULT_ROUTE_CONFIG_OUT),
+    (baseConfigPath ? DEFAULT_ROUTE_FULL_CONFIG_OUT : DEFAULT_ROUTE_CONFIG_OUT);
+  assertBscCanonicalProductionOutputSafe(
+    outPath,
+    manifest,
+    "BSC route config manifest",
+  );
+  const out = await writeTextNoSecrets(
+    outPath,
     toml,
     0o644,
   );
@@ -2473,6 +3427,52 @@ async function commandRouteConfig(options) {
     nextStep: baseConfigPath
       ? "Deploy this merged TAIRA node config on every public validator and restart Torii/Iroha before rerunning the BSC SCCP preflight without --manifest-file."
       : "Merge this TOML into the TAIRA node config and redeploy/restart Torii before rerunning the BSC SCCP preflight.",
+  };
+}
+
+async function commandNativeProverBundle(options) {
+  const result = await buildBscNativeEvmProverBundleFromArtifacts(options);
+  const out = resolve(options.out ?? DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT);
+  assertBscCanonicalProductionOutputSafe(
+    out,
+    result.bundle,
+    "BSC native EVM prover bundle",
+  );
+  await writeJsonNoSecrets(out, result.bundle);
+  let attachedRouteManifestOut = null;
+  if (options["attach-route-manifest-out"]) {
+    if (!result.attachedRouteManifest) {
+      throw new Error(
+        "--attach-route-manifest-out requires --route-manifest input.",
+      );
+    }
+    attachedRouteManifestOut = resolve(options["attach-route-manifest-out"]);
+    assertBscCanonicalProductionOutputSafe(
+      attachedRouteManifestOut,
+      result.attachedRouteManifest,
+      "BSC route manifest",
+    );
+    await writeJsonNoSecrets(
+      attachedRouteManifestOut,
+      result.attachedRouteManifest,
+    );
+  }
+  return {
+    ok: true,
+    wrote: out,
+    attachedRouteManifest: attachedRouteManifestOut,
+    routeSource: result.routeSource.kind,
+    artifactRoot: result.artifactRoot,
+    routeId: ROUTE_ID,
+    assetKey: ASSET_KEY,
+    bundleId: result.descriptor.bundleId,
+    destinationBindingHash: result.descriptor.destinationBindingHash,
+    proofArtifactHash: result.descriptor.proofArtifactHash,
+    provingKeyHash: result.descriptor.provingKeyHash,
+    verifierKeyHash: result.descriptor.verifierKeyHash,
+    verifiedSdks: result.verifiedSdks,
+    nextStep:
+      "Attach this nativeEvmProverBundle to the production BSC route manifest, regenerate the TAIRA route config, redeploy every public peer, then rerun the BSC SCCP production gates.",
   };
 }
 
@@ -2537,6 +3537,8 @@ export async function main(argv = process.argv.slice(2)) {
       return commandDeploy(options);
     case "evidence":
       return commandEvidence(options);
+    case "native-prover-bundle":
+      return commandNativeProverBundle(options);
     case "route-config":
       return commandRouteConfig(options);
     case "self-test":

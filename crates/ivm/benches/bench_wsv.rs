@@ -1,11 +1,21 @@
 //! Benchmarks for world state view (WSV) operations.
-use std::{convert::TryFrom, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    convert::TryFrom,
+    fs,
+    hint::black_box,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use criterion::Criterion;
 use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
+    DurableStateSnapshot, MockWorldStateView, WsvHost,
+    host::IVMHost,
     mock_wsv::{AccountId, AssetDefinitionId, DomainId, Mintable, Name},
     parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult},
 };
@@ -222,9 +232,51 @@ fn bench_massive_wsv(c: &mut Criterion) {
     });
 }
 
+fn mock_wsv_host_with_persisted_state(entries: usize, value_bytes: usize) -> (WsvHost, PathBuf) {
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "ivm_bench_wsv_checkpoint_{}_{}",
+        entries,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&tmp_dir).expect("create benchmark state directory");
+    let persist_path = tmp_dir.join("state.json");
+    let mut wsv = MockWorldStateView::with_state_store(persist_path)
+        .expect("create persisted mock WSV state store");
+    let mut state = BTreeMap::new();
+    for idx in 0..entries {
+        state.insert(format!("bench/{idx:06}"), vec![idx as u8; value_bytes]);
+    }
+    wsv.sc_restore(&DurableStateSnapshot::new(state))
+        .expect("seed persisted mock WSV state");
+    let caller = AccountId::new(KeyPair::random().public_key().clone());
+    (
+        WsvHost::new_with_subject(wsv, caller, HashMap::new()),
+        tmp_dir,
+    )
+}
+
+fn bench_mock_wsv_checkpoint_restore(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mock_wsv_checkpoint_restore");
+    for entries in [128_usize, 2_048] {
+        group.bench_function(format!("persisted_entries_{entries}"), |b| {
+            let (mut host, tmp_dir) = mock_wsv_host_with_persisted_state(entries, 128);
+            b.iter(|| {
+                let snapshot = IVMHost::checkpoint(&host).expect("checkpoint mock WSV host");
+                black_box(IVMHost::restore(&mut host, snapshot.as_ref()));
+            });
+            let _ = fs::remove_dir_all(tmp_dir);
+        });
+    }
+    group.finish();
+}
+
 /// Entry point for the benchmark binary.
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_massive_wsv(&mut c);
+    bench_mock_wsv_checkpoint_restore(&mut c);
     c.final_summary();
 }

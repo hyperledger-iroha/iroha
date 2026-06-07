@@ -5774,7 +5774,6 @@ impl Actor {
             && slot.view == request.view
         {
             slot.repair_state.pending_requesters.insert(peer.clone());
-            slot.sync_compat_fields();
             stashed_on_frontier_slot = true;
         }
         if !stashed_on_frontier_slot && self.should_stash_pending_block_body_request(request.height)

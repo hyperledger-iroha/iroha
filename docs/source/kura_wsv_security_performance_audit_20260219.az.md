@@ -160,8 +160,8 @@ Bu audit aşağıdakıları əhatə edirdi:
 ### İstehsal WSV
 
 - Mövcud əhatə dairəsi:
-  - mübahisənin geri qaytarılması davranışı: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - səviyyəli arxa hissə ətrafında kilid sifarişi təhlükəsizliyi: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - mübahisənin geri qaytarılması davranışı: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - səviyyəli arxa hissə ətrafında kilid sifarişi təhlükəsizliyi: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Boşluqlar:
   - ağır dünya öhdəlikləri altında maksimum məqbul öhdəlik saxlama müddətini təsdiqləyən kəmiyyət mübahisəsi testi yoxdur
   - DA kursorunun irəliləmə invariantları gözlənilmədən pozularsa, paniksiz işləmə üçün reqressiya testi yoxdur
@@ -222,7 +222,7 @@ Bu audit aşağıdakıları əhatə edirdi:
 ## Təklif olunan Test Əlavələri1. `kura_writer_io_failures_do_not_panic` (vahid, nasaz inyeksiya)
 2. `kura_budget_check_scales_with_pending_depth` (performans reqressiyası)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (inteqrasiya/mükəmməl)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (mübahisəli reqressiya)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (mübahisəli reqressiya)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (davamlılıq)
 6. `mock_wsv_admin_alias_requires_permissions` (təhlükəsizlik reqressiyası)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS mühafizəsi)

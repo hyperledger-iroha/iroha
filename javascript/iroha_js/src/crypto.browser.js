@@ -19,6 +19,32 @@ export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
 export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
 export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
 export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
+const PRIVACY_NORITO_HEADER_BYTES = 40;
+const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
+const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
+const PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
+const PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
+const PRIVACY_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const PRIVACY_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
+const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
+const KAGEMUSHA_ZK1_MAGIC = Buffer.from([0x5a, 0x4b, 0x31, 0x00]);
+const KAGEMUSHA_ZK1_TLV_CID1 = Buffer.from("CID1", "ascii");
+const KAGEMUSHA_ZK1_TLV_IPAK = Buffer.from("IPAK", "ascii");
+const KAGEMUSHA_ZK1_TLV_H2VK = Buffer.from("H2VK", "ascii");
+const PRIVACY_CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ PRIVACY_CRC64_REFLECTED_POLY
+          : crc >> 1n;
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
 
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
@@ -318,6 +344,7 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
@@ -398,6 +425,322 @@ export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProo
     outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
     outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
+}
+
+export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+  verifierOpeningLen,
+) {
+  return [2, 4, 8, 16, 32, 64, 128].includes(verifierOpeningLen);
+}
+
+export function kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+  verifierOpeningLen,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  return kagemushaRecursiveSpendLineageKeyArtifacts(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    verifierOpeningLen,
+    lineageVerifierKeyBackend,
+    lineageVerifierKey,
+    lineageProvingKeyArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+  verifierOpeningLen,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  return kagemushaRecursiveSpendLineageKeyArtifacts(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    verifierOpeningLen,
+    lineageVerifierKeyBackend,
+    lineageVerifierKey,
+    lineageProvingKeyArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendLineageKeyArtifacts(
+  proofCircuitId,
+  verifierOpeningLen,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  return validateKagemushaRecursiveSpendLineageKeyArtifacts({
+    proofCircuitId,
+    verifierOpeningLen,
+    lineageVerifierKeyBackend,
+    lineageVerifierKey: kagemushaLineageKeyArtifactBytes(
+      lineageVerifierKey,
+      "lineage_verifier_key",
+    ),
+    lineageProvingKeyArchive: kagemushaLineageKeyArtifactBytes(
+      lineageProvingKeyArchive,
+      "lineage_proving_key_archive",
+    ),
+  });
+}
+
+export function validateKagemushaRecursiveSpendLineageKeyArtifacts(artifacts) {
+  if (artifacts === undefined || artifacts === null || typeof artifacts !== "object") {
+    throw new TypeError("lineage_key_artifacts");
+  }
+  if (
+    artifacts.proofCircuitId !==
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 &&
+    artifacts.proofCircuitId !==
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  ) {
+    throw new TypeError("proof_circuit_id");
+  }
+  if (!isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+    artifacts.verifierOpeningLen,
+  )) {
+    throw new TypeError("verifier_opening_len");
+  }
+  const lineageVerifierKey = kagemushaLineageKeyArtifactBytes(
+    artifacts.lineageVerifierKey,
+    "lineage_verifier_key",
+  );
+  const lineageProvingKeyArchive = kagemushaLineageKeyArtifactBytes(
+    artifacts.lineageProvingKeyArchive,
+    "lineage_proving_key_archive",
+  );
+  if (
+    artifacts.lineageVerifierKeyBackend !== KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND ||
+    lineageVerifierKey.length === 0
+  ) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  if (lineageProvingKeyArchive.length === 0) {
+    throw new TypeError("lineage_proving_key_archive");
+  }
+  validateKagemushaRecursiveSpendLineageKeyArtifactPackageBinding(
+    artifacts.proofCircuitId,
+    artifacts.lineageVerifierKeyBackend,
+    lineageVerifierKey,
+    lineageProvingKeyArchive,
+  );
+  const storedLineageVerifierKey = Buffer.from(lineageVerifierKey);
+  const storedLineageProvingKeyArchive = Buffer.from(lineageProvingKeyArchive);
+  return Object.freeze({
+    proofCircuitId: artifacts.proofCircuitId,
+    verifierOpeningLen: artifacts.verifierOpeningLen,
+    lineageVerifierKeyBackend: artifacts.lineageVerifierKeyBackend,
+    get lineageVerifierKey() {
+      return Buffer.from(storedLineageVerifierKey);
+    },
+    get lineageProvingKeyArchive() {
+      return Buffer.from(storedLineageProvingKeyArchive);
+    },
+    isInitArtifact:
+      artifacts.proofCircuitId ===
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    isAppendArtifact:
+      artifacts.proofCircuitId ===
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  });
+}
+
+function kagemushaLineageKeyArtifactBytes(value, name) {
+  if (value === undefined || value === null) {
+    return Buffer.alloc(0);
+  }
+  if (Buffer.isBuffer(value)) {
+    return Buffer.from(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(value));
+  }
+  throw new TypeError(name);
+}
+
+function validateKagemushaRecursiveSpendLineageKeyArtifactPackageBinding(
+  proofCircuitId,
+  lineageVerifierKeyBackend,
+  lineageVerifierKey,
+  lineageProvingKeyArchive,
+) {
+  const verifierCircuitId = kagemushaLineageVerifierKeyEnvelopeCircuitId(
+    lineageVerifierKey,
+  );
+  if (verifierCircuitId !== proofCircuitId) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  const archivePayload = kagemushaLineageProvingKeyArchivePayload(
+    lineageProvingKeyArchive,
+  );
+  const circuitIdBytes = Buffer.from(proofCircuitId, "utf8");
+  const verifierKeyCommitment = kagemushaVerifyingKeyCommitment(
+    lineageVerifierKeyBackend,
+    lineageVerifierKey,
+  );
+  if (
+    !archivePayload.includes(circuitIdBytes) ||
+    !archivePayload.includes(verifierKeyCommitment)
+  ) {
+    throw new TypeError("lineage_proving_key_archive");
+  }
+}
+
+function kagemushaLineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey) {
+  if (
+    lineageVerifierKey.length < KAGEMUSHA_ZK1_MAGIC.length ||
+    !lineageVerifierKey.subarray(0, KAGEMUSHA_ZK1_MAGIC.length).equals(KAGEMUSHA_ZK1_MAGIC)
+  ) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  let offset = KAGEMUSHA_ZK1_MAGIC.length;
+  let circuitId = null;
+  let sawIpaK = false;
+  let sawH2Vk = false;
+  while (offset < lineageVerifierKey.length) {
+    if (offset + 8 > lineageVerifierKey.length) {
+      throw new TypeError("lineage_verifier_key");
+    }
+    const tag = lineageVerifierKey.subarray(offset, offset + 4);
+    const payloadLength = lineageVerifierKey.readUInt32LE(offset + 4);
+    const payloadStart = offset + 8;
+    const payloadEnd = payloadStart + payloadLength;
+    if (payloadEnd > lineageVerifierKey.length) {
+      throw new TypeError("lineage_verifier_key");
+    }
+    const payload = lineageVerifierKey.subarray(payloadStart, payloadEnd);
+    if (tag.equals(KAGEMUSHA_ZK1_TLV_CID1)) {
+      if (circuitId !== null || payload.some((byte) => byte < 0x20 || byte > 0x7e)) {
+        throw new TypeError("lineage_verifier_key");
+      }
+      circuitId = payload.toString("utf8").trim();
+      if (circuitId.length === 0) {
+        throw new TypeError("lineage_verifier_key");
+      }
+    } else if (tag.equals(KAGEMUSHA_ZK1_TLV_IPAK)) {
+      if (sawIpaK || payload.length !== 4) {
+        throw new TypeError("lineage_verifier_key");
+      }
+      sawIpaK = true;
+    } else if (tag.equals(KAGEMUSHA_ZK1_TLV_H2VK)) {
+      if (sawH2Vk || payload.length === 0) {
+        throw new TypeError("lineage_verifier_key");
+      }
+      sawH2Vk = true;
+    } else {
+      throw new TypeError("lineage_verifier_key");
+    }
+    offset = payloadEnd;
+  }
+  if (circuitId === null || !sawIpaK || !sawH2Vk) {
+    throw new TypeError("lineage_verifier_key");
+  }
+  return circuitId;
+}
+
+function kagemushaLineageProvingKeyArchivePayload(lineageProvingKeyArchive) {
+  try {
+    return assertKagemushaNoritoArchive(
+      lineageProvingKeyArchive,
+      "lineage_proving_key_archive",
+    );
+  } catch {
+    throw new TypeError("lineage_proving_key_archive");
+  }
+}
+
+function kagemushaVerifyingKeyCommitment(lineageVerifierKeyBackend, lineageVerifierKey) {
+  const backend = Buffer.from(lineageVerifierKeyBackend, "utf8");
+  const backendLength = Buffer.alloc(8);
+  backendLength.writeBigUInt64BE(BigInt(backend.length));
+  const verifierKeyLength = Buffer.alloc(8);
+  verifierKeyLength.writeBigUInt64BE(BigInt(lineageVerifierKey.length));
+  return Buffer.from(
+    sha256(
+      Buffer.concat([
+        Buffer.from("iroha:zk:v1:vk", "utf8"),
+        backendLength,
+        backend,
+        verifierKeyLength,
+        lineageVerifierKey,
+      ]),
+    ),
+  );
+}
+
+function assertKagemushaNoritoArchive(
+  output,
+  archiveName,
+  invalidMessage = `${archiveName} must be a valid Norito archive`,
+  emptyPayloadMessage = `${archiveName} must contain a non-empty Norito payload`,
+) {
+  const fail = () => {
+    throw new Error(invalidMessage);
+  };
+  if (output.length > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES) {
+    throw new Error(
+      `${archiveName} must not exceed ${KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES} bytes`,
+    );
+  }
+  if (output.length < PRIVACY_NORITO_HEADER_BYTES) {
+    fail();
+  }
+  if (!output.subarray(0, 4).equals(PRIVACY_NORITO_MAGIC)) {
+    fail();
+  }
+  if (output[4] !== 0 || output[5] !== 0 || output[22] !== 0) {
+    fail();
+  }
+  const flags = output[39];
+  if (
+    (flags & ~PRIVACY_NORITO_SUPPORTED_FLAGS_MASK) !== 0 ||
+    ((flags & PRIVACY_NORITO_FIELD_BITSET_FLAG) !== 0 &&
+      (flags & PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS) !==
+        PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS)
+  ) {
+    fail();
+  }
+  const payloadLengthBig = output.readBigUInt64LE(23);
+  if (payloadLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    fail();
+  }
+  const payloadLength = Number(payloadLengthBig);
+  if (payloadLength === 0) {
+    throw new Error(emptyPayloadMessage);
+  }
+  const minimumLength = PRIVACY_NORITO_HEADER_BYTES + payloadLength;
+  if (output.length < minimumLength) {
+    fail();
+  }
+  const paddingLength = output.length - minimumLength;
+  if (paddingLength > PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES) {
+    fail();
+  }
+  const padding = output.subarray(
+    PRIVACY_NORITO_HEADER_BYTES,
+    PRIVACY_NORITO_HEADER_BYTES + paddingLength,
+  );
+  if (padding.some((byte) => byte !== 0)) {
+    fail();
+  }
+  const payload = output.subarray(PRIVACY_NORITO_HEADER_BYTES + paddingLength);
+  if (privacyCrc64(payload) !== output.readBigUInt64LE(31)) {
+    fail();
+  }
+  return payload;
+}
+
+function privacyCrc64(payload) {
+  let crc = PRIVACY_CRC64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = PRIVACY_CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ PRIVACY_CRC64_MASK);
 }
 
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit() {
@@ -532,6 +875,10 @@ export function isKagemushaRecursiveSpendNativeAvailable() {
 }
 
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable() {
+  return false;
+}
+
+export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable() {
   return false;
 }
 

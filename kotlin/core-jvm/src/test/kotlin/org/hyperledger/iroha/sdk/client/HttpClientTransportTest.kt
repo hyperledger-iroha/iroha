@@ -333,6 +333,17 @@ class HttpClientTransportTest {
             "rotation key count drift" to { operationVectors ->
                 mutableObj(operationVectors, "evaluation_key_bundle")["rotation_key_count"] = 99L
             },
+            "missing full-bootstrap material fixture" to { operationVectors ->
+                operationVectors.remove("full_bootstrap_material")
+            },
+            "full-bootstrap verifier commitment drift" to { operationVectors ->
+                val material = mutableObj(operationVectors, "full_bootstrap_material")
+                material["vk_commitment_hex"] = string(material, "expected_statement_digest_hex")
+            },
+            "noncanonical full-bootstrap material digest" to { operationVectors ->
+                val material = mutableObj(operationVectors, "full_bootstrap_material")
+                material["expected_material_digest_hex"] = string(material, "expected_material_digest_hex").uppercase()
+            },
         )) {
             val operationVectors = mutableObj(loadSharedBfvFixture(), "operation_vectors")
             mutate(operationVectors)
@@ -2523,6 +2534,7 @@ class HttpClientTransportTest {
                 "bootstrap round refresh material must be domain separated"
             }
         }
+        assertBfvFullBootstrapMaterialFixture(operationVectors)
         val bootstrapRefreshVectors = listOfMaps(operationVectors, "bootstrap_refresh_vectors")
         assert(bootstrapRefreshVectors.isNotEmpty()) { "bootstrap refresh vectors must not be empty" }
         for (vector in bootstrapRefreshVectors) {
@@ -2610,6 +2622,56 @@ class HttpClientTransportTest {
         assertEquals(publicDegree, long(packedRotateScheduleComponents, "coefficient_count"), "packed RotateLeft schedule coefficient count")
         assertBfvComponentDigest("packed RotateLeft schedule c0", string(packedRotateScheduleComponents, "c0_sha256"), componentDigests)
         assertBfvComponentDigest("packed RotateLeft schedule c1", string(packedRotateScheduleComponents, "c1_sha256"), componentDigests)
+    }
+
+    private fun assertBfvFullBootstrapMaterialFixture(operationVectors: Map<String, Any?>) {
+        val material = obj(operationVectors, "full_bootstrap_material")
+        assertEquals("iroha_bfv_full_bootstrap_v1", string(material, "circuit_id"), "full-bootstrap circuit id")
+        assertEquals(1L, long(material, "max_bootstrap_depth"), "full-bootstrap max depth")
+
+        val digestFields = listOf(
+            "parameter_digest_hex",
+            "rns_modulus_chain_digest_hex",
+            "key_switch_decomposition_chain_digest_hex",
+            "coefficient_to_slot_key_digest_hex",
+            "slot_to_coefficient_key_digest_hex",
+            "blind_rotation_key_digest_hex",
+            "sample_extraction_key_digest_hex",
+            "accumulator_digest_hex",
+            "proof_public_input_schema_digest_hex",
+            "prover_key_digest_hex",
+            "verifier_key_digest_hex",
+            "vk_commitment_hex",
+            "expected_material_digest_hex",
+            "expected_statement_digest_hex",
+        )
+        val digestValues = digestFields.map { field ->
+            val value = string(material, field)
+            assertBfvLowerDigest("full-bootstrap material $field", value)
+            value
+        }
+        assertEquals(
+            string(obj(operationVectors, "rns_modulus_chain"), "expected_digest_hex"),
+            string(material, "rns_modulus_chain_digest_hex"),
+            "full-bootstrap RNS digest",
+        )
+        assertEquals(
+            string(material, "verifier_key_digest_hex"),
+            string(material, "vk_commitment_hex"),
+            "full-bootstrap verifier-key commitment",
+        )
+        val uniqueDigestValues = digestFields.zip(digestValues)
+            .filter { (field, _) -> field != "vk_commitment_hex" }
+            .map { (_, value) -> value }
+        assertEquals(
+            uniqueDigestValues.size,
+            uniqueDigestValues.toSet().size,
+            "full-bootstrap material digest roles must be unique",
+        )
+        assertTrue(
+            string(material, "expected_material_digest_hex") != string(material, "expected_statement_digest_hex"),
+            "full-bootstrap material and statement digests must differ",
+        )
     }
 
     private fun assertBfvRnsModulusChainFixture(operationVectors: Map<String, Any?>, publicDegree: Long) {
