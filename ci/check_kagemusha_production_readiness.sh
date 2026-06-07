@@ -1805,6 +1805,28 @@ if mode == "--negative-control-android-device-lab-slot-files-direct-root-shape":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-slot-files-direct-secret-paths":
+    run_negative_control(
+        "Android device-lab slot file discovery direct secret-path gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if SECRET_RE.search(str(slot_path)):\n        return set()\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-slot-files-direct-ancestor-symlink":
+    run_negative_control(
+        "Android device-lab slot file discovery ancestor symlink gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if validate_no_symlink_ancestors(slot_path, "slot ancestor directory"):\n        return set()\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-slot-files-direct-symlink-directory":
     run_negative_control(
         "Android device-lab slot file discovery symlink directory gate",

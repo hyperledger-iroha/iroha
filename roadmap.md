@@ -136,10 +136,11 @@ and completed history lives in [`status.md`](./status.md).
 		  attestation, handoff, wallet, required-artifact, signed-evidence, and
 		  production-metadata validator helpers, and repeats that
 		  preflight before direct SHA-256 manifest rewrites are also now guarded.
-		  Direct slot-file discovery returns no artifacts for missing,
-		  non-directory, symlinked slot roots, or symlinked artifact directories
-		  before traversal, and direct manifest verification rejects entries under
-		  symlinked artifact directories before hashing. The shared
+		  Direct slot-file discovery returns no artifacts for secret-looking slot
+		  paths, symlinked slot ancestors, missing roots, non-directory roots,
+		  symlinked slot roots, or symlinked artifact directories before traversal,
+		  and direct manifest verification rejects entries under symlinked artifact
+		  directories before hashing. The shared
 		  Android device-lab JSON loader rejects secret-looking direct file paths and
 		  symlinked ancestor directories before parsing direct metadata, attestation,
 		  handoff, wallet-integrity, or signed-evidence JSON. The D2D transcript is

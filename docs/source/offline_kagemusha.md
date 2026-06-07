@@ -315,9 +315,10 @@ reject secret-looking signed-evidence and manifest paths before creating output
 parents or writing files. Direct SHA-256 manifest parser and verifier helper
 calls reject secret-looking slot paths, symlinked slot roots, and symlinked slot
 ancestors before parsing `sha256sum.txt` or traversing slot artifacts. Direct
-slot-file discovery returns no artifacts for
-missing, non-directory, or symlinked slot roots before traversal, and skips
-symlinked artifact directories instead of discovering files through them. Direct
+slot-file discovery returns no artifacts for secret-looking slot paths,
+symlinked slot ancestors, missing roots, non-directory roots, or symlinked slot
+roots before traversal, and skips symlinked artifact directories instead of
+discovering files through them. Direct
 manifest verification rejects entries under symlinked artifact directories
 before reading or hashing bytes. Direct attestation, D2D handoff, wallet-integrity,
 required-artifact, signed-evidence, and production-metadata validator helper
