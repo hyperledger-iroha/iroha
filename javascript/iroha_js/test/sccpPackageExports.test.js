@@ -8,7 +8,6 @@ import {
   TonSccpSourceStateProver,
   buildEvmSccpBridgeProofSubmitPayload,
   buildSolanaSccpFullLightClientAuditProofRequests,
-  buildSubstrateSccpSubmission,
   buildTonSccpFullLightClientAuditProofRequests,
   buildTronSccpBridgeProofSubmitPayload,
   canonicalSccpMessageProofBundleBytes,
@@ -170,10 +169,7 @@ test("published TypeScript declarations expose SCCP domain id inputs", () => {
     declarationInterface(declarations, "BscSccpReceiptProofInput"),
     ["sourceDomain", "source_domain"],
   );
-  assertDomainInputFields(
-    declarationInterface(declarations, "SubstrateSccpProofRequestInput"),
-    ["sourceDomain", "source_domain"],
-  );
+  assert.doesNotMatch(declarations, /export interface SubstrateSccpProofRequestInput/u);
 
   const verifierVkHash = declarationFunction(declarations, "sccpSourceAdapterVerifierVkHash");
   assert.match(verifierVkHash, /input: SccpDomainIdInput \| \{/u);
@@ -216,7 +212,7 @@ test("published TypeScript declarations expose SCCP v1 version inputs", () => {
   assertVersionInputFields(declarationInterface(declarations, "TonValidatorSignatureProofInput"));
   assertVersionInputFields(declarationInterface(declarations, "EthBeaconSyncCommitteeProofInput"));
   assertVersionInputFields(declarationInterface(declarations, "BscValidatorStorageProofInput"));
-  assertVersionInputFields(declarationInterface(declarations, "SubstrateGrandpaJustificationProofInput"));
+  assert.doesNotMatch(declarations, /export interface SubstrateGrandpaJustificationProofInput/u);
   assertVersionInputFields(declarationInterface(declarations, "TronSolidBlockMessageInput"));
   assertVersionInputFields(declarationInterface(declarations, "TronWitnessSealInput"));
   assertVersionInputFields(declarationInterface(declarations, "SccpMessageTransparentPublicInputsInput"));
@@ -299,11 +295,22 @@ test("published package root exports SCCP destination binding helpers", () => {
   assert.equal(typeof SolanaSccpSourceStateProver, "function");
   assert.equal(typeof TonSccpSourceStateProver, "function");
   assert.equal(typeof buildSolanaSccpFullLightClientAuditProofRequests, "function");
-  assert.equal(typeof buildSubstrateSccpSubmission, "function");
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequests, "function");
   assert.equal(typeof buildEvmSccpBridgeProofSubmitPayload, "function");
   assert.equal(typeof buildTronSccpBridgeProofSubmitPayload, "function");
   assert.equal(typeof canonicalSccpPayloadEnvelopeBytes, "function");
   assert.equal(typeof canonicalSccpMerkleProofBytes, "function");
   assert.equal(typeof canonicalSccpMessageProofBundleBytes, "function");
+  for (const name of [
+    "SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1",
+    "SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1",
+    "SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1",
+    "buildSubstrateSccpProofRequest",
+    "buildSubstrateSccpSubmission",
+    "wrapSubstrateSccpProofResult",
+    "SubstrateSccpProver",
+  ]) {
+    assert.equal(name in rootExports, false);
+    assert.equal(name in sccpExports, false);
+  }
 });

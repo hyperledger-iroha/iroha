@@ -501,7 +501,7 @@ pub async fn enforce_operator_access(
     .into_response()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::sync::Arc;
 

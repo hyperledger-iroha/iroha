@@ -39,27 +39,32 @@ and completed history lives in [`status.md`](./status.md).
   must not advertise SORA2, SORA Kusama, SORA Polkadot, or generic
   Substrate/Polkadot lanes while they remain outside launch scope. Optional
   runtime SCALE capability fields must also stay absent from public discovery
-  until that launch scope is explicitly re-opened, and the direct Torii runtime
-  SCALE export path must reject unsupported launch domains even when the cached
-  SORA-origin bundle carries valid Nexus finality. Core SCCP local-admission
-  submission packaging must also require the same supported-domain inventory, so
-  complete Substrate-family source material and source-adapter deployment
-  evidence cannot emit a SORA `local_admission` package while the lane is
-  unsupported. Torii typed proof artifact, normalized proof job, and bridge proof
-  conversion surfaces must also reject unsupported launch domains even when
-  allow-unready diagnostics are enabled, so diagnostic Substrate-family bundles
-  cannot be repackaged as production proof outputs. Core source-chain proof
-  production verifier APIs must also require a supported launch remote domain, so
-  complete Substrate-family source material and matching source-adapter
-  deployment evidence remains diagnostic-only and cannot be extracted through a
-  direct `*_production*` verifier while the launch scope is closed. Those
-  generic production source-proof verifier APIs must also remain inbound-only:
-  remote -> remote source-adapter proofs may stay structurally inspectable for
-  future target-specific profiles, but they cannot be extracted as production
-  proofs unless the target is SORA. Torii configured all-lanes launch readiness
-  must also iterate only that supported-domain set, so Substrate-family
-  diagnostic records cannot satisfy or block production launch checks while they
-  remain out of scope.
+  until that launch scope is explicitly re-opened, public SCCP proof manifest
+  helpers must return no Substrate-family manifests, native-recursive package
+  tests must cover only supported public manifests while Substrate-family
+  package attempts stop at the absent-manifest boundary, and Torii
+  configured-launch gates must use the supported launch-domain set instead of the full diagnostic
+  domain list. The direct Torii runtime SCALE export path must reject
+  unsupported launch domains even when the cached SORA-origin bundle carries
+  valid Nexus finality. Core SCCP local-admission submission packaging must also
+  require the same supported-domain inventory, so complete Substrate-family
+  source material and source-adapter deployment evidence cannot emit a SORA
+  `local_admission` package while the lane is unsupported. Torii typed proof
+  artifact, normalized proof job, and bridge proof conversion surfaces must also
+  reject unsupported launch domains even when allow-unready diagnostics are
+  enabled, so diagnostic Substrate-family bundles cannot be repackaged as
+  production proof outputs. Core source-chain proof production verifier APIs
+  must also require a supported launch remote domain, so complete
+  Substrate-family source material and matching source-adapter deployment
+  evidence remains diagnostic-only and cannot be extracted through a direct
+  `*_production*` verifier while the launch scope is closed. Those generic
+  production source-proof verifier APIs must also remain inbound-only: remote ->
+  remote source-adapter proofs may stay structurally inspectable for future
+  target-specific profiles, but they cannot be extracted as production proofs
+  unless the target is SORA. Torii configured all-lanes launch readiness must
+  also iterate only that supported-domain set, so Substrate-family diagnostic
+  records cannot satisfy or block production launch checks while they remain out
+  of scope.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
@@ -614,9 +619,28 @@ and completed history lives in [`status.md`](./status.md).
   the same workload set. Caller-scoped account reads now also require canonical
   request signatures or witnesses for private dataspace visibility, so bare
   `X-Iroha-Account` headers no longer create caller identity, and the Torii
-  library suite is green after aligning stale SCCP, SoraFS, ISO20022, and ZK
-  fixtures with current production admission rules. The
-  `iroha_cli --all-targets` strict clippy gate now
+	  library suite is green after aligning stale SCCP, SoraFS, ISO20022, and ZK
+	  fixtures with current production admission rules. Torii API-token-gated
+	  Sumeragi/SCCP/bridge endpoints now also emit bounded endpoint/token-state
+	  telemetry counters without exporting raw token material, and Torii ZK prover
+	  report list/count/bulk-delete filters now reject malformed `has_tag` values
+	  unless they are exactly four printable ASCII ZK1 TLV tag characters. Default
+	  Torii builds now omit disabled telemetry, schema, profiling, and ZK
+	  batch-verify routes instead of exposing placeholder `501 Not Implemented`
+	  handlers, and account-alias resolution returns a documented `409 Conflict`
+	  for stored non-account alias-service targets instead of a `501` fallback.
+	  Routed-query unsupported-shape responses now also use `409 Conflict`, while
+	  no-`app_api` inbound Torii proxy read/fanout/hosted-HTTP requests report
+	  `503 route_unavailable`; the feature-minimal connect corridor now passes
+	  check, library tests, and all-target strict clippy with app-only proof,
+	  hosted-proxy, integration-test, binary, and bench targets gated behind
+	  their owning features. SoraFS proof streaming rejects reserved
+	  `proof_kind=pdp` as `400 Bad Request` until the SF-13 provider protocol
+	  lands. The code-only placeholder/TODO sweep now leaves only intentional
+	  negative tests, fail-closed placeholder-material guards, fallback skeleton
+	  naming, manifest-derived source rendering, and telemetry peer compatibility
+	  handling. The
+	  `iroha_cli --all-targets` strict clippy gate now
   covers the governance-instruction, IVM contract deploy, and Taikai helper
   targets with checked length/time arithmetic in the previously failing paths.
   The `iroha_crypto --all-targets` strict clippy gate is also green, covering
@@ -741,6 +765,16 @@ and completed history lives in [`status.md`](./status.md).
   handshake `Result` path; embedded `irohad` Soracloud runtime model-host
   heartbeat and Inrou host advert provenance signing now shares a fallible
   `Signature::try_new` helper with contextual `eyre` errors;
+  `QueryRequestWithAuthority` now exposes `try_sign` for
+  `SignatureOf::try_new` failures, and the CLI JSON-stdin and
+  cursor-continuation query paths use it to return contextual command errors
+  instead of relying on the infallible compatibility wrapper;
+  transaction builders, multisig signature bundles, and sealed transaction
+  commitments now route through fallible `SignatureOf::try_new` APIs while
+  retaining compatibility wrappers for existing callers;
+  local Sumeragi VRF material derivation plus local VRF commit/reveal metadata
+  signing now use `Signature::try_new` and propagate contextual `eyre` errors
+  through the emission `Result` path;
   GOST random scalar sampling and per-signature extra entropy now also use
   checked OS fills, while both BLS backends derive random keys from checked OS
   seed material and the default w3f backend seeds its key-splitting/signing RNGs
@@ -2471,8 +2505,10 @@ and completed history lives in [`status.md`](./status.md).
   commit-artifact GST-only remaining gate,
   commit-certificate exact-source committed-delivery completion,
   commit-certificate GST preservation,
+  commit-certificate GST-only remaining gate,
   commit-view exact-source committed-delivery completion,
   commit-view GST preservation,
+  commit-view GST-only remaining gate,
   finality-latch exact-source committed-delivery completion,
   finality-latch GST preservation,
   finality-latch GST-only remaining gate,
@@ -2482,10 +2518,25 @@ and completed history lives in [`status.md`](./status.md).
   run-level prepare-quorum commit gating, commit-certificate evidence stability,
   commit-certificate vote/stake traceability,
   live stake-accounting traceability,
+  live stake roster-budget boundedness,
   honest commit-support preservation,
   live vote/stake quorum preservation,
   RBC finality evidence preservation,
   RBC progress-state evidence causality,
+  RBC partial-progress counter causality,
+  RBC corrupted digest invalidation,
+  RBC ready-quorum deliver-gate availability,
+  RBC delivered-without-finality certificate absence,
+  RBC delivered finality commit-vote source,
+  RBC delivered finality committed-delivery completion,
+  RBC delivered finality current-view binding,
+  RBC delivered finality GST-only remaining gate,
+  RBC delivered finality commit-certificate witness installation,
+  RBC delivered finality commit-certificate witness-change matching,
+  RBC delivered finality commit-view witness-change matching,
+  RBC delivered finality live commit-gate crossing,
+  RBC delivered finality post-commit progress quiescence,
+  RBC delivered finality certified source-stack matching,
   post-finality progress-action quiescence,
   honest/fault roster-budgeted vote counters, RBC delivery stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
@@ -2905,12 +2956,20 @@ and completed history lives in [`status.md`](./status.md).
 - Complete the first-release Offline Bearer Cash pilot over the ZK note and
   nullifier engine. Swift, Kotlin, and Java Android now expose the Bearer Cash
   v1 wallet, note, receive-request, payment-token, ACK, text-codec, and policy
-  names; QR/NFC/Nearby app payloads use only the
-  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
-  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
-  QR/stream payload limits, and Android one-use-key pool sizing. Torii no
-  longer carries legacy offline transfer/revocation compatibility routes or
-  MCP aliases.
+	  names; QR/NFC/Nearby app payloads use only the
+	  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
+	  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
+	  QR/stream payload limits, and Android one-use-key pool sizing. Torii no
+	  longer publishes the legacy offline transfer/revocation HTTP compatibility
+	  routes or the v1 redeem/audit issuer-unavailable stubs, and the versioned
+	  Offline V2 route surface now exposes readiness, key refill, note issue, note
+	  redeem, and audit handlers under `/v1/offline/v2/*`. Governance council
+	  persist/replace/derive-vrf mutation helpers are no longer advertised in
+	  default Torii builds unless `gov_vrf` is compiled, avoiding mounted
+	  not-implemented fallbacks in the production route/tool surface. The shared
+	  Offline V2 interop fixture now uses the chain-admissible key-certificate
+	  version directly, and Swift, Kotlin/JVM, and Java Android SDK constructors
+	  mirror that version for wallet-side fixture parity.
   Shared chain-side `OpenVerifyEnvelope` admission now requires exact active
   verifier-key commitment binding and canonical empty auxiliary bytes for
   generic `VerifyProof`, governance voting proofs, STARK shielded
@@ -5441,16 +5500,13 @@ operator-provided rollout bundles.
   defensive BOC/envelope byte getters; the same mobile SDKs can build the TON
   message-body submission input directly from a local `TonSccpProofResult`, so
   apps no longer need to manually copy proof-context hashes between proof
-  generation and wallet/liteserver packaging. JavaScript Substrate-family
-  runtime proof requests/results now use the same frozen envelope and defensive
-  byte getter contract, and the JavaScript package root now re-exports the
-  Substrate runtime proof backend id, request builder, and prover facade so
-  TypeScript portal imports match the packaged runtime surface. It now also
-  exposes Substrate-family `scale_call_v1` runtime-call
-  submission builders, and the Python, Swift, Kotlin, and Java Android SDKs
-  mirror the same `SccpBridge.submit_message_proof` argument order so
-  portal/mobile-generated proofs can be handed directly to chain submission
-  clients without node-side proof generation.
+  generation and wallet/liteserver packaging. Because SCCP launch support no
+  longer includes Substrate/Polkadot-family networks, the JavaScript, Python,
+  Swift, Kotlin, and Java Android SDKs no longer expose Substrate runtime proof
+  builders, prover facades, or SCALE runtime-call submission helpers. Torii and
+  the SDK release checks now keep the production SCCP surface limited to ETH,
+  BSC, Solana, TON, and TRON until a future Substrate launch scope is designed
+  explicitly.
   The package root also re-exports the SCCP source-adapter OpenVerify circuit id, FastPQ
   parameter-set id, and verifier VK hash helper used by portal evidence
   checks, keeping declared TypeScript imports runtime-available.
@@ -6424,7 +6480,10 @@ replaying the same final validator or authority-set hash. ETH, BSC, Solana,
 TON, and Substrate-family signer-certificate preflight now also rejects
 non-canonical signer bitmap width/padding, empty signer sets, signature-count
 drift, claimed stake/weight drift, and sub-quorum certificates before
-transcript hashing. Solana source-adapter preflight also recomputes the
+transcript hashing. ETH source-adapter preflight also recomputes the active
+sync-committee root, signed sync-committee message hash, and aggregate
+signature transcript hash before deeper BLS verification. Solana
+source-adapter preflight also recomputes the
 vote-message hash from the adapter fields and finality-context hash before
 deeper account/finality verification. For BSC, use the new offline
 source-bridge evidence renderer, which now rejects BSC EVM-family template
@@ -6432,14 +6491,21 @@ component hashes before rendering governance TOML and also rejects
 non-canonical BSC source-adapter
 OpenVerify VK hashes, while BSC adapter structural admission rejects wrong
 version/domain envelopes and zero block, receipt-root, validator-set,
-commit-seal, or receipt-proof hashes before deeper verifier work. TON adapter
+commit-seal, or receipt-proof hashes, checks the Parlia epoch window, and
+recomputes the validator-set hash, commit-message hash, and commit-seal
+transcript hash before deeper verifier work. TON adapter
 structural admission likewise rejects wrong version/domain envelopes, wrong
 masterchain/basechain identifiers, zero chain sequence numbers, and zero
 masterchain, shard, config, validator-set, transaction, signature, or proof
-roots before BOC/config/signature verifiers run. TON and TRON transition-chain
-preflight now also rejects disconnected internal parent hashes between
-self-consistent transition steps before deeper Ed25519 or secp256k1 verifier
-work. Use the EVM live source and
+roots before BOC/config/signature verifiers run, and now recomputes the
+validator-set hash, masterchain block-message hash, and masterchain signatures
+transcript hash before deeper Ed25519 certificate verification. TON and TRON
+transition-chain preflight now also rejects disconnected internal parent hashes
+between self-consistent transition steps before deeper Ed25519 or secp256k1
+verifier work. TRON source-adapter preflight also recomputes the witness schedule hash
+from the declared witness roster, the solid-block message hash from adapter
+roots, and the witness-seal transcript hash before deeper witness-signature
+verification. Use the EVM live source and
 destination evidence collectors to query deployed source emitter, bridge, and
 verifier views, verify
 runtime code/key hashes, require the canonical RPC chain id, governed bridge
@@ -7713,12 +7779,26 @@ or ABI behavior.
 				  that declares the canonical circuit id, registered parameter/RNS/decomposition
 				  digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
 				  and empty-payload artifact attachments fail before the unavailable evaluator
-				  boundary. `RunSoracloudFheJob` now carries optional full-bootstrap artifacts,
-				  provenance signs them, and Core routes exact/bounded full-mode jobs through
-				  artifact-aware preflight before the current unavailable-evaluator error.
-				  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-				  Remaining work is the executable full BFV bootstrapping evaluator and the
-				  real prover/verifier artifacts and implementation.
+					  boundary. Coefficient-to-slot and slot-to-coefficient artifacts now carry
+					  typed diagonal packed-slot linear transforms, and crypto exposes exact and
+					  bounded deterministic evaluators for those transforms through the registered
+							  RNS paths. The blind-rotation artifact now carries canonical packed-slot
+							  rotation schedules bound to the governed accumulator artifact. The
+							  sample-extraction artifact now carries typed source/output ciphertext shape
+							  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
+							  bad-component-count, or out-of-range payloads. The accumulator artifact now
+							  carries typed packed-slot test-vector material and rejects opaque,
+							  wrong-slot-count, malformed, or all-zero accumulator payloads. Crypto now
+							  also exposes a domain-separated full-bootstrap execution proof statement
+							  digest that validates and binds the public key, governed bootstrap
+							  key/material, concrete artifact bundle, input/output ciphertexts, exact or
+							  bounded proof mode, and input/output bound metadata for the future verifier.
+							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts,
+							  provenance signs them, and Core routes exact/bounded full-mode jobs through
+							  artifact-aware preflight before the current unavailable-evaluator error.
+						  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
+						  Remaining work is the executable full BFV bootstrapping evaluator and the real
+						  prover/verifier artifacts and implementation.
 	  Soracloud transcript digesting now preflights the advertised BFV public-key
 	  shape before evaluation-key bundle validation, so malformed transcript key
 	  material is reported at the public-key boundary instead of being masked by

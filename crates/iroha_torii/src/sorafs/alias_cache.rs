@@ -9,6 +9,7 @@ pub use sorafs_manifest::alias_cache::{
 };
 use sorafs_manifest::pin_registry::AliasProofBundleV1;
 
+#[cfg(feature = "app_api")]
 use crate::sorafs::registry::{GovernanceSummary, ManifestLineageSummary};
 
 /// Grace window overrides layered atop the base alias cache policy.
@@ -179,6 +180,7 @@ fn push_reason_with_deadline(
 
 /// Evaluate cache enforcement decisions using successor and governance metadata.
 #[must_use]
+#[cfg(feature = "app_api")]
 pub(crate) fn evaluate_cache_decision(
     evaluation: &AliasProofEvaluation,
     lineage: &ManifestLineageSummary,
@@ -469,6 +471,7 @@ pub struct SuccessorAssessment {
 }
 
 impl SuccessorAssessment {
+    #[cfg(feature = "app_api")]
     fn from_lineage(lineage: &ManifestLineageSummary) -> Self {
         Self {
             exists: lineage.immediate_successor.is_some(),
@@ -500,6 +503,7 @@ pub struct GovernanceAssessment {
 }
 
 impl GovernanceAssessment {
+    #[cfg(feature = "app_api")]
     fn from_summary(summary: &GovernanceSummary) -> Self {
         let mut refs = Vec::new();
         for reference in &summary.references {
@@ -621,7 +625,7 @@ impl AliasProofEvaluationExt for AliasProofEvaluation {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_config::parameters::actual::SorafsAliasCachePolicy as ConfigPolicy;

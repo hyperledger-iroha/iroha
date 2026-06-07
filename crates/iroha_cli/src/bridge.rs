@@ -241,25 +241,13 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "sccp capabilities: local={}({}) proof_family={} runtime_family={} runtime_backend={} payloads={} codecs={} artifact={} runtime_message={} job={} manifests={} counterparties=[{}]",
+        "sccp capabilities: local={}({}) proof_family={} payloads={} codecs={} artifact={} job={} manifests={} counterparties=[{}]",
         capabilities.local_chain,
         capabilities.local_domain,
         capabilities.proof_family,
-        capabilities
-            .runtime_proof_family
-            .as_deref()
-            .unwrap_or("unavailable"),
-        capabilities
-            .runtime_verifier_backend
-            .as_deref()
-            .unwrap_or("unavailable"),
         payloads,
         codecs,
         capabilities.message_proof_path,
-        capabilities
-            .message_runtime_bundle_path
-            .as_deref()
-            .unwrap_or("unavailable"),
         capabilities.message_job_path,
         capabilities.proof_manifest_path,
         counterparties
@@ -726,11 +714,6 @@ mod tests {
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
-            runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
-            runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
-            message_runtime_bundle_path: Some(
-                "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
-            ),
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
@@ -1115,11 +1098,9 @@ mod tests {
         let rendered = ctx.printed_lines.join("\n");
         assert!(rendered.contains("sccp capabilities:"));
         assert!(rendered.contains("proof_family=stark-fri-v1"));
-        assert!(rendered.contains("runtime_family=runtime-scale-v1"));
-        assert!(rendered.contains("runtime_backend=sora-nexus-runtime-v1"));
-        assert!(
-            rendered.contains("runtime_message=/v1/sccp/proofs/message/{message_id}/runtime-scale")
-        );
+        assert!(!rendered.contains("runtime_family="));
+        assert!(!rendered.contains("runtime_backend="));
+        assert!(!rendered.contains("runtime_message="));
         assert!(rendered.contains(
             "ton(4:ton_raw:ton-contract-v1:TonContractNativeRecursive/verifier_live=false/anchors_live=false:disabled)"
         ));

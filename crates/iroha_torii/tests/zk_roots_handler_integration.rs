@@ -188,7 +188,11 @@ fn seeded_zk_roots_state(
                 owner.clone(),
                 1u128,
                 note,
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                    [0xA1; 32],
+                    [0xB2; 24],
+                    vec![0xC3, i],
+                ),
             )
             .into();
             stx.world

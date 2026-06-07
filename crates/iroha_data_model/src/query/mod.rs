@@ -132,7 +132,11 @@ mod signature_tests {
             .expect("query signing should succeed");
         let compatibility = make_payload().sign(&key_pair);
 
-        assert_eq!(fallible, compatibility);
+        let fallible_bytes = norito::to_bytes(&fallible).expect("encode fallible signed query");
+        let compatibility_bytes =
+            norito::to_bytes(&compatibility).expect("encode compatibility signed query");
+        assert_eq!(fallible_bytes, compatibility_bytes);
+
         let QuerySignature(signature) = &fallible.signature;
         signature
             .verify(key_pair.public_key(), &fallible.payload)

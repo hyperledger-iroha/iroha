@@ -2880,6 +2880,33 @@ ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS = (
     "active BSC launch lane",
     "with the first-release BSC-mainnet launch policy",
 )
+SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
+    (
+        "docs/source/bridge_proofs.md",
+        (
+            "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`",
+            "Substrate/Polkadot-family routes remain diagnostic/backlog-only",
+            "No manifest is returned for Substrate/Polkadot-family domains while launch",
+            "the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`)",
+            "the same pattern applies to supported `bsc`, `sol`, `ton`, and `tron`",
+            "canonical supported launch-domain key (`eth`,",
+            "`evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`)",
+        ),
+    ),
+)
+SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS = (
+    "`bsc`, `sol`, `ton`, `tron`, `sora2`, `sora-kusama`, and",
+    "or `substrate-runtime-v1`);",
+    "Substrate-style runtime);",
+    (
+        "the same pattern applies to `bsc`, `sol`, `ton`, `tron`, "
+        "`sora2`, `sora-kusama`, and `sora-polkadot`;"
+    ),
+    (
+        "`counterparty_chain` is the canonical domain key (`eth`, `bsc`, "
+        "`sol`, `ton`, `tron`, `sora2`, etc.)."
+    ),
+)
 ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
         "crates/iroha_core/src/smartcontracts/isi/world.rs",
@@ -3595,6 +3622,8 @@ USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE = {
     "sol": "Solana verifier-program instruction envelope",
     "ton": "TON internal message body BOC",
 }
+# Substrate/Polkadot-family networks are outside the current SCCP launch scope.
+# Keep those helper inventories out of public submission surfaces until support is re-opened.
 USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
     "eth,bsc": {
         "js-sdk": (
@@ -4063,48 +4092,6 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "TonSccpProver.ShardStateProofEngine",
             "TonSccpProver.FullLightClientAuditProofEngine",
             "TonSccpProver.buildSubmission",
-        ),
-    },
-    "substrate": {
-        "js-sdk": (
-            "buildSubstrateSccpProofRequest",
-            "buildSubstrateSccpRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "witnessProvider",
-            "proveFn",
-            "buildSubstrateSccpSubmission",
-        ),
-        "python-sdk": (
-            "build_substrate_sccp_proof_request",
-            "build_substrate_sccp_runtime_storage_proof_request",
-            "SubstrateSccpProver",
-            "witness_provider",
-            "prove",
-            "build_substrate_sccp_submission",
-        ),
-        "swift-sdk": (
-            "buildSubstrateSccpProofRequest",
-            "buildSubstrateSccpRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpWitnessProvider",
-            "SubstrateSccpProver.ProveFunction",
-            "buildSubstrateSccpSubmission",
-        ),
-        "kotlin-sdk": (
-            "SccpSubstrate.buildProofRequest",
-            "SccpSourceProofs.buildSubstrateRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpWitnessProvider",
-            "SubstrateSccpProofEngine",
-            "SccpSubstrate.buildSubmission",
-        ),
-        "java-android": (
-            "SubstrateSccpProver.buildProofRequest",
-            "SourceSccpProofs.buildSubstrateRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpProver.WitnessProvider",
-            "SubstrateSccpProver.ProofEngine",
-            "SubstrateSccpProver.buildSubmission",
         ),
     },
 }
@@ -5239,6 +5226,36 @@ def _ethereum_launch_policy_documentation_inventory_errors(
     if forbidden_markers is None:
         forbidden_markers = ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS
     label = "Ethereum mainnet launch-policy documentation"
+    errors = _source_marker_inventory_errors(inventory, label=label)
+    for raw_path, _markers in inventory:
+        path = Path(raw_path)
+        display_path = str(path)
+        if not path.is_absolute():
+            display_path = path.as_posix()
+            path = ROOT / path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for marker in forbidden_markers:
+            if marker in source:
+                errors.append(
+                    f"{label} source inventory {display_path} contains stale marker: {marker}"
+                )
+    return errors
+
+
+def _sccp_public_discovery_documentation_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_markers: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public SCCP discovery documentation."""
+
+    if inventory is None:
+        inventory = SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS
+    if forbidden_markers is None:
+        forbidden_markers = SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS
+    label = "SCCP public discovery documentation"
     errors = _source_marker_inventory_errors(inventory, label=label)
     for raw_path, _markers in inventory:
         path = Path(raw_path)
@@ -10899,6 +10916,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_evm_source_adapter_deployment_gate_inventory_errors())
     errors.extend(_ethereum_launch_policy_selector_inventory_errors())
     errors.extend(_ethereum_launch_policy_documentation_inventory_errors())
+    errors.extend(_sccp_public_discovery_documentation_inventory_errors())
     errors.extend(_ethereum_core_range_finality_binding_inventory_errors())
     errors.extend(_ethereum_core_message_replay_guard_inventory_errors())
     errors.extend(_ethereum_torii_pinned_message_proof_inventory_errors())

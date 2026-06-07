@@ -37,8 +37,11 @@
 //! plus RNS Galois/packed-rotation, target-limb basis-extension key-switch,
 //! explicit key-switch decomposition/evaluator prefix binding, and
 //! bounded-noise outer-slot rotation/bootstrap-refresh bridges are available
-//! for explicitly bounded runtime metadata. Security-complete bootstrapping
-//! remains pending.
+//! for explicitly bounded runtime metadata. Full-bootstrap material can now
+//! carry typed coefficient/slot diagonal transforms with exact and bounded RNS
+//! evaluator surfaces, canonical blind-rotation schedules, typed
+//! sample-extraction metadata, and accumulator test vectors, but
+//! security-complete bootstrapping remains pending.
 
 use std::{fmt, string::String, vec::Vec};
 
@@ -102,6 +105,7 @@ pub const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 102
 pub const BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum diagonal entries admitted in one BFV full-bootstrap linear transform.
 pub const BFV_FULL_BOOTSTRAP_LINEAR_TRANSFORM_MAX_DIAGONALS: usize = 1_024;
+const BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1: u16 = 2;
 /// Maximum public rotation-key count admitted in one BFV evaluation-key bundle.
 pub const BFV_EVALUATION_KEY_MAX_ROTATION_KEYS: usize = 64;
 const BFV_EVALUATION_KEY_MAX_GALOIS_KEYS: usize = 64;
@@ -1510,6 +1514,68 @@ pub struct BfvFullBootstrapLinearTransformV1 {
     pub output_slot_count: u16,
     /// Diagonal rotation/mask entries evaluated in ascending schema order.
     pub diagonals: Vec<BfvFullBootstrapLinearTransformDiagonalV1>,
+}
+
+/// One automorphism/mask entry in a canonical packed-slot blind-rotation key.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapBlindRotationStepV1 {
+    /// Galois automorphism power evaluated for this schedule entry.
+    pub automorphism_power: u32,
+    /// Binary packed-slot selector plaintext in `Z_t[x] / (x^n + 1)`.
+    pub selector_plaintext: Vec<u64>,
+}
+
+/// Canonical blind-rotation material for the full-bootstrap circuit.
+///
+/// This is the typed payload for the blind-rotation artifact. It binds the
+/// governed accumulator/test-vector artifact and the deterministic packed
+/// left-rotation schedule that a future executable bootstrap evaluator must
+/// consume.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapBlindRotationKeyV1 {
+    /// Packed slot count targeted by the blind-rotation schedule.
+    pub slot_count: u16,
+    /// Governed accumulator artifact digest consumed by this key.
+    pub accumulator_digest: Hash,
+    /// Packed-slot left rotation implemented by `steps`.
+    pub rotation_steps: u32,
+    /// Canonical Galois automorphism and selector entries.
+    pub steps: Vec<BfvFullBootstrapBlindRotationStepV1>,
+}
+
+/// Sample-extraction material for the full-bootstrap circuit.
+///
+/// This is the typed payload for the sample-extraction artifact. It declares the
+/// fixed BFV ciphertext shape and coefficient selected after the future blind
+/// rotation stage, so artifact admission can reject opaque placeholder bytes
+/// before the executable circuit consumes them.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapSampleExtractionV1 {
+    /// Packed slot count expected from the source accumulator ciphertext.
+    pub source_slot_count: u16,
+    /// Number of source ciphertext components. First-release BFV ciphertexts use two components.
+    pub source_ciphertext_component_count: u16,
+    /// Coefficient selected from the source ring ciphertext.
+    pub extracted_coefficient_index: u16,
+    /// Number of output ciphertext components. First-release BFV ciphertexts use two components.
+    pub output_ciphertext_component_count: u16,
+}
+
+/// Bootstrapping accumulator/test-vector material for the full-bootstrap circuit.
+///
+/// This is the typed payload for the accumulator artifact. The accumulator must
+/// advertise the exact packed-slot test vector it contributes to the future
+/// executable circuit.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapAccumulatorV1 {
+    /// Packed slot count targeted by `test_vector`.
+    pub slot_count: u16,
+    /// Plaintext test-vector polynomial in `Z_t[x] / (x^n + 1)`.
+    pub test_vector: Vec<u64>,
 }
 
 /// Concrete artifacts for a governed BFV full-bootstrap circuit.
@@ -4694,6 +4760,422 @@ pub fn decode_bfv_full_bootstrap_linear_transform_artifact_v1(
     Ok(transform)
 }
 
+/// Construct canonical blind-rotation material for a packed-slot left rotation.
+///
+/// The selector masks are encoded as packed plaintext polynomials so callers can
+/// build governed artifact bundles without duplicating the Galois scheduling
+/// logic.
+///
+/// # Errors
+/// Returns [`BfvError`] when the parameter set is not batchable, the accumulator
+/// digest is zero, or the requested rotation has no deterministic schedule.
+pub fn bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+    params: &BfvParameters,
+    accumulator_digest: Hash,
+    rotation_steps: u32,
+) -> Result<BfvFullBootstrapBlindRotationKeyV1, BfvError> {
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap blind-rotation accumulator digest",
+        &accumulator_digest,
+    )?;
+    let schedule = packed_left_rotation_galois_schedule(params, rotation_steps)?;
+    let mut steps = Vec::with_capacity(schedule.len());
+    for (automorphism_power, selector_slots) in schedule {
+        let selector_plaintext = encode_packed_plaintext_slots(params, &selector_slots)?;
+        steps.push(BfvFullBootstrapBlindRotationStepV1 {
+            automorphism_power,
+            selector_plaintext,
+        });
+    }
+    let key = BfvFullBootstrapBlindRotationKeyV1 {
+        slot_count: u16::try_from(params.degree()).map_err(|_| {
+            BfvError::InvalidParameters(
+                "BFV full-bootstrap blind-rotation degree exceeds u16 slot metadata".to_owned(),
+            )
+        })?,
+        accumulator_digest,
+        rotation_steps,
+        steps,
+    };
+    validate_bfv_full_bootstrap_blind_rotation_key_v1(params, &key)?;
+    Ok(key)
+}
+
+/// Validate a typed full-bootstrap blind-rotation key payload.
+///
+/// # Errors
+/// Returns [`BfvError`] when the BFV profile is not batchable, slot metadata does
+/// not match the registered polynomial degree, the accumulator digest is zero,
+/// or the automorphism/selector schedule does not match the canonical packed
+/// left-rotation schedule.
+pub fn validate_bfv_full_bootstrap_blind_rotation_key_v1(
+    params: &BfvParameters,
+    key: &BfvFullBootstrapBlindRotationKeyV1,
+) -> Result<(), BfvError> {
+    packed_plaintext_root(params)?;
+    let degree = params.degree();
+    let degree_u16 = u16::try_from(degree).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap blind-rotation degree exceeds u16 slot metadata".to_owned(),
+        )
+    })?;
+    if key.slot_count != degree_u16 {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap blind-rotation slot_count {} does not match polynomial_degree {}",
+            key.slot_count, params.polynomial_degree
+        )));
+    }
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap blind-rotation accumulator digest",
+        &key.accumulator_digest,
+    )?;
+    if key.steps.is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap blind-rotation schedule must not be empty".to_owned(),
+        ));
+    }
+    let max_steps = BFV_EVALUATION_KEY_MAX_GALOIS_KEYS.min(degree);
+    if key.steps.len() > max_steps {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap blind-rotation schedule count {} exceeds supported limit {max_steps}",
+            key.steps.len()
+        )));
+    }
+    let mut seen_powers = std::collections::BTreeSet::new();
+    let mut decoded_selectors = Vec::with_capacity(key.steps.len());
+    for (index, step) in key.steps.iter().enumerate() {
+        validate_galois_automorphism_power(params, step.automorphism_power)?;
+        if !seen_powers.insert(step.automorphism_power) {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap blind-rotation step[{index}] duplicates automorphism_power {}",
+                step.automorphism_power
+            )));
+        }
+        if step.selector_plaintext.len() != degree {
+            return Err(BfvError::ShapeMismatch(format!(
+                "BFV full-bootstrap blind-rotation step[{index}] selector_plaintext length {} does not match polynomial_degree {}",
+                step.selector_plaintext.len(),
+                params.polynomial_degree
+            )));
+        }
+        validate_plaintext(params, &step.selector_plaintext)?;
+        let selector_slots = decode_packed_plaintext_slots(params, &step.selector_plaintext)?;
+        if selector_slots.iter().all(|&slot| slot == 0) {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap blind-rotation step[{index}] selector_plaintext must not be all zero"
+            )));
+        }
+        if selector_slots.iter().any(|&slot| slot != 0 && slot != 1) {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap blind-rotation step[{index}] selector slots must be binary"
+            )));
+        }
+        decoded_selectors.push(selector_slots);
+    }
+    let expected_schedule = packed_left_rotation_galois_schedule(params, key.rotation_steps)?;
+    if key.steps.len() != expected_schedule.len() {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap blind-rotation schedule count {} does not match canonical packed-left-rotation schedule count {}",
+            key.steps.len(),
+            expected_schedule.len()
+        )));
+    }
+    for (index, ((step, selector_slots), (expected_power, expected_selector_slots))) in key
+        .steps
+        .iter()
+        .zip(&decoded_selectors)
+        .zip(expected_schedule.iter())
+        .enumerate()
+    {
+        if step.automorphism_power != *expected_power {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap blind-rotation step[{index}] automorphism_power {} does not match canonical packed-left-rotation power {}",
+                step.automorphism_power, expected_power
+            )));
+        }
+        if selector_slots != expected_selector_slots {
+            return Err(BfvError::InvalidParameters(format!(
+                "BFV full-bootstrap blind-rotation step[{index}] selector_plaintext does not match canonical packed-left-rotation mask"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Encode a typed full-bootstrap blind-rotation artifact.
+///
+/// The returned bytes are a governed full-bootstrap artifact envelope whose
+/// inner payload is [`BfvFullBootstrapBlindRotationKeyV1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when blind-rotation validation or canonical encoding
+/// fails.
+pub fn encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    key: &BfvFullBootstrapBlindRotationKeyV1,
+) -> Result<Vec<u8>, BfvError> {
+    validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
+    let payload = norito::to_bytes(key).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap blind rotation encoding failed: {err}"
+        ))
+    })?;
+    encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+        params,
+        max_bootstrap_depth,
+        BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
+        &payload,
+    )
+}
+
+/// Decode and validate a governed full-bootstrap blind-rotation artifact.
+///
+/// # Errors
+/// Returns [`BfvError`] when the artifact envelope does not match the governed
+/// material or the typed blind-rotation payload is malformed.
+pub fn decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapBlindRotationKeyV1, BfvError> {
+    let role = BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey;
+    let label = full_bootstrap_artifact_label_for_role(role);
+    let expected_digest = full_bootstrap_material_digest_for_role(material, role);
+    let artifact = decode_full_bootstrap_artifact_payload(
+        params,
+        material,
+        label,
+        role,
+        bytes,
+        expected_digest,
+    )?;
+    let key = norito::decode_from_bytes::<BfvFullBootstrapBlindRotationKeyV1>(&artifact.payload)
+        .map_err(|err| {
+            BfvError::InvalidParameters(format!(
+                "{label} payload must be a Norito-encoded BFV full-bootstrap blind rotation key: {err}"
+            ))
+        })?;
+    validate_bfv_full_bootstrap_blind_rotation_key_v1(params, &key)?;
+    if key.accumulator_digest != material.accumulator_digest {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap blind-rotation key accumulator digest does not match governed accumulator artifact".to_owned(),
+        ));
+    }
+    Ok(key)
+}
+
+/// Validate a typed full-bootstrap sample-extraction payload.
+///
+/// # Errors
+/// Returns [`BfvError`] when the BFV profile is not batchable, slot metadata does
+/// not match the registered polynomial degree, the selected coefficient is out
+/// of range, or the declared BFV ciphertext component counts do not match the
+/// first-release two-component ciphertext shape.
+pub fn validate_bfv_full_bootstrap_sample_extraction_v1(
+    params: &BfvParameters,
+    sample_extraction: &BfvFullBootstrapSampleExtractionV1,
+) -> Result<(), BfvError> {
+    packed_plaintext_root(params)?;
+    let degree = params.degree();
+    let degree_u16 = u16::try_from(degree).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap sample extraction degree exceeds u16 slot metadata".to_owned(),
+        )
+    })?;
+    if sample_extraction.source_slot_count != degree_u16 {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap sample extraction source_slot_count {} does not match polynomial_degree {}",
+            sample_extraction.source_slot_count, params.polynomial_degree
+        )));
+    }
+    if sample_extraction.source_ciphertext_component_count
+        != BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1
+    {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap sample extraction source_ciphertext_component_count {} does not match first-release BFV ciphertext component count {}",
+            sample_extraction.source_ciphertext_component_count,
+            BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1
+        )));
+    }
+    if sample_extraction.output_ciphertext_component_count
+        != BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1
+    {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap sample extraction output_ciphertext_component_count {} does not match first-release BFV ciphertext component count {}",
+            sample_extraction.output_ciphertext_component_count,
+            BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1
+        )));
+    }
+    if sample_extraction.extracted_coefficient_index >= degree_u16 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap sample extraction extracted_coefficient_index {} must be less than polynomial_degree {}",
+            sample_extraction.extracted_coefficient_index, params.polynomial_degree
+        )));
+    }
+    Ok(())
+}
+
+/// Encode a typed full-bootstrap sample-extraction artifact.
+///
+/// The returned bytes are a governed full-bootstrap artifact envelope whose
+/// inner payload is [`BfvFullBootstrapSampleExtractionV1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when sample-extraction validation or canonical encoding
+/// fails.
+pub fn encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    sample_extraction: &BfvFullBootstrapSampleExtractionV1,
+) -> Result<Vec<u8>, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+    let payload = norito::to_bytes(sample_extraction).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap sample extraction encoding failed: {err}"
+        ))
+    })?;
+    encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+        params,
+        max_bootstrap_depth,
+        BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
+        &payload,
+    )
+}
+
+/// Decode and validate a governed full-bootstrap sample-extraction artifact.
+///
+/// # Errors
+/// Returns [`BfvError`] when the artifact envelope does not match the governed
+/// material or the typed sample-extraction payload is malformed.
+pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapSampleExtractionV1, BfvError> {
+    let role = BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey;
+    let label = full_bootstrap_artifact_label_for_role(role);
+    let expected_digest = full_bootstrap_material_digest_for_role(material, role);
+    let artifact = decode_full_bootstrap_artifact_payload(
+        params,
+        material,
+        label,
+        role,
+        bytes,
+        expected_digest,
+    )?;
+    let sample_extraction = norito::decode_from_bytes::<BfvFullBootstrapSampleExtractionV1>(
+        &artifact.payload,
+    )
+    .map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "{label} payload must be a Norito-encoded BFV full-bootstrap sample extraction: {err}"
+        ))
+    })?;
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, &sample_extraction)?;
+    Ok(sample_extraction)
+}
+
+/// Validate a typed full-bootstrap accumulator/test-vector payload.
+///
+/// # Errors
+/// Returns [`BfvError`] when the BFV profile is not batchable, slot metadata does
+/// not match the registered polynomial degree, the test vector is not a
+/// plaintext polynomial, or the vector is an inert all-zero placeholder.
+pub fn validate_bfv_full_bootstrap_accumulator_v1(
+    params: &BfvParameters,
+    accumulator: &BfvFullBootstrapAccumulatorV1,
+) -> Result<(), BfvError> {
+    packed_plaintext_root(params)?;
+    let degree = params.degree();
+    let degree_u16 = u16::try_from(degree).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap accumulator degree exceeds u16 slot metadata".to_owned(),
+        )
+    })?;
+    if accumulator.slot_count != degree_u16 {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap accumulator slot_count {} does not match polynomial_degree {}",
+            accumulator.slot_count, params.polynomial_degree
+        )));
+    }
+    if accumulator.test_vector.len() != degree {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap accumulator test_vector length {} does not match polynomial_degree {}",
+            accumulator.test_vector.len(),
+            params.polynomial_degree
+        )));
+    }
+    validate_plaintext(params, &accumulator.test_vector)?;
+    if accumulator
+        .test_vector
+        .iter()
+        .all(|&coefficient| coefficient == 0)
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap accumulator test_vector must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Encode a typed full-bootstrap accumulator/test-vector artifact.
+///
+/// The returned bytes are a governed full-bootstrap artifact envelope whose
+/// inner payload is [`BfvFullBootstrapAccumulatorV1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when accumulator validation or canonical encoding fails.
+pub fn encode_bfv_full_bootstrap_accumulator_artifact_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    accumulator: &BfvFullBootstrapAccumulatorV1,
+) -> Result<Vec<u8>, BfvError> {
+    validate_bfv_full_bootstrap_accumulator_v1(params, accumulator)?;
+    let payload = norito::to_bytes(accumulator).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap accumulator encoding failed: {err}"
+        ))
+    })?;
+    encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+        params,
+        max_bootstrap_depth,
+        BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
+        &payload,
+    )
+}
+
+/// Decode and validate a governed full-bootstrap accumulator artifact.
+///
+/// # Errors
+/// Returns [`BfvError`] when the artifact envelope does not match the governed
+/// material or the typed accumulator payload is malformed.
+pub fn decode_bfv_full_bootstrap_accumulator_artifact_v1(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapAccumulatorV1, BfvError> {
+    let role = BfvFullBootstrapCircuitArtifactRoleV1::Accumulator;
+    let label = full_bootstrap_artifact_label_for_role(role);
+    let expected_digest = full_bootstrap_material_digest_for_role(material, role);
+    let artifact = decode_full_bootstrap_artifact_payload(
+        params,
+        material,
+        label,
+        role,
+        bytes,
+        expected_digest,
+    )?;
+    let accumulator = norito::decode_from_bytes::<BfvFullBootstrapAccumulatorV1>(&artifact.payload)
+        .map_err(|err| {
+            BfvError::InvalidParameters(format!(
+                "{label} payload must be a Norito-encoded BFV full-bootstrap accumulator: {err}"
+            ))
+        })?;
+    validate_bfv_full_bootstrap_accumulator_v1(params, &accumulator)?;
+    Ok(accumulator)
+}
+
 /// Validate concrete full-bootstrap artifacts against governed commitments.
 ///
 /// This is the artifact companion to
@@ -4723,30 +5205,17 @@ pub fn validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
         BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
         &artifacts.slot_to_coefficient_key,
     )?;
-    validate_full_bootstrap_artifact_bytes(
+    decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
         params,
         material,
-        "BFV full-bootstrap blind-rotation key artifact",
-        BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
         &artifacts.blind_rotation_key,
-        &material.blind_rotation_key_digest,
     )?;
-    validate_full_bootstrap_artifact_bytes(
+    decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
         params,
         material,
-        "BFV full-bootstrap sample-extraction key artifact",
-        BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
         &artifacts.sample_extraction_key,
-        &material.sample_extraction_key_digest,
     )?;
-    validate_full_bootstrap_artifact_bytes(
-        params,
-        material,
-        "BFV full-bootstrap accumulator artifact",
-        BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
-        &artifacts.accumulator,
-        &material.accumulator_digest,
-    )?;
+    decode_bfv_full_bootstrap_accumulator_artifact_v1(params, material, &artifacts.accumulator)?;
     validate_full_bootstrap_artifact_bytes(
         params,
         material,
@@ -12058,9 +12527,56 @@ mod tests {
             .expect("encode sample full-bootstrap linear transform artifact")
     }
 
+    fn sample_full_bootstrap_sample_extraction(
+        params: &BfvParameters,
+    ) -> BfvFullBootstrapSampleExtractionV1 {
+        BfvFullBootstrapSampleExtractionV1 {
+            source_slot_count: params.polynomial_degree,
+            source_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1,
+            extracted_coefficient_index: 0,
+            output_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1,
+        }
+    }
+
+    fn sample_full_bootstrap_sample_extraction_artifact_payload(params: &BfvParameters) -> Vec<u8> {
+        let sample_extraction = sample_full_bootstrap_sample_extraction(params);
+        encode_bfv_full_bootstrap_sample_extraction_artifact_v1(params, 1, &sample_extraction)
+            .expect("encode sample full-bootstrap sample-extraction artifact")
+    }
+
+    fn sample_full_bootstrap_blind_rotation_artifact_payload(
+        params: &BfvParameters,
+        accumulator_digest: Hash,
+    ) -> Vec<u8> {
+        let blind_rotation_key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+            params,
+            accumulator_digest,
+            1,
+        )
+        .expect("build sample full-bootstrap blind-rotation key");
+        encode_bfv_full_bootstrap_blind_rotation_artifact_v1(params, 1, &blind_rotation_key)
+            .expect("encode sample full-bootstrap blind-rotation artifact")
+    }
+
+    fn sample_full_bootstrap_accumulator(params: &BfvParameters) -> BfvFullBootstrapAccumulatorV1 {
+        BfvFullBootstrapAccumulatorV1 {
+            slot_count: params.polynomial_degree,
+            test_vector: encode_packed_plaintext_slots(params, &vec![1; params.degree()])
+                .expect("encode sample full-bootstrap accumulator test vector"),
+        }
+    }
+
+    fn sample_full_bootstrap_accumulator_artifact_payload(params: &BfvParameters) -> Vec<u8> {
+        let accumulator = sample_full_bootstrap_accumulator(params);
+        encode_bfv_full_bootstrap_accumulator_artifact_v1(params, 1, &accumulator)
+            .expect("encode sample full-bootstrap accumulator artifact")
+    }
+
     fn sample_full_bootstrap_circuit_artifacts(
         params: &BfvParameters,
     ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+        let accumulator = sample_full_bootstrap_accumulator_artifact_payload(params);
+        let accumulator_digest = Hash::new(&accumulator);
         BfvFullBootstrapCircuitArtifactBundleV1 {
             coefficient_to_slot_key: sample_full_bootstrap_linear_transform_artifact_payload(
                 params,
@@ -12070,21 +12586,12 @@ mod tests {
                 params,
                 BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
             ),
-            blind_rotation_key: sample_full_bootstrap_artifact_payload(
+            blind_rotation_key: sample_full_bootstrap_blind_rotation_artifact_payload(
                 params,
-                BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
-                b"bfv-full-bootstrap-blind-rotation",
+                accumulator_digest,
             ),
-            sample_extraction_key: sample_full_bootstrap_artifact_payload(
-                params,
-                BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
-                b"bfv-full-bootstrap-sample-extraction",
-            ),
-            accumulator: sample_full_bootstrap_artifact_payload(
-                params,
-                BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
-                b"bfv-full-bootstrap-accumulator",
-            ),
+            sample_extraction_key: sample_full_bootstrap_sample_extraction_artifact_payload(params),
+            accumulator,
             proof_public_input_schema: sample_full_bootstrap_artifact_payload(
                 params,
                 BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
@@ -15963,14 +16470,15 @@ mod tests {
             rns_modulus_chain_digest: material.rns_modulus_chain_digest,
             key_switch_decomposition_chain_digest: material.key_switch_decomposition_chain_digest,
             max_bootstrap_depth: material.max_bootstrap_depth,
-            role: BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
-            payload: b"stale-profile-bfv-full-bootstrap-accumulator".to_vec(),
+            role: BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
+            payload: b"stale-profile-bfv-full-bootstrap-sample-extraction".to_vec(),
         };
         let mut stale_profile_artifact = artifacts.clone();
-        stale_profile_artifact.accumulator =
+        stale_profile_artifact.sample_extraction_key =
             norito::to_bytes(&stale_profile_payload).expect("encode stale profile artifact");
         let mut stale_profile_material = material.clone();
-        stale_profile_material.accumulator_digest = Hash::new(&stale_profile_artifact.accumulator);
+        stale_profile_material.sample_extraction_key_digest =
+            Hash::new(&stale_profile_artifact.sample_extraction_key);
         assert_error_contains(
             validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
                 &params,
@@ -15979,6 +16487,45 @@ mod tests {
             ),
             "parameter digest",
             "full-bootstrap artifacts must reject stale parameter-profile envelopes",
+        );
+
+        let mut opaque_blind_rotation_artifact = artifacts.clone();
+        opaque_blind_rotation_artifact.blind_rotation_key = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
+            b"opaque-blind-rotation-bundle-payload",
+        );
+        let mut opaque_blind_rotation_material = material.clone();
+        opaque_blind_rotation_material.blind_rotation_key_digest =
+            Hash::new(&opaque_blind_rotation_artifact.blind_rotation_key);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
+                &params,
+                &opaque_blind_rotation_material,
+                &opaque_blind_rotation_artifact,
+            ),
+            "blind rotation",
+            "full-bootstrap artifact bundles must reject opaque blind-rotation payloads",
+        );
+
+        let mut opaque_sample_extraction_artifact = artifacts.clone();
+        opaque_sample_extraction_artifact.sample_extraction_key =
+            sample_full_bootstrap_artifact_payload(
+                &params,
+                BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
+                b"opaque-sample-extraction-bundle-payload",
+            );
+        let mut opaque_sample_extraction_material = material.clone();
+        opaque_sample_extraction_material.sample_extraction_key_digest =
+            Hash::new(&opaque_sample_extraction_artifact.sample_extraction_key);
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
+                &params,
+                &opaque_sample_extraction_material,
+                &opaque_sample_extraction_artifact,
+            ),
+            "sample extraction",
+            "full-bootstrap artifact bundles must reject opaque sample-extraction payloads",
         );
 
         let empty_payload = BfvFullBootstrapCircuitArtifactPayloadV1 {
@@ -16093,6 +16640,277 @@ mod tests {
     }
 
     #[test]
+    fn full_bootstrap_blind_rotation_artifact_is_typed_and_profile_bound() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let accumulator_artifact = sample_full_bootstrap_accumulator_artifact_payload(&params);
+        let accumulator_digest = Hash::new(&accumulator_artifact);
+        let key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+            &params,
+            accumulator_digest.clone(),
+            1,
+        )
+        .expect("build blind-rotation key");
+        validate_bfv_full_bootstrap_blind_rotation_key_v1(&params, &key)
+            .expect("sample blind-rotation key is valid");
+        let artifact = encode_bfv_full_bootstrap_blind_rotation_artifact_v1(&params, 1, &key)
+            .expect("encode blind-rotation artifact");
+        let material = BfvFullBootstrapCircuitMaterialV1 {
+            blind_rotation_key_digest: Hash::new(&artifact),
+            accumulator_digest: accumulator_digest.clone(),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        let decoded =
+            decode_bfv_full_bootstrap_blind_rotation_artifact_v1(&params, &material, &artifact)
+                .expect("decode governed blind-rotation artifact");
+        assert_eq!(decoded, key);
+
+        let opaque_payload = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
+            b"opaque-blind-rotation-payload",
+        );
+        let opaque_material = BfvFullBootstrapCircuitMaterialV1 {
+            blind_rotation_key_digest: Hash::new(&opaque_payload),
+            accumulator_digest: accumulator_digest.clone(),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+                &params,
+                &opaque_material,
+                &opaque_payload,
+            ),
+            "blind rotation",
+            "blind-rotation artifacts must carry typed blind-rotation payloads",
+        );
+
+        let wrong_slot_count = BfvFullBootstrapBlindRotationKeyV1 {
+            slot_count: params.polynomial_degree.saturating_sub(1),
+            ..key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_blind_rotation_key_v1(&params, &wrong_slot_count),
+            "slot_count",
+            "blind rotation must bind the packed slot count",
+        );
+
+        let zero_accumulator_digest = BfvFullBootstrapBlindRotationKeyV1 {
+            accumulator_digest: Hash::prehashed([0_u8; Hash::LENGTH]),
+            ..key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_blind_rotation_key_v1(&params, &zero_accumulator_digest),
+            "accumulator digest",
+            "blind rotation must reject zero accumulator digests",
+        );
+
+        let mut duplicate_power = key.clone();
+        duplicate_power.steps.push(duplicate_power.steps[0].clone());
+        assert_error_contains(
+            validate_bfv_full_bootstrap_blind_rotation_key_v1(&params, &duplicate_power),
+            "duplicates automorphism_power",
+            "blind rotation must reject duplicate automorphism powers",
+        );
+
+        let mut malformed_plaintext = key.clone();
+        malformed_plaintext.steps[0].selector_plaintext[0] = params.plaintext_modulus;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_blind_rotation_key_v1(&params, &malformed_plaintext),
+            "plaintext coefficient",
+            "blind-rotation selectors must stay inside plaintext modulus",
+        );
+
+        let mut non_binary_selector = key.clone();
+        non_binary_selector.steps[0].selector_plaintext =
+            encode_packed_plaintext_slots(&params, &vec![2; params.degree()])
+                .expect("encode non-binary selector slots");
+        assert_error_contains(
+            validate_bfv_full_bootstrap_blind_rotation_key_v1(&params, &non_binary_selector),
+            "binary",
+            "blind-rotation selectors must be binary slot masks",
+        );
+
+        let mut all_zero_selector = key.clone();
+        all_zero_selector.steps[0].selector_plaintext = vec![0; params.degree()];
+        assert_error_contains(
+            validate_bfv_full_bootstrap_blind_rotation_key_v1(&params, &all_zero_selector),
+            "all zero",
+            "blind-rotation selectors must reject inert all-zero masks",
+        );
+
+        let mismatched_accumulator_digest =
+            bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+                &params,
+                Hash::new(b"other full-bootstrap accumulator artifact"),
+                1,
+            )
+            .expect("build mismatched blind-rotation key");
+        let mismatched_artifact = encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+            &params,
+            1,
+            &mismatched_accumulator_digest,
+        )
+        .expect("encode mismatched blind-rotation artifact");
+        let mismatched_material = BfvFullBootstrapCircuitMaterialV1 {
+            blind_rotation_key_digest: Hash::new(&mismatched_artifact),
+            accumulator_digest,
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+                &params,
+                &mismatched_material,
+                &mismatched_artifact,
+            ),
+            "accumulator digest",
+            "blind rotation must bind the governed accumulator artifact digest",
+        );
+    }
+
+    #[test]
+    fn full_bootstrap_accumulator_artifact_is_typed_and_profile_bound() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let accumulator = sample_full_bootstrap_accumulator(&params);
+        validate_bfv_full_bootstrap_accumulator_v1(&params, &accumulator)
+            .expect("sample accumulator is valid");
+        let artifact = encode_bfv_full_bootstrap_accumulator_artifact_v1(&params, 1, &accumulator)
+            .expect("encode accumulator artifact");
+        let material = BfvFullBootstrapCircuitMaterialV1 {
+            accumulator_digest: Hash::new(&artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        let decoded =
+            decode_bfv_full_bootstrap_accumulator_artifact_v1(&params, &material, &artifact)
+                .expect("decode governed accumulator artifact");
+        assert_eq!(decoded, accumulator);
+
+        let opaque_payload = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
+            b"opaque-accumulator-payload",
+        );
+        let opaque_material = BfvFullBootstrapCircuitMaterialV1 {
+            accumulator_digest: Hash::new(&opaque_payload),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_accumulator_artifact_v1(
+                &params,
+                &opaque_material,
+                &opaque_payload,
+            ),
+            "accumulator",
+            "accumulator artifacts must carry typed accumulator payloads",
+        );
+
+        let wrong_slot_count = BfvFullBootstrapAccumulatorV1 {
+            slot_count: params.polynomial_degree.saturating_sub(1),
+            ..accumulator.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_accumulator_v1(&params, &wrong_slot_count),
+            "slot_count",
+            "accumulator artifacts must bind the packed slot count",
+        );
+
+        let mut malformed_plaintext = accumulator.clone();
+        malformed_plaintext.test_vector[0] = params.plaintext_modulus;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_accumulator_v1(&params, &malformed_plaintext),
+            "plaintext coefficient",
+            "accumulator test-vector coefficients must stay inside plaintext modulus",
+        );
+
+        let all_zero = BfvFullBootstrapAccumulatorV1 {
+            test_vector: vec![0; params.degree()],
+            ..accumulator
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_accumulator_v1(&params, &all_zero),
+            "all zero",
+            "accumulator test vectors must reject inert all-zero placeholders",
+        );
+    }
+
+    #[test]
+    fn full_bootstrap_sample_extraction_artifact_is_typed_and_profile_bound() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let sample_extraction = sample_full_bootstrap_sample_extraction(&params);
+        validate_bfv_full_bootstrap_sample_extraction_v1(&params, &sample_extraction)
+            .expect("sample extraction is valid");
+        let artifact =
+            encode_bfv_full_bootstrap_sample_extraction_artifact_v1(&params, 1, &sample_extraction)
+                .expect("encode sample-extraction artifact");
+        let material = BfvFullBootstrapCircuitMaterialV1 {
+            sample_extraction_key_digest: Hash::new(&artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        let decoded =
+            decode_bfv_full_bootstrap_sample_extraction_artifact_v1(&params, &material, &artifact)
+                .expect("decode governed sample-extraction artifact");
+        assert_eq!(decoded, sample_extraction);
+
+        let opaque_payload = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
+            b"opaque-sample-extraction-payload",
+        );
+        let opaque_material = BfvFullBootstrapCircuitMaterialV1 {
+            sample_extraction_key_digest: Hash::new(&opaque_payload),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+                &params,
+                &opaque_material,
+                &opaque_payload,
+            ),
+            "sample extraction",
+            "sample-extraction artifacts must carry typed sample-extraction payloads",
+        );
+
+        let wrong_slot_count = BfvFullBootstrapSampleExtractionV1 {
+            source_slot_count: params.polynomial_degree.saturating_sub(1),
+            ..sample_extraction.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &wrong_slot_count),
+            "source_slot_count",
+            "sample extraction must bind the source packed slot count",
+        );
+
+        let out_of_range_coefficient = BfvFullBootstrapSampleExtractionV1 {
+            extracted_coefficient_index: params.polynomial_degree,
+            ..sample_extraction.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &out_of_range_coefficient),
+            "extracted_coefficient_index",
+            "sample extraction must reject out-of-range coefficient indices",
+        );
+
+        let wrong_source_components = BfvFullBootstrapSampleExtractionV1 {
+            source_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1 + 1,
+            ..sample_extraction.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &wrong_source_components),
+            "source_ciphertext_component_count",
+            "sample extraction must reject incompatible source ciphertext shapes",
+        );
+
+        let wrong_output_components = BfvFullBootstrapSampleExtractionV1 {
+            output_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1 + 1,
+            ..sample_extraction
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &wrong_output_components),
+            "output_ciphertext_component_count",
+            "sample extraction must reject incompatible output ciphertext shapes",
+        );
+    }
+
+    #[test]
     fn full_bootstrap_execution_proof_statement_binds_claim_and_artifacts() {
         let params = ram_lfe_bfv_parameters_v1();
         let (_secret_key, public_key, _relinearization_key) =
@@ -16169,13 +16987,23 @@ mod tests {
         );
 
         let mut alternate_artifacts = artifacts.clone();
-        alternate_artifacts.accumulator = sample_full_bootstrap_artifact_payload(
-            &params,
-            BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
-            b"bfv-full-bootstrap-execution-proof-alt-accumulator",
-        );
+        let mut alternate_accumulator = sample_full_bootstrap_accumulator(&params);
+        alternate_accumulator.test_vector =
+            encode_packed_plaintext_slots(&params, &vec![2; params.degree()])
+                .expect("encode alternate accumulator test vector");
+        alternate_artifacts.accumulator =
+            encode_bfv_full_bootstrap_accumulator_artifact_v1(&params, 1, &alternate_accumulator)
+                .expect("encode alternate accumulator artifact");
+        let alternate_accumulator_digest = Hash::new(&alternate_artifacts.accumulator);
+        alternate_artifacts.blind_rotation_key =
+            sample_full_bootstrap_blind_rotation_artifact_payload(
+                &params,
+                alternate_accumulator_digest.clone(),
+            );
         let mut alternate_material = material.clone();
-        alternate_material.accumulator_digest = Hash::new(&alternate_artifacts.accumulator);
+        alternate_material.accumulator_digest = alternate_accumulator_digest;
+        alternate_material.blind_rotation_key_digest =
+            Hash::new(&alternate_artifacts.blind_rotation_key);
         let mut alternate_bootstrap_key = bootstrap_key.clone();
         alternate_bootstrap_key.full_bootstrap_material = Some(alternate_material);
         let alternate_artifact_statement = bfv_full_bootstrap_execution_proof_statement_digest_v1(

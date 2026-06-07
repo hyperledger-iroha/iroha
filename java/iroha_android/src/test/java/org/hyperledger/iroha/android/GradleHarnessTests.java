@@ -99,7 +99,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
         "org.hyperledger.iroha.android.sccp.TonSccpProverTests",
         "org.hyperledger.iroha.android.sccp.TronSccpProverTests",
-        "org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests",
         "org.hyperledger.iroha.android.telemetry.AndroidNetworkContextProviderTests",
         "org.hyperledger.iroha.android.telemetry.AuthorityHashTest",
         "org.hyperledger.iroha.android.telemetry.ChaosScenarioLoggerTests",

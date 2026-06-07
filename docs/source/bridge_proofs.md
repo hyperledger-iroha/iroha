@@ -17,13 +17,11 @@ production network support until that launch scope is explicitly re-opened.
 Torii public SCCP discovery follows the same rule: `/v1/sccp/capabilities`,
 `/v1/sccp/manifests`, and configured wallet route manifests advertise only the
 supported launch remote domains (`eth`, `bsc`, `sol`, `ton`, and `tron`).
-Substrate-family route configuration and runtime SCALE helper code may remain
-as diagnostic/future evidence, but Substrate routes and the optional
-`runtime_proof_family`, `runtime_verifier_backend`, and
-`message_runtime_bundle_path` capability fields are filtered out of public
-wallet/prover discovery while that launch scope is closed. Torii's direct
-runtime SCALE export path also fails closed for unsupported launch domains, so
-a signed SORA-origin SORA2 bundle cannot become a hidden production relay path.
+Substrate routes, runtime SCALE helper code, and legacy optional runtime
+capability fields are not part of public wallet/prover discovery while that
+launch scope is closed. Torii also does not serve a direct runtime SCALE export
+path, so a signed SORA-origin SORA2 bundle cannot become a hidden production
+relay path.
 Torii's typed proof artifact, normalized proof job, and bridge-proof conversion
 surfaces use the same launch-scope gate, including when unready diagnostic
 proofs are explicitly allowed, so diagnostic Substrate-family bundles cannot be
@@ -40,6 +38,11 @@ complete Substrate-family diagnostic source material and source-adapter
 deployment evidence may still be inspected with explicit diagnostic tooling, but
 it cannot emit a SORA `local_admission` submission package while the lane is
 unsupported.
+Core public proof manifest helpers likewise return no Substrate-family
+manifests while that launch scope is closed, so native-recursive submission
+package builders only expose the supported Solana and TON public manifest
+surfaces and stop Substrate-family package attempts at the absent-manifest
+boundary.
 Configured all-lanes launch readiness uses the same supported-domain inventory:
 complete or malformed Substrate-family diagnostic records cannot open a
 production lane and cannot block supported-domain launch checks.
@@ -63,27 +66,9 @@ may govern channel configuration, but it does not approve bridge transactions.
 A malformed or unauthorized relay transaction is expected to be rejected
 on-chain.
 
-If Substrate/Polkadot support is re-opened later and Torii advertises the
-runtime SCALE capability fields again, the bridge UI should perform the
-following checks before preparing a wallet transaction:
-
-- fetch `/v1/sccp/capabilities` and confirm `runtime_proof_family =
-  runtime-scale-v1` and `runtime_verifier_backend = sora-nexus-runtime-v1`;
-- fetch the human-readable JSON bundle for the selected message and display the
-  payload, message id, commitment root, finality epoch, and finality height;
-- fetch the matching runtime SCALE envelope from
-  `/v1/sccp/proofs/message/{message_id}/runtime-scale`;
-- check that SORA2 already has the required `TrustedNexusFinalityAnchors` and
-  destination verifier/trust-anchor configuration; and
-- prepare the correct SORA2 call for wallet signing:
-  `submit_message_proof`, `submit_token_add_proof`, `submit_token_pause_proof`,
-  or `submit_token_resume_proof`.
-
-For that future runtime SCALE path, the SORA2 call would use `proof_family =
-runtime-scale-v1`, `verifier_backend = sora-nexus-runtime-v1`, and
-`bundle_bytes` equal to the raw response body from the `/runtime-scale`
-endpoint. `proof_bytes` and `public_inputs` are retained for non-runtime
-verifier backends and may be empty for this runtime envelope path.
+If Substrate/Polkadot support is re-opened later, the bridge UI and Torii API
+surface must be designed again as a new launch scope. Do not reuse hidden
+runtime SCALE exports or legacy helper names as an implied production path.
 
 ## User-side prover SDKs
 
@@ -4818,14 +4803,12 @@ remove one phase while leaving top-level ready flags true. The corridor section
 also rejects unknown root fields and non-empty blockers, so operator
 attestations or unresolved phase blockers cannot be hidden beside the phase
 status and evidence maps. The verifier also owns and recomputes the exact
-user-prover SDK submission surface table from the corridor phase
-results, the user-side proof backend labels,
-the full per-lane/per-SDK helper inventory,
-and the expected on-chain submission text
-(`sccp-solana-recursive-mainnet-v1`, `ton-contract-v1`,
-`substrate-runtime-v1`, `evm-groth16-bn254-v1`, and
-`tron-groth16-bn254-v1`), so public release notes cannot claim a portal or
-mobile proof path is validated unless its required SDK and contract-smoke phases
+user-prover SDK submission surface table from the corridor phase results, the
+user-side proof backend labels, the full per-lane/per-SDK helper inventory, and
+the expected on-chain submission text (`sccp-solana-recursive-mainnet-v1`,
+`ton-contract-v1`, `evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`), so
+public release notes cannot claim a portal or mobile proof path is validated
+unless its required SDK and contract-smoke phases
 actually passed, and a weakened report generator cannot define a shorter
 helper table as canonical. The Solana destination manifest still uses `solana-program-v1`
 as the target verifier backend; the release-readiness surface uses the recursive
@@ -5765,9 +5748,13 @@ ancestor headers, confirmation headers, wrong adapter domains, zero
 block/root/seal/proof hashes, empty witness rosters, non-canonical signer
 bitmaps, mismatched witness weights/signature counts, all-zero TRON witness
 addresses, insufficient signed witness weight, truncated or non-canonical
-header/witness signatures, stale transition-domain/message/seal metadata,
+header/witness signatures, stale adapter witness-schedule roots, solid-block
+message hashes, witness-seal hashes, transition-domain/message/seal metadata,
 transition chains, or transition payloads are rejected before canonical adapter
-bytes are serialized.
+bytes are serialized. The adapter-level preflight recomputes the witness
+schedule hash from the declared witness roster, the solid-block message hash
+from the adapter roots, and the witness-seal transcript hash from the declared
+seal material before deeper witness-signature verification runs.
 
 For ETH, `receipt_trie_proof_hash` is derived from
 `blake2b256("sccp:evm:receipt-proof:v1" || 0x01 || source_domain_le ||
@@ -5787,6 +5774,10 @@ execution_block_hash || execution_receipts_root || beacon_finalized_root ||
 sync_committee_root || receipt_trie_proof_hash)`, and the aggregate-signature
 hash binds the signed message, committee, signer bitmap, and aggregate BLS
 signature under `sccp:eth:sync-committee-aggregate:v1`.
+ETH source-adapter preflight recomputes the active sync-committee root from the
+declared committee roster, the signed sync-committee message hash from the
+adapter finality/execution fields, and the aggregate-signature transcript hash
+before deeper BLS signature verification runs.
 ETH sync-committee transition-message hashes are derived from
 `blake2b256("sccp:eth:sync-committee-transition-message:v1" || version ||
 source_domain_le || from_sync_period_le || to_sync_period_le ||
@@ -5888,7 +5879,11 @@ signers, claimed total/signed powers must equal the roster and selected signer
 powers, and the selected power must satisfy a strict `> 2/3` quorum. The
 adapter-level preflight also rejects non-V1/non-BSC envelopes and zero
 block/receipt/validator-set/commit-seal roots before receipt MPT, Parlia seal,
-or transition-chain verification runs.
+or transition-chain verification runs. It also checks that the block number is
+inside the declared Parlia validator epoch, recomputes the validator-set hash
+from the declared validator roster, recomputes the commit-message hash from the
+adapter block and receipt roots, and recomputes the commit-seal transcript hash
+before deeper secp256k1 seal verification runs.
 BSC transition structural preflight now also rejects non-V1/non-BSC transition
 envelopes, non-adjacent validator epochs, transition blocks that are not the
 Parlia epoch-start block for `to_validator_epoch`, empty transition
@@ -5997,7 +5992,11 @@ shard_block_hash || shard_file_hash || shard_state_root || transaction_root ||
 shard_proof_hash)`, and the
 masterchain signatures hash binds the block-message hash, validator set,
 signer bitmap, and Ed25519 signatures under
-`sccp:ton:masterchain-signatures:v1`. Production source material rejects
+`sccp:ton:masterchain-signatures:v1`. TON source-adapter preflight recomputes
+the validator-set hash from the declared validator roster, the signed
+masterchain block-message hash from the adapter BlockIdExt/config/shard fields,
+and the masterchain signatures transcript hash before deeper Ed25519
+certificate verification runs. Production source material rejects
 replayed TON proofs unless the derived validator-set hash equals the configured
 TON source trust anchor or is derived from it by a valid transition chain, and
 the signed weight is strictly greater than two thirds of the declared validator
@@ -6404,9 +6403,10 @@ as Nexus-origin messages from block-level SCCP records.
   - the normalized SCCP counterparty proof-job discovery path (`/v1/sccp/jobs/message/{message_id}`);
   - the SCCP proof-manifest discovery path (`/v1/sccp/manifests`);
   - supported codec ids/keys; and
-  - the per-counterparty generic message backends / registry backends for `eth`,
-    `bsc`, `sol`, `ton`, `tron`, `sora2`, `sora-kusama`, and
-    `sora-polkadot`.
+  - the per-counterparty generic message backends / registry backends for
+    supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`.
+    Substrate/Polkadot-family routes remain diagnostic/backlog-only and are not
+    returned by public capabilities while launch scope is closed.
   - the production launch policy: the first-release runtime admits the Ethereum
     mainnet lane when its governed source material, source-adapter deployment,
     destination rollout, route allowlist, and route-canary evidence are
@@ -6426,17 +6426,16 @@ as Nexus-origin messages from block-level SCCP records.
     records with the wrong domain, wrong chain, wrong verifier plan, missing or
     empty verifier identity, missing anchor id, non-hex/zero verifier code
     hash, missing or zero Groth16 verifier key hash for EVM-family/TRON lanes,
-    unexpected verifier key hashes on native Solana/TON/Substrate-family
-    rollouts, or any remaining rollout blocker. Destination rollout readiness
+    unexpected verifier key hashes on native Solana/TON rollouts, or any
+    remaining rollout blocker. Destination rollout readiness
     is also profile-bound for every advertised SCCP domain: ETH/BSC require non-zero EVM
     contract addresses plus their exact mainnet anchor ids, Solana requires a
     non-zero program id plus
     `sccp:sol:destination-anchor:solana-mainnet-beta:v1`, TON requires a
     non-zero raw basechain `0:account_hex` contract address plus
-    `sccp:ton:destination-anchor:ton-mainnet:v1`, TRON requires a checksummed
-    base58 contract address plus
-    `sccp:tron:destination-anchor:tron-mainnet:v1`, and Substrate-family lanes
-    require the exact `SccpBridge.submit_message_proof` runtime entrypoint.
+    `sccp:ton:destination-anchor:ton-mainnet:v1`, and TRON requires a
+    checksummed base58 contract address plus
+    `sccp:tron:destination-anchor:tron-mainnet:v1`.
     Generic anchor metadata, cross-chain verifier identities, zero addresses,
     malformed addresses, and wrong profile ids fail closed.
     The nested `route_allowlist` object is also profile-bound: readiness
@@ -6455,13 +6454,14 @@ as Nexus-origin messages from block-level SCCP records.
 - `GET /v1/sccp/manifests` returns the typed SCCP proof manifests for the same
   counterparty set. Each manifest binds together:
   - the chain key and counterparty domain id;
-  - the target verifier backend key for that counterparty lane (`evm-groth16-bn254-v1`, `tron-groth16-bn254-v1`, `solana-program-v1`, `ton-contract-v1`, or `substrate-runtime-v1`);
+  - the target verifier backend key for that counterparty lane
+    (`evm-groth16-bn254-v1`, `tron-groth16-bn254-v1`, `solana-program-v1`,
+    or `ton-contract-v1`);
   - the declared SCCP proof security model (`RecursiveZk`) and anchor mode (`CryptographicProof`);
   - a typed destination binding (`version`, `key`, `binding_hash`) that scopes proofs to the intended verifier deployment/runtime context for that lane;
   - the chain-specific message backend / registry backend pair;
   - the canonical counterparty account codec;
-  - the intended verifier target (`EVM`, `Solana`, `TON`, `TRON`, or
-    Substrate-style runtime);
+  - the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`);
   - the finality model label used by proof tooling; and
   - the manifest seed used to derive the bridge proof manifest hash, plus the
     required SCCP public inputs (`message_id`, `payload_hash`, `target_domain`,
@@ -6476,6 +6476,8 @@ as Nexus-origin messages from block-level SCCP records.
     production-ready only when its `production_ready` flag still matches the
     canonical verifier backend, verifier target, and `stark-fri-v1` proof
     family for the counterparty lane.
+  - No manifest is returned for Substrate/Polkadot-family domains while launch
+    scope is closed.
   - the reference EVM wrapper contracts for that template now live under
     `contracts/evm/sccp` in this repo.
   - ETH and BSC currently share the same reference EVM wrapper entrypoint:
@@ -6662,10 +6664,8 @@ as Nexus-origin messages from block-level SCCP records.
       `ton_message_body_boc_v1` `message_body_boc` plus its `query_id`,
       destination binding hash, statement hash, proof bytes, public inputs,
       and SCCP bundle bytes;
-    - Substrate-family lanes: `substrate_runtime_call`, carrying a
-      `scale_call_v1` runtime-call envelope for
-      `SccpBridge.submit_message_proof` with SCALE vectors for proof bytes,
-      canonical SCCP transparent public-input bytes, and the SCCP bundle bytes;
+    - Substrate-family lanes: no production submission package is emitted while
+      the SCCP launch scope excludes Substrate/Polkadot-family networks;
   - JSON responses for EVM and TRON Groth16 artifacts expose
     `groth16_proof_summary` instead of `proof_envelope_summary`. The summary
     reports `platform_payload`, `version`, `proof_len_bytes`,
@@ -6853,7 +6853,9 @@ as Nexus-origin messages from block-level SCCP records.
     finality from local Nexus/Iroha finality evidence.
 - `POST /v1/bridge/proofs/submit` now derives chain-specific SCCP transparent backends for generic `message` bundles:
   - outbound `SORA -> ETH` and inbound `ETH -> SORA` messages use `bridge/sccp/stark-fri-v1/eth`;
-  - the same pattern applies to `bsc`, `sol`, `ton`, `tron`, `sora2`, `sora-kusama`, and `sora-polkadot`;
+  - the same pattern applies to supported `bsc`, `sol`, `ton`, and `tron`
+    lanes; Substrate/Polkadot-family backend suffixes are not public production
+    targets while launch scope is closed;
   - the bridge proof manifest hash is derived from the same domain suffix, so proof IDs and registry queries split cleanly by counterparty chain instead of collapsing all SCCP traffic into one generic backend bucket.
 - ETH/BSC message-proof building previously depended on Torii's
   `da_receipt_signer` using `secp256k1`, because the EVM submission package was
@@ -6862,7 +6864,8 @@ as Nexus-origin messages from block-level SCCP records.
   is not destination-native cryptographic verification.
 - `POST /v1/bridge/proofs/submit` and `POST /v1/bridge/messages` now also return normalized SCCP counterparty metadata in the response:
   - `counterparty_domain` is the numeric SCCP domain id; and
-  - `counterparty_chain` is the canonical domain key (`eth`, `bsc`, `sol`, `ton`, `tron`, `sora2`, etc.).
+  - `counterparty_chain` is the canonical supported launch-domain key (`eth`,
+    `bsc`, `sol`, `ton`, or `tron`).
 - `GET /v1/zk/proof/{backend}/{hash}` and `GET /v1/zk/proofs` now mirror that metadata inside `bridge.payload` for SCCP transparent proofs when the backend matches the chain-split SCCP family.
   - when the stored payload decodes as a typed SCCP artifact, the bridge summary now also exposes `message_id`, `payload_hash`, `target_domain`, `commitment_root`, `finality_height`, `finality_block_hash`, and `proof_artifact_len_bytes`.
   - the bridge summary additionally exposes `verifier_backend`, `inner_verifier_backend`, `inner_chain_family`,

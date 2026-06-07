@@ -4653,9 +4653,10 @@ impl SccpRouteManifest {
             .map(|(name, _)| *name)
             .collect::<Vec<_>>()
             .join(", ");
-        resolved.map(|(_, value)| value).unwrap_or_else(|| {
-            panic!("SCCP route manifest requires {role} using one of: {expected}")
-        })
+        resolved.map_or_else(
+            || panic!("SCCP route manifest requires {role} using one of: {expected}"),
+            |(_, value)| value,
+        )
     }
 
     fn source_bridge_address(&self) -> String {

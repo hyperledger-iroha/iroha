@@ -1686,7 +1686,7 @@ pub(crate) async fn handle_submit_vpn_receipt(
         .into_response())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::sync::Arc;
 

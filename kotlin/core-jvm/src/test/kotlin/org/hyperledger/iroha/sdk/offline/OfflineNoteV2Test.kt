@@ -118,7 +118,7 @@ class OfflineNoteV2Test {
 
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteV2.KeyCertificateV2(
-                version = 1,
+                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION + 1,
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),

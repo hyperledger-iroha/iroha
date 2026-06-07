@@ -150211,9 +150211,11 @@ fn derive_vrf_material_is_deterministic() {
     let chain_hash = Hash::new(chain.clone().into_inner().as_bytes());
 
     let (reveal_a, commit_a) =
-        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3);
+        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3)
+            .expect("VRF material signing succeeds");
     let (reveal_b, commit_b) =
-        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3);
+        derive_vrf_material_from_key(&chain_hash, key_pair.private_key(), 7, 3)
+            .expect("VRF material signing succeeds");
 
     assert_eq!(reveal_a, reveal_b);
     assert_eq!(commit_a, commit_b);

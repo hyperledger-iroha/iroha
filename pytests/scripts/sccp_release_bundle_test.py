@@ -398,6 +398,20 @@ def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
         assert module.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
+def test_release_bundle_verifier_submission_helper_lanes_exclude_substrate() -> None:
+    """The strict verifier must not require unsupported Substrate helper rows."""
+
+    verifier = load_verify_helpers()
+
+    assert set(verifier.USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK) == {
+        "eth,bsc",
+        "tron",
+        "sol",
+        "ton",
+    }
+    assert "substrate" not in verifier.USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK
+
+
 def test_release_bundle_verifier_guards_launch_scope_constant_inventory(
     tmp_path: Path,
 ) -> None:
@@ -10275,6 +10289,51 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
         )
         in error
         for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_public_discovery_documentation(
+    tmp_path: Path,
+) -> None:
+    """Public SCCP discovery docs must not advertise unsupported Substrate lanes."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_public_discovery_documentation_inventory_errors() == []
+
+    sparse_docs = tmp_path / "bridge_proofs.md"
+    sparse_docs.write_text(
+        "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`\n"
+        "or `substrate-runtime-v1`);\n",
+        encoding="utf-8",
+    )
+    inventory = (
+        (
+            sparse_docs,
+            (
+                "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`",
+                "No manifest is returned for Substrate/Polkadot-family domains while launch",
+            ),
+        ),
+    )
+
+    errors = verifier._sccp_public_discovery_documentation_inventory_errors(
+        inventory,
+        ("or `substrate-runtime-v1`);",),
+    )
+
+    assert any(
+        "SCCP public discovery documentation source inventory" in error
+        and (
+            "missing marker: No manifest is returned for Substrate/Polkadot-family "
+            "domains while launch"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP public discovery documentation source inventory" in error
+        and "contains stale marker: or `substrate-runtime-v1`);" in error
+        for error in errors
     )
 
 

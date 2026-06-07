@@ -1511,6 +1511,34 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
     assert report.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
+def test_release_readiness_submission_surfaces_exclude_substrate_launch_scope() -> None:
+    """Public submission surfaces must not advertise Substrate/Polkadot lanes."""
+
+    report = load_report_module()
+    passed_phases = {
+        phase: "passed"
+        for phase in (
+            *report.USER_PROVER_SDK_PHASES,
+            report.EVM_NATIVE_DOTNET_PHASE,
+            "contract-smoke",
+            "core-admission",
+        )
+    }
+
+    surfaces = report._submission_surfaces(passed_phases)
+
+    assert [surface["lanes"] for surface in surfaces] == [
+        "eth,bsc",
+        "tron",
+        "sol",
+        "ton",
+    ]
+    assert all("substrate" not in surface["lanes"] for surface in surfaces)
+    assert all(
+        surface["proof_backend"] != "substrate-runtime-v1" for surface in surfaces
+    )
+
+
 def test_release_readiness_evidence_phase_requires_evm_script_suites() -> None:
     """The evidence phase transcript must prove the EVM evidence suites ran."""
 

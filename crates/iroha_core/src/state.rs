@@ -16,6 +16,8 @@ use std::{
 
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::{ConsensusMode, LaneConfig, NexusFeeSettlementMode};
+#[cfg(any(test, feature = "bench"))]
+use iroha_crypto::KeyPair;
 #[cfg(feature = "sm-ffi-openssl")]
 use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
@@ -20433,6 +20435,31 @@ impl State {
         s
     }
 
+    /// Commit a synthetic account-heavy world transaction for benchmark scenarios.
+    ///
+    /// # Errors
+    /// Returns a transaction-block error if the commit path fails while flushing block state.
+    #[cfg(any(test, feature = "bench"))]
+    pub fn commit_heavy_world_accounts_for_bench(
+        &self,
+        block_height: NonZeroU64,
+        account_count: usize,
+    ) -> core::result::Result<Duration, TransactionsBlockError> {
+        let header = BlockHeader::new(block_height, None, None, None, 0, 0);
+        let mut block = self.block(header);
+        for _ in 0..account_count {
+            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            block.world.accounts.insert(
+                account_id,
+                AccountValue::new(iroha_data_model::account::AccountDetails::default()),
+            );
+        }
+
+        let started_at = Instant::now();
+        block.commit()?;
+        Ok(started_at.elapsed())
+    }
+
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
@@ -29148,6 +29175,20 @@ mod state_commit_lock_order_tests {
 
         lane_handle.join().expect("lane lifecycle thread");
         commit_handle.join().expect("commit thread");
+    }
+
+    #[test]
+    fn heavy_world_commit_bench_helper_commits_accounts() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let elapsed = state
+            .commit_heavy_world_accounts_for_bench(nonzero!(1_u64), 16)
+            .expect("heavy world bench commit");
+
+        assert!(elapsed > Duration::ZERO);
+        assert_eq!(state.view().world.accounts().iter().count(), 16);
     }
 }
 

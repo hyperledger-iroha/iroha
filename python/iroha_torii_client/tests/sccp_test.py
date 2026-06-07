@@ -24,9 +24,6 @@ from iroha_torii_client import (  # noqa: E402
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_SOL,
     SCCP_DOMAIN_SORA,
-    SCCP_DOMAIN_SORA2,
-    SCCP_DOMAIN_SORA_KUSAMA,
-    SCCP_DOMAIN_SORA_POLKADOT,
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
     SCCP_ETH_MAINNET_EVM_CHAIN_ID,
@@ -73,10 +70,6 @@ from iroha_torii_client import (  # noqa: E402
     SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1,
     SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1,
     SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1,
-    SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
-    SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
-    SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
-    SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
     SCCP_ZERO_HASH_V1,
     BscMainnetSccp,
     BscMainnetSccpProver,
@@ -87,8 +80,6 @@ from iroha_torii_client import (  # noqa: E402
     SolanaSccpSourceStateProverUnavailableError,
     SolanaSccpProver,
     SolanaSccpProverUnavailableError,
-    SubstrateSccpProver,
-    SubstrateSccpProverUnavailableError,
     TonSccpSourceStateProver,
     TonSccpSourceStateProverUnavailableError,
     TonSccpProver,
@@ -130,10 +121,6 @@ from iroha_torii_client import (  # noqa: E402
     build_solana_sccp_submission,
     wrap_solana_sccp_source_state_verification_proof,
     wrap_solana_sccp_proof_result,
-    build_substrate_sccp_runtime_storage_proof_request,
-    build_substrate_sccp_proof_request,
-    build_substrate_sccp_submission,
-    wrap_substrate_sccp_proof_result,
     build_ton_shard_state_proof_request,
     build_ton_sccp_full_light_client_audit_proof_requests,
     build_ton_sccp_message_body_boc,
@@ -188,12 +175,6 @@ from iroha_torii_client import (  # noqa: E402
     canonical_solana_sccp_tower_lockout_bytes,
     canonical_solana_sccp_tower_replay_bytes,
     canonical_solana_sccp_witness_bytes,
-    canonical_substrate_authority_set_payload_bytes,
-    canonical_substrate_authority_set_transition_justification_bytes,
-    canonical_substrate_authority_set_transition_message_bytes,
-    canonical_substrate_sccp_storage_proof_bytes,
-    canonical_substrate_sccp_runtime_storage_verification_context_bytes,
-    canonical_substrate_sccp_runtime_storage_verification_statement_bytes,
     canonical_ton_sccp_shard_proof_bytes,
     canonical_ton_sccp_full_light_client_audit_statement_bytes,
     canonical_ton_sccp_source_state_verification_proof_bytes,
@@ -298,14 +279,6 @@ from iroha_torii_client import (  # noqa: E402
     solana_sccp_route_canary_evidence_hash,
     ton_sccp_route_canary_evidence_hash,
     tron_sccp_route_canary_evidence_hash,
-    substrate_authority_set_hash_from_payload,
-    substrate_authority_set_payload_hash,
-    substrate_authority_set_transition_justification_hash,
-    substrate_authority_set_transition_message_hash,
-    substrate_sccp_runtime_storage_open_verify_schema_descriptor,
-    substrate_sccp_runtime_storage_proof_public_inputs_hash,
-    substrate_sccp_runtime_storage_public_input_columns,
-    substrate_sccp_storage_proof_hash,
     ton_config_validator_set_payload_from_proof_boc,
     ton_config_validator_set_payload_hash_from_proof_boc,
     ton_hashmap_e_cell_ref_value_hash,
@@ -351,6 +324,56 @@ from iroha_torii_client import (  # noqa: E402
     tron_witness_schedule_payload_hash,
 )
 from iroha_torii_client.sccp import _keccak_256  # noqa: E402
+
+SCCP_DOMAIN_SORA2 = sccp_module.SCCP_DOMAIN_SORA2
+SCCP_DOMAIN_SORA_KUSAMA = sccp_module.SCCP_DOMAIN_SORA_KUSAMA
+SCCP_DOMAIN_SORA_POLKADOT = sccp_module.SCCP_DOMAIN_SORA_POLKADOT
+SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 = (
+    sccp_module.SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1
+)
+build_substrate_sccp_runtime_storage_proof_request = (
+    sccp_module.build_substrate_sccp_runtime_storage_proof_request
+)
+canonical_substrate_authority_set_payload_bytes = (
+    sccp_module.canonical_substrate_authority_set_payload_bytes
+)
+canonical_substrate_authority_set_transition_justification_bytes = (
+    sccp_module.canonical_substrate_authority_set_transition_justification_bytes
+)
+canonical_substrate_authority_set_transition_message_bytes = (
+    sccp_module.canonical_substrate_authority_set_transition_message_bytes
+)
+canonical_substrate_sccp_storage_proof_bytes = (
+    sccp_module.canonical_substrate_sccp_storage_proof_bytes
+)
+canonical_substrate_sccp_runtime_storage_verification_context_bytes = (
+    sccp_module.canonical_substrate_sccp_runtime_storage_verification_context_bytes
+)
+canonical_substrate_sccp_runtime_storage_verification_statement_bytes = (
+    sccp_module.canonical_substrate_sccp_runtime_storage_verification_statement_bytes
+)
+substrate_authority_set_hash_from_payload = (
+    sccp_module.substrate_authority_set_hash_from_payload
+)
+substrate_authority_set_payload_hash = (
+    sccp_module.substrate_authority_set_payload_hash
+)
+substrate_authority_set_transition_justification_hash = (
+    sccp_module.substrate_authority_set_transition_justification_hash
+)
+substrate_authority_set_transition_message_hash = (
+    sccp_module.substrate_authority_set_transition_message_hash
+)
+substrate_sccp_runtime_storage_open_verify_schema_descriptor = (
+    sccp_module.substrate_sccp_runtime_storage_open_verify_schema_descriptor
+)
+substrate_sccp_runtime_storage_proof_public_inputs_hash = (
+    sccp_module.substrate_sccp_runtime_storage_proof_public_inputs_hash
+)
+substrate_sccp_runtime_storage_public_input_columns = (
+    sccp_module.substrate_sccp_runtime_storage_public_input_columns
+)
+substrate_sccp_storage_proof_hash = sccp_module.substrate_sccp_storage_proof_hash
 
 
 HEX32_A = "0x" + "aa" * 32
@@ -427,7 +450,6 @@ def test_package_all_exports_sccp_proof_result_wrappers() -> None:
         "wrap_evm_sccp_proof_result",
         "wrap_ton_sccp_proof_result",
         "wrap_tron_sccp_proof_result",
-        "wrap_substrate_sccp_proof_result",
     } <= exported
 
 
@@ -437,6 +459,10 @@ def test_package_all_exports_public_sccp_symbols() -> None:
         name
         for name, value in vars(sccp_module).items()
         if not name.startswith("_")
+        and "substrate" not in name.lower()
+        and "SORA_KUSAMA" not in name
+        and "SORA_POLKADOT" not in name
+        and "SORA2" not in name
         and (
             (
                 name.startswith("SCCP_")
@@ -10197,299 +10223,18 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
             )
 
 
-def test_builds_substrate_sccp_runtime_proof_request() -> None:
-    request = build_substrate_sccp_proof_request(sample_substrate_request_input())
-
-    assert request["version"] == 1
-    assert request["backend"] == SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1
-    assert request["source_domain"] == SCCP_DOMAIN_SORA
-    assert request["target_domain"] == SCCP_DOMAIN_SORA2
-    assert request["public_inputs"] == sample_substrate_public_inputs()
-    assert request["bundle_bytes"] == bytes([5, 6, 7])
-    assert request["source_proof_bytes"] == bytes([9, 10])
-    assert request["proof_context"] == {
-        "version": 1,
-        "statement_hash": "0x" + "55" * 32,
-        "destination_binding_hash": "0x" + "66" * 32,
-    }
-    assert len(request["public_inputs_bytes"]) == 141
-    assert len(request["request_hash"]) == 66
-    with pytest.raises(TypeError, match="immutable"):
-        request["source_proof_bytes"] = b""
-
-    kusama_request = build_substrate_sccp_proof_request(
-        sample_substrate_request_input(
-            public_inputs=sample_substrate_public_inputs(
-                target_domain=SCCP_DOMAIN_SORA_KUSAMA
-            )
-        )
-    )
-    assert kusama_request["target_domain"] == SCCP_DOMAIN_SORA_KUSAMA
-    assert kusama_request["request_hash"] != request["request_hash"]
-
-    assert request["request_hash"] != build_substrate_sccp_proof_request(
-        sample_substrate_request_input(
-            bundle_bytes=bytes([5, 6, 7, 9]),
-            source_proof_bytes=bytes([10]),
-        )
-    )["request_hash"]
-    with pytest.raises(TypeError, match="publicInputs must not use multiple aliases"):
-        build_substrate_sccp_proof_request(
-            {
-                **sample_substrate_request_input(),
-                "publicInputs": sample_substrate_public_inputs(),
-            }
-        )
-    with pytest.raises(TypeError, match="bundleBytes must not use multiple aliases"):
-        build_substrate_sccp_proof_request(
-            {
-                **sample_substrate_request_input(),
-                "bundleBytes": bytes([5, 6, 7]),
-            }
-        )
-    with pytest.raises(TypeError, match="sourceProofBytes must not use multiple aliases"):
-        build_substrate_sccp_proof_request(
-            {
-                **sample_substrate_request_input(),
-                "sourceProofBytes": bytes([9, 10]),
-            }
-        )
-    with pytest.raises(TypeError, match="sourceDomain must not use multiple aliases"):
-        build_substrate_sccp_proof_request(
-            {
-                **sample_substrate_request_input(),
-                "sourceDomain": SCCP_DOMAIN_SORA,
-            }
-        )
-    with pytest.raises(TypeError, match="proofContext must not use multiple aliases"):
-        build_substrate_sccp_proof_request(
-            {
-                **sample_substrate_request_input(
-                    proof_context={
-                        "statement_hash": "0x" + "55" * 32,
-                        "destination_binding_hash": "0x" + "66" * 32,
-                    }
-                ),
-                "proofContext": {
-                    "statement_hash": "0x" + "55" * 32,
-                    "destination_binding_hash": "0x" + "66" * 32,
-                },
-            }
-        )
-    with pytest.raises(TypeError, match="statementHash must not use multiple aliases"):
-        build_substrate_sccp_proof_request(
-            {
-                **sample_substrate_request_input(),
-                "statementHash": "0x" + "55" * 32,
-            }
-        )
-    with pytest.raises(
-        TypeError,
-        match=r"destinationBinding\.bindingHash must not use multiple aliases",
+def test_package_root_does_not_export_substrate_runtime_sccp_helpers() -> None:
+    for name in (
+        "SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1",
+        "SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1",
+        "SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1",
+        "build_substrate_sccp_proof_request",
+        "build_substrate_sccp_submission",
+        "wrap_substrate_sccp_proof_result",
+        "SubstrateSccpProver",
+        "SubstrateSccpProverUnavailableError",
     ):
-        build_substrate_sccp_proof_request(
-            {
-                **sample_substrate_request_input(destination_binding_hash=None),
-                "destination_binding": {
-                    "binding_hash": "0x" + "66" * 32,
-                    "bindingHash": "0x" + "66" * 32,
-                },
-            }
-        )
-    with pytest.raises(ValueError, match="sourceDomain must be SORA"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(source_domain=SCCP_DOMAIN_TRON)
-        )
-
-    with pytest.raises(ValueError, match="Substrate-family SCCP domain"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(
-                public_inputs=sample_substrate_public_inputs(target_domain=SCCP_DOMAIN_TON)
-            )
-        )
-    with pytest.raises(ValueError, match="sourceDomain must be SORA"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(source_domain=SCCP_DOMAIN_SORA2)
-        )
-    with pytest.raises(TypeError, match="destinationBindingHash must not be zero"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(destination_binding_hash=SCCP_ZERO_HASH_V1)
-        )
-    with pytest.raises(TypeError, match="bundleBytes must not be empty"):
-        build_substrate_sccp_proof_request(sample_substrate_request_input(bundle_bytes=b""))
-    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(bundle_bytes=b"\x00\x00")
-        )
-    with pytest.raises(TypeError, match="bundleBytes must be at most"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(
-                bundle_bytes=b"\x01" * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1)
-            )
-        )
-    with pytest.raises(TypeError, match="backend must be substrate-runtime-v1"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(backend="debug-substrate-backend")
-        )
-    for bad_backend in ("", False, 0):
-        with pytest.raises(TypeError, match="backend must be substrate-runtime-v1"):
-            build_substrate_sccp_proof_request(
-                sample_substrate_request_input(backend=bad_backend)
-            )
-    for bad_context in ({}, False, 0, ""):
-        with pytest.raises(TypeError, match="proof context|statementHash"):
-            build_substrate_sccp_proof_request(
-                sample_substrate_request_input(proof_context=bad_context)
-            )
-
-
-def test_builds_substrate_sccp_runtime_call_submission() -> None:
-    request = build_substrate_sccp_proof_request(sample_substrate_request_input())
-    proof_result = wrap_substrate_sccp_proof_result(bytes([1, 2, 3, 4]), request)
-    submission = build_substrate_sccp_submission({"proof_result": proof_result})
-
-    assert submission["version"] == 1
-    assert submission["proof_family"] == SCCP_STARK_FRI_PROOF_FAMILY_V1
-    assert submission["verifier_backend"] == SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1
-    assert submission["platform_payload"] == "substrate_runtime_call"
-    assert submission["envelope_encoding"] == SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1
-    assert submission["submission_kind"] == "runtime_call"
-    assert (
-        submission["verifier_entrypoint"]
-        == SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1
-    )
-    assert submission["source_domain"] == SCCP_DOMAIN_SORA
-    assert submission["target_domain"] == SCCP_DOMAIN_SORA2
-    assert submission["request_hash"] == request["request_hash"]
-    assert [argument["key"] for argument in submission["arguments"]] == [
-        "proof_bytes",
-        "public_inputs",
-        "bundle_bytes",
-    ]
-    assert submission["runtime_call"] == submission["envelope_bytes"]
-    assert submission["runtime_call_hex"] == submission["envelope_hex"]
-    assert submission["runtime_call_hex"].startswith(
-        "0x7c" + SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1.encode().hex() + "10"
-    )
-    assert submission["proof_bytes"] == bytes([1, 2, 3, 4])
-    assert submission["public_inputs_bytes"] == request["public_inputs_bytes"]
-    assert submission["bundle_bytes"] == bytes([5, 6, 7])
-    with pytest.raises(TypeError, match="immutable"):
-        submission["bundle_bytes"] = b""
-    with pytest.raises(TypeError, match="proofResult must not use multiple aliases"):
-        build_substrate_sccp_submission(
-            {
-                "proof_result": proof_result,
-                "proofResult": proof_result,
-            }
-        )
-    with pytest.raises(
-        TypeError,
-        match="proofResult must be a wrapped Substrate SCCP proof result",
-    ):
-        build_substrate_sccp_submission(
-            {
-                "proof_result": None,
-                "proof_bytes": bytes([1, 2, 3, 4]),
-                "public_inputs": sample_substrate_public_inputs(),
-                "bundle_bytes": bytes([5, 6, 7]),
-                "source_proof_bytes": bytes([9, 10]),
-                "statement_hash": "0x" + "55" * 32,
-                "destination_binding_hash": "0x" + "66" * 32,
-            }
-        )
-    with pytest.raises(TypeError, match=r"proofResult\.requestHash.*multiple aliases"):
-        build_substrate_sccp_submission(
-            {
-                "proof_result": {
-                    **dict(proof_result),
-                    "requestHash": proof_result["request_hash"],
-                },
-            }
-        )
-    with pytest.raises(TypeError, match=r"proofResult\.envelopeHash.*multiple aliases"):
-        build_substrate_sccp_submission(
-            {
-                "proof_result": {
-                    **dict(proof_result),
-                    "envelopeHash": proof_result["envelope_hash"],
-                },
-            }
-        )
-    with pytest.raises(TypeError, match="bundleBytes must not use multiple aliases"):
-        build_substrate_sccp_submission(
-            {
-                "proof_result": proof_result,
-                "bundle_bytes": bytes([5, 6, 7]),
-                "bundleBytes": bytes([5, 6, 7]),
-            }
-        )
-    with pytest.raises(TypeError, match=r"proofContext\.statementHash.*multiple aliases"):
-        build_substrate_sccp_submission(
-            {
-                "proof_result": {
-                    **dict(proof_result),
-                    "proof_context": {
-                        **dict(proof_result["proof_context"]),
-                        "statementHash": proof_result["statement_hash"],
-                    },
-                },
-            }
-        )
-
-    explicit_submission = build_substrate_sccp_submission(
-        {
-            "proof_bytes": bytes([1, 2, 3, 4]),
-            "public_inputs": sample_substrate_public_inputs(),
-            "bundle_bytes": bytes([5, 6, 7]),
-            "source_proof_bytes": b"",
-            "statement_hash": "0x" + "55" * 32,
-            "destination_binding_hash": "0x" + "66" * 32,
-        }
-    )
-    assert explicit_submission["runtime_call"] == submission["runtime_call"]
-
-    with pytest.raises(
-        TypeError,
-        match="sourceProofBytes requires proofResult for request-bound submission",
-    ):
-        build_substrate_sccp_submission(
-            {
-                "proof_bytes": bytes([1, 2, 3, 4]),
-                "public_inputs": sample_substrate_public_inputs(),
-                "bundle_bytes": bytes([5, 6, 7]),
-                "source_proof_bytes": bytes([9, 10]),
-                "statement_hash": "0x" + "55" * 32,
-                "destination_binding_hash": "0x" + "66" * 32,
-            }
-        )
-
-    with pytest.raises(TypeError, match="bundleBytes must match proofResult.bundleBytes"):
-        build_substrate_sccp_submission(
-            {"proof_result": proof_result, "bundle_bytes": bytes([5, 6, 8])}
-        )
-    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
-        build_substrate_sccp_submission(
-            {
-                "proof_bytes": bytes([1, 2, 3, 4]),
-                "public_inputs": sample_substrate_public_inputs(),
-                "bundle_bytes": b"\x00\x00",
-                "source_proof_bytes": bytes([9, 10]),
-                "statement_hash": "0x" + "55" * 32,
-                "destination_binding_hash": "0x" + "66" * 32,
-            }
-        )
-    with pytest.raises(TypeError, match="envelopeHash must match request"):
-        build_substrate_sccp_submission(
-            {"proof_result": {**proof_result, "envelope_hash": HEX32_A}}
-        )
-    with pytest.raises(
-        TypeError,
-        match="publicInputsBytes must match canonical SCCP transparent public inputs",
-    ):
-        build_substrate_sccp_submission(
-            {"proof_result": proof_result, "public_inputs_bytes": bytes([1, 2, 3])}
-        )
+        assert not hasattr(iroha_torii_client_package, name)
 
 
 def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:
@@ -10509,10 +10254,6 @@ def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:
         build_evm_sccp_proof_request(
             sample_evm_request_input(source_proof_bytes=b"\x00\x00")
         )
-    with pytest.raises(TypeError, match="sourceProofBytes must not be all zero"):
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(source_proof_bytes=b"\x00\x00")
-        )
 
     assert (
         build_evm_sccp_proof_request(
@@ -10523,12 +10264,6 @@ def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:
     assert (
         build_tron_sccp_proof_request(
             sample_tron_request_input(source_proof_bytes=b"")
-        )["source_proof_bytes"]
-        == b""
-    )
-    assert (
-        build_substrate_sccp_proof_request(
-            sample_substrate_request_input(source_proof_bytes=b"")
         )["source_proof_bytes"]
         == b""
     )
@@ -10556,15 +10291,6 @@ def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:
             GROTH16_PROOF_BYTES,
             build_tron_sccp_proof_request(
                 sample_tron_production_request_input(source_proof_bytes=b"")
-            ),
-        )["source_proof_bytes"]
-        == b""
-    )
-    assert (
-        wrap_substrate_sccp_proof_result(
-            bytes([1, 2, 3, 4]),
-            build_substrate_sccp_proof_request(
-                sample_substrate_request_input(source_proof_bytes=b"")
             ),
         )["source_proof_bytes"]
         == b""
@@ -11583,36 +11309,6 @@ def test_sccp_provers_resolve_ui_witnesses_before_linked_provers() -> None:
         )
     assert tron_result["source_proof_bytes"] == bytes([9, 10])
 
-    substrate_resolved = False
-
-    class SubstrateWitnessProvider:
-        async def resolve_witness(
-            self,
-            input_value: Mapping[str, Any],
-            options: Mapping[str, Any],
-        ) -> Mapping[str, Any]:
-            nonlocal substrate_resolved
-            assert options["portal"] is True
-            assert input_value["source_proof_bytes"] == b""
-            substrate_resolved = True
-            return {**input_value, "source_proof_bytes": bytes([9, 10])}
-
-    async def substrate_prove(
-        request: Mapping[str, Any],
-        options: Mapping[str, Any],
-    ) -> Dict[str, Any]:
-        assert options["portal"] is True
-        assert substrate_resolved
-        assert request["source_proof_bytes"] == bytes([9, 10])
-        return {"proof_bytes": bytes([1, 2, 3, 4])}
-
-    substrate_result = asyncio.run(
-        SubstrateSccpProver(
-            witness_provider=SubstrateWitnessProvider(),
-            prove=substrate_prove,
-        ).prove(sample_substrate_request_input(source_proof_bytes=b""), portal=True)
-    )
-    assert substrate_result["source_proof_bytes"] == bytes([9, 10])
 
 
 def test_ton_sccp_proof_request_requires_ton_source_domain() -> None:
@@ -11782,7 +11478,7 @@ def test_evm_family_sccp_prover_wraps_externally_generated_proof_bytes() -> None
     assert result["destination_binding"] == input_value["destination_binding"]
     assert len(result["envelope_hash"]) == 66
     with pytest.raises(TypeError, match="at most"):
-        wrap_substrate_sccp_proof_result(
+        wrap_evm_sccp_proof_result(
             b"\x01" * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1), request
         )
 
@@ -13769,88 +13465,6 @@ def test_bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> None:
             )
 
 
-def test_substrate_sccp_prover_requires_linked_engine() -> None:
-    prover = SubstrateSccpProver()
-
-    with pytest.raises(SubstrateSccpProverUnavailableError) as exc:
-        asyncio.run(prover.prove(sample_substrate_request_input()))
-
-    assert exc.value.code == "ERR_SCCP_SUBSTRATE_PROVER_UNAVAILABLE"
-
-
-def test_substrate_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
-    callback_request = None
-
-    async def prove(request: Mapping[str, Any], _options: Mapping[str, Any]) -> Dict[str, Any]:
-        nonlocal callback_request
-        callback_request = request
-        assert request["backend"] == SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1
-        assert isinstance(request["bundle_bytes"], bytes)
-        assert isinstance(request["source_proof_bytes"], bytes)
-        assert request["bundle_bytes"] == bytes([5, 6, 7])
-        assert request["source_proof_bytes"] == bytes([9, 10])
-        assert request["proof_context"]["statement_hash"] == "0x" + "55" * 32
-        assert request["target_domain"] == SCCP_DOMAIN_SORA2
-        with pytest.raises(TypeError, match="immutable"):
-            request["bundle_bytes"] = b"\x00"
-        with pytest.raises(TypeError, match="immutable"):
-            request["source_proof_bytes"] = b"\x00"
-        return {"proof_bytes": [1, 2, 3, 4]}
-
-    bundle_bytes = bytearray([5, 6, 7])
-    source_proof_bytes = bytearray([9, 10])
-    input_value = sample_substrate_request_input(
-        bundle_bytes=bundle_bytes,
-        source_proof_bytes=source_proof_bytes,
-    )
-    result = asyncio.run(SubstrateSccpProver(prove=prove).prove(input_value))
-    request = build_substrate_sccp_proof_request(input_value)
-    direct_result = wrap_substrate_sccp_proof_result([1, 2, 3, 4], request)
-
-    assert callback_request is not request
-    assert callback_request == request
-    async def prove_with_request_hash_aliases(
-        linked_request: Mapping[str, Any],
-        _options: Mapping[str, Any],
-    ) -> Dict[str, Any]:
-        return {
-            "proof_bytes": [1, 2, 3, 4],
-            "request_hash": linked_request["request_hash"],
-            "requestHash": linked_request["request_hash"],
-        }
-
-    with pytest.raises(TypeError, match=r"proofResult\.requestHash.*multiple aliases"):
-        asyncio.run(
-            SubstrateSccpProver(prove=prove_with_request_hash_aliases).prove(input_value)
-        )
-
-    async def prove_with_envelope_hash_aliases(
-        linked_request: Mapping[str, Any],
-        _options: Mapping[str, Any],
-    ) -> Dict[str, Any]:
-        wrapped = wrap_substrate_sccp_proof_result([1, 2, 3, 4], linked_request)
-        return {
-            "proof_bytes": [1, 2, 3, 4],
-            "envelope_hash": wrapped["envelope_hash"],
-            "envelopeHash": wrapped["envelope_hash"],
-        }
-
-    with pytest.raises(TypeError, match=r"proofResult\.envelopeHash.*multiple aliases"):
-        asyncio.run(
-            SubstrateSccpProver(prove=prove_with_envelope_hash_aliases).prove(input_value)
-        )
-
-    assert result["proof_bytes"] == bytes([1, 2, 3, 4])
-    assert result["proof_base64"] == "AQIDBA=="
-    assert result["request_hash"] == request["request_hash"]
-    assert direct_result["envelope_hash"] == result["envelope_hash"]
-    assert result["bundle_bytes"] == bytes([5, 6, 7])
-    assert result["source_proof_bytes"] == bytes([9, 10])
-    assert result["statement_hash"] == "0x" + "55" * 32
-    assert result["destination_binding_hash"] == "0x" + "66" * 32
-    assert len(result["envelope_hash"]) == 66
-
-
 def test_tron_sccp_prover_requires_linked_engine() -> None:
     prover = TronSccpProver()
 
@@ -14413,7 +14027,7 @@ def test_evm_and_tron_sccp_provers_reject_all_zero_groth16_proof_bytes() -> None
         asyncio.run(TronSccpProver(prove=zero_proof).prove(sample_tron_production_request_input()))
 
 
-def test_ton_and_substrate_sccp_provers_reject_all_zero_proof_bytes() -> None:
+def test_ton_sccp_prover_rejects_all_zero_proof_bytes() -> None:
     async def zero_proof(
         _request: Mapping[str, Any], _options: Mapping[str, Any]
     ) -> Dict[str, Any]:
@@ -14427,11 +14041,6 @@ def test_ton_and_substrate_sccp_provers_reject_all_zero_proof_bytes() -> None:
                     source_adapter_deployment_receipt_hash=HEX32_B,
                 )
             )
-        )
-
-    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
-        asyncio.run(
-            SubstrateSccpProver(prove=zero_proof).prove(sample_substrate_request_input())
         )
 
 
@@ -14667,66 +14276,9 @@ def test_sccp_provers_reject_results_bound_to_different_request_contexts() -> No
             )
         )
 
-    async def wrong_substrate_request(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
-    ) -> Dict[str, Any]:
-        return {"proof_bytes": [1, 2, 3, 4], "request_hash": HEX32_A}
-
-    with pytest.raises(TypeError, match="requestHash must match request"):
-        asyncio.run(
-            SubstrateSccpProver(prove=wrong_substrate_request).prove(
-                sample_substrate_request_input()
-            )
-        )
-
-    async def wrong_substrate_proof_base64(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
-    ) -> Dict[str, Any]:
-        return {"proof_bytes": [1, 2, 3, 4], "proof_base64": "AAAA"}
-
-    with pytest.raises(TypeError, match=r"proofResult\.proofBase64"):
-        asyncio.run(
-            SubstrateSccpProver(prove=wrong_substrate_proof_base64).prove(
-                sample_substrate_request_input()
-            )
-        )
-
-    async def wrong_substrate_public_inputs(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
-    ) -> Dict[str, Any]:
-        return {
-            "proof_bytes": [1, 2, 3, 4],
-            "public_inputs": sample_substrate_public_inputs(commitment_root=HEX32_A),
-        }
-
-    with pytest.raises(TypeError, match=r"proofResult\.publicInputs"):
-        asyncio.run(
-            SubstrateSccpProver(prove=wrong_substrate_public_inputs).prove(
-                sample_substrate_request_input()
-            )
-        )
-
-    async def wrong_substrate_proof_context(
-        _request: Mapping[str, Any], _options: Mapping[str, Any]
-    ) -> Dict[str, Any]:
-        return {
-            "proof_bytes": [1, 2, 3, 4],
-            "proof_context": {
-                "version": 1,
-                "statement_hash": "0x" + "55" * 32,
-                "destination_binding_hash": HEX32_A,
-            },
-        }
-
-    with pytest.raises(TypeError, match=r"proofResult\.proofContext"):
-        asyncio.run(
-            SubstrateSccpProver(prove=wrong_substrate_proof_context).prove(
-                sample_substrate_request_input()
-            )
-        )
 
 
-def test_evm_tron_and_substrate_wrappers_reject_mutated_proof_requests() -> None:
+def test_evm_and_tron_wrappers_reject_mutated_proof_requests() -> None:
     hash_only_evm_request = build_evm_sccp_proof_request(sample_evm_request_input())
     with pytest.raises(
         TypeError,
@@ -14756,20 +14308,8 @@ def test_evm_tron_and_substrate_wrappers_reject_mutated_proof_requests() -> None
     with pytest.raises(TypeError, match="TRON SCCP proof request must be canonical"):
         wrap_tron_sccp_proof_result(GROTH16_PROOF_BYTES, tron_request)
 
-    substrate_request = dict(
-        build_substrate_sccp_proof_request(sample_substrate_request_input())
-    )
-    substrate_context = dict(substrate_request["proof_context"])
-    substrate_context["destination_binding_hash"] = HEX32_A
-    substrate_request["proof_context"] = substrate_context
-    with pytest.raises(
-        TypeError,
-        match="Substrate SCCP proof request must be canonical",
-    ):
-        wrap_substrate_sccp_proof_result([1, 2, 3, 4], substrate_request)
 
-
-def test_evm_tron_and_substrate_provers_reject_non_production_input_before_callback() -> None:
+def test_evm_and_tron_provers_reject_non_production_input_before_callback() -> None:
     invoked = False
 
     async def prove(_request: Mapping[str, Any], _options: Mapping[str, Any]) -> Dict[str, Any]:
@@ -14792,18 +14332,6 @@ def test_evm_tron_and_substrate_provers_reject_non_production_input_before_callb
             TronSccpProver(prove=prove).prove(
                 sample_tron_request_input(
                     public_inputs=sample_tron_public_inputs(target_domain=SCCP_DOMAIN_ETH)
-                )
-            )
-        )
-    assert not invoked
-
-    with pytest.raises(ValueError, match="Substrate-family SCCP domain"):
-        asyncio.run(
-            SubstrateSccpProver(prove=prove).prove(
-                sample_substrate_request_input(
-                    public_inputs=sample_substrate_public_inputs(
-                        target_domain=SCCP_DOMAIN_TON
-                    )
                 )
             )
         )

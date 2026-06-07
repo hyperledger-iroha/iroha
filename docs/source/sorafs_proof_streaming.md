@@ -140,7 +140,8 @@ lands. The main panels include:
   provider attestations remain on the roadmap and will be threaded once council
   distributes PQ keys to operators (tracked under SF-14 follow-ups).
 - **PDP streaming.** Proof-of-Data-Possession support remains on the roadmap
-  alongside the CDC commitment work (SF-13). The CLI will add `proof_kind=pdp`
-  once the provider protocol and CDC commitments ship.
+  alongside the CDC commitment work (SF-13). Current Torii gateways reject
+  `proof_kind=pdp` as an unsupported proof kind; the CLI will add it once the
+  provider protocol and CDC commitments ship.
 - **Event volume.** The CLI prints per-item NDJSON locally; set
   `--emit-events=false` when you only need the final summary blob for CI.

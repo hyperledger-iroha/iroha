@@ -359,9 +359,13 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_unlocks_stats_tool());
     tools.push(iroha_gov_council_current_tool());
     tools.push(iroha_gov_citizens_count_tool());
-    tools.push(iroha_gov_council_persist_tool());
-    tools.push(iroha_gov_council_replace_tool());
+    #[cfg(feature = "gov_vrf")]
+    {
+        tools.push(iroha_gov_council_persist_tool());
+        tools.push(iroha_gov_council_replace_tool());
+    }
     tools.push(iroha_gov_council_audit_tool());
+    #[cfg(feature = "gov_vrf")]
     tools.push(iroha_gov_council_derive_vrf_tool());
     tools.push(iroha_gov_enact_tool());
     tools.push(iroha_gov_finalize_tool());
@@ -1454,12 +1458,14 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        #[cfg(feature = "gov_vrf")]
         "iroha.gov.council.persist" => {
             match dispatch_iroha_gov_council_persist(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
+        #[cfg(feature = "gov_vrf")]
         "iroha.gov.council.replace" => {
             match dispatch_iroha_gov_council_replace(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1472,6 +1478,7 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        #[cfg(feature = "gov_vrf")]
         "iroha.gov.council.derive_vrf" => {
             match dispatch_iroha_gov_council_derive_vrf(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -5065,6 +5072,7 @@ async fn dispatch_iroha_gov_citizens_count(
     .await
 }
 
+#[cfg(feature = "gov_vrf")]
 async fn dispatch_iroha_gov_council_persist(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5088,6 +5096,7 @@ async fn dispatch_iroha_gov_council_persist(
     .await
 }
 
+#[cfg(feature = "gov_vrf")]
 async fn dispatch_iroha_gov_council_replace(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5132,6 +5141,7 @@ async fn dispatch_iroha_gov_council_audit(
     .await
 }
 
+#[cfg(feature = "gov_vrf")]
 async fn dispatch_iroha_gov_council_derive_vrf(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -11557,6 +11567,7 @@ fn iroha_gov_citizens_count_tool() -> ToolSpec {
     }
 }
 
+#[cfg(feature = "gov_vrf")]
 fn iroha_gov_council_persist_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.council.persist",
@@ -11565,6 +11576,7 @@ fn iroha_gov_council_persist_tool() -> ToolSpec {
     )
 }
 
+#[cfg(feature = "gov_vrf")]
 fn iroha_gov_council_replace_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.council.replace",
@@ -11595,6 +11607,7 @@ fn iroha_gov_council_audit_tool() -> ToolSpec {
     }
 }
 
+#[cfg(feature = "gov_vrf")]
 fn iroha_gov_council_derive_vrf_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.council.derive_vrf",
@@ -14378,7 +14391,7 @@ pub(crate) fn invalid_json_payload(err: &json::Error) -> Value {
     jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, &msg, None)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use super::*;
     use crate::tests_runtime_handlers::mk_app_state_for_tests;
@@ -15552,23 +15565,46 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.citizens.count")
         );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.gov.council.persist")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.gov.council.replace")
-        );
+        #[cfg(feature = "gov_vrf")]
+        {
+            assert!(
+                tools
+                    .iter()
+                    .any(|tool| tool.name == "iroha.gov.council.persist")
+            );
+            assert!(
+                tools
+                    .iter()
+                    .any(|tool| tool.name == "iroha.gov.council.replace")
+            );
+        }
+        #[cfg(not(feature = "gov_vrf"))]
+        {
+            assert!(
+                !tools
+                    .iter()
+                    .any(|tool| tool.name == "iroha.gov.council.persist")
+            );
+            assert!(
+                !tools
+                    .iter()
+                    .any(|tool| tool.name == "iroha.gov.council.replace")
+            );
+        }
         assert!(
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.council.audit")
         );
+        #[cfg(feature = "gov_vrf")]
         assert!(
             tools
+                .iter()
+                .any(|tool| tool.name == "iroha.gov.council.derive_vrf")
+        );
+        #[cfg(not(feature = "gov_vrf"))]
+        assert!(
+            !tools
                 .iter()
                 .any(|tool| tool.name == "iroha.gov.council.derive_vrf")
         );

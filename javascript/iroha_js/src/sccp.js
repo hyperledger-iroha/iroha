@@ -11,9 +11,9 @@ export const SCCP_DOMAIN_BSC = 2;
 export const SCCP_DOMAIN_SOL = 3;
 export const SCCP_DOMAIN_TON = 4;
 export const SCCP_DOMAIN_TRON = 5;
-export const SCCP_DOMAIN_SORA_KUSAMA = 6;
-export const SCCP_DOMAIN_SORA_POLKADOT = 7;
-export const SCCP_DOMAIN_SORA2 = 8;
+const SCCP_DOMAIN_SORA_KUSAMA = 6;
+const SCCP_DOMAIN_SORA_POLKADOT = 7;
+const SCCP_DOMAIN_SORA2 = 8;
 export const SCCP_CODEC_TEXT_UTF8 = 1;
 export const SCCP_CODEC_EVM_HEX = 2;
 export const SCCP_CODEC_SOLANA_BASE58 = 3;
@@ -46,6 +46,12 @@ export const SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
   "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
   "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
+  "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
+  "sccp-bsc-testnet-native-evm-prover-self-test-v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
+  "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1 =
   Object.freeze({
     javascript: "pure-typescript",
@@ -143,11 +149,7 @@ export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1 = 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1 =
   "ivm_proved_record_sccp_message_v1";
 export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1 = "burn_and_record";
-export const SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1 = "substrate-runtime-v1";
-export const SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1 = "scale_call_v1";
-export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 =
-  "SccpBridge.submit_message_proof";
-export const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 =
+const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 =
   "sccp-substrate-runtime-storage-v1";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1 =
   "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
@@ -160,9 +162,6 @@ export const SCCP_CORE_REMOTE_DOMAINS = [
   SCCP_DOMAIN_SOL,
   SCCP_DOMAIN_TON,
   SCCP_DOMAIN_TRON,
-  SCCP_DOMAIN_SORA_KUSAMA,
-  SCCP_DOMAIN_SORA_POLKADOT,
-  SCCP_DOMAIN_SORA2,
 ];
 
 const SCCP_MSG_PREFIX_BURN_V1 = "sccp:burn:v1";
@@ -422,10 +421,6 @@ const SCCP_TRON_GROTH16_PROOF_ENVELOPE_PREFIX_V1 =
   "sccp:tron:groth16-proof-envelope:v1";
 const SCCP_TRON_DESTINATION_BINDING_LABEL_V1 =
   "iroha:sccp:tron-destination-binding:v1";
-const SCCP_SUBSTRATE_RUNTIME_PROOF_REQUEST_PREFIX_V1 =
-  "sccp:substrate:runtime-proof-request:v1";
-const SCCP_SUBSTRATE_RUNTIME_PROOF_ENVELOPE_PREFIX_V1 =
-  "sccp:substrate:runtime-proof-envelope:v1";
 const SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1 =
   "sccp:substrate:storage-proof:v1";
 const SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1 =
@@ -1077,108 +1072,6 @@ const immutableTonProofResult = ({
   defineCopiedByteField(result, "bundleBytes", bundleBytes);
   defineCopiedByteField(result, "sourceProofBytes", sourceProofBytes);
   return Object.freeze(result);
-};
-
-const immutableSubstrateProofRequest = ({
-  version,
-  backend,
-  sourceDomain,
-  targetDomain,
-  publicInputs,
-  publicInputsBytes,
-  bundleBytes,
-  sourceProofBytes,
-  proofContext,
-  statementHash,
-  destinationBindingHash,
-  requestHash,
-}) => {
-  const request = {
-    version,
-    backend,
-    sourceDomain,
-    targetDomain,
-    publicInputs: Object.freeze({ ...publicInputs }),
-    proofContext: Object.freeze({ ...proofContext }),
-    statementHash,
-    destinationBindingHash,
-    requestHash,
-  };
-  defineCopiedByteField(request, "publicInputsBytes", publicInputsBytes);
-  defineCopiedByteField(request, "bundleBytes", bundleBytes);
-  defineCopiedByteField(request, "sourceProofBytes", sourceProofBytes);
-  return Object.freeze(request);
-};
-
-const immutableSubstrateProofResult = ({
-  version,
-  backend,
-  proofBytes,
-  proofBase64,
-  publicInputs,
-  bundleBytes,
-  sourceProofBytes,
-  proofContext,
-  statementHash,
-  destinationBindingHash,
-  requestHash,
-  envelopeHash,
-}) => {
-  const result = {
-    version,
-    backend,
-    proofBase64,
-    publicInputs: Object.freeze({ ...publicInputs }),
-    proofContext: Object.freeze({ ...proofContext }),
-    statementHash,
-    destinationBindingHash,
-    requestHash,
-    envelopeHash,
-  };
-  defineCopiedByteField(result, "proofBytes", proofBytes);
-  defineCopiedByteField(result, "bundleBytes", bundleBytes);
-  defineCopiedByteField(result, "sourceProofBytes", sourceProofBytes);
-  return Object.freeze(result);
-};
-
-const scaleCompactU32Bytes = (value, label) => {
-  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
-    throw new RangeError(`${label} length must fit u32`);
-  }
-  if (value < 1 << 6) {
-    return new Uint8Array([value << 2]);
-  }
-  if (value < 1 << 14) {
-    const encoded = value * 4 + 0b01;
-    return new Uint8Array([encoded & 0xff, Math.floor(encoded / 0x100) & 0xff]);
-  }
-  if (value < 1 << 30) {
-    const encoded = value * 4 + 0b10;
-    return new Uint8Array([
-      encoded & 0xff,
-      Math.floor(encoded / 0x100) & 0xff,
-      Math.floor(encoded / 0x1_0000) & 0xff,
-      Math.floor(encoded / 0x100_0000) & 0xff,
-    ]);
-  }
-  return concatBytes(
-    new Uint8Array([0b11]),
-    writeU32Le(new Uint8Array(), value),
-  );
-};
-
-const scaleVecBytes = (value, label) =>
-  concatBytes(scaleCompactU32Bytes(value.length, label), value);
-
-const encodeSubstrateSccpRuntimeCall = (argumentBytes) => {
-  let out = scaleVecBytes(
-    textEncoder.encode(SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1),
-    "verifierEntrypoint",
-  );
-  for (const [index, value] of argumentBytes.entries()) {
-    out = concatBytes(out, scaleVecBytes(value, `arguments[${index}]`));
-  }
-  return out;
 };
 
 const writeU8 = (target, value) => {
@@ -8161,8 +8054,39 @@ const normalizeEthereumMainnetNativeEvmProverSdkArtifact = (
   });
 };
 
-const normalizeExpectedEthereumMainnetNativeEvmProverDestinationBindingHash = (
+const nativeEvmProverBundleProfiles = Object.freeze({
+  ethereumMainnet: Object.freeze({
+    displayName: "Ethereum mainnet",
+    className: "EthereumMainnetSccp",
+    domain: SCCP_DOMAIN_ETH,
+    chain: "eth",
+    bundleId: SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    parityFixtureSchema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    selfTestFixtureSchema: SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    destinationBinding: ethereumMainnetSccpDestinationBinding,
+    unavailableCode: "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+    selfTestUnavailableCode: "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+  }),
+  bscTestnet: Object.freeze({
+    displayName: "BSC testnet",
+    className: "BscTestnetSccp",
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    bundleId: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    parityFixtureSchema:
+      SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    selfTestFixtureSchema:
+      SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    destinationBinding: bscTestnetSccpDestinationBinding,
+    unavailableCode: "ERR_SCCP_BSC_TESTNET_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
+    selfTestUnavailableCode:
+      "ERR_SCCP_BSC_TESTNET_NATIVE_PROVER_SELF_TEST_UNAVAILABLE",
+  }),
+});
+
+const normalizeExpectedNativeEvmProverDestinationBindingHash = (
   options,
+  profile,
 ) => {
   if (options == null) {
     return undefined;
@@ -8191,11 +8115,11 @@ const normalizeExpectedEthereumMainnetNativeEvmProverDestinationBindingHash = (
       : normalizeCanonicalNativeEvmProverBundleHex32(
           direct,
           "expectedDestinationBindingHash",
-        );
+  );
   const bindingHash =
     binding === SCCP_OPTIONAL_FIELD_MISSING
       ? undefined
-      : ethereumMainnetSccpDestinationBinding(binding).bindingHash;
+      : profile.destinationBinding(binding).bindingHash;
   if (
     directHash !== undefined &&
     bindingHash !== undefined &&
@@ -8241,13 +8165,17 @@ const requireEthereumMainnetNativeEvmProverBundleHashRoleSeparation = ({
   }
 };
 
-export function validateEthereumMainnetNativeEvmProverBundle(
+const validateNativeEvmProverBundle = (
   manifest,
   options = {},
-) {
+) => {
+  const profile =
+    options?.profile && typeof options.profile === "object"
+      ? options.profile
+      : nativeEvmProverBundleProfiles.ethereumMainnet;
   requireNativeEvmProverBundleObject(
     manifest,
-    "Ethereum mainnet native EVM prover bundle",
+    `${profile.displayName} native EVM prover bundle`,
   );
   requireNativeEvmProverBundleKnownFields(
     manifest,
@@ -8267,19 +8195,19 @@ export function validateEthereumMainnetNativeEvmProverBundle(
       "bundle_id",
     ),
     "bundleId",
-    SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    profile.bundleId,
   );
   const domain = normalizeSccpDomainId(
     requiredNativeEvmProverBundleField(manifest, "domain", "domain"),
     "domain",
   );
-  if (domain !== SCCP_DOMAIN_ETH) {
-    throw new TypeError("domain must be Ethereum mainnet");
+  if (domain !== profile.domain) {
+    throw new TypeError(`domain must be ${profile.displayName}`);
   }
   const chain = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(manifest, "chain", "chain"),
     "chain",
-    "eth",
+    profile.chain,
   );
   const proofBackend = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(
@@ -8389,9 +8317,7 @@ export function validateEthereumMainnetNativeEvmProverBundle(
     "destinationBindingHash",
   );
   const expectedDestinationBindingHash =
-    normalizeExpectedEthereumMainnetNativeEvmProverDestinationBindingHash(
-      options,
-    );
+    normalizeExpectedNativeEvmProverDestinationBindingHash(options, profile);
   if (
     expectedDestinationBindingHash !== undefined &&
     destinationBindingHash !== expectedDestinationBindingHash
@@ -8513,6 +8439,26 @@ export function validateEthereumMainnetNativeEvmProverBundle(
     nativeProverSelfTestArtifact,
     auditHashes,
   });
+};
+
+export function validateEthereumMainnetNativeEvmProverBundle(
+  manifest,
+  options = {},
+) {
+  return validateNativeEvmProverBundle(manifest, {
+    ...options,
+    profile: nativeEvmProverBundleProfiles.ethereumMainnet,
+  });
+}
+
+export function validateBscTestnetNativeEvmProverBundle(
+  manifest,
+  options = {},
+) {
+  return validateNativeEvmProverBundle(manifest, {
+    ...options,
+    profile: nativeEvmProverBundleProfiles.bscTestnet,
+  });
 }
 
 export function parseEthereumMainnetNativeEvmProverBundleManifest(
@@ -8524,6 +8470,17 @@ export function parseEthereumMainnetNativeEvmProverBundleManifest(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
   return validateEthereumMainnetNativeEvmProverBundle(JSON.parse(json), options);
+}
+
+export function parseBscTestnetNativeEvmProverBundleManifest(
+  json,
+  options = {},
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverBundle JSON manifest must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverBundle");
+  return validateBscTestnetNativeEvmProverBundle(JSON.parse(json), options);
 }
 
 const normalizeNativeEvmProverParityHex32 = (value, label) =>
@@ -8641,16 +8598,18 @@ const normalizeEthereumMainnetNativeEvmProverParitySdkResult = (
   });
 };
 
-export function validateEthereumMainnetNativeEvmProverParityFixture(
+const validateNativeEvmProverParityFixture = (
   fixture,
   nativeProverBundle,
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     fixture,
-    "Ethereum mainnet native EVM prover parity fixture",
+    `${profile.displayName} native EVM prover parity fixture`,
   );
-  const bundle =
-    validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle);
+  const bundle = validateNativeEvmProverBundle(nativeProverBundle, {
+    profile,
+  });
   requireNativeEvmProverBundleKnownFields(
     fixture,
     "nativeProverParityFixture",
@@ -8659,13 +8618,13 @@ export function validateEthereumMainnetNativeEvmProverParityFixture(
   const schema = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(fixture, "schema", "schema"),
     "schema",
-    SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    profile.parityFixtureSchema,
   );
   const domain = normalizeSccpDomainId(
     requiredNativeEvmProverBundleField(fixture, "domain", "domain"),
     "domain",
   );
-  if (domain !== SCCP_DOMAIN_ETH || domain !== bundle.domain) {
+  if (domain !== profile.domain || domain !== bundle.domain) {
     throw new TypeError(
       "nativeProverParityFixture domain must match nativeProverBundle",
     );
@@ -8844,6 +8803,28 @@ export function validateEthereumMainnetNativeEvmProverParityFixture(
     toriiSubmitPayloadHash,
     sdkResults,
   });
+};
+
+export function validateEthereumMainnetNativeEvmProverParityFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverParityFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export function validateBscTestnetNativeEvmProverParityFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverParityFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
 }
 
 export function parseEthereumMainnetNativeEvmProverParityFixture(
@@ -8855,6 +8836,20 @@ export function parseEthereumMainnetNativeEvmProverParityFixture(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverParityFixture");
   return validateEthereumMainnetNativeEvmProverParityFixture(
+    JSON.parse(json),
+    nativeProverBundle,
+  );
+}
+
+export function parseBscTestnetNativeEvmProverParityFixture(
+  json,
+  nativeProverBundle,
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverParityFixture JSON must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverParityFixture");
+  return validateBscTestnetNativeEvmProverParityFixture(
     JSON.parse(json),
     nativeProverBundle,
   );
@@ -8969,16 +8964,18 @@ const normalizeEthereumMainnetNativeEvmProverSelfTestSdkResult = (
   });
 };
 
-export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
+const validateNativeEvmProverSelfTestFixture = (
   fixture,
   nativeProverBundle,
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     fixture,
-    "Ethereum mainnet native EVM prover self-test fixture",
+    `${profile.displayName} native EVM prover self-test fixture`,
   );
-  const bundle =
-    validateEthereumMainnetNativeEvmProverBundle(nativeProverBundle);
+  const bundle = validateNativeEvmProverBundle(nativeProverBundle, {
+    profile,
+  });
   requireNativeEvmProverBundleKnownFields(
     fixture,
     "nativeProverSelfTestFixture",
@@ -8987,13 +8984,13 @@ export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
   const schema = requiredNativeEvmProverBundleString(
     requiredNativeEvmProverBundleField(fixture, "schema", "schema"),
     "schema",
-    SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    profile.selfTestFixtureSchema,
   );
   const domain = normalizeSccpDomainId(
     requiredNativeEvmProverBundleField(fixture, "domain", "domain"),
     "domain",
   );
-  if (domain !== SCCP_DOMAIN_ETH || domain !== bundle.domain) {
+  if (domain !== profile.domain || domain !== bundle.domain) {
     throw new TypeError(
       "nativeProverSelfTestFixture domain must match nativeProverBundle",
     );
@@ -9193,6 +9190,28 @@ export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
     toriiSubmitPayloadHash,
     sdkResults,
   });
+};
+
+export function validateEthereumMainnetNativeEvmProverSelfTestFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverSelfTestFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export function validateBscTestnetNativeEvmProverSelfTestFixture(
+  fixture,
+  nativeProverBundle,
+) {
+  return validateNativeEvmProverSelfTestFixture(
+    fixture,
+    nativeProverBundle,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
 }
 
 export function parseEthereumMainnetNativeEvmProverSelfTestFixture(
@@ -9204,6 +9223,20 @@ export function parseEthereumMainnetNativeEvmProverSelfTestFixture(
   }
   rejectDuplicateJsonObjectKeys(json, "nativeProverSelfTestFixture");
   return validateEthereumMainnetNativeEvmProverSelfTestFixture(
+    JSON.parse(json),
+    nativeProverBundle,
+  );
+}
+
+export function parseBscTestnetNativeEvmProverSelfTestFixture(
+  json,
+  nativeProverBundle,
+) {
+  if (typeof json !== "string") {
+    throw new TypeError("nativeProverSelfTestFixture JSON must be a string");
+  }
+  rejectDuplicateJsonObjectKeys(json, "nativeProverSelfTestFixture");
+  return validateBscTestnetNativeEvmProverSelfTestFixture(
     JSON.parse(json),
     nativeProverBundle,
   );
@@ -9391,13 +9424,14 @@ function assertNativeEvmProverArtifactHasProductionSize(bytes, label) {
   }
 }
 
-export function verifyEthereumMainnetNativeEvmProverArtifacts(
+const verifyNativeEvmProverArtifacts = (
   input,
   options = {},
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     input,
-    "Ethereum mainnet native EVM prover artifacts",
+    `${profile.displayName} native EVM prover artifacts`,
   );
   const manifestInput = strictOptionalResultField(
     input,
@@ -9411,13 +9445,16 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
   if (manifestInput === SCCP_OPTIONAL_FIELD_MISSING) {
     throw new TypeError("nativeProverBundle is required");
   }
-  const nativeProverBundle =
-    typeof manifestInput === "string"
-      ? parseEthereumMainnetNativeEvmProverBundleManifest(
-          manifestInput,
-          options,
-        )
-      : validateEthereumMainnetNativeEvmProverBundle(manifestInput, options);
+  if (typeof manifestInput === "string") {
+    rejectDuplicateJsonObjectKeys(manifestInput, "nativeProverBundle");
+  }
+  const nativeProverBundle = validateNativeEvmProverBundle(
+    typeof manifestInput === "string" ? JSON.parse(manifestInput) : manifestInput,
+    {
+      ...options,
+      profile,
+    },
+  );
   const proofArtifactBytes = requiredNativeEvmProverArtifactBytes(
     input,
     "proofArtifactBytes",
@@ -9533,16 +9570,20 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
     nativeProverSelfTestBytes,
     "nativeProverSelfTestBytes",
   );
-  const crossSdkFixtureParity =
-    parseEthereumMainnetNativeEvmProverParityFixture(
-      textDecoder.decode(crossSdkFixtureParityBytes),
-      nativeProverBundle,
-    );
-  const nativeProverSelfTest =
-    parseEthereumMainnetNativeEvmProverSelfTestFixture(
-      textDecoder.decode(nativeProverSelfTestBytes),
-      nativeProverBundle,
-    );
+  const parityJson = textDecoder.decode(crossSdkFixtureParityBytes);
+  rejectDuplicateJsonObjectKeys(parityJson, "nativeProverParityFixture");
+  const crossSdkFixtureParity = validateNativeEvmProverParityFixture(
+    JSON.parse(parityJson),
+    nativeProverBundle,
+    profile,
+  );
+  const selfTestJson = textDecoder.decode(nativeProverSelfTestBytes);
+  rejectDuplicateJsonObjectKeys(selfTestJson, "nativeProverSelfTestFixture");
+  const nativeProverSelfTest = validateNativeEvmProverSelfTestFixture(
+    JSON.parse(selfTestJson),
+    nativeProverBundle,
+    profile,
+  );
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   const implementationBytes = optionalNativeEvmProverArtifactBytes(
     input,
@@ -9602,6 +9643,28 @@ export function verifyEthereumMainnetNativeEvmProverArtifacts(
     implementation,
     implementationHash,
   });
+};
+
+export function verifyEthereumMainnetNativeEvmProverArtifacts(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export function verifyBscTestnetNativeEvmProverArtifacts(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
 }
 
 const resolveNativeEvmProverArtifactBytes = async (
@@ -9620,13 +9683,14 @@ const resolveNativeEvmProverArtifactBytes = async (
   return toBytes(value, label);
 };
 
-export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+const verifyNativeEvmProverArtifactsFromBundle = async (
   input,
   options = {},
-) {
+  profile,
+) => {
   requireNativeEvmProverBundleObject(
     input,
-    "Ethereum mainnet native EVM prover artifact bundle",
+    `${profile.displayName} native EVM prover artifact bundle`,
   );
   const manifestInput = strictOptionalResultField(
     input,
@@ -9642,11 +9706,17 @@ export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
   }
   const nativeProverBundle =
     typeof manifestInput === "string"
-      ? parseEthereumMainnetNativeEvmProverBundleManifest(
-          manifestInput,
-          options,
-        )
-      : validateEthereumMainnetNativeEvmProverBundle(manifestInput, options);
+      ? (() => {
+          rejectDuplicateJsonObjectKeys(manifestInput, "nativeProverBundle");
+          return validateNativeEvmProverBundle(JSON.parse(manifestInput), {
+            ...options,
+            profile,
+          });
+        })()
+      : validateNativeEvmProverBundle(manifestInput, {
+          ...options,
+          profile,
+        });
   const sdk = strictOptionalResultField(input, "sdk", "sdk");
   if (typeof sdk !== "string" || sdk.length === 0) {
     throw new TypeError(
@@ -9715,7 +9785,7 @@ export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
     "implementationBytes",
     { ...sharedMetadata, role: "implementationArtifact" },
   );
-  return verifyEthereumMainnetNativeEvmProverArtifacts(
+  return verifyNativeEvmProverArtifacts(
     {
       nativeProverBundle,
       proofArtifactBytes,
@@ -9727,6 +9797,29 @@ export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
       implementationBytes,
     },
     options,
+    profile,
+  );
+};
+
+export async function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifactsFromBundle(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export async function verifyBscTestnetNativeEvmProverArtifactsFromBundle(
+  input,
+  options = {},
+) {
+  return verifyNativeEvmProverArtifactsFromBundle(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
   );
 }
 
@@ -9790,13 +9883,14 @@ const ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput = (
   return options;
 };
 
-const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
+const normalizeVerifiedNativeEvmProverArtifacts = (
   input,
   options = {},
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) => {
   requireNativeEvmProverBundleObject(
     input,
-    "Ethereum mainnet verified native EVM prover artifacts",
+    `${profile.displayName} verified native EVM prover artifacts`,
   );
   const hashAlgorithm = strictResultField(
     input,
@@ -9807,7 +9901,7 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
   if (hashAlgorithm !== SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1) {
     throw new TypeError("nativeProverArtifacts hashAlgorithm is not supported");
   }
-  const nativeProverBundle = validateEthereumMainnetNativeEvmProverBundle(
+  const nativeProverBundle = validateNativeEvmProverBundle(
     strictResultField(
       input,
       "nativeProverArtifacts.nativeProverBundle",
@@ -9816,7 +9910,10 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
       "proverBundle",
       "prover_bundle",
     ),
-    options,
+    {
+      ...options,
+      profile,
+    },
   );
   const proofArtifactHash = normalizeNonZeroHex32(
     strictResultField(
@@ -9900,30 +9997,30 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
       "nativeProverArtifacts nativeProverSelfTestHash must match nativeProverBundle.auditHashes.native_prover_self_test",
     );
   }
-  const crossSdkFixtureParity =
-    validateEthereumMainnetNativeEvmProverParityFixture(
-      strictResultField(
-        input,
-        "nativeProverArtifacts.crossSdkFixtureParity",
-        "crossSdkFixtureParity",
-        "cross_sdk_fixture_parity",
-        "parityFixture",
-        "parity_fixture",
-      ),
-      nativeProverBundle,
-    );
-  const nativeProverSelfTest =
-    validateEthereumMainnetNativeEvmProverSelfTestFixture(
-      strictResultField(
-        input,
-        "nativeProverArtifacts.nativeProverSelfTest",
-        "nativeProverSelfTest",
-        "native_prover_self_test",
-        "selfTest",
-        "self_test",
-      ),
-      nativeProverBundle,
-    );
+  const crossSdkFixtureParity = validateNativeEvmProverParityFixture(
+    strictResultField(
+      input,
+      "nativeProverArtifacts.crossSdkFixtureParity",
+      "crossSdkFixtureParity",
+      "cross_sdk_fixture_parity",
+      "parityFixture",
+      "parity_fixture",
+    ),
+    nativeProverBundle,
+    profile,
+  );
+  const nativeProverSelfTest = validateNativeEvmProverSelfTestFixture(
+    strictResultField(
+      input,
+      "nativeProverArtifacts.nativeProverSelfTest",
+      "nativeProverSelfTest",
+      "native_prover_self_test",
+      "selfTest",
+      "self_test",
+    ),
+    nativeProverBundle,
+    profile,
+  );
   const sdk = strictOptionalResultField(
     input,
     "nativeProverArtifacts.sdk",
@@ -9990,15 +10087,36 @@ const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
   });
 };
 
-const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest = (
+const normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts = (
+  input,
+  options = {},
+) =>
+  normalizeVerifiedNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+
+const normalizeBscTestnetVerifiedNativeEvmProverArtifacts = (
+  input,
+  options = {},
+) =>
+  normalizeVerifiedNativeEvmProverArtifacts(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
+
+const requireVerifiedNativeEvmProverArtifactsForRequest = (
   artifacts,
   request,
+  profile,
 ) => {
   if (artifacts == null) {
     const error = new Error(
-      "Ethereum mainnet SCCP outbound proof requires verified native EVM prover artifacts",
+      `${profile.displayName} SCCP outbound proof requires verified native EVM prover artifacts`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    error.code = profile.unavailableCode;
     throw error;
   }
   if (
@@ -10072,15 +10190,36 @@ const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest = (
   return artifacts;
 };
 
-const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult = (
+const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest = (
+  artifacts,
+  request,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForRequest(
+    artifacts,
+    request,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+
+const requireBscTestnetVerifiedNativeEvmProverArtifactsForRequest = (
+  artifacts,
+  request,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForRequest(
+    artifacts,
+    request,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
+
+const requireVerifiedNativeEvmProverArtifactsForProofResult = (
   artifacts,
   proofResult,
+  profile,
 ) => {
   if (artifacts == null) {
     const error = new Error(
-      "Ethereum mainnet SCCP submission requires verified native EVM prover artifacts",
+      `${profile.displayName} SCCP submission requires verified native EVM prover artifacts`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    error.code = profile.unavailableCode;
     throw error;
   }
   const proofArtifactHash = strictOptionalResultField(
@@ -10177,6 +10316,26 @@ const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult = (
   return artifacts;
 };
 
+const requireEthereumMainnetVerifiedNativeEvmProverArtifactsForProofResult = (
+  artifacts,
+  proofResult,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForProofResult(
+    artifacts,
+    proofResult,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+
+const requireBscTestnetVerifiedNativeEvmProverArtifactsForProofResult = (
+  artifacts,
+  proofResult,
+) =>
+  requireVerifiedNativeEvmProverArtifactsForProofResult(
+    artifacts,
+    proofResult,
+    nativeEvmProverBundleProfiles.bscTestnet,
+  );
+
 const normalizeEthereumMainnetNativeProverSelfTestResult = (
   result,
   artifacts,
@@ -10202,12 +10361,13 @@ const requireEthereumMainnetNativeProverSelfTest = async (
   artifacts,
   selfTestFn,
   options,
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) => {
   if (typeof selfTestFn !== "function") {
     const error = new Error(
-      "Ethereum mainnet SCCP outbound prover requires a native prover self-test hook",
+      `${profile.displayName} SCCP outbound prover requires a native prover self-test hook`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_SELF_TEST_UNAVAILABLE";
+    error.code = profile.selfTestUnavailableCode;
     throw error;
   }
   const sdk = artifacts.sdk;
@@ -10227,12 +10387,16 @@ const requireEthereumMainnetNativeProverSelfTest = async (
   return normalizeEthereumMainnetNativeProverSelfTestResult(result, artifacts);
 };
 
-export async function runEthereumMainnetNativeProverSelfTest(input = {}, options = {}) {
+const runNativeProverSelfTestForProfile = async (
+  input = {},
+  options = {},
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
+) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("Ethereum mainnet native prover self-test input must be an object");
+    throw new TypeError(`${profile.displayName} native prover self-test input must be an object`);
   }
   if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("Ethereum mainnet native prover self-test options must be an object");
+    throw new TypeError(`${profile.displayName} native prover self-test options must be an object`);
   }
   const destinationBinding = strictOptionalConstructorOption(
     input,
@@ -10255,14 +10419,15 @@ export async function runEthereumMainnetNativeProverSelfTest(input = {}, options
       : null);
   if (nativeProverArtifactsInput == null) {
     const error = new Error(
-      "Ethereum mainnet SCCP native prover self-test requires verified native EVM prover artifacts",
+      `${profile.displayName} SCCP native prover self-test requires verified native EVM prover artifacts`,
     );
-    error.code = "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE";
+    error.code = profile.unavailableCode;
     throw error;
   }
-  const nativeProverArtifacts = normalizeEthereumMainnetVerifiedNativeEvmProverArtifacts(
+  const nativeProverArtifacts = normalizeVerifiedNativeEvmProverArtifacts(
     nativeProverArtifactsInput,
     destinationBinding == null ? {} : { destinationBinding },
+    profile,
   );
   const nativeProverSelfTestFn =
     strictOptionalConstructorOption(
@@ -10285,12 +10450,30 @@ export async function runEthereumMainnetNativeProverSelfTest(input = {}, options
     nativeProverArtifacts,
     nativeProverSelfTestFn,
     options,
+    profile,
+  );
+};
+
+export async function runEthereumMainnetNativeProverSelfTest(input = {}, options = {}) {
+  return runNativeProverSelfTestForProfile(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.ethereumMainnet,
+  );
+}
+
+export async function runBscTestnetNativeProverSelfTest(input = {}, options = {}) {
+  return runNativeProverSelfTestForProfile(
+    input,
+    options,
+    nativeEvmProverBundleProfiles.bscTestnet,
   );
 }
 
 const prepareEthereumMainnetNativeEvmProverBundleInput = (
   input,
   defaultNativeProverBundle,
+  profile = nativeEvmProverBundleProfiles.ethereumMainnet,
 ) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return { input, nativeProverBundle: undefined };
@@ -10312,7 +10495,7 @@ const prepareEthereumMainnetNativeEvmProverBundleInput = (
   const nativeProverBundle =
     bundleInput === SCCP_OPTIONAL_FIELD_MISSING
       ? defaultNativeProverBundle
-      : validateEthereumMainnetNativeEvmProverBundle(bundleInput);
+      : validateNativeEvmProverBundle(bundleInput, { profile });
   const artifacts = normalizeOptionalGroth16ProverArtifacts(
     input,
     "proof request",
@@ -16344,6 +16527,44 @@ export class BscMainnetSccp {
 }
 
 export class BscTestnetSccp {
+  static async fromNativeProverBundle(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError(
+        "BscTestnetSccp native prover bundle options must be an object",
+      );
+    }
+    const existingArtifacts = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    if (existingArtifacts != null) {
+      throw new TypeError(
+        "BscTestnetSccp.fromNativeProverBundle resolves artifacts from the bundle; pass nativeProverArtifacts to the constructor directly",
+      );
+    }
+    const destinationBinding = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp destinationBinding",
+      "destinationBinding",
+      "destination_binding",
+    );
+    const nativeProverArtifacts =
+      await verifyBscTestnetNativeEvmProverArtifactsFromBundle(
+        options,
+        destinationBinding == null ? {} : { destinationBinding },
+      );
+    return new BscTestnetSccp(
+      ethereumMainnetSccpConstructorOptionsFromBundleFactoryInput(
+        options,
+        nativeProverArtifacts,
+      ),
+    );
+  }
+
   constructor(options = {}) {
     if (!options || typeof options !== "object" || Array.isArray(options)) {
       throw new TypeError("BscTestnetSccp options must be an object");
@@ -16381,12 +16602,80 @@ export class BscTestnetSccp {
       "submit_outbound_to_bsc",
       "submitToBsc",
     );
+    this.nativeProverSelfTestFn = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverSelfTest",
+      "nativeProverSelfTest",
+      "native_prover_self_test",
+      "selfTestNativeProver",
+      "self_test_native_prover",
+    );
     this.destinationBinding = strictOptionalConstructorOption(
       options,
       "BscTestnetSccp destinationBinding",
       "destinationBinding",
       "destination_binding",
     );
+    const nativeProverBundleInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverBundle",
+      "nativeProverBundle",
+      "native_prover_bundle",
+      "proverBundle",
+      "prover_bundle",
+    );
+    this.nativeProverBundle =
+      nativeProverBundleInput == null
+        ? null
+        : validateBscTestnetNativeEvmProverBundle(
+            nativeProverBundleInput,
+            this.destinationBinding == null
+              ? {}
+              : { destinationBinding: this.destinationBinding },
+          );
+    const nativeProverArtifactsInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    this.nativeProverArtifacts =
+      nativeProverArtifactsInput == null
+        ? hasEthereumMainnetNativeEvmProverArtifactBytes(options)
+          ? verifyBscTestnetNativeEvmProverArtifacts(
+              options,
+              this.destinationBinding == null
+                ? {}
+                : { destinationBinding: this.destinationBinding },
+            )
+          : null
+        : normalizeBscTestnetVerifiedNativeEvmProverArtifacts(
+            nativeProverArtifactsInput,
+            this.destinationBinding == null
+              ? {}
+              : { destinationBinding: this.destinationBinding },
+          );
+    if (this.nativeProverArtifacts != null) {
+      if (
+        this.nativeProverBundle != null &&
+        (this.nativeProverBundle.proofArtifactHash !==
+          this.nativeProverArtifacts.nativeProverBundle.proofArtifactHash ||
+          this.nativeProverBundle.provingKeyHash !==
+            this.nativeProverArtifacts.nativeProverBundle.provingKeyHash ||
+          this.nativeProverBundle.verifierKeyHash !==
+            this.nativeProverArtifacts.nativeProverBundle.verifierKeyHash ||
+          this.nativeProverBundle.destinationBindingHash !==
+            this.nativeProverArtifacts.nativeProverBundle
+              .destinationBindingHash)
+      ) {
+        throw new TypeError(
+          "nativeProverArtifacts must match nativeProverBundle",
+        );
+      }
+      this.nativeProverBundle = this.nativeProverArtifacts.nativeProverBundle;
+    }
     this.sourceVerifierMaterial = strictOptionalConstructorOption(
       options,
       "BscTestnetSccp sourceVerifierMaterial",
@@ -16660,12 +16949,125 @@ export class BscTestnetSccp {
   }
 
   buildOutboundProofRequest(input) {
-    return requireBscTestnetOutboundRequest(
-      buildBscTestnetSccpDestinationProofRequest(input),
+    const prepared = prepareEthereumMainnetNativeEvmProverBundleInput(
+      input,
+      this.nativeProverBundle,
+      nativeEvmProverBundleProfiles.bscTestnet,
+    );
+    const request = buildBscTestnetSccpDestinationProofRequest(prepared.input);
+    if (
+      prepared.nativeProverBundle !== undefined &&
+      request.destinationBindingHash !==
+        prepared.nativeProverBundle.destinationBindingHash
+    ) {
+      throw new TypeError(
+        "nativeProverBundle destinationBindingHash must match destinationBinding",
+      );
+    }
+    if (
+      prepared.nativeProverBundle !== undefined &&
+      request.destinationBinding?.verifierKeyHash !==
+        prepared.nativeProverBundle.verifierKeyHash
+    ) {
+      throw new TypeError(
+        "nativeProverBundle verifierKeyHash must match destinationBinding",
+      );
+    }
+    return requireBscTestnetOutboundRequest(request);
+  }
+
+  async runNativeProverSelfTest(options = {}) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError(
+        "BscTestnetSccp native prover self-test options must be an object",
+      );
+    }
+    const nativeProverArtifactsInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    const nativeProverArtifacts =
+      nativeProverArtifactsInput == null
+        ? this.nativeProverArtifacts
+        : normalizeBscTestnetVerifiedNativeEvmProverArtifacts(
+            nativeProverArtifactsInput,
+            this.destinationBinding == null
+              ? {}
+              : { destinationBinding: this.destinationBinding },
+          );
+    const nativeProverSelfTestFn =
+      strictOptionalConstructorOption(
+        options,
+        "BscTestnetSccp nativeProverSelfTest",
+        "nativeProverSelfTest",
+        "native_prover_self_test",
+        "selfTestNativeProver",
+        "self_test_native_prover",
+      ) ??
+      this.nativeProverSelfTestFn ??
+      (typeof this.outboundProver?.nativeProverSelfTest === "function"
+        ? this.outboundProver.nativeProverSelfTest.bind(this.outboundProver)
+        : null) ??
+      (typeof this.outboundProver?.selfTest === "function"
+        ? this.outboundProver.selfTest.bind(this.outboundProver)
+        : null);
+    return runBscTestnetNativeProverSelfTest(
+      {
+        nativeProverArtifacts,
+        nativeProverSelfTest: nativeProverSelfTestFn,
+      },
+      options,
     );
   }
 
   async proveOutboundToBsc(input, options = {}) {
+    const request = this.buildOutboundProofRequest(input);
+    const nativeProverArtifactsInput = strictOptionalConstructorOption(
+      options,
+      "BscTestnetSccp nativeProverArtifacts",
+      "nativeProverArtifacts",
+      "native_prover_artifacts",
+      "verifiedNativeProverArtifacts",
+      "verified_native_prover_artifacts",
+    );
+    const nativeProverArtifacts =
+      nativeProverArtifactsInput == null
+        ? this.nativeProverArtifacts
+        : normalizeBscTestnetVerifiedNativeEvmProverArtifacts(
+            nativeProverArtifactsInput,
+            { destinationBinding: request.destinationBinding },
+          );
+    requireBscTestnetVerifiedNativeEvmProverArtifactsForRequest(
+      nativeProverArtifacts,
+      request,
+    );
+    const nativeProverSelfTestFn =
+      strictOptionalConstructorOption(
+        options,
+        "BscTestnetSccp nativeProverSelfTest",
+        "nativeProverSelfTest",
+        "native_prover_self_test",
+        "selfTestNativeProver",
+        "self_test_native_prover",
+      ) ??
+      this.nativeProverSelfTestFn ??
+      (typeof this.outboundProver?.nativeProverSelfTest === "function"
+        ? this.outboundProver.nativeProverSelfTest.bind(this.outboundProver)
+        : null) ??
+      (typeof this.outboundProver?.selfTest === "function"
+        ? this.outboundProver.selfTest.bind(this.outboundProver)
+        : null);
+    await runBscTestnetNativeProverSelfTest(
+      {
+        nativeProverArtifacts,
+        nativeProverSelfTest: nativeProverSelfTestFn,
+      },
+      options,
+    );
     if (
       !this.outboundProver ||
       typeof this.outboundProver.prove !== "function"
@@ -16676,7 +17078,6 @@ export class BscTestnetSccp {
       error.code = "ERR_SCCP_BSC_TESTNET_OUTBOUND_PROVER_UNAVAILABLE";
       throw error;
     }
-    const request = this.buildOutboundProofRequest(input);
     const proofResult = normalizeEvmProofResult(
       await this.outboundProver.prove(
         immutableGroth16ProofRequest(request),
@@ -16694,10 +17095,21 @@ export class BscTestnetSccp {
   }
 
   buildBscCalldata(input) {
-    return requireBscTestnetSubmission(
+    const submission = requireBscTestnetSubmission(
       buildBscTestnetSccpDestinationSubmission(input),
       input,
     );
+    const proofResult = strictResultField(
+      input,
+      "proofResult",
+      "proofResult",
+      "proof_result",
+    );
+    requireBscTestnetVerifiedNativeEvmProverArtifactsForProofResult(
+      this.nativeProverArtifacts,
+      proofResult,
+    );
+    return submission;
   }
 
   async submitOutboundToBsc(input, options = {}) {
@@ -17115,740 +17527,6 @@ export class TronSccpProver {
     requireProductionTronProofRequest(request);
     return normalizeTronProofResult(
       await this.proveFn(immutableGroth16ProofRequest(request), options),
-      request,
-    );
-  }
-}
-
-const SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1 = new Set([
-  SCCP_DOMAIN_SORA_KUSAMA,
-  SCCP_DOMAIN_SORA_POLKADOT,
-  SCCP_DOMAIN_SORA2,
-]);
-
-const normalizeSubstrateRuntimeProofRequest = (input) => {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("Substrate SCCP proof request input must be an object");
-  }
-  const requestField = (label, ...names) =>
-    strictResultField(input, label, ...names);
-  const requestOptionalField = (label, ...names) =>
-    strictOptionalResultField(input, label, ...names);
-  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
-    requestField("publicInputs", "publicInputs", "public_inputs"),
-  );
-  const publicInputsBytes =
-    canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
-  const bundleBytes = requireNativeRecursiveProofBytes(
-    toBytes(
-      requestField("bundleBytes", "bundleBytes", "bundle_bytes"),
-      "bundleBytes",
-    ),
-    "bundleBytes",
-  );
-  const sourceProofInput = requestOptionalField(
-    "sourceProofBytes",
-    "sourceProofBytes",
-    "source_proof_bytes",
-  );
-  const sourceProofBytes = requireOptionalNonZeroBytes(
-    sourceProofInput !== SCCP_OPTIONAL_FIELD_MISSING
-      ? toBytes(sourceProofInput, "sourceProofBytes")
-      : new Uint8Array(),
-    "sourceProofBytes",
-  );
-  const sourceDomainInput = requestOptionalField(
-    "sourceDomain",
-    "sourceDomain",
-    "source_domain",
-  );
-  const sourceDomain =
-    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
-      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "sourceDomain")
-      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
-  const backendInput = requestOptionalField("backend", "backend");
-  const backend =
-    backendInput === SCCP_OPTIONAL_FIELD_MISSING || backendInput === null
-      ? SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1
-      : backendInput;
-  if (backend !== SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1) {
-    throw new TypeError("backend must be substrate-runtime-v1");
-  }
-  if (
-    !SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1.has(publicInputs.targetDomain)
-  ) {
-    throw new RangeError(
-      "publicInputs.targetDomain must be a Substrate-family SCCP domain",
-    );
-  }
-  if (sourceDomain !== SCCP_DOMAIN_SORA) {
-    throw new RangeError("sourceDomain must be SORA");
-  }
-  if (sourceDomain === publicInputs.targetDomain) {
-    throw new RangeError(
-      "sourceDomain and publicInputs.targetDomain must differ",
-    );
-  }
-  const proofContextInput = requestOptionalField(
-    "proofContext",
-    "proofContext",
-    "proof_context",
-  );
-  const proofContext = normalizeSccpProofContext(
-    proofContextInput === SCCP_OPTIONAL_FIELD_MISSING
-      ? input
-      : proofContextInput,
-    "Substrate SCCP proof context",
-  );
-  return {
-    publicInputs,
-    publicInputsBytes,
-    bundleBytes,
-    sourceProofBytes,
-    sourceDomain,
-    backend,
-    proofContext,
-  };
-};
-
-export const buildSubstrateSccpProofRequest = (input) => {
-  const {
-    publicInputs,
-    publicInputsBytes,
-    bundleBytes,
-    sourceProofBytes,
-    sourceDomain,
-    backend,
-    proofContext,
-  } = normalizeSubstrateRuntimeProofRequest(input);
-  const requestHash = bytesToHex(
-    prefixedBlake2b(
-      SCCP_SUBSTRATE_RUNTIME_PROOF_REQUEST_PREFIX_V1,
-      concatBytes(
-        writeU32Le(new Uint8Array(), sourceDomain),
-        publicInputsBytes,
-        writeBytes(new Uint8Array(), bundleBytes),
-        writeBytes(new Uint8Array(), sourceProofBytes),
-        hexToBytes(proofContext.statementHash, "statementHash", 32),
-        hexToBytes(
-          proofContext.destinationBindingHash,
-          "destinationBindingHash",
-          32,
-        ),
-      ),
-    ),
-  );
-  return immutableSubstrateProofRequest({
-    version: 1,
-    backend,
-    sourceDomain,
-    targetDomain: publicInputs.targetDomain,
-    publicInputs,
-    publicInputsBytes,
-    bundleBytes,
-    sourceProofBytes,
-    proofContext,
-    statementHash: proofContext.statementHash,
-    destinationBindingHash: proofContext.destinationBindingHash,
-    requestHash,
-  });
-};
-
-const substrateProofRequestComparable = (request) => {
-  const publicInputs = request.publicInputs ?? {};
-  const proofContext = request.proofContext ?? {};
-  return {
-    version: request.version,
-    backend: request.backend,
-    sourceDomain: request.sourceDomain,
-    targetDomain: request.targetDomain,
-    publicInputs: {
-      messageId: publicInputs.messageId,
-      payloadHash: publicInputs.payloadHash,
-      targetDomain: publicInputs.targetDomain,
-      commitmentRoot: publicInputs.commitmentRoot,
-      finalityHeight: publicInputs.finalityHeight,
-      finalityBlockHash: publicInputs.finalityBlockHash,
-    },
-    publicInputsBytes: bytesToHex(
-      toBytes(request.publicInputsBytes, "publicInputsBytes"),
-    ),
-    bundleBytes: bytesToHex(toBytes(request.bundleBytes, "bundleBytes")),
-    sourceProofBytes: bytesToHex(
-      toBytes(request.sourceProofBytes, "sourceProofBytes"),
-    ),
-    proofContext: {
-      version: proofContext.version,
-      statementHash: proofContext.statementHash,
-      destinationBindingHash: proofContext.destinationBindingHash,
-    },
-    statementHash: request.statementHash,
-    destinationBindingHash: request.destinationBindingHash,
-    requestHash: request.requestHash,
-  };
-};
-
-const requireCanonicalSubstrateProofRequest = (request) => {
-  if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new TypeError("Substrate SCCP proof request must be canonical");
-  }
-  try {
-    const expected = buildSubstrateSccpProofRequest({
-      publicInputs: request.publicInputs,
-      bundleBytes: request.bundleBytes,
-      sourceProofBytes: request.sourceProofBytes,
-      statementHash: request.statementHash,
-      destinationBindingHash: request.destinationBindingHash,
-      backend: request.backend,
-      sourceDomain: request.sourceDomain,
-    });
-    if (
-      JSON.stringify(substrateProofRequestComparable(request)) !==
-      JSON.stringify(substrateProofRequestComparable(expected))
-    ) {
-      throw new TypeError("Substrate SCCP proof request must be canonical");
-    }
-  } catch (error) {
-    if (
-      error instanceof TypeError &&
-      error.message === "Substrate SCCP proof request must be canonical"
-    ) {
-      throw error;
-    }
-    throw new TypeError("Substrate SCCP proof request must be canonical");
-  }
-};
-
-const requireProductionSubstrateProofRequest = (request) => {
-  requireCanonicalSubstrateProofRequest(request);
-  if (request.version !== 1) {
-    throw new TypeError("Substrate SCCP proof request version must be 1");
-  }
-  if (request.backend !== SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1) {
-    throw new TypeError(
-      "Substrate SCCP proof request backend must be substrate-runtime-v1",
-    );
-  }
-  if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
-    throw new TypeError(
-      "Substrate SCCP production proofs must start from SORA",
-    );
-  }
-  if (
-    request.targetDomain !== request.publicInputs?.targetDomain ||
-    !SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1.has(request.targetDomain)
-  ) {
-    throw new TypeError(
-      "Substrate SCCP production proofs must target a Substrate-family domain",
-    );
-  }
-  requireNativeRecursiveProofBytes(
-    toBytes(request.bundleBytes, "bundleBytes"),
-    "bundleBytes",
-  );
-  requireOptionalNonZeroBytes(
-    toBytes(request.sourceProofBytes, "sourceProofBytes"),
-    "sourceProofBytes",
-  );
-};
-
-const normalizeSubstrateProofResult = (result, request) => {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    throw new TypeError("Substrate SCCP proof result must be an object");
-  }
-  requireProductionSubstrateProofRequest(request);
-  const proofBytes = toBytes(
-    strictResultField(
-      result,
-      "proofResult.proofBytes",
-      "proofBytes",
-      "proof_bytes",
-      "proof",
-    ),
-    "proofBytes",
-  );
-  requireNativeRecursiveProofBytes(proofBytes, "proofBytes");
-  requireOptionalResultProofBase64Matches(result, proofBytes);
-  requireOptionalResultBackendMatches(result.backend, request.backend);
-  const resultRequestHash = strictOptionalResultField(
-    result,
-    "proofResult.requestHash",
-    "requestHash",
-    "request_hash",
-  );
-  if (resultRequestHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    requireSuppliedResultHashMatches(
-      resultRequestHash,
-      request.requestHash,
-      "requestHash",
-    );
-  }
-  requireOptionalTransparentResultMetadataMatches(result, request);
-  const envelopeHash = bytesToHex(
-    prefixedBlake2b(
-      SCCP_SUBSTRATE_RUNTIME_PROOF_ENVELOPE_PREFIX_V1,
-      concatBytes(
-        hexToBytes(request.requestHash, "requestHash", 32),
-        proofBytes,
-      ),
-    ),
-  );
-  const resultEnvelopeHash = strictOptionalResultField(
-    result,
-    "proofResult.envelopeHash",
-    "envelopeHash",
-    "envelope_hash",
-  );
-  if (resultEnvelopeHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    requireSuppliedResultHashMatches(
-      resultEnvelopeHash,
-      envelopeHash,
-      "envelopeHash",
-    );
-  }
-  return immutableSubstrateProofResult({
-    version: 1,
-    backend: request.backend,
-    proofBytes,
-    proofBase64: bytesToBase64(proofBytes),
-    publicInputs: request.publicInputs,
-    bundleBytes: request.bundleBytes,
-    sourceProofBytes: request.sourceProofBytes,
-    proofContext: request.proofContext,
-    statementHash: request.statementHash,
-    destinationBindingHash: request.destinationBindingHash,
-    requestHash: request.requestHash,
-    envelopeHash,
-  });
-};
-
-export function wrapSubstrateSccpProofResult(proofBytes, request) {
-  return normalizeSubstrateProofResult({ proofBytes }, request);
-}
-
-export function buildSubstrateSccpSubmission(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("Substrate SCCP submission input must be an object");
-  }
-  const proofResultInput = strictOptionalResultField(
-    input,
-    "proofResult",
-    "proofResult",
-    "proof_result",
-  );
-  if (proofResultInput === null) {
-    throw new TypeError(
-      "proofResult must be a wrapped Substrate SCCP proof result",
-    );
-  }
-  const proofResult =
-    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING ? null : proofResultInput;
-  if (
-    proofResult !== null &&
-    (!proofResult ||
-      typeof proofResult !== "object" ||
-      Array.isArray(proofResult))
-  ) {
-    throw new TypeError(
-      "proofResult must be a wrapped Substrate SCCP proof result",
-    );
-  }
-  if (proofResult !== null) {
-    const resultBackend = optionalResultField(proofResult, "backend");
-    if (resultBackend !== SCCP_OPTIONAL_FIELD_MISSING) {
-      requireOptionalResultBackendMatches(
-        resultBackend,
-        SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
-      );
-    }
-  }
-
-  const inputPublicInputs = strictOptionalResultField(
-    input,
-    "publicInputs",
-    "publicInputs",
-    "public_inputs",
-  );
-  const resultPublicInputs =
-    proofResult === null
-      ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.publicInputs",
-          "publicInputs",
-          "public_inputs",
-        );
-  const publicInputs = normalizeSccpMessageTransparentPublicInputs(
-    inputPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING
-      ? inputPublicInputs
-      : resultPublicInputs,
-  );
-  if (
-    !SCCP_SUBSTRATE_RUNTIME_TARGET_DOMAINS_V1.has(publicInputs.targetDomain)
-  ) {
-    throw new TypeError(
-      "Substrate SCCP submissions must target a Substrate-family domain",
-    );
-  }
-  if (
-    resultPublicInputs !== SCCP_OPTIONAL_FIELD_MISSING &&
-    JSON.stringify(
-      normalizeSccpMessageTransparentPublicInputs(resultPublicInputs),
-    ) !== JSON.stringify(publicInputs)
-  ) {
-    throw new TypeError("publicInputs must match proofResult.publicInputs");
-  }
-
-  const expectedPublicInputsBytes =
-    canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
-  const publicInputsBytesInput = strictOptionalResultField(
-    input,
-    "publicInputsBytes",
-    "publicInputsBytes",
-    "public_inputs_bytes",
-  );
-  const publicInputsBytes =
-    publicInputsBytesInput === SCCP_OPTIONAL_FIELD_MISSING
-      ? expectedPublicInputsBytes
-      : toBytes(publicInputsBytesInput, "publicInputsBytes");
-  if (!bytesEqual(publicInputsBytes, expectedPublicInputsBytes)) {
-    throw new TypeError(
-      "publicInputsBytes must match canonical SCCP transparent public inputs",
-    );
-  }
-
-  const inputBundle = strictOptionalResultField(
-    input,
-    "bundleBytes",
-    "bundleBytes",
-    "bundle_bytes",
-  );
-  const resultBundle =
-    proofResult === null
-      ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.bundleBytes",
-          "bundleBytes",
-          "bundle_bytes",
-        );
-  const bundleBytes = requireNativeRecursiveProofBytes(
-    toBytes(
-      inputBundle !== SCCP_OPTIONAL_FIELD_MISSING ? inputBundle : resultBundle,
-      "bundleBytes",
-    ),
-    "bundleBytes",
-  );
-  if (
-    resultBundle !== SCCP_OPTIONAL_FIELD_MISSING &&
-    !bytesEqual(bundleBytes, toBytes(resultBundle, "proofResult.bundleBytes"))
-  ) {
-    throw new TypeError("bundleBytes must match proofResult.bundleBytes");
-  }
-
-  const inputSourceProof = strictOptionalResultField(
-    input,
-    "sourceProofBytes",
-    "sourceProofBytes",
-    "source_proof_bytes",
-  );
-  const resultSourceProof =
-    proofResult === null
-      ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.sourceProofBytes",
-          "sourceProofBytes",
-          "source_proof_bytes",
-        );
-  const sourceProofBytes = requireOptionalNonZeroBytes(
-    inputSourceProof !== SCCP_OPTIONAL_FIELD_MISSING
-      ? toBytes(inputSourceProof, "sourceProofBytes")
-      : resultSourceProof !== SCCP_OPTIONAL_FIELD_MISSING
-        ? toBytes(resultSourceProof, "proofResult.sourceProofBytes")
-        : new Uint8Array(),
-    "sourceProofBytes",
-  );
-  if (
-    resultSourceProof !== SCCP_OPTIONAL_FIELD_MISSING &&
-    !bytesEqual(
-      sourceProofBytes,
-      toBytes(resultSourceProof, "proofResult.sourceProofBytes"),
-    )
-  ) {
-    throw new TypeError(
-      "sourceProofBytes must match proofResult.sourceProofBytes",
-    );
-  }
-  if (
-    proofResult === null &&
-    inputSourceProof !== SCCP_OPTIONAL_FIELD_MISSING &&
-    sourceProofBytes.length > 0
-  ) {
-    throw new TypeError(
-      "sourceProofBytes requires proofResult for request-bound submission",
-    );
-  }
-
-  const sourceDomainInput = strictOptionalResultField(
-    input,
-    "sourceDomain",
-    "sourceDomain",
-    "source_domain",
-  );
-  const sourceDomain =
-    sourceDomainInput === SCCP_OPTIONAL_FIELD_MISSING
-      ? normalizeSccpDomainId(SCCP_DOMAIN_SORA, "sourceDomain")
-      : normalizeSccpDomainId(sourceDomainInput, "sourceDomain");
-  if (sourceDomain !== SCCP_DOMAIN_SORA) {
-    throw new TypeError("Substrate SCCP submissions must start from SORA");
-  }
-
-  const inputProofContext = strictOptionalResultField(
-    input,
-    "proofContext",
-    "proofContext",
-    "proof_context",
-  );
-  const resultProofContext =
-    proofResult === null
-      ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.proofContext",
-          "proofContext",
-          "proof_context",
-        );
-  const proofContextSource =
-    inputProofContext !== SCCP_OPTIONAL_FIELD_MISSING
-      ? inputProofContext
-      : resultProofContext !== SCCP_OPTIONAL_FIELD_MISSING
-        ? resultProofContext
-        : input;
-  if (
-    !proofContextSource ||
-    typeof proofContextSource !== "object" ||
-    Array.isArray(proofContextSource)
-  ) {
-    throw new TypeError("proofContext must be an object");
-  }
-  const inputStatementHash = strictOptionalResultField(
-    input,
-    "statementHash",
-    "statementHash",
-    "statement_hash",
-  );
-  const contextStatementHash = strictOptionalResultField(
-    proofContextSource,
-    "proofContext.statementHash",
-    "statementHash",
-    "statement_hash",
-  );
-  const resultStatementHash =
-    proofResult === null
-      ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.statementHash",
-          "statementHash",
-          "statement_hash",
-        );
-  const statementHash = normalizeNonZeroHex32(
-    inputStatementHash !== SCCP_OPTIONAL_FIELD_MISSING
-      ? inputStatementHash
-      : contextStatementHash !== SCCP_OPTIONAL_FIELD_MISSING
-        ? contextStatementHash
-        : resultStatementHash,
-    "statementHash",
-  );
-  if (resultStatementHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    requireSuppliedResultHashMatches(
-      resultStatementHash,
-      statementHash,
-      "statementHash",
-    );
-  }
-
-  const inputDestinationBindingHash = strictOptionalResultField(
-    input,
-    "destinationBindingHash",
-    "destinationBindingHash",
-    "destination_binding_hash",
-  );
-  const contextDestinationBindingHash = strictOptionalResultField(
-    proofContextSource,
-    "proofContext.destinationBindingHash",
-    "destinationBindingHash",
-    "destination_binding_hash",
-  );
-  const resultDestinationBindingHash =
-    proofResult === null
-      ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.destinationBindingHash",
-          "destinationBindingHash",
-          "destination_binding_hash",
-        );
-  const destinationBindingHash = normalizeNonZeroHex32(
-    inputDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
-      ? inputDestinationBindingHash
-      : contextDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING
-        ? contextDestinationBindingHash
-        : resultDestinationBindingHash,
-    "destinationBindingHash",
-  );
-  if (resultDestinationBindingHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    requireSuppliedResultHashMatches(
-      resultDestinationBindingHash,
-      destinationBindingHash,
-      "destinationBindingHash",
-    );
-  }
-
-  const proofBytesInput = strictOptionalResultField(
-    input,
-    "proofBytes",
-    "proofBytes",
-    "proof_bytes",
-  );
-  const resultProofBytes =
-    proofResult === null
-      ? SCCP_OPTIONAL_FIELD_MISSING
-      : strictOptionalResultField(
-          proofResult,
-          "proofResult.proofBytes",
-          "proofBytes",
-          "proof_bytes",
-          "proof",
-        );
-  const proofBytes = requireNativeRecursiveProofBytes(
-    toBytes(
-      proofBytesInput !== SCCP_OPTIONAL_FIELD_MISSING
-        ? proofBytesInput
-        : resultProofBytes,
-      "proofBytes",
-    ),
-    "proofBytes",
-  );
-  if (
-    resultProofBytes !== SCCP_OPTIONAL_FIELD_MISSING &&
-    !bytesEqual(proofBytes, toBytes(resultProofBytes, "proofResult.proofBytes"))
-  ) {
-    throw new TypeError("proofBytes must match proofResult.proofBytes");
-  }
-
-  const expectedRequest = buildSubstrateSccpProofRequest({
-    publicInputs,
-    bundleBytes,
-    sourceProofBytes,
-    statementHash,
-    destinationBindingHash,
-    sourceDomain,
-  });
-  if (proofResult !== null) {
-    const wrappedResult = normalizeSubstrateProofResult(
-      proofResult,
-      expectedRequest,
-    );
-    if (!bytesEqual(proofBytes, wrappedResult.proofBytes)) {
-      throw new TypeError("proofBytes must match proofResult.proofBytes");
-    }
-  }
-
-  const runtimeCall = encodeSubstrateSccpRuntimeCall([
-    proofBytes,
-    publicInputsBytes,
-    bundleBytes,
-  ]);
-  const argumentsValue = [
-    {
-      key: "proof_bytes",
-      encoding: "raw_bytes",
-      bytes: bytesToHex(proofBytes),
-    },
-    {
-      key: "public_inputs",
-      encoding: "raw_bytes",
-      bytes: bytesToHex(publicInputsBytes),
-    },
-    {
-      key: "bundle_bytes",
-      encoding: "raw_bytes",
-      bytes: bytesToHex(bundleBytes),
-    },
-  ];
-  const submission = {
-    version: 1,
-    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
-    verifierBackend: SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
-    platformPayload: "substrate_runtime_call",
-    envelopeEncoding: SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
-    submissionKind: "runtime_call",
-    verifierEntrypoint: SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
-    sourceDomain,
-    targetDomain: publicInputs.targetDomain,
-    publicInputs: Object.freeze({ ...publicInputs }),
-    proofContext: Object.freeze({ ...expectedRequest.proofContext }),
-    statementHash,
-    destinationBindingHash,
-    requestHash: expectedRequest.requestHash,
-    arguments: Object.freeze(
-      argumentsValue.map((argument) => Object.freeze({ ...argument })),
-    ),
-    runtimeCallHex: bytesToHex(runtimeCall),
-    envelopeHex: bytesToHex(runtimeCall),
-  };
-  defineCopiedByteField(submission, "proofBytes", proofBytes);
-  defineCopiedByteField(submission, "publicInputsBytes", publicInputsBytes);
-  defineCopiedByteField(submission, "bundleBytes", bundleBytes);
-  defineCopiedByteField(submission, "runtimeCall", runtimeCall);
-  defineCopiedByteField(submission, "envelopeBytes", runtimeCall);
-  return Object.freeze(submission);
-}
-
-export class SubstrateSccpProver {
-  constructor(options = {}) {
-    if (!options || typeof options !== "object" || Array.isArray(options)) {
-      throw new TypeError("SubstrateSccpProver options must be an object");
-    }
-    this.witnessProvider = strictOptionalConstructorOption(
-      options,
-      "Substrate SCCP prover witnessProvider",
-      "witnessProvider",
-      "witness_provider",
-    );
-    this.proveFn = strictOptionalConstructorOption(
-      options,
-      "Substrate SCCP prover prove",
-      "prove",
-      "proveFn",
-      "prove_fn",
-    );
-  }
-
-  async buildRequest(input, options = {}) {
-    const witness = await resolveSccpWitness(
-      this.witnessProvider,
-      input,
-      options,
-      "Substrate SCCP",
-    );
-    return buildSubstrateSccpProofRequest(witness);
-  }
-
-  async prove(input, options = {}) {
-    const request = await this.buildRequest(input, options);
-    if (typeof this.proveFn !== "function") {
-      const error = new Error(
-        "Substrate SCCP runtime prover is not linked; provide a browser-safe prove function before generating production proofs",
-      );
-      error.code = "ERR_SCCP_SUBSTRATE_PROVER_UNAVAILABLE";
-      throw error;
-    }
-    requireProductionSubstrateProofRequest(request);
-    return normalizeSubstrateProofResult(
-      await this.proveFn(immutableSubstrateProofRequest(request), options),
       request,
     );
   }
@@ -34163,7 +33841,7 @@ const normalizeSubstrateSccpStorageProofInput = (input) => {
   };
 };
 
-export function canonicalSubstrateSccpStorageProofBytes(input) {
+function canonicalSubstrateSccpStorageProofBytes(input) {
   const normalized = normalizeSubstrateSccpStorageProofInput(input);
   let out = new Uint8Array();
   out = writeU8(out, 1);
@@ -34192,7 +33870,7 @@ export function canonicalSubstrateSccpStorageProofBytes(input) {
   return writeSccpH256Branch(out, normalized.inclusionBranch);
 }
 
-export function substrateSccpStorageProofHash(input) {
+function substrateSccpStorageProofHash(input) {
   return bytesToHex(
     prefixedBlake2b(
       SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1,
@@ -34302,7 +33980,7 @@ const normalizeSubstrateSccpRuntimeStorageProofRequestInput = (input) => {
   };
 };
 
-export function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
+function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
   input,
 ) {
   return canonicalSubstrateSccpStorageProofBytes(
@@ -34310,7 +33988,7 @@ export function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
   );
 }
 
-export function substrateSccpRuntimeStorageProofPublicInputsHash(input) {
+function substrateSccpRuntimeStorageProofPublicInputsHash(input) {
   return bytesToHex(
     prefixedBlake2b(
       SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
@@ -34319,7 +33997,7 @@ export function substrateSccpRuntimeStorageProofPublicInputsHash(input) {
   );
 }
 
-export function canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
+function canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
   input,
 ) {
   const normalized =
@@ -34381,7 +34059,7 @@ export function canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
   );
 }
 
-export function substrateSccpRuntimeStoragePublicInputColumns(input) {
+function substrateSccpRuntimeStoragePublicInputColumns(input) {
   const normalized =
     normalizeSubstrateSccpRuntimeStorageProofRequestInput(input);
   return [
@@ -34399,7 +34077,7 @@ export function substrateSccpRuntimeStoragePublicInputColumns(input) {
   ];
 }
 
-export function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(input) {
+function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(input) {
   const sourceDomain =
     typeof input === "object" && input !== null
       ? normalizeSccpDomainId(
@@ -34450,7 +34128,7 @@ export function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(input) {
   return descriptor;
 }
 
-export function buildSubstrateSccpRuntimeStorageProofRequest(input) {
+function buildSubstrateSccpRuntimeStorageProofRequest(input) {
   const normalized =
     normalizeSubstrateSccpRuntimeStorageProofRequestInput(input);
   const statementBytes =
@@ -34516,7 +34194,7 @@ export function buildSubstrateSccpRuntimeStorageProofRequest(input) {
   );
 }
 
-export function canonicalSubstrateAuthoritySetPayloadBytes(input) {
+function canonicalSubstrateAuthoritySetPayloadBytes(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError(
       "Substrate authority-set payload input must be an object",
@@ -34647,7 +34325,7 @@ const substrateAuthoritySetPayloadBytes = (input) => {
   return payload;
 };
 
-export function substrateAuthoritySetPayloadHash(input) {
+function substrateAuthoritySetPayloadHash(input) {
   return bytesToHex(
     prefixedBlake2b(
       SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1,
@@ -34656,7 +34334,7 @@ export function substrateAuthoritySetPayloadHash(input) {
   );
 }
 
-export function substrateAuthoritySetHashFromPayload(input) {
+function substrateAuthoritySetHashFromPayload(input) {
   return bytesToHex(
     prefixedBlake2b(
       SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1,
@@ -34711,7 +34389,7 @@ function substrateTransitionPayloadHashBytes(input) {
   return payloadHash;
 }
 
-export function canonicalSubstrateAuthoritySetTransitionMessageBytes(input) {
+function canonicalSubstrateAuthoritySetTransitionMessageBytes(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError(
       "Substrate authority-set transition message input must be an object",
@@ -34799,7 +34477,7 @@ export function canonicalSubstrateAuthoritySetTransitionMessageBytes(input) {
   return out;
 }
 
-export function substrateAuthoritySetTransitionMessageHash(input) {
+function substrateAuthoritySetTransitionMessageHash(input) {
   return bytesToHex(
     prefixedBlake2b(
       SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1,
@@ -34977,7 +34655,7 @@ function canonicalSubstrateGrandpaJustificationProofBytes(input) {
   return out;
 }
 
-export function canonicalSubstrateAuthoritySetTransitionJustificationBytes(
+function canonicalSubstrateAuthoritySetTransitionJustificationBytes(
   input,
 ) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -35168,7 +34846,7 @@ export function canonicalSubstrateAuthoritySetTransitionJustificationBytes(
   return out;
 }
 
-export function substrateAuthoritySetTransitionJustificationHash(input) {
+function substrateAuthoritySetTransitionJustificationHash(input) {
   return bytesToHex(
     prefixedBlake2b(
       SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1,

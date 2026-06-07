@@ -5,6 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+  SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+} from "../javascript/iroha_js/src/sccp.js";
+import {
   BSC_TESTNET_NETWORK_ID_HEX,
   ROUTE_MANIFEST_SCHEMA,
   SCCP_BSC_DIAGNOSTIC_VERIFIER_KEY_HASHES,
@@ -35,6 +41,7 @@ const HASH_44 = `0x${"44".repeat(32)}`;
 const HASH_55 = `0x${"55".repeat(32)}`;
 const HASH_66 = `0x${"66".repeat(32)}`;
 const HASH_77 = `0x${"77".repeat(32)}`;
+const hex32 = (byte) => `0x${byte.repeat(32)}`;
 const SOURCE_EVENT_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_55}`;
 const ROUTE_CANARY_EXPLORER_URL = `https://testnet.bscscan.com/tx/${HASH_77}`;
 const DIAGNOSTIC_BSC_VERIFIER_KEY_HASH = [
@@ -88,6 +95,61 @@ const diagnosticBindingKey = () =>
     verifierCodeHash: HASH_11,
     verifierKeyHash: DIAGNOSTIC_BSC_VERIFIER_KEY_HASH,
   });
+
+const nativeProverBundleForRollout = (destinationRollout, overrides = {}) => {
+  const proofArtifactHash = destinationRollout.proofArtifactHash;
+  const provingKeyHash = destinationRollout.provingKeyHash;
+  return {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundle_id: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact: "artifacts/bsc-testnet/proof-artifact.bin",
+    proof_artifact_hash: proofArtifactHash,
+    proving_key: "artifacts/bsc-testnet/proving-key.bin",
+    proving_key_hash: provingKeyHash,
+    verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
+    verifier_key_hash: destinationRollout.verifierKeyHash,
+    destination_binding_hash: destinationRollout.destinationBindingHash,
+    no_wasm: true,
+    remote_prover_required: false,
+    browser_implementation: "pure-typescript",
+    cross_sdk_fixture_parity_artifact:
+      "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
+    native_prover_self_test_artifact:
+      "artifacts/bsc-testnet/native-prover-self-test.json",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/bsc-testnet/${sdk}-implementation.bin`,
+      implementation_hash: hex32((0x81 + index).toString(16)),
+    })),
+    audit_hashes: {
+      circuit_security_audit: hex32("91"),
+      native_implementation_audit: hex32("92"),
+      reproducible_build_attestation: hex32("93"),
+      cross_sdk_fixture_parity: hex32("94"),
+      native_prover_self_test: hex32("95"),
+      no_wasm_no_remote_scan: hex32("96"),
+    },
+    ...overrides,
+  };
+};
+
+const attachNativeProverBundle = (manifest, bundleOverrides = {}) => ({
+  ...manifest,
+  nativeEvmProverBundle: nativeProverBundleForRollout(
+    manifest.destinationRollout,
+    bundleOverrides,
+  ),
+});
+const hasOwn = (record, key) =>
+  Object.prototype.hasOwnProperty.call(record, key);
 
 const readyReadback = (overrides = {}) => ({
   chainIdHex: "0x61",
@@ -220,6 +282,32 @@ const routeManifest = (overrides = {}) => {
     postDeployLiveEvidence,
     ...topLevelOverrides,
   };
+};
+
+const productionReadyRouteManifest = (overrides = {}) => {
+  const {
+    bundleOverrides,
+    skipNativeEvmProverBundle,
+    postDeployLiveEvidence: postDeployOverrides,
+    ...manifestOverrides
+  } = overrides;
+  const manifest = routeManifest({
+    productionReady: true,
+    disabledReason: undefined,
+    postDeployLiveEvidence: {
+      fullTomlReady: true,
+      offlineFullTomlSha256: HASH_33,
+      ...postDeployOverrides,
+    },
+    ...manifestOverrides,
+  });
+  if (
+    skipNativeEvmProverBundle ||
+    hasOwn(manifestOverrides, "nativeEvmProverBundle")
+  ) {
+    return manifest;
+  }
+  return attachNativeProverBundle(manifest, bundleOverrides ?? {});
 };
 
 test("BSC deployment binding key and hash are canonical public evidence", () => {
@@ -565,8 +653,8 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
 });
 
 test("BSC route-config requires explicit post-deploy evidence for production-ready manifests", () => {
-  const productionReadyManifest = (postDeployOverrides = {}) =>
-    routeManifest({
+  const productionReadyManifest = (postDeployOverrides = {}, overrides = {}) => {
+    const manifest = routeManifest({
       productionReady: true,
       disabledReason: undefined,
       postDeployLiveEvidence: {
@@ -574,7 +662,12 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
         offlineFullTomlSha256: HASH_33,
         ...postDeployOverrides,
       },
+      ...overrides,
     });
+    return hasOwn(overrides, "nativeEvmProverBundle")
+      ? manifest
+      : attachNativeProverBundle(manifest);
+  };
 
   const toml = buildBscTairaXorRouteConfigToml(productionReadyManifest());
   assert.match(toml, /production_ready = true/u);
@@ -645,18 +738,124 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
   );
 });
 
+test("BSC route-config requires SDK-valid native prover bundles for production readiness", () => {
+  const validToml = buildBscTairaXorRouteConfigToml(
+    productionReadyRouteManifest(),
+  );
+  assert.match(validToml, /production_ready = true/u);
+  assert.match(validToml, new RegExp(`proof_artifact_hash = "${HASH_44}"`, "u"));
+  assert.match(validToml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
+
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({ skipNativeEvmProverBundle: true }),
+      ),
+    /productionReady requires nativeEvmProverBundle/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: { chain: "eth" },
+        }),
+      ),
+    /nativeEvmProverBundle.*BSC SDK validation.*chain must be bsc-testnet/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: { verifier_key_hash: HASH_33 },
+        }),
+      ),
+    /nativeEvmProverBundle verifierKeyHash must match route manifest verifierKeyHash/u,
+  );
+  const proofHashDriftBase = productionReadyRouteManifest();
+  const proofHashDriftBundle = nativeProverBundleForRollout(
+    proofHashDriftBase.destinationRollout,
+    {
+      proof_artifact_hash: HASH_66,
+      native_sdk_artifacts: Object.entries(
+        SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+      ).map(([sdk, implementation], index) => ({
+        sdk,
+        implementation,
+        prover_artifact_hash: HASH_66,
+        proving_key_hash: proofHashDriftBase.destinationRollout.provingKeyHash,
+        implementation_artifact: `artifacts/bsc-testnet/${sdk}-implementation.bin`,
+        implementation_hash: hex32((0x81 + index).toString(16)),
+      })),
+    },
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml({
+        ...proofHashDriftBase,
+        nativeEvmProverBundle: proofHashDriftBundle,
+      }),
+    /nativeEvmProverBundle proofArtifactHash must match route manifest proofArtifactHash/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: { destination_binding_hash: HASH_66 },
+        }),
+      ),
+    /nativeEvmProverBundle.*BSC SDK validation.*destinationBindingHash/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: { proof_artifact: "../proof-artifact.bin" },
+        }),
+      ),
+    /nativeEvmProverBundle.*BSC SDK validation.*proofArtifact/u,
+  );
+
+  const aliasBase = productionReadyRouteManifest();
+  const aliasDriftBundle = nativeProverBundleForRollout(
+    aliasBase.destinationRollout,
+    {
+      audit_hashes: {
+        circuit_security_audit: hex32("91"),
+        native_implementation_audit: hex32("92"),
+        reproducible_build_attestation: hex32("93"),
+        cross_sdk_fixture_parity: hex32("94"),
+        native_prover_self_test: hex32("95"),
+        no_wasm_no_remote_scan: hex32("97"),
+      },
+    },
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml({
+        ...aliasBase,
+        destinationRollout: {
+          ...aliasBase.destinationRollout,
+          nativeProverBundle: aliasDriftBundle,
+        },
+      }),
+    /nativeEvmProverBundle aliases disagree/u,
+  );
+});
+
 test("BSC route-config refuses production-ready manifests with disabled reasons", () => {
   assert.throws(
     () =>
       buildBscTairaXorRouteConfigToml(
-        routeManifest({
-          productionReady: true,
-          disabledReason: "operator left this route disabled",
-          postDeployLiveEvidence: {
-            fullTomlReady: true,
-            offlineFullTomlSha256: HASH_33,
-          },
-        }),
+        attachNativeProverBundle(
+          routeManifest({
+            productionReady: true,
+            disabledReason: "operator left this route disabled",
+            postDeployLiveEvidence: {
+              fullTomlReady: true,
+              offlineFullTomlSha256: HASH_33,
+            },
+          }),
+        ),
       ),
     /productionReady cannot be true when disabledReason is set/u,
   );

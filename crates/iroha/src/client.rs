@@ -249,15 +249,6 @@ pub struct SccpCapabilities {
     pub burn_bundle_path: String,
     /// Generic SCCP message-bundle fetch path.
     pub message_bundle_path: String,
-    /// Runtime SCALE proof family accepted by the SORA SCCP pallet.
-    #[norito(default)]
-    pub runtime_proof_family: Option<String>,
-    /// Runtime verifier backend label accepted by the SORA SCCP pallet.
-    #[norito(default)]
-    pub runtime_verifier_backend: Option<String>,
-    /// Optional runtime SCALE message-envelope fetch path.
-    #[norito(default)]
-    pub message_runtime_bundle_path: Option<String>,
     /// Generic SCCP typed proof-artifact fetch path.
     pub message_proof_path: String,
     /// Generic SCCP normalized proof-job fetch path.
@@ -23546,11 +23537,6 @@ mod tests {
             proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
             burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
-            runtime_proof_family: Some(iroha_sccp::SCCP_RUNTIME_PROOF_FAMILY_V1.to_owned()),
-            runtime_verifier_backend: Some(iroha_sccp::SCCP_RUNTIME_VERIFIER_BACKEND_V1.to_owned()),
-            message_runtime_bundle_path: Some(
-                "/v1/sccp/proofs/message/{message_id}/runtime-scale".to_owned(),
-            ),
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),

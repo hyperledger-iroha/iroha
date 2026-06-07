@@ -159,7 +159,7 @@ fn verify_against_store(store: &DaPinStore, proof: &DaPinIntentWithLocation) -> 
         .unwrap_or(false)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use iroha_data_model::{
         da::{commitment::DaCommitmentLocation, pin_intent::DaPinIntent, types::StorageTicketId},

@@ -13,9 +13,9 @@ use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
     offline::{
-        OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
-        OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
-        OfflineNoteRedeem,
+        OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim,
+        OfflineNoteIssue, OfflineNoteIssuedClaim, OfflineNoteKeyCertificate,
+        OfflineNoteRecursiveProof, OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
     qr_stream::{QrPayloadKind, QrStreamEncoder, QrStreamFrameKind, QrStreamOptions},
@@ -286,7 +286,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     let fountain = fountain_qr_fixture(payment_token_payload.as_bytes())?;
     let audit_output_claim_hashes = audit_output_claims
         .iter()
-        .map(|claim| Ok(OfflineNoteIssuedClaim::from_audit_output(claim)?.claim_hash()?))
+        .map(|claim| OfflineNoteIssuedClaim::from_audit_output(claim)?.claim_hash())
         .collect::<Result<Vec<Hash>, norito::Error>>()?;
     let redeem_claim = OfflineNoteIssuedClaim::from_redemption(&redeem)?;
 
@@ -542,7 +542,7 @@ fn signed_certificate(
             )
         };
     let unsigned_certificate = OfflineNoteKeyCertificate {
-        version: 2,
+        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: platform.to_owned(),
         key_id: key_id.to_owned(),
         device_id: device_id.to_owned(),
@@ -558,7 +558,7 @@ fn signed_certificate(
     let signing_bytes = unsigned_certificate.signing_bytes()?;
     let issuer_signature = Signature::new(issuer_key_pair.private_key(), &signing_bytes);
     let certificate = OfflineNoteKeyCertificate {
-        version: 2,
+        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: platform.to_owned(),
         key_id: key_id.to_owned(),
         device_id: device_id.to_owned(),
@@ -573,7 +573,7 @@ fn signed_certificate(
     };
     Ok(VectorCertificate {
         model: certificate.clone(),
-        version: 2,
+        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: platform.to_owned(),
         key_id: key_id.to_owned(),
         device_id: device_id.to_owned(),
@@ -973,6 +973,14 @@ mod tests {
         );
 
         let token = field(&fixture, "payment_token");
+        assert_eq!(
+            number(field(field(token, "sender_key_certificate"), "version")),
+            u64::from(OFFLINE_NOTE_KEY_CERTIFICATE_VERSION)
+        );
+        assert_eq!(
+            number(field(field(token, "recipient_key_certificate"), "version")),
+            u64::from(OFFLINE_NOTE_KEY_CERTIFICATE_VERSION)
+        );
         assert_eq!(string(field(token, "type")), "offline_payment_token_v2");
         assert_eq!(array(field(token, "input_nullifiers")).len(), 1);
         assert_eq!(array(field(token, "input_claims")).len(), 1);

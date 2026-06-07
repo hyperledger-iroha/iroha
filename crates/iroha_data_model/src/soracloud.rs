@@ -13424,8 +13424,16 @@ mod tests {
     use iroha_crypto::{
         Algorithm, KeyPair,
         fhe_bfv::{
-            BfvFullBootstrapCircuitArtifactRoleV1,
-            encode_bfv_full_bootstrap_circuit_artifact_payload_v1, ram_lfe_bfv_parameters_v1,
+            BfvFullBootstrapAccumulatorV1, BfvFullBootstrapCircuitArtifactRoleV1,
+            BfvFullBootstrapLinearTransformDiagonalV1, BfvFullBootstrapLinearTransformV1,
+            BfvFullBootstrapSampleExtractionV1,
+            bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1,
+            encode_bfv_full_bootstrap_accumulator_artifact_v1,
+            encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
+            encode_bfv_full_bootstrap_circuit_artifact_payload_v1,
+            encode_bfv_full_bootstrap_linear_transform_artifact_v1,
+            encode_bfv_full_bootstrap_sample_extraction_artifact_v1, encode_packed_plaintext_slots,
+            ram_lfe_bfv_parameters_v1,
         },
     };
 
@@ -14219,27 +14227,65 @@ mod tests {
             encode_bfv_full_bootstrap_circuit_artifact_payload_v1(&params, 1, role, payload)
                 .expect("encode sample full-bootstrap artifact payload")
         };
+        let linear_transform_artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1| {
+            let transform = BfvFullBootstrapLinearTransformV1 {
+                input_slot_count: params.polynomial_degree,
+                output_slot_count: params.polynomial_degree,
+                diagonals: vec![BfvFullBootstrapLinearTransformDiagonalV1 {
+                    rotation_steps: 0,
+                    plaintext: encode_packed_plaintext_slots(
+                        &params,
+                        &vec![1; usize::from(params.polynomial_degree)],
+                    )
+                    .expect("encode identity packed-slot mask"),
+                }],
+            };
+            encode_bfv_full_bootstrap_linear_transform_artifact_v1(&params, 1, role, &transform)
+                .expect("encode sample full-bootstrap linear transform artifact")
+        };
+        let accumulator = BfvFullBootstrapAccumulatorV1 {
+            slot_count: params.polynomial_degree,
+            test_vector: encode_packed_plaintext_slots(
+                &params,
+                &vec![1; usize::from(params.polynomial_degree)],
+            )
+            .expect("encode sample full-bootstrap accumulator test vector"),
+        };
+        let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
+            source_slot_count: params.polynomial_degree,
+            source_ciphertext_component_count: 2,
+            extracted_coefficient_index: 0,
+            output_ciphertext_component_count: 2,
+        };
+        let accumulator_artifact =
+            encode_bfv_full_bootstrap_accumulator_artifact_v1(&params, 1, &accumulator)
+                .expect("encode sample full-bootstrap accumulator artifact");
+        let blind_rotation_key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+            &params,
+            Hash::new(&accumulator_artifact),
+            1,
+        )
+        .expect("build sample full-bootstrap blind-rotation key");
         BfvFullBootstrapCircuitArtifactBundleV1 {
-            coefficient_to_slot_key: artifact(
+            coefficient_to_slot_key: linear_transform_artifact(
                 BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
-                b"soracloud-full-bootstrap-coeff-to-slot",
             ),
-            slot_to_coefficient_key: artifact(
+            slot_to_coefficient_key: linear_transform_artifact(
                 BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
-                b"soracloud-full-bootstrap-slot-to-coeff",
             ),
-            blind_rotation_key: artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::BlindRotationKey,
-                b"soracloud-full-bootstrap-blind-rotation",
-            ),
-            sample_extraction_key: artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::SampleExtractionKey,
-                b"soracloud-full-bootstrap-sample-extraction",
-            ),
-            accumulator: artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::Accumulator,
-                b"soracloud-full-bootstrap-accumulator",
-            ),
+            blind_rotation_key: encode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+                &params,
+                1,
+                &blind_rotation_key,
+            )
+            .expect("encode sample full-bootstrap blind-rotation artifact"),
+            sample_extraction_key: encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+                &params,
+                1,
+                &sample_extraction,
+            )
+            .expect("encode sample full-bootstrap sample-extraction artifact"),
+            accumulator: accumulator_artifact,
             proof_public_input_schema: artifact(
                 BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
                 b"soracloud-full-bootstrap-proof-schema",
@@ -16859,6 +16905,7 @@ mod tests {
     fn sample_full_bootstrap_material(
         params: &iroha_crypto::fhe_bfv::BfvParameters,
     ) -> iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1 {
+        let artifacts = sample_full_bootstrap_circuit_artifacts();
         iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1 {
             circuit_id: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_string(),
             parameter_digest: iroha_crypto::fhe_bfv::registered_bfv_parameter_digest(params)
@@ -16869,14 +16916,14 @@ mod tests {
             key_switch_decomposition_chain_digest:
                 iroha_crypto::fhe_bfv::registered_bfv_key_switch_decomposition_chain_digest(params)
                     .expect("registered decomposition digest"),
-            coefficient_to_slot_key_digest: Hash::new(b"soracloud-full-bootstrap-coeff-to-slot"),
-            slot_to_coefficient_key_digest: Hash::new(b"soracloud-full-bootstrap-slot-to-coeff"),
-            blind_rotation_key_digest: Hash::new(b"soracloud-full-bootstrap-blind-rotation"),
-            sample_extraction_key_digest: Hash::new(b"soracloud-full-bootstrap-sample-extract"),
-            accumulator_digest: Hash::new(b"soracloud-full-bootstrap-accumulator"),
-            proof_public_input_schema_digest: Hash::new(b"soracloud-full-bootstrap-proof-schema"),
-            prover_key_digest: Hash::new(b"soracloud-full-bootstrap-prover-key"),
-            verifier_key_digest: Hash::new(b"soracloud-full-bootstrap-verifier-key"),
+            coefficient_to_slot_key_digest: Hash::new(&artifacts.coefficient_to_slot_key),
+            slot_to_coefficient_key_digest: Hash::new(&artifacts.slot_to_coefficient_key),
+            blind_rotation_key_digest: Hash::new(&artifacts.blind_rotation_key),
+            sample_extraction_key_digest: Hash::new(&artifacts.sample_extraction_key),
+            accumulator_digest: Hash::new(&artifacts.accumulator),
+            proof_public_input_schema_digest: Hash::new(&artifacts.proof_public_input_schema),
+            prover_key_digest: Hash::new(&artifacts.prover_key),
+            verifier_key_digest: Hash::new(&artifacts.verifier_key),
             max_bootstrap_depth: 1,
         }
     }

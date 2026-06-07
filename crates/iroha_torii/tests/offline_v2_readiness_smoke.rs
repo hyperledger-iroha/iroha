@@ -1,5 +1,6 @@
-#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Smoke test for the Offline V2 app route.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![cfg(feature = "app_api")]
 
 use std::sync::Arc;
 
@@ -152,6 +153,8 @@ async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
         "/v1/offline/cash/redeem",
         "/v1/offline/transfers",
         "/v1/offline/transfers/query",
+        "/v1/offline/notes/redeem",
+        "/v1/offline/audit",
         "/v1/offline/revocations",
         "/v1/offline/revocations/bundle",
     ] {

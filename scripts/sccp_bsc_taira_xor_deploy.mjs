@@ -15,6 +15,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import { keccak_256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha3.js";
+import { validateBscTestnetNativeEvmProverBundle } from "../javascript/iroha_js/src/sccp.js";
 
 const requireFromScript = createRequire(import.meta.url);
 const requireFromCwd = createRequire(`${resolve("noop.js")}`);
@@ -90,6 +91,16 @@ const DIAGNOSTIC_FLAG_KEYS = [
   "diagnostic_verifier_material",
   "diagnostic",
 ];
+const NATIVE_EVM_PROVER_BUNDLE_KEYS = Object.freeze([
+  "nativeEvmProverBundle",
+  "native_evm_prover_bundle",
+  "bscNativeEvmProverBundle",
+  "bsc_native_evm_prover_bundle",
+  "nativeProverBundle",
+  "native_prover_bundle",
+  "proverBundle",
+  "prover_bundle",
+]);
 
 const CONTRACT_SOURCES = Object.freeze({
   "contracts/evm/sccp/ISccpMessageVerifier.sol": repoPath(
@@ -1286,6 +1297,24 @@ function collectStringEntries(record, keys, pathName) {
   return entries;
 }
 
+function collectRecordEntries(record, keys, pathName) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const entries = [];
+  for (const key of keys) {
+    const value = record[key];
+    if (isRecord(value)) {
+      entries.push({
+        key,
+        path: `${pathName}.${key}`,
+        value,
+      });
+    }
+  }
+  return entries;
+}
+
 function readConsistentNormalizedString(sources, label, normalizeValue) {
   let selected = null;
   for (const source of sources) {
@@ -1362,6 +1391,81 @@ function routeConfigRequiredRecord(value, label) {
     throw new Error(`${label} must be an object.`);
   }
   return value;
+}
+
+function normalizeBscRouteNativeEvmProverBundle({
+  record,
+  destinationRollout,
+  productionReady,
+  verifierKeyHash,
+  proofArtifactHash,
+  provingKeyHash,
+  destinationBindingHash,
+}) {
+  const entries = [
+    ...collectRecordEntries(
+      record,
+      NATIVE_EVM_PROVER_BUNDLE_KEYS,
+      "route manifest",
+    ),
+    ...collectRecordEntries(
+      destinationRollout,
+      NATIVE_EVM_PROVER_BUNDLE_KEYS,
+      "route manifest destinationRollout",
+    ),
+  ];
+  if (entries.length === 0) {
+    if (productionReady) {
+      throw new Error(
+        "route manifest productionReady requires nativeEvmProverBundle.",
+      );
+    }
+    return null;
+  }
+
+  let selected = null;
+  let selectedJson = "";
+  for (const entry of entries) {
+    let normalized;
+    try {
+      normalized = validateBscTestnetNativeEvmProverBundle(entry.value, {
+        expectedDestinationBindingHash: destinationBindingHash,
+      });
+    } catch (error) {
+      throw new Error(
+        `${entry.path} failed BSC SDK validation: ${error instanceof Error ? error.message : String(error)}.`,
+      );
+    }
+    if (normalized.verifierKeyHash !== verifierKeyHash) {
+      throw new Error(
+        `${entry.path} verifierKeyHash must match route manifest verifierKeyHash.`,
+      );
+    }
+    if (
+      proofArtifactHash &&
+      normalized.proofArtifactHash !== proofArtifactHash
+    ) {
+      throw new Error(
+        `${entry.path} proofArtifactHash must match route manifest proofArtifactHash.`,
+      );
+    }
+    if (provingKeyHash && normalized.provingKeyHash !== provingKeyHash) {
+      throw new Error(
+        `${entry.path} provingKeyHash must match route manifest provingKeyHash.`,
+      );
+    }
+
+    const normalizedJson = JSON.stringify(normalized);
+    if (selected && selectedJson !== normalizedJson) {
+      throw new Error(
+        `route manifest nativeEvmProverBundle aliases disagree: ${selected.path} does not match ${entry.path}.`,
+      );
+    }
+    selected = { path: entry.path, value: normalized };
+    selectedJson = normalizedJson;
+  }
+
+  return selected.value;
 }
 
 function normalizeRouteManifestForConfig(manifest) {
@@ -1775,6 +1879,15 @@ function normalizeRouteManifestForConfig(manifest) {
     );
   }
   roleSeparatedHashes[2][1] = destinationBindingHash;
+  const nativeEvmProverBundle = normalizeBscRouteNativeEvmProverBundle({
+    record,
+    destinationRollout,
+    productionReady,
+    verifierKeyHash,
+    proofArtifactHash,
+    provingKeyHash,
+    destinationBindingHash,
+  });
   const seenRouteHashes = new Map();
   for (const [label, value] of roleSeparatedHashes.filter(([, value]) =>
     Boolean(value),
@@ -2010,6 +2123,7 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierKeyHash,
     proofArtifactHash,
     provingKeyHash,
+    nativeEvmProverBundle,
     destinationBindingKey,
     destinationBindingHash,
     settlementAssetDefinitionId,
