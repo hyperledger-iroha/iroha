@@ -259,4 +259,30 @@ CachedCommitQcSkipsRebroadcast ==
   "hasCommitQcRetransmit" \in tried =>
     ~ImplementationRebroadcastsMissingVotes("hasCommitQcRetransmit")
 
+LocalCommitQcOrderingExact ==
+  /\ LocalCommitQcFormationMatchesSpec
+  /\ LocalQuorumFormsBeforePeerRecovery
+  /\ CommitQcObservationIsPreserved
+
+MissingCommitQcRecoveryGateExact ==
+  /\ MissingCommitQcRecoveryMatchesSpec
+  /\ FreshLocalVoteDoesNotRecover
+  /\ RecoveryRequiresLocalVote
+  /\ RecoveryRequiresCommitQcAbsent
+  /\ RecoveryRequiresPayloadLocal
+  /\ RecoveryRequiresValidPending
+  /\ RecoveryRequiresTipExtension
+
+QuorumRetransmitGateExact ==
+  /\ QuorumRetransmitMatchesSpec
+  /\ QuorumRetransmitUsesMissingSignerTargets
+  /\ CollectorSubsetNeverOverridesQuorumTargets
+  /\ EmptyVoteSetNeverRebroadcasts
+  /\ CachedCommitQcSkipsRebroadcast
+
+CommitPipelineRecoveryExactness ==
+  /\ LocalCommitQcOrderingExact
+  /\ MissingCommitQcRecoveryGateExact
+  /\ QuorumRetransmitGateExact
+
 ====

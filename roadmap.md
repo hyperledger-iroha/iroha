@@ -22,7 +22,9 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.
-  Retired runtime-network families outside that launch scope are not supported.
+  Retired runtime-network families outside that launch scope are explicitly
+  unsupported for now.
+  Substrate/Polkadot-style networks are explicitly outside SCCP launch support for now.
   Reintroducing any such family requires a new design pass, fresh fixtures, and
   explicit governance approval rather than reviving diagnostic code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
@@ -2846,7 +2848,13 @@ and completed history lives in [`status.md`](./status.md).
   RBC availability reschedule aggregate exactness, vote-backed reassembly stall
   aggregate exactness, completed quorum view-advance aggregate exactness,
   quorum rebroadcast dispatch aggregate exactness, isolated vote-backed handoff
-  aggregate exactness, preemptive vote-backed retransmit aggregate exactness.
+  aggregate exactness, preemptive vote-backed retransmit aggregate exactness,
+  near-quorum preemptive escalation aggregate exactness, manifest-gate
+  reschedule aggregate exactness, QC signer-bitmap admission aggregate
+  exactness, raw QC signer-count aggregate exactness, QC signer-bitmap
+  construction aggregate exactness, signer-index normalization aggregate
+  exactness, commit-root consistency aggregate exactness, commit-pipeline
+  recovery aggregate exactness.
 - Sumeragi prepare-quorum phase-gating validation is closed for the current
   formal slice: the dedicated 2026-06-03 Apalache fast run reached `NoError`
   up to computation length `10` with `CommitPhasesNeverBypassPrepareQuorum`
@@ -6545,6 +6553,9 @@ operator-provided rollout bundles.
   caller-supplied governed material and a matching source-adapter deployment
   descriptor are both present, and adversarial tests prove template material
   cannot be promoted by wrapping it in a matching-looking deployment record.
+  Template source-verifier component hashing and source-chain proof-envelope
+  shape checks now also reject unmapped source domains instead of falling back
+  to empty chain keys.
   The all-lanes release summary now also publishes the supported launch-domain
   set and the unsupported diagnostic-domain set as separate verified fields, so
   release tooling can reject launch-scope tampering instead of inferring scope
@@ -6565,7 +6576,10 @@ constructed, leaving structural source-proof fixtures behind explicit
 diagnostic `allow_unready` paths. Rust EVM/TRON Groth16 proof-request builders
 now reject non-canonical bundle bytes, bundle/public-input mismatches, and
 omitted source-proof witness bytes for non-SORA source bundles before local UI
-proving or wrapped proof-result submission.
+proving or wrapped proof-result submission. The Rust TON native-recursive
+proof-request builder and proof-result wrapper now apply the same canonical
+SCCP bundle/public-input/source-proof gate before local proof generation or
+wallet/liteserver packaging.
 Transparent OpenVerify summary helpers now apply the same production-shaped
 wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
 envelopes cannot be normalized into release/readiness summaries. The
@@ -7905,11 +7919,19 @@ or ABI behavior.
 							  exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
 							  and bound propagation through sample-switch and slot-to-coefficient output
 							  before requiring one governed execution proof per output slot.
+							  A `zk-stark` positive fixture now installs the governed
+							  artifact-backed STARK verifier key, generates backend-verified
+							  `OpenVerifyEnvelope` proofs over each full-bootstrap execution
+							  statement, and proves the active-verifier gate accepts them when
+							  STARK verification is enabled at runtime.
+							  A `zk-preverify` positive fixture now proves the active-verifier gate
+							  accepts a preverified proof batch for every production identifier slot.
 							  The legacy no-artifact Core execution helpers are test-only, so production
 							  full-mode jobs must pass through the governed artifact-aware path.
 						  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-						  Remaining work is the real full-bootstrap proof-producing backend and
-						  end-to-end positive proof fixture for the already wired verifier gate.
+						  Remaining work is the audited full-bootstrap arithmetic proof-producing
+						  backend plus release-grade prover/verifier artifacts, not the Core verifier
+						  gate.
 	  Soracloud transcript digesting now preflights the advertised BFV public-key
 	  shape before evaluation-key bundle validation, so malformed transcript key
 	  material is reported at the public-key boundary instead of being masked by

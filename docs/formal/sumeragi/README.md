@@ -2392,6 +2392,9 @@ near-quorum missing-payload recovery escalation loop in
   `max(recovery_missing_block_height_ttl, 1ms)`, and
 - escalation counts and progress are recorded only when
   `maybe_escalate_missing_block_height_recovery(...)` returns true.
+- `NearQuorumPreemptiveEscalationExactness` composes budget and missing-pending
+  fail-closed gates, fresh-request suppression, in-flight suppression, delegate
+  result authority, per-tick cap enforcement, and progress/counter consistency.
 
 `SumeragiManifestGateRescheduleGate.tla` captures the `ManifestGuard` branch
 inside `reschedule_pending_quorum_block(...)`:
@@ -2403,6 +2406,10 @@ inside `reschedule_pending_quorum_block(...)`:
   rotation, even when the local payload is already available,
 - empty retransmit-target sets remain no-op reschedules and do not stamp a
   fresh quorum-reschedule marker.
+- `ManifestGateRescheduleExactness` composes manifest effectiveness,
+  manifest-action and manifest-no-target behavior, plain zero-work cleanup,
+  vote-backed action and no-target behavior, authoritative rotation
+  admission/suppression, and passive vote-backed evidence preservation.
 
 `SumeragiQcSignerBitmap.tla` captures QC signer-bitmap admission:
 - bitmap length must match the topology-derived byte length,
@@ -2411,6 +2418,10 @@ inside `reschedule_pending_quorum_block(...)`:
 - observer or padding indices cannot satisfy quorum on behalf of voting
   validators,
 - accepted QC signer evidence must match the voting-set quorum predicate.
+- `QcSignerBitmapAdmissionExactness` composes topology-width matching,
+  parser/spec equality, voting-only quorum accounting, observer/padding
+  rejection, out-of-bounds rejection, length-mismatch rejection, and accepted
+  evidence exactness.
 
 `SumeragiQcSignerCountGate.tla` captures the raw `qc_signer_count(...)`
 projection:
@@ -2420,6 +2431,9 @@ projection:
 - multi-byte bitmaps sum every byte without truncation or saturation, and
 - malformed padding bits are still counted because the helper has no roster
   context and reports the raw aggregate bitmap population.
+- `QcSignerRawCountExactness` composes bitmap-width bounds, raw anchor counts,
+  empty/zero-byte handling, single-bit handling, full-byte and padding-bit
+  handling, and multi-byte accumulation.
 
 `SumeragiBuildSignersBitmapGate.tla` captures QC signer-bitmap construction:
 - zero-length rosters return an empty bitmap,
@@ -2431,6 +2445,10 @@ projection:
   preserve every valid signer,
 - duplicate observations collapse through the `BTreeSet` input, and
   out-of-roster/padding indexes never set bits or extend the bitmap.
+- `BuildSignersBitmapExactness` composes exact bitmap length, zero-roster and
+  non-empty allocation behavior, single-signer bit placement, multi-signer OR
+  behavior, out-of-range/padding filtering, duplicate collapse, and full-roster
+  coverage.
 
 `SumeragiSignerIndexNormalizationGate.tla` captures canonical/view signer-index
 normalization:
@@ -2444,6 +2462,9 @@ normalization:
 - repeated peer observations collapse through set semantics, and
 - canonical signers whose peers are present in both topologies round-trip
   through view indexes without changing the canonical set.
+- `SignerIndexNormalizationExactness` composes canonical normalization anchors,
+  canonical-to-view index lookup, canonical-set-to-view normalization,
+  round-trip preservation/filtering, and exact actual/spec result equality.
 
 `SumeragiCommitRootConsistency.tla` captures commit-QC execution-root
 consistency:
@@ -2454,6 +2475,9 @@ consistency:
 - NPoS mode selects the heaviest same-root stake group with the same tie-break,
 - wrong-context votes cannot help satisfy quorum,
 - QC validation rejects signer votes whose roots do not match the QC roots.
+- `CommitRootConsistencyExactness` composes root selection/evidence exactness,
+  permissioned and NPoS quorum exactness, mixed-root rejection, wrong-context
+  signer/stake rejection, and QC root-validation exactness.
 
 `SumeragiCommitPipelineRecoveryGate.tla` captures adapter-side commit-pipeline
 recovery ordering:
@@ -2468,6 +2492,8 @@ recovery ordering:
 - cached near-quorum commit votes are rebroadcast to quorum missing-signer
   targets, not the proposal collector subset, and empty/committed vote sets do
   not rebroadcast.
+- `CommitPipelineRecoveryExactness` composes local commit-QC ordering,
+  missing-QC recovery gates, and quorum retransmit target exactness.
 
 `SumeragiKnownBlockCommitQcRecoveryGate.tla` captures known-block commit-QC
 recovery helpers:
@@ -10549,6 +10575,91 @@ the implementation surfaces it abstracts:
 | `VoteRosterVotes`, `AtQuorumOutput` | The downstream near-quorum flag is true below quorum and false at quorum. |
 | `PreemptiveVoteBackedRetransmitExactness` | The aggregate invariant ties candidate rejection/admission, missing-pending handling, target selection, output-based progress, pending retention, and near-quorum flag exactness together for every bounded case. |
 
+The near-quorum preemptive escalation model is intentionally finite. These are
+the implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `NoCandidates`, `BudgetExhausted`, `MissingPending` | `reschedule_stale_pending_blocks(...)` does no escalation without a candidate, marks exhausted per-tick budget, and fails closed when the pending block is missing. |
+| `FreshRequestSuppresses`, `RequestWindowZeroFresh` | Fresh matching missing-block requests suppress duplicate escalation, including the zero retry-window case through the one-millisecond floor. |
+| `RequestHeightMismatch`, `RequestViewMismatch`, `RequestNotActionable`, `RequestBoundaryStale`, `RequestStale`, `RequestCapBoundaryStale` | Height/view mismatch, non-actionable dependencies, boundary-age requests, stale requests, and fetch-cap boundary requests do not suppress escalation. |
+| `InflightSuppresses`, `InflightTtlZeroFresh` | Fresh matching in-flight recovery range pulls suppress duplicate escalation, including the zero-TTL case through the one-millisecond floor. |
+| `InflightHashMismatch`, `InflightViewMismatch`, `InflightNotInflight`, `InflightBoundaryStale`, `InflightStale` | Hash/view mismatch, not-in-flight records, boundary-age records, and stale in-flight records do not suppress escalation. |
+| `DelegateFalse`, `DelegateTrue` | `maybe_escalate_missing_block_height_recovery(...)` is the only source of escalation counts and progress. |
+| `SecondCandidateIgnored` | The per-tick cap ignores a second near-quorum candidate even when it would otherwise be processable. |
+| `NearQuorumPreemptiveEscalationExactness` | The aggregate invariant ties budget gates, missing-pending fail-closed behavior, fresh-request suppression, in-flight suppression, delegate-result authority, per-tick cap enforcement, and progress/counter consistency together for every bounded case. |
+
+The manifest-gate reschedule model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `manifest_no_votes`, `manifest_payload`, `manifest_votes_payload`, `manifest_no_targets` | `reschedule_pending_quorum_block(...)` treats manifest-gated pending blocks as effective work, preserves them, and never classifies them as zombie drops. |
+| `manifest_no_votes`, `manifest_payload`, `manifest_votes_payload` | Manifest-gated action paths mark plain quorum-reschedule attempts unless vote evidence is present, and they do not trigger immediate authoritative rotation. |
+| `manifest_no_targets` | Empty manifest retransmit targets are no-op reschedules: no action, no marker, retained pending state, and a false return. |
+| `plain_zero` | Plain zero-work pending blocks are dropped, cleaned, and reported as handled instead of being retained. |
+| `votes_payload`, `votes_backlog`, `votes_no_slot` | Vote-backed reschedule work remains effective, retained, and marked as vote-backed. |
+| `votes_no_targets` | Empty vote-backed target sets remain no-op reschedules with no marker while still allowing authoritative rotation when the local frontier payload is ready. |
+| `votes_payload`, `votes_no_targets`, `manifest_payload`, `manifest_votes_payload`, `votes_backlog`, `votes_no_slot` | Authoritative frontier rotation is admitted only for non-manifest contiguous payloads with the matching slot and no ingress backlog. |
+| `same_slot_evidence`, `frontier_owner_vote_backed` | Same-slot vote-backed evidence and frontier owner state keep pending blocks effective without forcing the manifest action path. |
+| `ManifestGateRescheduleExactness` | The aggregate invariant ties manifest effectiveness/retention, manifest action/no-target behavior, plain zero-work cleanup, vote-backed action/no-target behavior, authoritative rotation admission/suppression, and passive vote-backed evidence preservation together for every bounded case. |
+
+The QC signer-bitmap admission model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Bitmap length | `parse_signers_bitmap(...)` requires `signers_bitmap.len() == topology_len.div_ceil(8)` before any signer is accepted. |
+| Out-of-bounds bits | `parse_signers_bitmap(...)` rejects a set bit whose decoded index is outside the topology instead of treating it as observer or padding evidence. |
+| Voting signer count | `ParsedQcSigners::voting` includes only decoded signer indexes below `voting_len`; commit quorum checks use that voting set. |
+| Observer/padding rejection | Bits at indexes outside the voting validator set can be present in the topology but cannot make an under-quorum voting set acceptable. |
+| `QcSignerBitmapAdmissionExactness` | The aggregate invariant ties topology-width matching, parser/spec equality, voting-only quorum accounting, observer/padding rejection, out-of-bounds rejection, length-mismatch rejection, and accepted-evidence exactness together for every bounded case. |
+
+The raw QC signer-count helper model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Empty and zero bytes | `qc_signer_count(...)` sums `count_ones()` over the bitmap bytes, so empty bitmaps and zero bytes contribute zero. |
+| Single-bit bytes | Low and high bits both count through the same byte population-count path. |
+| Full and padding bytes | Full bytes contribute eight signers and padding-looking high bits still count because this helper has no roster context. |
+| Multi-byte accumulation | Every byte contributes to the raw sum without truncating at the first byte, saturating at one byte, or counting byte values instead of set bits. |
+| `QcSignerRawCountExactness` | The aggregate invariant ties bitmap-width bounds, raw anchor counts, empty/zero-byte handling, single-bit handling, full-byte and padding-bit handling, and multi-byte accumulation together for every bounded case. |
+
+The QC signer-bitmap construction model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Zero roster and allocation | `build_signers_bitmap(...)` returns `Vec::new()` for a zero-length roster and allocates exactly `roster_len.div_ceil(8)` bytes for non-empty rosters. |
+| Single-signer bit placement | Signer indexes map to little-endian bits within each byte, including index `0`, middle bits, the last valid signer, and the `7`/`8` byte boundary. |
+| Multi-signer OR behavior | Multiple in-range signers are ORed into the same bitmap, with second-byte and full-roster cases preserving every valid signer. |
+| Out-of-range and padding filtering | Signer indexes at or beyond `roster_len` are skipped and cannot set padding bits or extend the bitmap. |
+| Duplicate collapse | The `BTreeSet` input means repeated observations keep a bit set instead of toggling or double-counting it. |
+| `BuildSignersBitmapExactness` | The aggregate invariant ties exact bitmap length, zero-roster and non-empty allocation behavior, single-signer bit placement, multi-signer OR behavior, out-of-range/padding filtering, duplicate collapse, and full-roster coverage together for every bounded case. |
+
+The signer-index normalization model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Canonical normalization | `normalize_signer_indices_to_canonical(...)` maps signer indexes from the signature topology into the canonical topology by peer identity, preserving rotated peers and filtering empty, out-of-range, or absent-peer inputs. |
+| View index lookup | `view_index_for_canonical_signer(...)` returns `None` for empty canonical rosters, out-of-range canonical indexes, or peers absent from the signature topology; otherwise it returns the view-specific peer position. |
+| View normalization | `normalize_signer_indices_to_view(...)` maps canonical signer sets into the signature topology by peer identity and keeps valid index `0` instead of treating it as absent. |
+| Round-trip behavior | Canonical signers whose peers remain in the signature topology round-trip through view indexes, while missing peers are filtered. |
+| `SignerIndexNormalizationExactness` | The aggregate invariant ties canonical normalization anchors, canonical-to-view index lookup, canonical-set-to-view normalization, round-trip preservation/filtering, and exact actual/spec result equality together for every bounded case. |
+
+The commit-root consistency model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Permissioned root selection | `select_commit_root_signers(...)` groups accepted commit votes by `(parent_state_root, post_state_root)`, selects the largest same-root signer group, and breaks ties by the lower root tuple. |
+| NPoS root selection | `select_commit_root_signers_by_stake(...)` uses the same root grouping but selects by signed stake weight, with the same deterministic low-root tie break. |
+| Mixed-root and wrong-context rejection | Commit quorum is evaluated only after root grouping and context filtering, so signers or stake from different roots or different block/height/view/epoch contexts cannot be combined to satisfy quorum. |
+| QC root validation | QC validation rejects signer vote records whose parent/post-state roots do not match the QC roots. |
+| `CommitRootConsistencyExactness` | The aggregate invariant ties root selection/evidence exactness, permissioned and NPoS quorum exactness, mixed-root rejection, wrong-context signer/stake rejection, and QC root-validation exactness together for every bounded case. |
+
 The commit-pipeline recovery-gate model is intentionally finite. These are the
 implementation surfaces it abstracts:
 
@@ -10560,6 +10671,7 @@ implementation surfaces it abstracts:
 | `missingLocalData`, `invalidPending`, `noLocalVote`, `offTip` | Recovery requires local DA payload availability, valid pending state, local commit-vote emission, and extension of the committed tip. |
 | `nearQuorumRetransmit`, `collectorDecoyRetransmit` | `rebroadcast_block_votes(..., target_missing_only = true)` derives quorum missing-signer targets through `quorum_retransmit_targets_for_missing_votes(...)`; bridge coverage includes `commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets`. |
 | `noVotesRetransmit`, `hasCommitQcRetransmit` | Empty vote logs and already cached commit QCs skip near-quorum rebroadcast. |
+| `CommitPipelineRecoveryExactness` | The aggregate invariant ties local commit-QC formation/order, observed-QC preservation, missing-QC recovery preconditions, and quorum retransmit target exactness together for every bounded case. |
 
 The known-block commit-QC recovery-gate model is intentionally finite. These
 are the implementation surfaces it abstracts:
@@ -14860,7 +14972,11 @@ marks `budget_exhausted` and fails closed, missing pending blocks cannot
 escalate, fresh matching missing-block requests and in-flight range pulls
 suppress duplicate escalation, stale or mismatched duplicate records do not
 suppress, delegate return values are the only source of escalation
-counts/progress, and the per-tick cap ignores a second candidate. Its TLC
+counts/progress, and the per-tick cap ignores a second candidate. The fast
+check also includes the aggregate `NearQuorumPreemptiveEscalationExactness`
+invariant tying budget gates, missing-pending fail-closed behavior,
+fresh-request suppression, in-flight suppression, delegate-result authority,
+per-tick cap enforcement, and progress/counter consistency together. Its TLC
 cross-check independently exhausts the same twenty-two expected-failure configs
 as Apalache.
 `manifest-gate-reschedule-fast` and `manifest-gate-reschedule-bug-*`
@@ -14869,9 +14985,13 @@ blocks count as effective work, are retained, avoid immediate authoritative
 frontier rotation, and use plain quorum-reschedule markers unless votes are
 present; empty target sets remain no-op reschedules; plain zero-work pending
 blocks are dropped and cleaned; vote-backed evidence and frontier ownership
-remain effective without forcing the manifest action path. Its TLC cross-check
-independently exhausts the same twenty-five expected-failure configs as
-Apalache.
+remain effective without forcing the manifest action path. The fast check also
+includes the aggregate `ManifestGateRescheduleExactness` invariant tying
+manifest effectiveness/retention, manifest action/no-target behavior, plain
+zero-work cleanup, vote-backed action/no-target behavior, authoritative
+rotation admission/suppression, and passive vote-backed evidence preservation
+together. Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 `vote-verify-worker-config-fast` and `vote-verify-worker-config-bug-*`
 cross-check vote-signature verification worker count and queue-cap derivation.
 The fast check also includes the aggregate `VoteVerifyWorkerConfigExactness`
@@ -14886,27 +15006,46 @@ explicit-cap preservation, and positive channel floors together.
 admission: bitmap length must match the full topology width, bits outside the
 topology are rejected, quorum accounting counts only voting validators, observer
 and padding bits cannot satisfy quorum, and under-quorum signer sets are
-rejected. Its TLC cross-check independently exhausts the same four
-expected-failure configs as Apalache.
+rejected. The fast check also includes the aggregate
+`QcSignerBitmapAdmissionExactness` invariant tying topology-width matching,
+parser/spec equality, voting-only quorum accounting, observer/padding
+rejection, out-of-bounds rejection, length-mismatch rejection, and accepted
+evidence exactness together. Its TLC cross-check independently exhausts the
+same four expected-failure configs as Apalache.
 It also supports `qc-signer-count-fast` and the `qc-signer-count-bug-*`
 expected-failure modes, providing an exhaustive raw signer-bitmap population
-count cross-check for the small QC helper model.
+count cross-check for the small QC helper model. The fast check also includes
+the aggregate `QcSignerRawCountExactness` invariant tying bitmap-width bounds,
+raw anchor counts, empty/zero-byte handling, single-bit handling, full-byte and
+padding-bit handling, and multi-byte accumulation together.
 `build-signers-bitmap-fast` and `build-signers-bitmap-bug-*` cross-check QC
 signer-bitmap construction: zero-length rosters produce an empty bitmap,
 non-empty rosters allocate `ceil(roster_len / 8)` bytes, signer indexes map to
 little-endian bits within each byte, duplicate observations collapse, and
-out-of-roster or padding indexes never set bits or extend the bitmap. Its TLC
+out-of-roster or padding indexes never set bits or extend the bitmap. The fast
+check also includes the aggregate `BuildSignersBitmapExactness` invariant tying
+exact bitmap length, zero-roster and non-empty allocation behavior,
+single-signer bit placement, multi-signer OR behavior, out-of-range/padding
+filtering, duplicate collapse, and full-roster coverage together. Its TLC
 cross-check independently exhausts the same seventeen expected-failure configs
 as Apalache.
 `signer-index-normalization-fast` and `signer-index-normalization-bug-*`
-check canonical/view signer-index conversion across shuffled topologies.
+check canonical/view signer-index conversion across shuffled topologies. The
+fast check also includes the aggregate `SignerIndexNormalizationExactness`
+invariant tying canonical normalization anchors, canonical-to-view index
+lookup, canonical-set-to-view normalization, round-trip preservation/filtering,
+and exact actual/spec result equality together.
 `commit-roots-fast` and `commit-roots-bug-*` cross-check commit-QC
 execution-root consistency: votes are grouped by one parent/post-state root
 before quorum evaluation, wrong-context votes are ignored, permissioned mode
 uses largest same-root signer count with a low-root tie-break, NPoS uses
 heaviest same-root stake with the same tie-break, mixed roots cannot satisfy
 quorum, and validation rejects QC signers whose recorded vote roots mismatch
-the QC roots. Its TLC cross-check independently exhausts the same six
+the QC roots. The fast check also includes the aggregate
+`CommitRootConsistencyExactness` invariant tying root selection/evidence
+exactness, permissioned and NPoS quorum exactness, mixed-root rejection,
+wrong-context signer/stake rejection, and QC root-validation exactness
+together. Its TLC cross-check independently exhausts the same six
 expected-failure mutations as Apalache using smaller TLC-specific configs.
 Those TLC configs constrain the state space to representative witnesses for the
 six mutation classes; the Apalache configs retain the broader bounded search.
@@ -14916,8 +15055,11 @@ form a local commit QC before peer recovery, missing commit-QC recovery is only
 requested for stale local-vote pending blocks without local data gaps or an
 observed commit QC, commit-QC observations are preserved, and near-quorum
 cached-vote retransmit uses quorum missing-signer targets rather than collector
-targets. Its TLC cross-check independently exhausts the same fourteen
-expected-failure configs as Apalache.
+targets. The fast check also includes the aggregate
+`CommitPipelineRecoveryExactness` invariant tying local commit-QC ordering,
+missing-QC recovery gates, and quorum retransmit target exactness together. Its
+TLC cross-check independently exhausts the same fourteen expected-failure
+configs as Apalache.
 `known-block-commit-qc-recovery-fast` and
 `known-block-commit-qc-recovery-bug-*` cross-check known-block commit-QC
 recovery helpers: local payloads request commit-QC-only fetches while missing

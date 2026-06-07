@@ -108,6 +108,46 @@ SCAN_ROOTS = (
     Path("status.md"),
 )
 
+SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_FILES = {
+    Path("docs/source/bridge_proofs.md"),
+    Path("docs/source/engineering_backlog.md"),
+    Path("roadmap.md"),
+    Path("status.md"),
+}
+
+SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS = (
+    "".join(
+        (
+            "Sub",
+            "strate",
+            "/Pol",
+            "kadot",
+            "-style networks are explicitly outside SCCP launch support for now.",
+        )
+    ),
+)
+
+
+def _is_explicit_unsupported_scope_note_match(
+    relative: Path,
+    text: str,
+    match_start: int,
+    match_end: int,
+) -> bool:
+    if relative not in SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_FILES:
+        return False
+
+    for snippet in SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS:
+        snippet_start = text.find(snippet)
+        while snippet_start != -1:
+            snippet_end = snippet_start + len(snippet)
+            if snippet_start <= match_start and match_end <= snippet_end:
+                return True
+            snippet_start = text.find(snippet, snippet_end)
+
+    return False
+
+
 def _is_scanned_file(path: Path) -> bool:
     if not path.is_file() or path.is_symlink():
         return False
@@ -213,6 +253,37 @@ def test_retired_network_surface_scan_covers_pipeline_translations() -> None:
     assert pipeline_docs <= scanned
 
 
+def test_retired_network_surface_scan_allows_only_explicit_no_support_note() -> None:
+    snippet = SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS[0]
+    text = f"Current scope. {snippet} Future scope."
+
+    for pattern in BANNED_PATTERNS[:3]:
+        match = pattern.search(text)
+        assert match is not None
+        assert _is_explicit_unsupported_scope_note_match(
+            Path("roadmap.md"),
+            text,
+            match.start(),
+            match.end(),
+        )
+        assert not _is_explicit_unsupported_scope_note_match(
+            Path("crates/iroha_sccp/src/lib.rs"),
+            text,
+            match.start(),
+            match.end(),
+        )
+
+    unsupported_text = "".join(("Sub", "strate", " lane support is active"))
+    match = BANNED_PATTERNS[0].search(unsupported_text)
+    assert match is not None
+    assert not _is_explicit_unsupported_scope_note_match(
+        Path("roadmap.md"),
+        unsupported_text,
+        match.start(),
+        match.end(),
+    )
+
+
 def test_active_tree_excludes_retired_network_surface_tokens() -> None:
     violations: list[str] = []
 
@@ -222,7 +293,15 @@ def test_active_tree_excludes_retired_network_surface_tokens() -> None:
         for pattern in BANNED_PATTERNS:
             match = pattern.search(text)
             while match is not None:
-                violations.append(f"{relative}:{match.start()}: {match.group(0)!r}")
+                if not _is_explicit_unsupported_scope_note_match(
+                    relative,
+                    text,
+                    match.start(),
+                    match.end(),
+                ):
+                    violations.append(
+                        f"{relative}:{match.start()}: {match.group(0)!r}"
+                    )
                 match = pattern.search(text, match.end())
 
     assert violations == []

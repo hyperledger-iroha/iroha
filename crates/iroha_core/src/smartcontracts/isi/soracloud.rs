@@ -14801,10 +14801,58 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "zk-stark")]
+    fn sample_fhe_bootstrap_key_attachment(
+        proof_box: iroha_data_model::proof::ProofBox,
+    ) -> iroha_data_model::proof::ProofAttachment {
+        let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            proof_box,
+            iroha_data_model::proof::VerifyingKeyId::new(
+                FHE_INPUT_ADMISSION_BACKEND,
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            ),
+        );
+        attachment.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &attachment.proof.bytes,
+        )));
+        let envelope = bootstrap_key_proof_attachment_envelope(&attachment)
+            .expect("decode sample bootstrap-key OpenVerifyEnvelope");
+        attachment.vk_commitment = Some(envelope.vk_hash);
+        attachment
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_verified_fhe_bootstrap_key_proof(
+        statement_hash: Hash,
+        vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    ) -> SoracloudFheBootstrapKeyProofV1 {
+        let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
+            FHE_INPUT_ADMISSION_BACKEND,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            vk_box,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+        )
+        .expect("prove bootstrap-key STARK envelope");
+        SoracloudFheBootstrapKeyProofV1 {
+            schema_version: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            statement_hash,
+            proof: sample_fhe_bootstrap_key_attachment(proof_box),
+        }
+    }
+
     fn sample_fhe_bootstrap_key_vk_box() -> iroha_data_model::proof::VerifyingKeyBox {
         iroha_data_model::proof::VerifyingKeyBox::new(
             FHE_INPUT_ADMISSION_BACKEND.into(),
             b"sample-soracloud-bootstrap-key-proof-vk".to_vec(),
+        )
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_fhe_bootstrap_key_stark_vk_box() -> iroha_data_model::proof::VerifyingKeyBox {
+        sample_fhe_input_admission_vk_box_for_circuit(
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
         )
     }
 
@@ -14879,10 +14927,59 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "zk-stark")]
+    fn sample_fhe_full_bootstrap_material_attachment(
+        proof_box: iroha_data_model::proof::ProofBox,
+    ) -> iroha_data_model::proof::ProofAttachment {
+        let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            proof_box,
+            iroha_data_model::proof::VerifyingKeyId::new(
+                FHE_INPUT_ADMISSION_BACKEND,
+                SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            ),
+        );
+        attachment.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &attachment.proof.bytes,
+        )));
+        let envelope = bootstrap_key_proof_attachment_envelope(&attachment)
+            .expect("decode sample full-bootstrap material OpenVerifyEnvelope");
+        attachment.vk_commitment = Some(envelope.vk_hash);
+        attachment
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_verified_fhe_full_bootstrap_material_proof(
+        statement_hash: Hash,
+        vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    ) -> SoracloudFheFullBootstrapMaterialProofV1 {
+        let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
+            FHE_INPUT_ADMISSION_BACKEND,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
+            vk_box,
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+            vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+        )
+        .expect("prove full-bootstrap material STARK envelope");
+        SoracloudFheFullBootstrapMaterialProofV1 {
+            schema_version: SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1,
+            statement_hash,
+            proof: sample_fhe_full_bootstrap_material_attachment(proof_box),
+        }
+    }
+
     fn sample_fhe_full_bootstrap_material_vk_box() -> iroha_data_model::proof::VerifyingKeyBox {
         iroha_data_model::proof::VerifyingKeyBox::new(
             FHE_INPUT_ADMISSION_BACKEND.into(),
             b"sample-soracloud-full-bootstrap-material-proof-vk".to_vec(),
+        )
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn sample_fhe_full_bootstrap_material_stark_vk_box() -> iroha_data_model::proof::VerifyingKeyBox
+    {
+        sample_fhe_input_admission_vk_box_for_circuit(
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
         )
     }
 
@@ -14946,8 +15043,7 @@ mod tests {
     }
 
     #[cfg(feature = "zk-stark")]
-    fn sample_fhe_full_bootstrap_execution_vk_box(
-    ) -> iroha_data_model::proof::VerifyingKeyBox {
+    fn sample_fhe_full_bootstrap_execution_vk_box() -> iroha_data_model::proof::VerifyingKeyBox {
         sample_fhe_input_admission_vk_box_for_circuit(
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
         )
@@ -15063,6 +15159,58 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "zk-stark")]
+    #[allow(clippy::type_complexity)]
+    fn sample_full_bootstrap_execution_verification_case_with_verifier_key(
+        vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    ) -> (
+        BfvParameters,
+        BfvEvaluationKeyBundle,
+        BfvEvaluationKeyRefreshTranscriptV1,
+        BfvFullBootstrapCircuitArtifactBundleV1,
+        FheJobSpecV1,
+        BfvIdentifierCiphertext,
+        BfvIdentifierCiphertext,
+        u128,
+        u128,
+    ) {
+        let params = ram_lfe_bfv_parameters_v1();
+        let mut evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let (secret_key, _public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-test-keygen")
+                .expect("sample full-bootstrap artifact keygen");
+        let artifacts = sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
+            &params,
+            &secret_key,
+            b"soracloud-full-bootstrap-prover-key",
+            &vk_box.bytes,
+        );
+        let material = sample_full_bootstrap_material_for_artifacts(&params, &artifacts);
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("sample bundle carries a bootstrap key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(material);
+        let transcript = sample_bfv_refresh_transcript();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = sample_fhe_envelope(b"abc", b"soracloud-full-bootstrap-execution-proof-input");
+        let output = input.clone();
+        (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            job,
+            input,
+            output,
+            1,
+            1,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn sample_full_bootstrap_execution_proofs_for_claims(
         params: &BfvParameters,
@@ -15102,6 +15250,104 @@ mod tests {
                 sample_fhe_full_bootstrap_execution_proof(statement_hash, vk_commitment)
             })
             .collect()
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[allow(clippy::too_many_arguments)]
+    fn sample_verified_full_bootstrap_execution_proofs_for_claims(
+        params: &BfvParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+        transcript: &BfvEvaluationKeyRefreshTranscriptV1,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+        input: &BfvIdentifierCiphertext,
+        output: &BfvIdentifierCiphertext,
+        input_bound: u128,
+        output_bound: u128,
+        vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    ) -> Vec<SoracloudFheFullBootstrapExecutionProofV1> {
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .expect("sample bundle carries a full-bootstrap key");
+        input
+            .slots
+            .iter()
+            .zip(output.slots.iter())
+            .map(|(input_ciphertext, output_ciphertext)| {
+                let claim = BfvFullBootstrapExecutionProofClaimV1 {
+                    input_ciphertext: input_ciphertext.clone(),
+                    output_ciphertext: output_ciphertext.clone(),
+                    bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
+                    input_bound,
+                    output_bound,
+                };
+                let statement_hash = bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                    params,
+                    &transcript.public_key,
+                    bootstrap_key,
+                    artifacts,
+                    &claim,
+                )
+                .expect("derive full-bootstrap execution proof statement");
+                let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
+                    FHE_INPUT_ADMISSION_BACKEND,
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+                    vk_box,
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                    vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+                )
+                .expect("prove full-bootstrap execution STARK envelope");
+                SoracloudFheFullBootstrapExecutionProofV1 {
+                    schema_version: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1,
+                    statement_hash,
+                    proof: sample_fhe_full_bootstrap_execution_attachment(proof_box),
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "zk-stark")]
+    fn enable_stark_sample_proof_quotas(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        proof_lengths: &[usize],
+    ) {
+        let max_proof_len = proof_lengths
+            .iter()
+            .copied()
+            .max()
+            .expect("sample proof length list is non-empty");
+        let total_proof_bytes = proof_lengths
+            .iter()
+            .map(|len| u64::try_from(*len).expect("proof length fits u64"))
+            .sum();
+        let proof_calls = u32::try_from(proof_lengths.len()).expect("proof count fits u32");
+        state_transaction.zk.stark.enabled = true;
+        state_transaction.zk.max_proof_size_bytes = state_transaction
+            .zk
+            .max_proof_size_bytes
+            .max(u32::try_from(max_proof_len).expect("sample proof length fits u32"));
+        state_transaction.zk.max_proof_bytes_block = state_transaction
+            .zk
+            .max_proof_bytes_block
+            .max(total_proof_bytes);
+        state_transaction.zk.max_verify_calls_per_tx = state_transaction
+            .zk
+            .max_verify_calls_per_tx
+            .max(proof_calls);
+        state_transaction.zk.max_verify_calls_per_block = state_transaction
+            .zk
+            .max_verify_calls_per_block
+            .max(proof_calls);
+        state_transaction.zk.stark.max_envelope_bytes = state_transaction
+            .zk
+            .stark
+            .max_envelope_bytes
+            .max(max_proof_len);
+        state_transaction.zk.stark.max_proof_bytes = state_transaction
+            .zk
+            .stark
+            .max_proof_bytes
+            .max(max_proof_len);
     }
 
     #[cfg(feature = "zk-preverify")]
@@ -18288,6 +18534,42 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_proof_accepts_verified_active_verifier()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        policy.full_bootstrap_material_proof_statement_digest =
+            Some(Hash::new(b"full-bootstrap-material-statement"));
+        let statement_hash = policy
+            .full_bootstrap_material_proof_statement_digest
+            .expect("policy binds full-bootstrap material proof statement");
+        let vk_box = sample_fhe_full_bootstrap_material_stark_vk_box();
+        let (_vk_id, vk_commitment) =
+            install_fhe_full_bootstrap_material_verifier_record(&mut stx, vk_box.clone());
+        assert_eq!(vk_commitment, crate::zk::hash_vk(&vk_box));
+        let proof = sample_verified_fhe_full_bootstrap_material_proof(statement_hash, &vk_box);
+        enable_stark_sample_proof_quotas(&mut stx, &[proof.proof.proof.bytes.len()]);
+
+        verify_soracloud_fhe_full_bootstrap_material_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect("active verifier and verified full-bootstrap material proof must be accepted");
+        Ok(())
+    }
+
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn soracloud_fhe_full_bootstrap_material_proof_accepts_preverified_active_verifier()
@@ -18409,6 +18691,87 @@ mod tests {
         )
         .expect_err("full-bootstrap outputs must carry one execution proof per output slot");
         assert_invalid_parameter_contains(err, "proof count must match output slot count");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_execution_proof_rejects_surplus_and_reordered_slot_proofs()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case();
+        let proofs = sample_full_bootstrap_execution_proofs_for_claims(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            input_bound,
+            output_bound,
+            [0x63; Hash::LENGTH],
+        );
+        assert!(
+            proofs.len() >= 2,
+            "slot-reorder regression requires at least two output slots"
+        );
+        assert_ne!(
+            proofs[0].statement_hash, proofs[1].statement_hash,
+            "slot claims must derive distinct proof statements"
+        );
+
+        let mut surplus_proofs = proofs.clone();
+        surplus_proofs.push(proofs[0].clone());
+        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            &mut stx,
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            &output,
+            Some(output_bound),
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            Some(&artifacts),
+            &surplus_proofs,
+        )
+        .expect_err("surplus full-bootstrap execution proofs must fail exact proof count");
+        assert_invalid_parameter_contains(err, "proof count must match output slot count");
+
+        let mut reordered_proofs = proofs;
+        reordered_proofs.swap(0, 1);
+        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            &mut stx,
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            &output,
+            Some(output_bound),
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            Some(&artifacts),
+            &reordered_proofs,
+        )
+        .expect_err("slot-reordered full-bootstrap execution proofs must fail statement binding");
+        assert_invalid_parameter_contains(err, "statement hash mismatch for slot 0");
         Ok(())
     }
 
@@ -18590,6 +18953,71 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
+        let (
+            params,
+            evaluation_keys,
+            transcript,
+            artifacts,
+            job,
+            input,
+            output,
+            input_bound,
+            output_bound,
+        ) = sample_full_bootstrap_execution_verification_case_with_verifier_key(&vk_box);
+        let governed_verifier_key =
+            governed_full_bootstrap_execution_verifier_key(&params, &evaluation_keys, &artifacts)
+                .expect("governed full-bootstrap execution verifier key");
+        assert_eq!(governed_verifier_key, vk_box);
+        let (_vk_id, vk_commitment) =
+            install_fhe_full_bootstrap_execution_verifier_record(&mut stx, governed_verifier_key);
+        assert_eq!(vk_commitment, crate::zk::hash_vk(&vk_box));
+        let proofs = sample_verified_full_bootstrap_execution_proofs_for_claims(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &input,
+            &output,
+            input_bound,
+            output_bound,
+            &vk_box,
+        );
+        let proof_lengths = proofs
+            .iter()
+            .map(|proof| proof.proof.proof.bytes.len())
+            .collect::<Vec<_>>();
+        enable_stark_sample_proof_quotas(&mut stx, &proof_lengths);
+
+        verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            &mut stx,
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            &output,
+            Some(output_bound),
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            Some(&artifacts),
+            &proofs,
+        )
+        .expect("active verifier and verified full-bootstrap execution proofs must be accepted");
+        Ok(())
+    }
+
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_accepts_preverified_active_verifier()
@@ -18634,6 +19062,21 @@ mod tests {
             vk_commitment,
         ));
         let mut stx = state_block.transaction();
+        let proof_calls = u32::try_from(proofs.len()).expect("proof count fits u32");
+        let full_identifier_slot_count =
+            u32::try_from(RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT).expect("slot count fits u32");
+        assert!(
+            stx.zk.max_verify_calls_per_tx >= full_identifier_slot_count,
+            "default confidential max_verify_calls_per_tx must admit one full Soracloud identifier proof batch"
+        );
+        assert!(
+            stx.zk.max_verify_calls_per_tx >= proof_calls,
+            "default confidential max_verify_calls_per_tx must admit this proof batch"
+        );
+        assert!(
+            stx.zk.max_verify_calls_per_block >= proof_calls,
+            "default confidential max_verify_calls_per_block must admit this proof batch"
+        );
 
         verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &mut stx,
@@ -18733,6 +19176,39 @@ mod tests {
         )
         .expect_err("active verifier must still reject an unverified fake proof");
         assert_invalid_parameter_contains(err, "proof verification failed");
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_accepts_verified_active_verifier()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let policy = sample_fhe_policy();
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let vk_box = sample_fhe_bootstrap_key_stark_vk_box();
+        let (_vk_id, vk_commitment) =
+            install_fhe_bootstrap_key_verifier_record(&mut stx, vk_box.clone());
+        assert_eq!(vk_commitment, crate::zk::hash_vk(&vk_box));
+        let proof = sample_verified_fhe_bootstrap_key_proof(statement_hash, &vk_box);
+        enable_stark_sample_proof_quotas(&mut stx, &[proof.proof.proof.bytes.len()]);
+
+        verify_soracloud_fhe_bootstrap_key_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect("active verifier and verified bootstrap-key proof must be accepted");
         Ok(())
     }
 

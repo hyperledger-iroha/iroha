@@ -189,6 +189,46 @@ Safety ==
   \A c \in Cases:
     ActualBitmap(c) = SpecBitmap(c)
 
+BitmapLengthExact ==
+  \A c \in Cases:
+    Len(ActualBitmap(c)) = BitmapLen(RosterLen(c))
+
+ZeroRosterAndAllocationExact ==
+  /\ ActualBitmap("zero_roster_empty") = <<>>
+  /\ ActualBitmap("empty_signers_allocates_byte") = <<0>>
+  /\ ActualBitmap("roster_len_ceil_two_bytes") = <<0, 0>>
+
+SingleSignerBitExact ==
+  /\ ActualBitmap("signer_zero_sets_low_bit") = <<1>>
+  /\ ActualBitmap("single_middle_bit") = <<8>>
+  /\ ActualBitmap("last_valid_bit_included") = <<32>>
+  /\ ActualBitmap("byte_boundary_seven") = <<128>>
+  /\ ActualBitmap("byte_boundary_eight") = <<0, 1>>
+
+MultiSignerOrExact ==
+  /\ ActualBitmap("multiple_bits_or") = <<41>>
+  /\ ActualBitmap("second_byte_multiple") = <<0, 133>>
+  /\ ActualBitmap("full_roster_len_eight") = <<255>>
+  /\ ActualBitmap("full_roster_len_nine") = <<255, 1>>
+
+OutOfRangeAndPaddingFiltered ==
+  /\ ActualBitmap("index_at_len_ignored") = <<0>>
+  /\ ActualBitmap("out_of_range_ignored") = <<0>>
+  /\ ActualBitmap("mixed_range_filters") = <<34>>
+  /\ ActualBitmap("padding_ignored_in_last_byte") = <<0, 1>>
+
+DuplicateSignerCollapsedExact ==
+  ActualBitmap("duplicates_collapsed") = <<36>>
+
+BuildSignersBitmapExactness ==
+  /\ Safety
+  /\ BitmapLengthExact
+  /\ ZeroRosterAndAllocationExact
+  /\ SingleSignerBitExact
+  /\ MultiSignerOrExact
+  /\ OutOfRangeAndPaddingFiltered
+  /\ DuplicateSignerCollapsedExact
+
 BugZeroRosterAllocatesByte ==
   ActualBitmap("zero_roster_empty") = SpecBitmap("zero_roster_empty")
 

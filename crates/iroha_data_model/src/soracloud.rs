@@ -14492,8 +14492,13 @@ mod tests {
     }
 
     fn sample_fhe_full_bootstrap_execution_proof() -> SoracloudFheFullBootstrapExecutionProofV1 {
+        sample_fhe_full_bootstrap_execution_proof_with_statement(sample_hash(20))
+    }
+
+    fn sample_fhe_full_bootstrap_execution_proof_with_statement(
+        statement_hash: Hash,
+    ) -> SoracloudFheFullBootstrapExecutionProofV1 {
         let vk_hash = [0x63; 32];
-        let statement_hash = sample_hash(20);
         let open_proof = StarkFriOpenProofV1 {
             version: 1,
             public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
@@ -17245,7 +17250,9 @@ mod tests {
         let param_set = sample_fhe_param_set();
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
         let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
-        let proof = sample_fhe_full_bootstrap_execution_proof();
+        let first_proof = sample_fhe_full_bootstrap_execution_proof();
+        let second_proof =
+            sample_fhe_full_bootstrap_execution_proof_with_statement(sample_hash(22));
         let governance_tx_hash = sample_hash(21);
 
         let with_proof = encode_fhe_job_run_provenance_payload(
@@ -17259,7 +17266,7 @@ mod tests {
             None,
             None,
             None,
-            vec![proof.clone()],
+            vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash,
         )
         .expect("encode execution proof-carrying FHE job payload");
@@ -17274,7 +17281,7 @@ mod tests {
             Option::<SoracloudFheBootstrapKeyProofV1>::None,
             Option::<SoracloudFheFullBootstrapMaterialProofV1>::None,
             Option::<BfvFullBootstrapCircuitArtifactBundleV1>::None,
-            vec![proof],
+            vec![first_proof.clone(), second_proof.clone()],
             governance_tx_hash,
         ))
         .expect("encode execution proof-carrying tuple");
@@ -17298,6 +17305,46 @@ mod tests {
         assert_ne!(
             with_proof, without_proof,
             "full-bootstrap execution proofs must be part of the signed FHE job payload"
+        );
+
+        let swapped_proof_order = encode_fhe_job_run_provenance_payload(
+            "health_portal",
+            "private_state",
+            sample_fhe_job_spec(),
+            sample_fhe_execution_policy(),
+            sample_fhe_param_set(),
+            sample_bfv_evaluation_key_bundle(),
+            sample_bfv_refresh_transcript(),
+            None,
+            None,
+            None,
+            vec![second_proof.clone(), first_proof.clone()],
+            governance_tx_hash,
+        )
+        .expect("encode swapped execution proof vector");
+        assert_ne!(
+            with_proof, swapped_proof_order,
+            "full-bootstrap execution proof order must be part of the signed FHE job payload"
+        );
+
+        let surplus_proof = encode_fhe_job_run_provenance_payload(
+            "health_portal",
+            "private_state",
+            sample_fhe_job_spec(),
+            sample_fhe_execution_policy(),
+            sample_fhe_param_set(),
+            sample_bfv_evaluation_key_bundle(),
+            sample_bfv_refresh_transcript(),
+            None,
+            None,
+            None,
+            vec![first_proof, second_proof.clone(), second_proof],
+            governance_tx_hash,
+        )
+        .expect("encode surplus execution proof vector");
+        assert_ne!(
+            with_proof, surplus_proof,
+            "full-bootstrap execution proof vector length must be part of the signed FHE job payload"
         );
     }
 

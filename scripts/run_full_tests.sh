@@ -15,7 +15,7 @@ host environment.
 Options:
   --only-network    Run only the integration tests (skip workspace fast tests).
   --wsl-safe        Conservative local mode for WSL and memory-constrained VMs:
-                    CARGO_BUILD_JOBS=2, --test-threads=1, serialized networks.
+                    CARGO_BUILD_JOBS=1, --test-threads=1, serialized networks.
   --fast            Run cargo via scripts/cargo_fast.sh when available.
   --fast-zero-debug When used with --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0.
   --fast-no-incremental
@@ -149,7 +149,7 @@ has_test_threads_arg() {
 }
 
 if [[ "${wsl_safe}" == true ]]; then
-    : "${cargo_jobs:=2}"
+    : "${cargo_jobs:=1}"
     : "${test_threads:=1}"
     : "${network_parallelism:=4}"
     serialize_networks=true

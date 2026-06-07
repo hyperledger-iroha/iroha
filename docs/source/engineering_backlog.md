@@ -10,6 +10,8 @@ track detailed unfinished engineering work.
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
+Retired runtime-network families are explicitly outside SCCP launch support for now.
+Substrate/Polkadot-style networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -303,11 +305,18 @@ redistributable schemas, and official trust/revocation bundles.
   exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
   and bound propagation through sample-switch and slot-to-coefficient output
   before requiring one governed execution proof per output slot.
+  A `zk-stark` positive fixture now installs the governed artifact-backed
+  STARK verifier key, generates backend-verified `OpenVerifyEnvelope` proofs
+  over each full-bootstrap execution statement, and proves the active-verifier
+  gate accepts them when STARK verification is enabled at runtime.
+  A `zk-preverify` positive fixture now proves the active-verifier gate accepts
+  a preverified proof batch for every production identifier slot.
   The legacy no-artifact Core execution helpers are test-only, so production
   full-mode jobs must pass through the governed artifact-aware path.
   Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-  Remaining production work is the real proof-producing backend and end-to-end
-  positive proof fixture for the wired verifier gate.
+  Remaining production work is the audited full-bootstrap arithmetic
+  proof-producing backend plus release-grade prover/verifier artifacts, not the
+  Core verifier gate.
   Direct crypto
   refresh-transcript validation/digesting and Soracloud transcript digesting
   now also preflight the advertised BFV public-key shape
@@ -1286,7 +1295,13 @@ redistributable schemas, and official trust/revocation bundles.
 				  require non-SORA bundles to satisfy the production source-proof gate
 				  before packaging destination submissions, and Rust EVM/TRON Groth16
 				  proof requests now require canonical bundle bytes plus non-empty
-				  source-proof witness bytes for non-SORA source bundles, while
+				  source-proof witness bytes for non-SORA source bundles; SCCP
+				  Rust TON native-recursive proof requests now apply the same canonical
+				  bundle/public-input/source-proof gate before local proof generation
+				  and proof-result wrapping; SCCP
+				  source-verifier template hashes and source-chain proof envelope
+				  shapes now reject unmapped source domains instead of falling back
+				  to empty source-chain keys, while
 				  diagnostic `allow_unready` builders remain available for structural fixtures; config
 				  parsing for streaming identity, Torii receipt signer, and Torii
 				  offline issuer public keys now also uses checked algorithm access

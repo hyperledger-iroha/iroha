@@ -76,6 +76,44 @@ Cases == {
   SecondCandidateIgnored
 }
 
+BudgetGateCases == {
+  NoCandidates,
+  BudgetExhausted,
+  MissingPending
+}
+
+FreshRequestSuppressionCases == {
+  FreshRequestSuppresses,
+  RequestWindowZeroFresh
+}
+
+FreshRequestNoSuppressionCases == {
+  RequestHeightMismatch,
+  RequestViewMismatch,
+  RequestNotActionable,
+  RequestBoundaryStale,
+  RequestStale,
+  RequestCapBoundaryStale
+}
+
+InflightSuppressionCases == {
+  InflightSuppresses,
+  InflightTtlZeroFresh
+}
+
+InflightNoSuppressionCases == {
+  InflightHashMismatch,
+  InflightViewMismatch,
+  InflightNotInflight,
+  InflightBoundaryStale,
+  InflightStale
+}
+
+DelegateCases == {
+  DelegateFalse,
+  DelegateTrue
+}
+
 Bugs == {
   "none",
   "budget_exhausted_escalates",
@@ -356,5 +394,85 @@ TypeInvariant ==
 
 SafetyFast ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+NearQuorumBudgetGateExact ==
+  /\ \A c \in BudgetGateCases:
+       /\ ActualProcessed(c) = FALSE
+       /\ ActualEscalated(c) = FALSE
+       /\ ActualCounter(c) = 0
+       /\ ActualProgress(c) = FALSE
+       /\ ActualOutput(c) = SpecOutput(c)
+  /\ ActualBudgetExhausted(BudgetExhausted) = TRUE
+  /\ ActualBudgetExhausted(NoCandidates) = FALSE
+  /\ ActualBudgetExhausted(MissingPending) = FALSE
+
+NearQuorumFreshRequestSuppressionExact ==
+  /\ \A c \in FreshRequestSuppressionCases:
+       /\ ActualProcessed(c) = TRUE
+       /\ ActualFreshRequestSuppresses(c) = TRUE
+       /\ ActualEscalated(c) = FALSE
+       /\ ActualCounter(c) = 0
+       /\ ActualProgress(c) = FALSE
+       /\ ActualOutput(c) = SpecOutput(c)
+  /\ \A c \in FreshRequestNoSuppressionCases:
+       /\ ActualProcessed(c) = TRUE
+       /\ ActualFreshRequestSuppresses(c) = FALSE
+       /\ ActualEscalated(c) = TRUE
+       /\ ActualCounter(c) = 1
+       /\ ActualProgress(c) = TRUE
+       /\ ActualOutput(c) = SpecOutput(c)
+
+NearQuorumInflightSuppressionExact ==
+  /\ \A c \in InflightSuppressionCases:
+       /\ ActualProcessed(c) = TRUE
+       /\ ActualInflightSuppresses(c) = TRUE
+       /\ ActualEscalated(c) = FALSE
+       /\ ActualCounter(c) = 0
+       /\ ActualProgress(c) = FALSE
+       /\ ActualOutput(c) = SpecOutput(c)
+  /\ \A c \in InflightNoSuppressionCases:
+       /\ ActualProcessed(c) = TRUE
+       /\ ActualInflightSuppresses(c) = FALSE
+       /\ ActualEscalated(c) = TRUE
+       /\ ActualCounter(c) = 1
+       /\ ActualProgress(c) = TRUE
+       /\ ActualOutput(c) = SpecOutput(c)
+
+NearQuorumDelegateResultExact ==
+  /\ ActualProcessed(DelegateFalse) = TRUE
+  /\ ActualEscalated(DelegateFalse) = FALSE
+  /\ ActualCounter(DelegateFalse) = 0
+  /\ ActualProgress(DelegateFalse) = FALSE
+  /\ ActualOutput(DelegateFalse) = SpecOutput(DelegateFalse)
+  /\ ActualProcessed(DelegateTrue) = TRUE
+  /\ ActualEscalated(DelegateTrue) = TRUE
+  /\ ActualCounter(DelegateTrue) = 1
+  /\ ActualProgress(DelegateTrue) = TRUE
+  /\ ActualOutput(DelegateTrue) = SpecOutput(DelegateTrue)
+
+NearQuorumPerTickCapExact ==
+  /\ ActualProcessed(SecondCandidateIgnored) = TRUE
+  /\ ActualEscalated(SecondCandidateIgnored) = FALSE
+  /\ ActualCounter(SecondCandidateIgnored) = 0
+  /\ ActualProgress(SecondCandidateIgnored) = FALSE
+  /\ ActualSecondCandidateProcessed(SecondCandidateIgnored) = FALSE
+  /\ ActualOutput(SecondCandidateIgnored) = SpecOutput(SecondCandidateIgnored)
+
+NearQuorumProgressCounterExact ==
+  \A c \in Cases:
+    /\ ActualCounter(c) = IF ActualEscalated(c) THEN 1 ELSE 0
+    /\ ActualProgress(c) = ActualEscalated(c)
+    /\ ActualCounter(c) = SpecCounter(c)
+    /\ ActualProgress(c) = SpecProgress(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+NearQuorumPreemptiveEscalationExactness ==
+  /\ SafetyFast
+  /\ NearQuorumBudgetGateExact
+  /\ NearQuorumFreshRequestSuppressionExact
+  /\ NearQuorumInflightSuppressionExact
+  /\ NearQuorumDelegateResultExact
+  /\ NearQuorumPerTickCapExact
+  /\ NearQuorumProgressCounterExact
 
 ====

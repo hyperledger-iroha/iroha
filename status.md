@@ -2,6 +2,279 @@
 
 Last updated: 2026-06-07
 
+## 2026-06-07 Sumeragi commit-pipeline recovery aggregate exactness
+
+- Added `LocalCommitQcOrderingExact`, `MissingCommitQcRecoveryGateExact`,
+  `QuorumRetransmitGateExact`, and `CommitPipelineRecoveryExactness` to
+  `SumeragiCommitPipelineRecoveryGate.tla`.
+- The aggregate invariant composes local commit-QC formation/order,
+  observed-QC preservation, missing-QC recovery preconditions, and quorum
+  retransmit target exactness.
+- Wired the aggregate through `SumeragiCommitPipelineRecoveryGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitPipelineRecoveryGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-recovery-fast`
+    (`NoError` up to computation length `2`; `60` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-recovery-fast`
+    (`61,441` states generated, `8,192` distinct states, depth `14`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Soracloud full-bootstrap execution STARK verifier fixture
+
+- Added a `zk-stark` Core positive fixture for the Soracloud full-bootstrap
+  execution proof gate. The fixture injects canonical STARK verifier-key bytes
+  into the governed full-bootstrap verifier-key artifact, installs the same
+  active verifier record, generates a backend-verified `OpenVerifyEnvelope`
+  over each execution statement hash, and verifies the active path with runtime
+  STARK guardrails enabled.
+- The acceptance test sizes transaction proof quotas from the generated fixture
+  bytes so the production quota checks stay active, while the existing
+  fake-proof, metadata-drift, statement-drift, missing, surplus, and reordered
+  proof regressions continue to fail closed.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core full_bootstrap_execution --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof-zk-stark CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_execution --lib -- --nocapture`
+    (`7` passed)
+
+## 2026-06-07 Sumeragi commit-root consistency aggregate exactness
+
+- Added `WrongContextCannotSatisfyStakeQuorum`, `CommitRootSelectionExact`,
+  `CommitRootQuorumExact`, `CommitRootValidationExact`, and
+  `CommitRootConsistencyExactness` to `SumeragiCommitRootConsistency.tla`.
+- The aggregate invariant composes root selection/evidence exactness,
+  permissioned and NPoS quorum exactness, mixed-root rejection,
+  wrong-context signer/stake rejection, and QC root-validation exactness.
+- Wired the aggregate through both `SumeragiCommitRootConsistency_fast.cfg`
+  and the witness-constrained `SumeragiCommitRootConsistency_tlc_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitRootConsistency.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-fast`
+    (`NoError` up to computation length `2`; `64` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-roots-fast`
+    (`579,626` states generated, `25` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP Rust TON proof-request source bundle gate
+
+- Hardened the Rust TON native-recursive proof-request builder and proof-result
+  canonicality check so `bundle_bytes` must decode as canonical SCCP message
+  bundle bytes and match the transparent public inputs before local proof
+  generation or wrapped result submission.
+- Non-SORA source bundles now require non-empty, nonzero source-proof witness
+  bytes on the TON request path, matching the EVM/TRON Groth16 source-bundle
+  gate. Self-consistent forged TON requests with stripped non-SORA
+  `source_proof_bytes` are rejected by the proof-result wrapper.
+- Replaced the Rust TON request hash vector fixture that used arbitrary bundle
+  bytes with a canonical SORA -> TON bundle preimage, so the request hash test
+  exercises the production bundle decoder instead of a byte-only placeholder.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `cargo fmt -p iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-ton-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_proof_request_hash_uses_canonical_sccp_bundle_preimage --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-ton-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_proof --lib -- --nocapture`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`6` passed)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md docs/source/engineering_backlog.md pytests/scripts/sccp_retired_network_surface_test.py roadmap.md scripts/sccp_verify_release_bundle.py status.md`
+
+## 2026-06-07 Sumeragi signer-index normalization aggregate exactness
+
+- Added `CanonicalNormalizationExact`, `ViewIndexNormalizationExact`,
+  `ViewSetNormalizationExact`, `RoundTripNormalizationExact`, and
+  `SignerIndexNormalizationExactness` to
+  `SumeragiSignerIndexNormalizationGate.tla`.
+- The aggregate invariant composes canonical normalization anchors,
+  canonical-to-view index lookup, canonical-set-to-view normalization,
+  round-trip preservation/filtering, and exact actual/spec result equality.
+- Wired the aggregate through `SumeragiSignerIndexNormalizationGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSignerIndexNormalizationGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh signer-index-normalization-fast`
+    (`NoError` up to computation length `1`; `88` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh signer-index-normalization-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi build-signers-bitmap aggregate exactness
+
+- Added `BitmapLengthExact`, `ZeroRosterAndAllocationExact`,
+  `SingleSignerBitExact`, `MultiSignerOrExact`,
+  `OutOfRangeAndPaddingFiltered`, `DuplicateSignerCollapsedExact`, and
+  `BuildSignersBitmapExactness` to `SumeragiBuildSignersBitmapGate.tla`.
+- The aggregate invariant composes exact bitmap length, zero-roster and
+  non-empty allocation behavior, single-signer bit placement, multi-signer OR
+  behavior, out-of-range/padding filtering, duplicate collapse, and
+  full-roster coverage.
+- Wired the aggregate through `SumeragiBuildSignersBitmapGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBuildSignersBitmapGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh build-signers-bitmap-fast`
+    (`NoError` up to computation length `1`; `46` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh build-signers-bitmap-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi QC signer bitmap/count aggregate exactness
+
+- Added `QcSignerBitmapAdmissionExactness` to
+  `SumeragiQcSignerBitmap.tla` and wired it through the fast config. The
+  aggregate composes topology-width matching, parser/spec equality,
+  voting-only quorum accounting, observer/padding rejection, out-of-bounds
+  rejection, length-mismatch rejection, and accepted-evidence exactness.
+- Added `EmptyAndZeroByteCountExact`, `SingleBitCountExact`,
+  `FullByteAndPaddingCountExact`, `MultiByteCountExact`, and
+  `QcSignerRawCountExactness` to `SumeragiQcSignerCountGate.tla`, then wired
+  them through the fast config. The aggregate composes bitmap-width bounds,
+  raw anchor counts, empty/zero-byte handling, single-bit handling,
+  full-byte/padding-bit handling, and multi-byte accumulation.
+- Documented both aggregate invariants in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcSignerBitmap.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcSignerCountGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-fast`
+    (`NoError` up to computation length `2`; `36` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signer-count-fast`
+    (`NoError` up to computation length `1`; `57` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-signers-fast`
+    (`7,842,801` states generated, `2,800` distinct states, depth `2`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-signer-count-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP source-verifier unmapped-domain fail-closed
+
+- Hardened SCCP source-verifier template material and source-chain proof
+  envelope shape checks so unmapped domains cannot fall back to an empty
+  source-chain key. Template component hashes now return `None` for unmapped
+  source domains, and source-chain proof envelopes reject unknown domains
+  before comparing the chain key.
+- Added a regression covering both the direct component-hash helper and a
+  structurally valid ETH source-chain envelope mutated into an unmapped source
+  domain with an empty `source_chain`.
+- Validation:
+  - `cargo fmt -p iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_verifier_component_hashes_and_envelopes_reject_unmapped_source_domains --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_chain_proof_envelope --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_verifier_material --lib -- --nocapture`
+    (`6` passed)
+
+## 2026-06-07 Sumeragi manifest-gate reschedule aggregate exactness
+
+- Added `ManifestGateEffectExact`, `ManifestGateActionExact`,
+  `ManifestGateNoTargetExact`, `PlainZeroDropCleanupExact`,
+  `VoteBackedActionExact`, `VoteBackedNoTargetExact`,
+  `AuthoritativeRotationExact`, `PassiveVoteBackedEvidenceExact`, and
+  `ManifestGateRescheduleExactness` to
+  `SumeragiManifestGateRescheduleGate.tla`.
+- The aggregate invariant composes manifest effectiveness and retention,
+  manifest action/no-target behavior, plain zero-work cleanup, vote-backed
+  action/no-target behavior, authoritative rotation admission/suppression, and
+  passive vote-backed evidence preservation.
+- Wired the aggregate through `SumeragiManifestGateRescheduleGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiManifestGateRescheduleGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh manifest-gate-reschedule-fast`
+    (`NoError` up to computation length `1`; `122` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh manifest-gate-reschedule-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi near-quorum preemptive escalation aggregate exactness
+
+- Added `NearQuorumBudgetGateExact`,
+  `NearQuorumFreshRequestSuppressionExact`,
+  `NearQuorumInflightSuppressionExact`, `NearQuorumDelegateResultExact`,
+  `NearQuorumPerTickCapExact`, `NearQuorumProgressCounterExact`, and
+  `NearQuorumPreemptiveEscalationExactness` to
+  `SumeragiNearQuorumPreemptiveEscalationGate.tla`.
+- The aggregate invariant composes exhausted-budget and missing-pending
+  fail-closed gates, fresh missing-request suppression, in-flight range-pull
+  suppression, delegate result authority, per-tick cap enforcement, and
+  progress/counter consistency.
+- Wired the aggregate through
+  `SumeragiNearQuorumPreemptiveEscalationGate_fast.cfg`, and documented the
+  proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNearQuorumPreemptiveEscalationGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh near-quorum-preemptive-escalation-fast`
+    (`NoError` up to computation length `1`; `110` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh near-quorum-preemptive-escalation-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 WSL-safe plain cargo test defaults
+
+- Tightened the repository Cargo defaults so plain `cargo test` uses one Cargo
+  build job and sets `RUST_TEST_THREADS=1` unless the caller overrides it,
+  avoiding the default logical-CPU fan-out that can exhaust WSL and
+  memory-constrained VMs.
+- Aligned `scripts/run_full_tests.sh --wsl-safe` with the same single Cargo job
+  default and documented the override path for high-memory hosts in the
+  integration-test README.
+- Validation:
+  - `python3 -c 'import pathlib,tomllib; tomllib.loads(pathlib.Path(".cargo/config.toml").read_text()); print(".cargo/config.toml: ok")'`
+  - `bash -n scripts/run_full_tests.sh`
+
 ## 2026-06-07 Sumeragi preemptive vote-backed retransmit aggregate exactness
 
 - Added `PreemptiveCandidateRejectExact`,
@@ -76,7 +349,21 @@ Last updated: 2026-06-07
   input/output ciphertexts, bound mode, and input/output bounds; it then checks
   the active Soracloud verifier-key record against the governed verifier-key
   artifact before backend verification.
+- Added a `zk-preverify` positive regression that installs the governed
+  full-bootstrap verifier key, preloads the block-level preverified-proof cache
+  for every output-slot proof, sizes the transaction proof-call quota for the
+  64-slot identifier batch, and proves the Core verifier gate accepts the
+  preverified active verifier path while default tests still reject missing,
+  surplus, reordered, metadata-drifted, statement-drifted, and unverified fake
+  proofs.
 - Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_full_bootstrap_execution_proof_accepts_preverified_active_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-preverify --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --tests --features zk-preverify --no-deps -- -D warnings`
   - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model full_bootstrap_execution --lib -- --nocapture`
     (`7` passed)
@@ -100,6 +387,9 @@ Last updated: 2026-06-07
 - Restored the SCCP launch-scope note: current SCCP support remains limited to
   Ethereum, BSC, Solana, TON, and TRON; retired runtime-network families remain
   outside the production surface.
+- Added an explicit note that retired runtime-network families remain outside
+  SCCP launch support for now.
+- Substrate/Polkadot-style networks are explicitly outside SCCP launch support for now.
 - Added EVM and TRON negative/adversarial regressions for omitted source-proof
   bytes, all-zero source-proof bytes, arbitrary non-canonical bundle bytes,
   bundle/public-input swaps, and forged self-consistent wrapped requests with
@@ -113,6 +403,14 @@ Last updated: 2026-06-07
     (`2` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_mainnet_destination_sdk_facade_enforces_mainnet_binding_and_wraps_ui_proof --lib -- --nocapture`
     (`1` passed)
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`6` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_retired_network_surface_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_sparse_retired_network_surface_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_stale_retired_network_surface_allowlist pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_custom_retired_network_surface_forbidden_marker`
+    (`4` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard`
+    (`1` passed)
+  - `git diff --check -- docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_verify_release_bundle.py`
 
 ## 2026-06-07 Sumeragi quorum rebroadcast dispatch aggregate exactness
 
@@ -301,6 +599,9 @@ Last updated: 2026-06-07
   commitment, missing `envelope_hash`, and forged proof-byte envelope hashes are
   rejected during runtime admission before verifier lookup can mask attachment
   metadata drift.
+- Extended the Core proof-vector regression to reject surplus full-bootstrap
+  execution proofs and per-slot proof reordering before any backend verifier
+  can accept a proof for the wrong output slot.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
   - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_sccp/src/lib.rs`
@@ -309,7 +610,7 @@ Last updated: 2026-06-07
   - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
     (`5` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof --lib -- --nocapture`
-    (`5` passed)
+    (`6` passed)
   - `git diff --name-only -- Cargo.lock` produced no output.
 
 ## 2026-06-07 Sumeragi paced retransmit target aggregate exactness
@@ -380,6 +681,9 @@ Last updated: 2026-06-07
   data-model, fixture, Core, and Torii test helpers populate the
   full-bootstrap material proof statement field, avoiding Rust struct-literal
   default assumptions for the public field.
+- Extended the FHE job provenance payload regression so full-bootstrap
+  execution proof vector order and surplus entries change the canonical signed
+  bytes.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
   - `rustfmt --edition 2024 --check crates/iroha_data_model/src/soracloud.rs`
@@ -388,6 +692,8 @@ Last updated: 2026-06-07
     (`6` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-full-bootstrap-exec-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --lib -- --nocapture`
     (`1466` passed, `2` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-provenance-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_job_run_provenance_payload_binds_full_bootstrap_execution_proof_vector --lib -- --nocapture`
+    (`1` passed)
 
 ## 2026-06-07 Sumeragi quorum retransmit target aggregate exactness
 

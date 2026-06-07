@@ -46740,9 +46740,22 @@ async fn maybe_emit_rbc_ready_for_local_kura_payload_hydrates_before_ready() {
         "READY emission should not wait for external READY bootstrap"
     );
     assert_eq!(
+        stored.received_chunks(),
+        stored.total_chunks(),
+        "local Kura payload should hydrate missing chunks before READY emission"
+    );
+    assert_eq!(
         stored.progress_stage(),
-        super::RbcProgressStage::Delivered,
-        "authoritative READY emission should immediately cascade into the DELIVER sidecar"
+        super::RbcProgressStage::LocalReadySent,
+        "uncommitted Kura payload should wait for READY quorum before local DELIVER"
+    );
+    assert!(
+        !stored.delivered,
+        "uncommitted Kura payload must not use the local-authoritative DELIVER bypass"
+    );
+    assert!(
+        !actor.rbc_session_has_local_authoritative_payload_for_progress(key, stored),
+        "uncommitted Kura payload must not be treated as locally authoritative"
     );
     assert_eq!(
         stored
@@ -102641,7 +102654,7 @@ async fn maybe_force_view_change_for_stalled_pending_rebroadcasts_cached_frontie
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.block_time_ms = 1_000;
+        params_block.sumeragi.block_time_ms = 200;
         params_block.commit();
     }
     let timing_view = actor.state.view();
@@ -102666,34 +102679,13 @@ async fn maybe_force_view_change_for_stalled_pending_rebroadcasts_cached_frontie
     let block = sample_block(height, view_idx, parent);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
-    let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
-    let frontier_pending_timeout =
-        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
-    let repair_exhaustion_window = actor.cap_active_block_production_gap(
-        frontier_pending_timeout.saturating_add(
-            actor
-                .frontier_slot_lag_window()
-                .max(actor.rebroadcast_cooldown())
-                .max(Duration::from_millis(1)),
-        ),
-        true,
-    );
 
     let now = Instant::now();
-    let stalled_age = frontier_pending_timeout.saturating_add(Duration::from_millis(2));
-    assert!(
-        stalled_age < repair_exhaustion_window,
-        "test setup should exercise quorum-timeout replay before repair exhaustion"
-    );
-    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
     let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view_idx);
-    pending.touch_progress(stalled_at);
+    pending.touch_progress(now);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
-    actor
-        .phase_tracker
-        .on_view_change(height, view_idx, stalled_at);
+    actor.phase_tracker.on_view_change(height, view_idx, now);
     actor.frontier_slot = Some(super::FrontierSlot::new(
         height,
         view_idx,
@@ -102769,6 +102761,31 @@ async fn maybe_force_view_change_for_stalled_pending_rebroadcasts_cached_frontie
         super::StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout,
         "test setup should match the active-recovery backlog timeout path"
     );
+    let frontier_pending_timeout = decision.timeout;
+    let repair_exhaustion_window = actor.cap_active_block_production_gap(
+        frontier_pending_timeout.saturating_add(
+            actor
+                .frontier_slot_lag_window()
+                .max(actor.rebroadcast_cooldown())
+                .max(Duration::from_millis(1)),
+        ),
+        true,
+    );
+    let stalled_age = frontier_pending_timeout.saturating_add(Duration::from_millis(2));
+    assert!(
+        stalled_age < repair_exhaustion_window,
+        "test setup should exercise quorum-timeout replay before repair exhaustion: timeout={frontier_pending_timeout:?}, stalled_age={stalled_age:?}, repair_exhaustion_window={repair_exhaustion_window:?}"
+    );
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending retained")
+        .touch_progress(stalled_at);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
 
     assert!(
         !actor.maybe_force_view_change_for_stalled_pending(now),
