@@ -14997,7 +14997,7 @@ where
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
     // Track when the transaction first entered the queue.
-    let mut queued_at: Option<Instant> = None;
+    let mut queued_at: Option<tokio::time::Instant> = None;
     let poll_enabled = poll_interval != Duration::ZERO;
     let poll_interval = if poll_enabled {
         poll_interval
@@ -15016,12 +15016,12 @@ where
         tokio::select! {
             biased;
             submit_outcome = async {
-                match submit_result_receiver.as_mut() {
-                    Some(receiver) => Some(receiver.await),
-                    None => None,
-                }
+                submit_result_receiver
+                    .as_mut()
+                    .expect("submit result branch is gated by receiver presence")
+                    .await
             }, if submit_result_receiver.is_some() => {
-                match submit_outcome.expect("submit result branch is gated by receiver presence") {
+                match submit_outcome {
                     Ok(Ok(())) => {
                         debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
                         submit_result_receiver = None;
@@ -15034,20 +15034,33 @@ where
                     ))),
                 }
             }
+            _ = async move {
+                let queued_at =
+                    queued_at.expect("queued timeout branch is gated by queued_at presence");
+                tokio::time::sleep_until(queued_at + max_queued_duration).await;
+            }, if queued_at.is_some() => {
+                let elapsed = queued_at
+                    .map(|queued_at| queued_at.elapsed())
+                    .unwrap_or_default();
+                warn!(%hash, ?elapsed, "transaction remained queued");
+                return Err(tx_confirmation_final_report(eyre!(
+                    "transaction queued for too long"
+                )));
+            }
             _ = poll.tick(), if poll_enabled => {
                 match status_check() {
                     Ok(Some(status)) => match status {
                         TxConfirmationStatus::Queued => {
                             if let Some(first) = queued_at {
                                 let elapsed = first.elapsed();
-                                if elapsed > max_queued_duration {
+                                if elapsed >= max_queued_duration {
                                     warn!(%hash, ?elapsed, "transaction remained queued");
                                     return Err(tx_confirmation_final_report(eyre!(
                                         "transaction queued for too long"
                                     )));
                                 }
                             } else {
-                                queued_at = Some(Instant::now());
+                                queued_at = Some(tokio::time::Instant::now());
                                 debug!(%hash, "transaction entered queue");
                             }
                         }
@@ -15090,7 +15103,7 @@ where
                                 TransactionStatus::Queued => {
                                     if let Some(first) = queued_at {
                                         let elapsed = first.elapsed();
-                                        if elapsed > max_queued_duration {
+                                        if elapsed >= max_queued_duration {
                                             warn!(%hash, ?elapsed, "transaction remained queued");
                                             return Some(Err(tx_confirmation_final_report(eyre!(
                                                 "transaction queued for too long"
@@ -15098,7 +15111,7 @@ where
                                         }
                                         // Duplicate queued notifications are possible; keep waiting.
                                     } else {
-                                        queued_at = Some(Instant::now());
+                                        queued_at = Some(tokio::time::Instant::now());
                                         debug!(%hash, "transaction entered queue");
                                     }
                                 }
@@ -15133,14 +15146,14 @@ where
                                         TxConfirmationStatus::Queued => {
                                             if let Some(first) = queued_at {
                                                 let elapsed = first.elapsed();
-                                                if elapsed > max_queued_duration {
+                                                if elapsed >= max_queued_duration {
                                                     warn!(%hash, ?elapsed, "transaction remained queued");
                                                     return Some(Err(tx_confirmation_final_report(eyre!(
                                                         "transaction queued for too long"
                                                     ))));
                                                 }
                                             } else {
-                                                queued_at = Some(Instant::now());
+                                                queued_at = Some(tokio::time::Instant::now());
                                                 debug!(%hash, "transaction entered queue");
                                             }
                                         }
