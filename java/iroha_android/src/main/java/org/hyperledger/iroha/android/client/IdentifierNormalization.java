@@ -128,15 +128,4 @@ public enum IdentifierNormalization {
     return builder.toString();
   }
 
-  private static String trimWhitespace(final String value) {
-    int start = 0;
-    int end = value.length();
-    while (start < end && Character.isWhitespace(value.charAt(start))) {
-      start++;
-    }
-    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
-      end--;
-    }
-    return value.substring(start, end);
-  }
 }

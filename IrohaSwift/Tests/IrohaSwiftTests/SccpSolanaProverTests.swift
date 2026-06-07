@@ -13483,7 +13483,8 @@ final class SccpSolanaProverTests: XCTestCase {
             sourceProofBytes: oversizedSourceProofBytes
         ))) { error in
             XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
-        }        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
             sourceProofBytes: zeroSourceProofBytes
         ))) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
@@ -13493,6 +13494,100 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertTrue(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput()).sourceProofBytes.isEmpty)
         XCTAssertTrue(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput()).sourceProofBytes.isEmpty)
     }
+
+    private static func accountsLtHashRequest(
+        _ request: SolanaSccpAccountsLtHashProofRequest,
+        accountsLtHashProofPublicInputsHash: String? = nil,
+        publicInputColumns: [[String]]? = nil,
+        fastpqPublicInputs: SolanaSccpAccountsLtHashFastpqPublicInputs? = nil,
+        fastpqTransitions: [SolanaSccpAccountsLtHashFastpqTransition]? = nil
+    ) -> SolanaSccpAccountsLtHashProofRequest {
+        SolanaSccpAccountsLtHashProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            parentSlot: request.parentSlot,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            accountsLtHashProofPublicInputsHash: accountsLtHashProofPublicInputsHash
+                ?? request.accountsLtHashProofPublicInputsHash,
+            openedAccountsLtHashContributionsHash: request.openedAccountsLtHashContributionsHash,
+            openedAccountsLtHashResidualChecksum: request.openedAccountsLtHashResidualChecksum,
+            statementBytes: request.statementBytes,
+            accountCommitmentBytes: request.accountCommitmentBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: publicInputColumns ?? request.publicInputColumns,
+            fastpqPublicInputs: fastpqPublicInputs ?? request.fastpqPublicInputs,
+            fastpqTransitions: fastpqTransitions ?? request.fastpqTransitions
+        )
+    }
+
+    private static func fullLightClientAuditRequest(
+        _ request: SolanaSccpFullLightClientAuditProofRequest,
+        verifierHash: String? = nil,
+        auditStatementHash: String? = nil,
+        publicInputColumns: [[String]]? = nil,
+        fastpqPublicInputs: SolanaSccpFullLightClientAuditFastpqPublicInputs? = nil,
+        fastpqTransitions: [SolanaSccpFullLightClientAuditFastpqTransition]? = nil
+    ) -> SolanaSccpFullLightClientAuditProofRequest {
+        SolanaSccpFullLightClientAuditProofRequest(
+            version: request.version,
+            proofFamily: request.proofFamily,
+            circuitId: request.circuitId,
+            parameterSet: request.parameterSet,
+            role: request.role,
+            roleCode: request.roleCode,
+            sourceDomain: request.sourceDomain,
+            finalizedSlot: request.finalizedSlot,
+            verifierId: request.verifierId,
+            verifierHash: verifierHash ?? request.verifierHash,
+            sourceStateVerifierId: request.sourceStateVerifierId,
+            sourceStateVerifierHash: request.sourceStateVerifierHash,
+            sourceVerifierMaterialHash: request.sourceVerifierMaterialHash,
+            sourceAdapterDeploymentHash: request.sourceAdapterDeploymentHash,
+            fullLightClientGateHash: request.fullLightClientGateHash,
+            finalityContextHash: request.finalityContextHash,
+            voteMessageHash: request.voteMessageHash,
+            accountsLtHashProofHash: request.accountsLtHashProofHash,
+            auditStatementHash: auditStatementHash ?? request.auditStatementHash,
+            statementBytes: request.statementBytes,
+            verificationContextBytes: request.verificationContextBytes,
+            schemaDescriptor: request.schemaDescriptor,
+            publicInputColumns: publicInputColumns ?? request.publicInputColumns,
+            fastpqPublicInputs: fastpqPublicInputs ?? request.fastpqPublicInputs,
+            fastpqTransitions: fastpqTransitions ?? request.fastpqTransitions
+        )
+    }
+
+    private static func sampleProductionWitness(
+        mainnetGenesisHash: String = sccpSolanaMainnetGenesisHash,
+        sourceStateVerifierHash: String = String(repeating: "ef", count: 32),
+        accountsLtHash: Data? = Data((0..<2_048).map { UInt8(($0 % 251) + 1) }),
+        destinationBindingHash: String = String(repeating: "78", count: 32)
+    ) -> SolanaSccpWitnessInput {
+        let branch = [Data(repeating: 0x56, count: 32)]
+        let sourceEventDigest = String(repeating: "34", count: 32)
+        let blockhash = String(repeating: "9a", count: 32)
+        let transactionStatusRoot = try! solanaSccpTransactionStatusRootFromBranch(
+            sourceEventDigest: sourceEventDigest,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            inclusionBranch: branch
+        )
+        let messageProofHash = try! solanaSccpMessageProofHash(
+            sourceEventDigest: sourceEventDigest,
+            transactionStatusRoot: transactionStatusRoot,
+            transactionSignature: Self.solanaSignature55,
+            emitterProgramId: Self.solanaProgram42,
+            inclusionBranch: branch
+        )
+        let accountsLtHashChecksum = accountsLtHash.map {
+            try! solanaSccpAccountsLtHashChecksum($0)
+        } ?? String(repeating: "88", count: 32)
         let bankHash = accountsLtHash.map {
             try! solanaSccpAgaveBankHash(
                 parentBankHash: String(repeating: "c0", count: 32),

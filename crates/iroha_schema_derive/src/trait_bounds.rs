@@ -1,6 +1,7 @@
 //! Algorithm for generating trait bounds in `IntoSchema` derive
 //!
-//! Based on <https://github.com/paritytech/parity-scale-codec/blob/2c61d4ab70dfa157556430546441cd2deb5031f2/derive/src/trait_bounds.rs>
+//! Based on the common derive strategy of adding bounds only for generic
+//! parameters that are used by generated schema fields.
 
 use std::iter;
 

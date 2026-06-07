@@ -5711,6 +5711,135 @@ pub fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_ba
     })
 }
 
+/// Apply a typed full-bootstrap blind rotation through registered exact RNS paths.
+///
+/// This consumes the governed selector schedule carried by
+/// [`BfvFullBootstrapBlindRotationKeyV1`]. Each step applies the declared
+/// Galois automorphism, masks the contribution with the typed selector
+/// plaintext, and accumulates the result through the registered exact RNS
+/// corridor.
+///
+/// # Errors
+/// Returns [`BfvError`] when blind-rotation material, ciphertext, required
+/// Galois keys, or registered RNS profile validation fails.
+pub fn apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    key: &BfvFullBootstrapBlindRotationKeyV1,
+) -> Result<BfvCiphertext, BfvError> {
+    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
+    validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
+    validate_galois_key_set_metadata(params, galois_keys, "BFV full-bootstrap blind rotation")?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key_set_entries(params, galois_keys)?;
+    let mut output: Option<BfvCiphertext> = None;
+    for step in &key.steps {
+        let galois_key = galois_keys
+            .iter()
+            .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for full-bootstrap blind-rotation automorphism power {}",
+                    step.automorphism_power
+                ))
+            })?;
+        let transformed = apply_galois_automorphism_ciphertext_rns_exact(
+            params, &rns_chain, galois_key, ciphertext,
+        )?;
+        let masked = multiply_plaintext_polynomial_rns_exact(
+            params,
+            &rns_chain,
+            &transformed,
+            &step.selector_plaintext,
+        )?;
+        output = Some(match output {
+            Some(accumulator) => {
+                add_ciphertexts_rns_exact(params, &rns_chain, &accumulator, &masked)?
+            }
+            None => masked,
+        });
+    }
+    output.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap blind rotation produced an empty Galois key schedule".to_owned(),
+        )
+    })
+}
+
+/// Apply a typed full-bootstrap blind rotation through bounded-noise RNS paths.
+///
+/// The evaluator and key-switch decomposition chains are derived from the
+/// registered production BFV profile before the governed selector schedule is
+/// evaluated. This is the bounded-noise counterpart to
+/// [`apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when bounded-noise capacity, blind-rotation material,
+/// ciphertext, required Galois keys, or registered RNS profile validation fails.
+pub fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+    key: &BfvFullBootstrapBlindRotationKeyV1,
+) -> Result<BfvCiphertext, BfvError> {
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    let decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
+    validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
+    validate_galois_key_set_metadata(
+        params,
+        galois_keys,
+        "BFV full-bootstrap bounded-noise blind rotation",
+    )?;
+    validate_bounded_noise_rns_basis_extension_corridor(
+        params,
+        &decomposition_chain,
+        &evaluator_chain,
+        "BFV full-bootstrap bounded-noise blind-rotation decomposition",
+    )?;
+    validate_ciphertext(params, ciphertext)?;
+    validate_galois_key_set_entries(params, galois_keys)?;
+    let mut output: Option<BfvCiphertext> = None;
+    for step in &key.steps {
+        let galois_key = galois_keys
+            .iter()
+            .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for full-bootstrap bounded-noise blind-rotation automorphism power {}",
+                    step.automorphism_power
+                ))
+            })?;
+        let transformed =
+            apply_galois_automorphism_ciphertext_bounded_noise_rns_basis_extension_exact(
+                params,
+                &decomposition_chain,
+                &evaluator_chain,
+                galois_key,
+                ciphertext,
+            )?;
+        let masked = multiply_plaintext_polynomial_bounded_noise_rns_exact(
+            params,
+            &evaluator_chain,
+            &transformed,
+            &step.selector_plaintext,
+        )?;
+        output = Some(match output {
+            Some(accumulator) => {
+                add_ciphertexts_rns_exact(params, &evaluator_chain, &accumulator, &masked)?
+            }
+            None => masked,
+        });
+    }
+    output.ok_or_else(|| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap bounded-noise blind rotation produced an empty Galois key schedule"
+                .to_owned(),
+        )
+    })
+}
+
 /// Validate the proof-facing profile bound by full-bootstrap material.
 ///
 /// This is the verifier admission companion to
@@ -17170,6 +17299,122 @@ mod tests {
             decode_bfv_full_bootstrap_blind_rotation_artifact_v1(&params, &material, &artifact)
                 .expect("decode governed blind-rotation artifact");
         assert_eq!(decoded, key);
+
+        let (secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-blind-rotation-exec-keygen")
+                .expect("keygen");
+        let slots = (0..params.degree())
+            .map(|slot| u64::try_from((slot * 5 + 3) % 257).expect("slot fits"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &slots).expect("encode packed slots");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-full-bootstrap-blind-rotation-exec-input",
+        )
+        .expect("encrypt packed input");
+        let galois_keys = key
+            .steps
+            .iter()
+            .map(|step| {
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    step.automorphism_power,
+                    b"bfv-full-bootstrap-blind-rotation-exec-galois",
+                )
+                .expect("Galois key")
+            })
+            .collect::<Vec<_>>();
+        let rotated = apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
+            &params,
+            &galois_keys,
+            &ciphertext,
+            &key,
+        )
+        .expect("apply governed blind rotation");
+        let baseline = rotate_packed_ciphertext_slots_left_with_galois_keys_registered_rns_exact(
+            &params,
+            &galois_keys,
+            &ciphertext,
+            key.rotation_steps,
+        )
+        .expect("apply registered packed RotateLeft baseline");
+        assert_eq!(rotated, baseline);
+        let rotated_plaintext =
+            decrypt(&params, &secret_key, &rotated).expect("decrypt blind-rotation output");
+        let mut expected_slots = slots;
+        expected_slots.rotate_left(usize::try_from(key.rotation_steps).expect("rotation fits"));
+        assert_eq!(
+            decode_packed_plaintext_slots(&params, &rotated_plaintext)
+                .expect("decode blind-rotation output slots"),
+            expected_slots
+        );
+
+        let missing_power = key.steps[0].automorphism_power;
+        assert_error_contains(
+            apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
+                &params,
+                &galois_keys[1..],
+                &ciphertext,
+                &key,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "blind rotation must reject missing Galois keys",
+        );
+
+        let (bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(
+            &params,
+            b"bfv-full-bootstrap-blind-rotation-bounded-exec-keygen",
+        )
+        .expect("bounded-noise keygen");
+        let bounded_ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &bounded_public_key,
+            &packed_plaintext,
+            b"bfv-full-bootstrap-blind-rotation-bounded-exec-input",
+        )
+        .expect("encrypt bounded packed input");
+        let bounded_galois_keys = key
+            .steps
+            .iter()
+            .map(|step| {
+                galois_key_bounded_noise_from_seed(
+                    &params,
+                    &bounded_secret_key,
+                    step.automorphism_power,
+                    b"bfv-full-bootstrap-blind-rotation-bounded-exec-galois",
+                )
+                .expect("bounded-noise Galois key")
+            })
+            .collect::<Vec<_>>();
+        let bounded_rotated =
+            apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+                &key,
+            )
+            .expect("apply governed bounded-noise blind rotation");
+        let bounded_baseline =
+            rotate_packed_ciphertext_slots_left_with_galois_keys_bounded_noise_registered_rns_basis_extension_exact(
+                &params,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+                key.rotation_steps,
+            )
+            .expect("apply bounded-noise packed RotateLeft baseline");
+        assert_eq!(bounded_rotated, bounded_baseline);
+        let bounded_rotated_plaintext =
+            decrypt_bounded_noise(&params, &bounded_secret_key, &bounded_rotated)
+                .expect("decrypt bounded blind-rotation output");
+        assert_eq!(
+            decode_packed_plaintext_slots(&params, &bounded_rotated_plaintext)
+                .expect("decode bounded blind-rotation output slots"),
+            expected_slots
+        );
 
         let opaque_payload = sample_full_bootstrap_artifact_payload(
             &params,

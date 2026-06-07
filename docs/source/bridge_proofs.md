@@ -16,6 +16,9 @@ Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic
 relay paths.
+Retired runtime-network families are not supported for now. Future support
+requires a new source-proof design, fresh fixtures, SDK/Torii surface review,
+and explicit governance approval rather than reviving diagnostic code paths.
 The active launch policy is Ethereum-mainnet lane readiness. The active Ethereum launch lane
 can open from complete mainnet source-proof, source-adapter deployment,
 destination rollout, and route-canary evidence without waiting for future
@@ -954,7 +957,7 @@ python3 scripts/sccp_solana_source_state_evidence.py \
   --toml
 ```
 
-the GRANDPA authority-set hash from ordered non-zero 32-byte Ed25519 authority
+the finality authority-set hash from ordered non-zero 32-byte Ed25519 authority
 keys and non-zero weights, requires it to match the adapter and configured
 source trust anchor for non-placeholder material, recomputes the finalized-header
 precommit-message hash, checks the justification hash, verifies Ed25519
@@ -3262,9 +3265,9 @@ components or partial audit evidence.
   bounded structural MPT proof nodes, and caps solid-block ancestor headers,
   solid-block confirmation headers, and witness-schedule transition chains at
   64 steps each.
-  `grandpa_set_id`, `block_hash`, `authority_set_hash`, `events_root`,
-  `grandpa_justification_hash`, `storage_proof_hash`,
-  `grandpa_justification`, and `authority_set_transition_proofs`.
+  `finality_set_id`, `block_hash`, `authority_set_hash`, `events_root`,
+  `finality_justification_hash`, `storage_proof_hash`,
+  `finality_justification`, and `authority_set_transition_proofs`.
 
 All source inclusion branches and nested H256 branches are bounded to at most
 64 32-byte siblings. EVM-family and TRON MPT openings are separately bounded to
@@ -3524,7 +3527,7 @@ non-empty StakeHistory sysvar data, and the exact 2,048-byte non-zero
 AccountsLtHash before deeper account/finality checks run.
 canonical `frame_system::Events` storage key and the source-event leaf index as
 first-class UI witness material, so the same runtime storage item and path bits
-used to reconstruct the events root are also signed by the GRANDPA precommit
+used to reconstruct the events root are also signed by the finality precommit
 the adapter must additionally carry the
 public inputs to the governed runtime storage-proof verifier hash. The
 portal, operator tooling, and mobile apps should derive these hashes and the
@@ -3920,7 +3923,7 @@ as Nexus-origin messages from block-level SCCP records.
   - local hub domain/chain identity (`SORA`);
   - the SCCP burn registry backend;
   - the generic message proof family (`stark-fri-v1`);
-  - no runtime SCALE proof family, verifier backend, or runtime envelope path
+  - no runtime proof family, verifier backend, or runtime envelope path
   - the typed SCCP message proof-artifact discovery path (`/v1/sccp/artifacts/message/{message_id}`);
   - the normalized SCCP counterparty proof-job discovery path (`/v1/sccp/jobs/message/{message_id}`);
   - the SCCP proof-manifest discovery path (`/v1/sccp/manifests`);

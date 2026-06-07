@@ -2,6 +2,154 @@
 
 Last updated: 2026-06-07
 
+## 2026-06-07 SCCP retired runtime-network package cleanup
+
+- Restored the supported Solana Swift SCCP test helpers that were left outside
+  the test scope during the retired runtime-network cleanup, and removed the
+  duplicate Java Android identifier-normalization helper that blocked
+  compilation.
+- Completed the JavaScript package root SCCP re-export surface for the BSC
+  native EVM prover constants, validators, parsers, artifact verifiers, and
+  self-test helpers, keeping the package root aligned with the SCCP subpath.
+- Preserved the BSC testnet production artifact gate in the package-dist
+  facade test by supplying verified native prover artifacts instead of allowing
+  unaudited high-level calldata construction.
+- Validation:
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/package_dist.test.js test/sccpPackageExports.test.js test/sccpSolanaProver.test.js` in `javascript/iroha_js`
+  - `swift test --filter SccpSolanaProverTests` in `IrohaSwift`
+    (`80` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew testDebugUnitTest --console=plain` in `java/iroha_android`
+  - Unsupported retired-lane marker scan across active SCCP Rust, JS, Python,
+    Swift, Kotlin, and Java Android surfaces returned no matches.
+  - `git diff --check -- IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierNormalization.java javascript/iroha_js/src/index.js javascript/iroha_js/dist/index.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-07 Sumeragi committed spec-step stutter/GST closure
+
+- Added `CommittedSpecStepStuttersOrObservesGstStep` /
+  `CommittedSpecStepStuttersOrObservesGst` to the top-level Sumeragi model so
+  committed-state spec behavior is checked as a complete stutter/GST split.
+- The property combines the pre-GST `[Next]_vars` split, the committed+GST
+  terminal stuttering theorem, and the non-stuttering GST-observation
+  exclusivity theorem: after finality, spec steps either stutter in the current
+  committed state or take `GstElapsed` into committed+GST terminal quiescence.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed spec-step closure
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed spec-step
+    closure property; the preceding top-level fast attempts exhausted heap at
+    `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi committed non-stuttering GST observation
+
+- Added `CommittedSpecNonStutteringOnlyObservesGstStep` /
+  `CommittedSpecNonStutteringOnlyObservesGst` to the top-level Sumeragi model
+  so any non-stuttering spec step after finality is checked as the pre-GST
+  `GstElapsed` observation into committed+GST terminal quiescence.
+- The property combines the committed pre-GST `[Next]_vars` split and the
+  committed+GST terminal stuttering theorem, while preserving the
+  finality/certificate/RBC stack and closing every action gate in the post-state.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed non-stuttering GST
+  observation obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed
+    non-stuttering property; the preceding top-level fast attempts exhausted
+    heap at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 BFV full-bootstrap proof-profile artifact validation
+
+- Added typed full-bootstrap proof-profile payloads for the proof public-input
+  schema and prover/verifier keys. The schema now binds the canonical
+  execution proof statement hash layout, and proof keys bind the canonical
+  STARK/FRI backend, key format, circuit id, and governed schema digest while
+  rejecting empty key material.
+- Full-bootstrap artifact bundle validation now decodes those proof-profile
+  artifacts instead of accepting opaque role/profile envelopes, and rejects
+  identical prover/verifier backend key bytes even when their outer artifacts
+  have distinct roles.
+- Updated crypto, data-model, and core Soracloud fixtures to emit typed
+  proof-profile artifacts derived from the governed public-input schema digest.
+  The executable full BFV bootstrap evaluator and real prover/verifier backend
+  implementation remain pending.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_job_run_provenance_payload_binds_full_bootstrap_artifact_bundle_option --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-07 SCCP retired runtime-network surface removal
+
+- Removed the named retired runtime-network surface from SCCP public docs,
+  roadmap/status notes, and active source comments. Public launch scope remains
+  limited to Ethereum, BSC, Solana, TON, and TRON.
+- Repaired the Swift SCCP test helper scope that had been left malformed by the
+  broad cleanup, and removed stale external-ecosystem references from audit
+  vendor examples.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_schema_derive/src/trait_bounds.rs crates/iroha_schema_gen/src/lib.rs`
+  - `swiftc -parse IrohaSwift/Sources/IrohaSwift/SccpSourceProofHashes.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift`
+  - Case-insensitive direct retired-network-name scan across the repository
+    returned no matches outside ignored build/dependency folders.
+  - Case-insensitive retired-ecosystem token scan returned no meaningful matches
+    outside ignored fixtures and package-lock data.
+  - `git diff --check`
+
+## 2026-06-07 Sumeragi committed+GST terminal spec-step stuttering
+
+- Added `CommittedGstSpecStepOnlyStuttersStep` /
+  `CommittedGstSpecStepOnlyStutters` to the top-level Sumeragi model so the
+  stuttering-closed `[Next]_vars` relation is checked explicitly from
+  committed+GST terminal states.
+- The property proves that committed+GST spec steps can only stutter while
+  preserving the complete finality/certificate/RBC stack and all disabled
+  action gates.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed+GST terminal spec-step
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this terminal spec-step
+    property; the preceding top-level fast attempts exhausted heap at `4` GiB
+    and `12` GiB during optimization.
+
 ## 2026-06-07 Sumeragi committed pre-GST spec-step split
 
 - Added `CommittedPreGstSpecStepStuttersOrObservesGstStep` /
@@ -693,7 +841,7 @@ Last updated: 2026-06-07
   user-prover backend rows advertise only the supported launch lanes (`eth`,
   diagnostic/backlog-only.
 - Added strict release-bundle verifier source inventory for those public
-  discovery docs, including forbidden stale markers for `sora2`,
+  discovery docs, including forbidden stale markers for `retired-runtime-lane`,
   discovery/manifests/release-surface prose.
 - Validation:
   - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
@@ -757,7 +905,7 @@ Last updated: 2026-06-07
     exhausted heap at `4` GiB and `12` GiB during optimization.
 
 
-  blocker and return it for SORA Kusama, SORA Polkadot, and SORA2 while those
+  blocker and return it for retired runtime-network lanes while those
   scope.
 - Added release-readiness and release-bundle verifier guards proving public
   user-prover submission surfaces stay limited to `eth,bsc`, `tron`, `sol`, and
@@ -850,8 +998,7 @@ Last updated: 2026-06-07
   manifest publication while production source proofs stay inbound-only to
   SORA.
 - Updated native-recursive submission-package coverage so public package
-  builders exercise only supported Solana/TON manifests, while SORA Kusama,
-  SORA Polkadot, and SORA2 stop at the absent public-manifest boundary instead
+  builders exercise only supported Solana/TON manifests, while retired runtime-network lanes stop at the absent public-manifest boundary instead
   of exposing diagnostic runtime-call package surfaces.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
@@ -862,7 +1009,7 @@ Last updated: 2026-06-07
 
 
   Torii and core SCCP packaging: Torii no longer serves the direct message
-  runtime SCALE export route, capability snapshots no longer advertise optional
+  runtime proof export route, capability snapshots no longer advertise optional
   runtime bundle fields, and SCCP active-domain maps/submission templates stay
   limited to ETH, BSC, Solana, TON, and TRON.
   JavaScript, Python, Swift, Kotlin, and Java Android SDK surfaces, including
@@ -2014,12 +2161,12 @@ Last updated: 2026-06-07
 
   so each transition decodes and binds the next authority-set payload, payload
   hash, payload-derived next-set hash, parent-set hash, transition message hash,
-  nested GRANDPA precommit hash, and transition justification hash before
+  nested finality precommit hash, and transition justification hash before
   Ed25519 signature verification.
-  GRANDPA set transitions and final termination at the adapter's declared active
-  `grandpa_set_id` and authority-set hash.
+  finality set transitions and final termination at the adapter's declared active
+  `finality_set_id` and authority-set hash.
 - Added explicit launch-scope documentation that SCCP will not support
-  SORA Kusama, SORA Polkadot, and SORA2.
+  retired runtime-network lanes.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
     (`1` passed, `255` filtered out)
@@ -2757,8 +2904,7 @@ Last updated: 2026-06-07
     (`2` states generated, `1` distinct, no errors)
 
 
-  networks for now, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and
-  SORA2. The bridge-proof docs and public roadmap keep the existing
+  networks for now, including retired runtime-network lanes. The bridge-proof docs and public roadmap keep the existing
   explicitly re-opened.
 - Validation:
   - documentation-only change
@@ -3085,7 +3231,7 @@ Last updated: 2026-06-07
   empty signer sets, signer/signature count drift, claimed total/signed stake or
   weight drift, and sub-quorum certificates before transcript hashing.
 - Added adversarial source-adapter coverage for ETH, BSC, Solana, TON, and
-  asserts that the GRANDPA justification hash fails closed instead of
+  asserts that the finality justification hash fails closed instead of
   serializing a malformed certificate transcript.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
@@ -3240,7 +3386,7 @@ Last updated: 2026-06-07
   replay shape where an otherwise valid transition could derive the active hash
   at an earlier epoch/set id.
   transcripts and final set hashes but stale `validator_epoch` /
-  `grandpa_set_id` termination; both now fail source verification.
+  `finality_set_id` termination; both now fail source verification.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-transition-epoch CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_transition_chain --lib -- --nocapture`
@@ -3848,7 +3994,7 @@ Last updated: 2026-06-07
   matching source-adapter deployment remain structurally inspectable for
   diagnostics, but direct production verification and bundle-level production
   extraction now fail closed while the launch scope is unsupported.
-  SORA Kusama deployment-bound evidence cannot pass direct production source
+  retired runtime-network deployment-bound evidence cannot pass direct production source
   verification even though the diagnostic structure and deployment binding still
   verify.
 - Validation:
@@ -3865,7 +4011,7 @@ Last updated: 2026-06-07
   normalized proof jobs, and `BridgeProof` conversion all reject remote domains
   outside `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, even when
   `sccp_allow_unready_transparent_proofs` is enabled for diagnostics.
-- Added an adversarial signed SORA2 bundle regression proving allow-unready
+- Added an adversarial signed retired-runtime lane bundle regression proving allow-unready
   diagnostic mode cannot emit a production-looking proof artifact, proof job, or
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
@@ -3880,7 +4026,7 @@ Last updated: 2026-06-07
   diagnostic material and deployment evidence remains inspectable only through
   diagnostic allow-unready runtime-call tooling while that launch scope is
   closed.
-- Added an adversarial SORA2 regression with complete source material,
+- Added an adversarial retired-runtime lane regression with complete source material,
   source-adapter deployment, destination rollout, and route allowlist evidence
   proving production artifact construction fails and the diagnostic artifact does
   not use `local_admission`.
@@ -3919,14 +4065,14 @@ Last updated: 2026-06-07
   - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core writer_loop_records_periodic_fsync_failure_without_panic --lib -- --nocapture`
     (`1` passed, `6967` filtered out)
 
-## 2026-06-06 SCCP Torii runtime SCALE launch-scope gate
+## 2026-06-06 SCCP Torii runtime proof launch-scope gate
 
-- Hardened Torii's direct SCCP runtime SCALE envelope export so it rejects any
+- Hardened Torii's direct SCCP runtime proof envelope export so it rejects any
   bundle whose remote counterparty domain is outside
   `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, even when a SORA-origin bundle
   runtime export diagnostic/backlog-only while public discovery hides the
-  runtime SCALE capability fields.
-- Added a signed SORA -> SORA2 runtime-export regression proving the endpoint
+  runtime proof capability fields.
+- Added a signed SORA -> SORA-origin retired-runtime export regression proving the endpoint
   envelope bytes, while the supported ETH token-control runtime export remains
   accepted.
 - Validation:
@@ -9419,7 +9565,7 @@ Last updated: 2026-06-07
   `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, matching the release evidence
   inventory and public discovery surface.
 - Added a direct unsupported-lane guard for configured launch checks, so
-  SORA2/SORA Kusama/SORA Polkadot return the explicit
+  retired runtime-network lanes return the explicit
   policy message.
 - Updated the configured launch fixtures and regressions for the active
   Ethereum mainnet launch policy, including supported-domain all-lanes route
@@ -9945,8 +10091,8 @@ Last updated: 2026-06-07
 
 - Constrained Torii public SCCP capability and proof-manifest snapshots to
   `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, so public discovery advertises
-  Ethereum, BSC, Solana, TON, and TRON without SORA2, SORA Kusama, SORA
-- Stopped advertising optional runtime SCALE capability fields while
+  Ethereum, BSC, Solana, TON, and TRON without retired-runtime lane, SORA retired-runtime, SORA
+- Stopped advertising optional runtime proof capability fields while
   handler stays available, but public discovery reports those fields as absent.
 - Filtered configured wallet route manifests through the same launch-scope
   predicate, preventing an unready-proof or mistakenly production-ready
@@ -10362,13 +10508,13 @@ Last updated: 2026-06-07
 
 - Updated the Torii SCCP capability and manifest OpenAPI descriptions to list
   the current launch networks as Ethereum, BSC, Solana, TON, and Tron.
-  SORA2, SORA Kusama, and SORA Polkadot, are not supported for now and any
+  retired runtime-network lanes, are not supported for now and any
   helper metadata remains diagnostic/backlog-only.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_torii/src/openapi.rs`
   - `jq empty docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json`
   - Checked `crates/iroha_torii/src/openapi.rs` and `docs/portal/static/openapi`
-    for the previous support-implying SORA2/SORA Kusama/SORA Polkadot OpenAPI
+    for the previous support-implying retired runtime-network lanes OpenAPI
     phrasing; no matches remain.
 
 ## 2026-06-06 soranet-relay SessionKey telemetry compatibility
@@ -11278,7 +11424,7 @@ Last updated: 2026-06-07
 - Unsupported diagnostic lanes must include the explicit unsupported
   launch-scope blocker, and complete diagnostic rows may not hide extra
   operator blockers beside it.
-- Added adversarial release-bundle coverage that tampers a complete SORA Kusama
+- Added adversarial release-bundle coverage that tampers a complete SORA retired-runtime
   diagnostic lane with a non-canonical source hash, an unexpected audit hash,
   and a replaced blocker list; the verifier now rejects both the embedded
   readiness evidence and copied all-lanes summary.
@@ -11335,7 +11481,7 @@ Last updated: 2026-06-07
 
 - Added an explicit user-facing note to `docs/source/bridge_proofs.md`, the
   roadmap, and the Torii OpenAPI SCCP discovery descriptions that SCCP does not
-  Polkadot, SORA Kusama, SORA Polkadot, and SORA2.
+  retired runtime-network lanes.
   diagnostic/backlog-only until the launch scope is explicitly re-opened.
 
 ## 2026-06-06 SCCP launch-scope summary schema hardening
@@ -11345,7 +11491,7 @@ Last updated: 2026-06-07
   the full diagnostic `required_domains` list.
 - The release-bundle verifier now checks that the supported launch set is
   exactly ETH/BSC/Solana/TON/TRON, the unsupported diagnostic set is exactly
-  SORA Kusama/SORA Polkadot/SORA2, the sets are disjoint, and together they
+  retired runtime-network lanes, the sets are disjoint, and together they
   cover the published diagnostic domains.
 - Added negative release-bundle coverage that tampers the launch-scope arrays in
   both the readiness report and copied all-lanes summary, then verifies the
@@ -11548,8 +11694,7 @@ Last updated: 2026-06-07
 ## 2026-06-06 SCCP launch scope and release inventory hardening
 
   launch scope. Rust lane readiness, manifest readiness, all-lanes evidence,
-  release summaries, `roadmap.md`, and diagnostics now keep SORA Kusama,
-  SORA Polkadot, and SORA2 evidence as backlog/diagnostic-only until support is
+  release summaries, `roadmap.md`, and diagnostics now keep retired runtime-network lanes evidence as backlog/diagnostic-only until support is
   explicitly re-opened.
 - Preserved launch readiness for the supported ETH/BSC/Solana/TON/TRON scope by
   all-lanes blockers while keeping those individual lanes non-production-ready.
@@ -67912,8 +68057,7 @@ Last updated: 2026-06-07
 
   source material hash, source-adapter deployment hash, runtime-storage circuit,
   FastPQ parameter set, and source-state verifier hash.
-- The all-lanes readiness summary now derives that gate for SORA-Kusama,
-  SORA-Polkadot, and SORA2 and marks it as required source-adapter audit
+- The all-lanes readiness summary now derives that gate for retired runtime-network lanes and marks it as required source-adapter audit
   evidence. The release-bundle verifier now rejects ready bundles whose
   lane hash.
   runtime-storage source proof readiness is machine-audited in release bundles,
@@ -70460,8 +70604,7 @@ Last updated: 2026-06-07
     (`674 passed`)
 
 
-- Hardened `scripts/sccp_verify_release_bundle.py` so SORA Kusama, SORA
-  published readiness/all-lanes JSON must be non-zero canonical bytes32 values,
+- Hardened `scripts/sccp_verify_release_bundle.py` so retired runtime-network lanes published readiness/all-lanes JSON must be non-zero canonical bytes32 values,
   matching the finalized-runtime route-canary evidence preflight.
   finalized-head route-canary fields in both embedded readiness evidence and the
   standalone all-lanes summary, proving the public verifier rejects both
@@ -75534,7 +75677,7 @@ Last updated: 2026-06-07
 ## 2026-05-31 SCCP Torii Nexus finality crypto gate
 
 - Tightened Torii production bridge-proof and runtime-envelope packaging so
-  SORA-origin SCCP message submit, artifact, proof-job, and runtime SCALE
+  SORA-origin SCCP message submit, artifact, proof-job, and runtime proof
   export generation require the BLS-backed Nexus finality verifier before
   packaging user-submitted proofs. Diagnostic `allow_unready` paths remain
   available, but production paths no longer accept structurally valid finality
@@ -75548,8 +75691,7 @@ Last updated: 2026-06-07
   packaging.
 - SORA-origin message bundle lookup now serves locally published/cacheable
   bundles before probing the non-SORA proof registry, so an empty proof
-  registry cannot break runtime SCALE export for freshly published local SCCP
-  messages while external-source bundles still depend on verified proof records
+  registry cannot break runtime proof export for freshly published local SCCP messages while external-source bundles still depend on verified proof records
   and configured source-lane material.
 - Core SCCP finality admission now also calls the BLS aggregate verifier on
   embedded Nexus finality before local block/QC anchoring. Structural-only
@@ -75557,7 +75699,7 @@ Last updated: 2026-06-07
   check to fail indirectly.
 - Validation:
   - `cargo test -p iroha_core --lib sccp_finality_local_state_check_rejects_unsigned_qc_before_state_lookup -- --nocapture`
-  - `cargo test -p iroha_torii --lib runtime_scale_export -- --nocapture`
+  - `cargo test -p iroha_torii --lib runtime_proof_export -- --nocapture`
   - `cargo test -p iroha_torii --lib bridge_proof_from_sccp_burn_bundle -- --nocapture`
   - `cargo fmt -p iroha_torii -- --check`
   - `git diff --check -- crates/iroha_torii/src/routing.rs status.md roadmap.md`
@@ -76200,9 +76342,9 @@ Last updated: 2026-06-07
   - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py -q` (`75` passed)
 
 
-  authority-set payload, authority transition, GRANDPA justification, and
+  authority-set payload, authority transition, finality justification, and
   transition-justification helpers now reject duplicate aliases for source
-  domains, source event indexes, finalized block fields, GRANDPA set ids,
+  domains, source event indexes, finalized block fields, finality set ids,
   storage roots, authority rosters/weights, payload hashes, transition hashes,
   signers bitmaps, nested verifier material, and runtime storage proof hashes
 - Rebuilt `javascript/iroha_js/dist/sccp.js` and `dist/index.js` so packaged
@@ -78172,7 +78314,7 @@ Last updated: 2026-06-07
   coverage only and does not change Rust implementation logic.
 
 
-  evidence in runtime config. SORA Kusama, SORA Polkadot, and SORA2 now require
+  evidence in runtime config. retired runtime-network lanes now require
   finalized head, runtime spec name/version, transaction version, runtime code
   hash, and replayable runtime code bytes before configured all-lanes launch can
   pass.
@@ -84197,12 +84339,12 @@ Last updated: 2026-06-07
 
 
   `state_getRuntimeVersion.specName` must match the selected SCCP destination
-  lane (`sora-kusama`, `sora-polkadot`, or `sora2`) before finalized runtime
+  retired runtime-network lane before finalized runtime
   code evidence is accepted.
   runtime `specName` metadata to match the selected destination domain, and the
   all-lanes preflight rejects destination records whose live runtime comments
-- Added regressions for a foreign `sora-polkadot` runtime being supplied to the
-  `sora2` lane through live collection, direct evidence rendering, and the
+- Added regressions for a foreign `retired-runtime-lane` runtime being supplied to the
+  another retired runtime-network lane through live collection, direct evidence rendering, and the
   all-lanes production-readiness validator.
 - Validation:
 
@@ -84749,7 +84891,7 @@ Last updated: 2026-06-07
 - Fixed the TRON live route-canary preflight to pass source material and
   source-adapter deployment hashes into the shared replay guard after that guard
   started rejecting canary evidence that reuses source record hashes.
-  TOML into a complete evidence bundle and verifies the SORA2 lane remains
+  TOML into a complete evidence bundle and verifies the retired-runtime lane lane remains
   production-ready.
 - Validation:
   - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py -k 'preflights_source_records'` (`1 passed, 29 deselected`)
@@ -85455,12 +85597,12 @@ Last updated: 2026-06-07
   - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh canonical-frontier-reanchor-fast`
   - Apalache wrapper sweep for all 35 `canonical-frontier-reanchor-bug-*` configs observed the expected invariant rejection for each mutation.
 
-## 2026-05-28 SCCP runtime SCALE configured source-lane export
+## 2026-05-28 SCCP runtime proof configured source-lane export
 
 - Added deployment-aware runtime proof-envelope conversion for non-SORA SCCP
   message bundles, requiring configured source-verifier material and
-  source-adapter deployment evidence before SCALE runtime bytes can be exported.
-- Torii's `/v1/sccp/proofs/message/{message_id}/runtime-scale` path now keeps
+  source-adapter deployment evidence before runtime proof bytes can be exported.
+- Torii's `/v1/sccp/proofs/message/{message_id}/runtime-proof` path now keeps
   SORA-origin bundles on the existing Nexus finality converter, but requires
   configured production source-lane material for Solana/TON/TRON/EVM-family
   source bundles instead of falling back to the static placeholder catalog.
@@ -85471,7 +85613,7 @@ Last updated: 2026-06-07
 - Validation:
   - `cargo fmt --all`
   - `cargo test -p iroha_sccp runtime_envelope_production_export_requires_configured_source_deployment -- --nocapture`
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-runtime-envelope cargo test -p iroha_torii --lib runtime_scale_export_requires_configured_source_lane_for_non_sora_bundles --features app_api -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-runtime-envelope cargo test -p iroha_torii --lib runtime_proof_export_requires_configured_source_lane_for_non_sora_bundles --features app_api -- --nocapture`
 
 ## 2026-05-28 Sumeragi missing-QC stall range-pull formal gate
 
@@ -85797,7 +85939,7 @@ Last updated: 2026-06-07
 
 ## 2026-05-28 SCCP Torii proof-registry message bundle lookup
 
-- Torii SCCP message proof, runtime SCALE envelope, proof artifact, proof job,
+- Torii SCCP message proof, runtime proof envelope, proof artifact, proof job,
   and recent-message read paths now recover non-SORA bundles from verified
   on-chain bridge proof records before falling back to SORA block
   reconstruction or the in-memory cache.
@@ -86211,7 +86353,7 @@ Last updated: 2026-06-07
   - `git diff --check -- crates/iroha_torii/src/routing.rs docs/source/bridge_proofs.md roadmap.md status.md`
 
 
-  SORA -> SORA Kusama/SORA Polkadot/SORA2 destination evidence from read-only
+  SORA -> retired runtime-network lanes destination evidence from read-only
 - The live collector reads the finalized head, `state_getRuntimeVersion`, and
   finalized `:code` storage, hashes runtime WASM bytes with BLAKE2b-256, and
   requires pinned finalized head, runtime code hash, `specName`, `specVersion`,
@@ -88171,7 +88313,7 @@ Last updated: 2026-06-07
   reject JSON or TOML output unless the route hash recomputes from the exact
   source/deployment/destination tuple.
 - Added route-hash vectors plus drift regressions for SORA -> Solana,
-  SORA -> TON, SORA -> SORA Kusama, SORA -> SORA Polkadot, and SORA -> SORA2
+  SORA -> TON, SORA -> retired runtime-network lanes
   destination helpers.
 - Validation:
 
@@ -88964,8 +89106,7 @@ Last updated: 2026-06-07
 - Added `scripts/sccp_all_lanes_evidence.py`, an offline Python preflight that
   merges rendered SCCP source, source-adapter deployment, destination rollout,
   and route allowlist TOML snippets. It requires complete records for every
-  advertised remote domain (ETH, BSC, Solana, TON, TRON, SORA-Kusama,
-  SORA-Polkadot, and SORA2) and exits non-zero with JSON lane blockers when
+  advertised remote domain (ETH, BSC, Solana, TON, TRON, retired runtime-network lanes) and exits non-zero with JSON lane blockers when
   any governed rollout record is missing or not production-shaped. The preflight
   now recomputes audited Solana and TON full-light-client gate hashes plus the
   TRON source bridge config hash and invokes each lane's canonical source
@@ -90771,7 +90912,7 @@ Last updated: 2026-06-07
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock' package-lock.json '**/package-lock.json'`
 
 
-  `SccpSourceStateVerificationProofV1` capsule to GRANDPA source proofs and
+  `SccpSourceStateVerificationProofV1` capsule to finality source proofs and
   made production material require it through the governed runtime
   storage-proof source-state verifier hash.
   schema descriptor, FastPQ batch, proof builder, verifier, and deployment gate
@@ -90903,11 +91044,11 @@ Last updated: 2026-06-07
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
 
 
-  canonicalization, raw authority-set payload decoding, and GRANDPA
+  canonicalization, raw authority-set payload decoding, and finality
   justification verification preflight.
 - Mirrored the same preflight across JavaScript, Python, Swift, Kotlin, and
   Java Android UI prover helpers, including raw payload hash paths and direct
-  GRANDPA justification byte builders where exposed.
+  finality justification byte builders where exposed.
   verification and recursive deployment evidence are represented and checked.
 - Validation:
   - `node --test --test-name-pattern "source proof hashes bind UI witness material" javascript/iroha_js/test/sccpSolanaProver.test.js`
@@ -91800,11 +91941,11 @@ Last updated: 2026-06-07
 
 
   transcript so `storage_proof_hash` now binds the source-event leaf index in
-  addition to the source event digest, finalized block, GRANDPA set id,
+  addition to the source event digest, finalized block, finality set id,
   authority set hash, events root, and inclusion branch.
 - The Rust source-adapter verifier now decodes the submitted
   proof hash with the exact leaf index used to reconstruct the events root.
-  Mutating the leaf index now rejects the adapter proof before the GRANDPA
+  Mutating the leaf index now rejects the adapter proof before the finality
   certificate can be accepted.
 - Mirrored the required leaf-index input through the JavaScript, Python,
   Swift, Kotlin, and Java Android SDK storage-proof helpers used by web/mobile
@@ -92327,8 +92468,7 @@ Last updated: 2026-06-07
 - Added canonical `SccpSourceVerifierMaterialV1` and
   `SccpSourceAdapterEngineDeploymentV1` byte/hash helpers to the JavaScript,
   Python, Swift, Kotlin, and Java Android SDK surfaces.
-- The helpers cover ETH, BSC, Solana, TON, TRON, SORA-Kusama,
-  SORA-Polkadot, and SORA2 source lanes with the same source profile ids,
+- The helpers cover ETH, BSC, Solana, TON, TRON, retired runtime-network lanes source lanes with the same source profile ids,
   source-bridge emitter fields, canonical source-adapter verifier VK hash, and
   deployment receipt binding used by governed evidence renderers and Rust
   admission.
@@ -92534,8 +92674,7 @@ Last updated: 2026-06-07
 
 - Added canonical `fastpq-lane-balanced` OpenVerify source-adapter verifier-key
   commitment helpers to the JavaScript, Python, Swift, Kotlin, and Java Android
-  SDK surfaces for ETH, BSC, Solana, TON, TRON, SORA-Kusama, SORA-Polkadot,
-  and SORA2 source lanes.
+  SDK surfaces for ETH, BSC, Solana, TON, TRON, retired runtime-network lanes source lanes.
 - Pinned the SDK helpers to the same lane vectors used by the evidence
   renderers and Rust admission so UI/mobile tooling can derive
   `adapter_verifier_vk_hash` locally instead of copying verifier commitments by
@@ -92611,7 +92750,7 @@ Last updated: 2026-06-07
   OpenVerify source-adapter verifier commitment that Rust admission requires.
 - The helpers now reject mismatched `adapter_verifier_vk_hash` values before
   rendering source-adapter deployment TOML for Solana -> SORA, TON -> SORA,
-  and SORA-Kusama/SORA-Polkadot/SORA2 -> SORA source lanes.
+  and retired runtime-network lanes -> SORA source lanes.
 - Validation passed:
   - scoped `git diff --check --no-index /dev/null <path>` checks for the
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock' package-lock.json '**/package-lock.json'` (no output)
@@ -92762,8 +92901,8 @@ Last updated: 2026-06-07
 
 
   domain-specific template-derived component hashes as `iroha_sccp` and
-  rejects them before emitting governance TOML for SORA Kusama, SORA Polkadot,
-  or SORA2 lanes.
+  rejects them before emitting governance TOML for SORA retired-runtime, SORA retired-runtime,
+  or retired-runtime lane lanes.
 - The helper now fails early for template source trust-anchor,
   consensus-verifier, message-inclusion, or finality-policy hashes instead of
   reject as non-deployable placeholder evidence.
@@ -92980,7 +93119,7 @@ Last updated: 2026-06-07
   - `JAVA_HOME="$HOME/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home" ANDROID_HOME="$HOME/Library/Android/sdk" ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew test --console=plain -Dandroid.test.mains=org.hyperledger.iroha.android.client.HttpClientTransportTests` in `java/iroha_android`
 
 
-  proof-request/prover wrappers for SORA-Kusama, SORA-Polkadot, and SORA2
+  proof-request/prover wrappers for retired runtime-network lanes
   destination lanes. The mobile builders bind source domain, canonical
   transparent public inputs, length-prefixed SCCP bundle/source-proof bytes,
   statement hash, and destination binding hash before invoking an app-linked
@@ -93075,7 +93214,7 @@ Last updated: 2026-06-07
 
 
 - Added JavaScript and Python SDK proof-request/prover wrappers for
-  builders accept SORA-Kusama, SORA-Polkadot, and SORA2 targets, bind source
+  builders accept retired runtime-network lanes targets, bind source
   domain, transparent public inputs, length-prefixed SCCP bundle/source-proof
   bytes, statement hash, and destination binding hash, and reject wrong
   invoking an app-linked runtime prover.
@@ -93409,13 +93548,13 @@ Last updated: 2026-06-07
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
 
 
-  for SORA Kusama/SORA Polkadot/SORA2 -> SORA source material and
-  domain, SORA target domain, non-zero GRANDPA/event-storage component hashes,
+  for retired runtime-network lanes -> SORA source material and
+  domain, SORA target domain, non-zero finality/event-storage component hashes,
   adapter verifier key hash, and deployment receipt hash before rendering
   `zk.sccp_source_verifier_materials` plus
   `zk.sccp_source_adapter_engine_deployments` TOML.
 - The helper pins the lane-specific source trust-anchor,
-  finalized-header-consensus, event-storage-inclusion, and GRANDPA finality
+  finalized-header-consensus, event-storage-inclusion, and finality finality
   policy ids for domains `6`, `7`, and `8`, while rejecting non-SORA source
   adapter targets before production TOML output.
 - Focused validation passed:
@@ -93423,7 +93562,7 @@ Last updated: 2026-06-07
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
 
 
-  helper for SORA -> SORA Kusama, SORA Polkadot, and SORA2 destination rollout
+  helper for SORA -> retired runtime-network lanes destination rollout
   `SccpBridge.submit_message_proof` runtime entrypoint, non-zero runtime
   verifier code hash, and non-zero governed route allowlist hash before
   rendering `zk.sccp_destination_rollouts` plus `zk.sccp_route_allowlists`
@@ -99967,7 +100106,7 @@ Last updated: 2026-06-07
 - Added JavaScript, Python, Swift, Kotlin, and Java Android helpers for the
   justification transcripts. The helpers validate the raw next authority-set
   payload hash, derive the next authority-set hash from that payload, and bind
-  the parent GRANDPA authority set before hashing the transition proof inputs.
+  the parent finality authority set before hashing the transition proof inputs.
   message hash, and transition-justification hash:
   - next payload hash:
     `0x12ce972498ba5cd8a760aee0429fdc30d8b6447890e1bf77d8dde46f86b40d85`
@@ -100463,7 +100602,7 @@ Last updated: 2026-06-07
 - Added `next_authority_set_payload` to
   transition proof/justification transcripts.
   `0x01 || authority_count_le || (ed25519_authority_key || weight_le)[0..n]`
-  the signed next authority set before GRANDPA transition signatures are
+  the signed next authority set before finality transition signatures are
   accepted.
   Python, JavaScript, Swift, Kotlin, and Java Android SDK surfaces. Shared
   fixture hash:
@@ -100676,8 +100815,8 @@ Last updated: 2026-06-07
   families.
   from a configured parent trust anchor through an ordered transition chain.
   Current steps bind the parent set, canonical next authority-set payload hash,
-  payload-derived next set, transition block, and GRANDPA set-id range, then
-  verify a strict `> 2/3` parent-set Ed25519 GRANDPA justification before the
+  payload-derived next set, transition block, and finality set-id range, then
+  verify a strict `> 2/3` parent-set Ed25519 finality justification before the
   next set becomes eligible.
   message and transition-justification transcript prefixes, closing the previous
   material-profile gap for authority-set rotation proofs.
@@ -101043,7 +101182,7 @@ Last updated: 2026-06-07
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
 
 
-  source-adapter proof and bound `grandpa_justification_hash` into the canonical
+  source-adapter proof and bound `finality_justification_hash` into the canonical
   adapter transcript.
   authority-set hash from 32-byte Ed25519 authority keys and non-zero weights,
   checks it against the adapter and configured source trust anchor for
@@ -102637,9 +102776,9 @@ Last updated: 2026-06-07
   - `rm -rf /tmp/iroha-sccp-evm-smoke && mkdir -p /tmp/iroha-sccp-evm-smoke && npm install --prefix /tmp/iroha-sccp-evm-smoke --no-save --no-package-lock solc@0.7.4 ganache ethers >/tmp/iroha-sccp-evm-smoke/npm-install.log 2>&1 && NODE_PATH=/tmp/iroha-sccp-evm-smoke/node_modules node contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
 
 
-  Kusama, SORA Polkadot, and SORA2. Configured material can now satisfy the
+  retired-runtime, SORA retired-runtime, and retired-runtime lane. Configured material can now satisfy the
   source-material production gate only when it uses the canonical
-  GRANDPA/event-storage profile ids and deployment-supplied authority-set,
+  finality/event-storage profile ids and deployment-supplied authority-set,
   finalized-header verifier, event-storage inclusion-verifier, and finality
   policy hashes.
   template-derived hashes, wrong profiles, and replayed ids remain fail-closed.
@@ -102924,8 +103063,8 @@ Last updated: 2026-06-07
 - Tightened `sccp_destination_rollout_is_production_ready(...)` so rollout
   material must match an exact destination profile instead of merely carrying
   non-empty metadata.
-- Added profile anchor ids for ETH, BSC, TON, TRON, SORA Kusama, SORA Polkadot,
-  and SORA2, plus `sccp_profiled_destination_rollout_v1(...)`,
+- Added profile anchor ids for ETH, BSC, TON, TRON, SORA retired-runtime, SORA retired-runtime,
+  and retired-runtime lane, plus `sccp_profiled_destination_rollout_v1(...)`,
   `sccp_evm_mainnet_destination_rollout_v1(...)`, and
   `sccp_tron_mainnet_destination_rollout_v1(...)` for operator-supplied rollout
   material. The EVM/TRON names were later superseded by binding-aware helpers
@@ -102949,8 +103088,8 @@ Last updated: 2026-06-07
   transcripts that the Rust SCCP source adapters already recompute.
 - The new helpers bind UI/RPC-collected witness material into the same
   adapter-proof hashes used on-chain, complementing the existing Solana
-  require the caller to pass the exact source domain so SORA Kusama, SORA
-  Polkadot, and SORA2 lanes cannot silently share one default domain.
+  require the caller to pass the exact source domain so SORA retired-runtime, SORA
+  retired-runtime, and retired-runtime lane lanes cannot silently share one default domain.
 - Added focused SDK coverage for branch tampering, malformed branch rejection,
   and canonical transcript lengths. The Java Android Gradle harness now includes
   the SCCP source-proof helper tests and the existing Solana SCCP prover tests.
@@ -103097,7 +103236,7 @@ Last updated: 2026-06-07
   branch mutation, and finality witness substitution before production material
   can be evaluated.
   source event digest, canonical `frame_system::Events` storage key,
-  source-event leaf index, finalized block number, GRANDPA set id, block hash,
+  source-event leaf index, finalized block number, finality set id, block hash,
   authority set hash, events root, and Merkle inclusion branch.
 - Added focused regression coverage for ETH/BSC receipt-proof hash binding and
 - Focused validation passed:
@@ -107332,7 +107471,7 @@ Last updated: 2026-06-07
   SORA-origin bundles must carry a Nexus finality proof, while non-SORA source
   bundles must carry the source-chain envelope. Wrong-format proofs are rejected
   before public-input or runtime-envelope projection.
-- SCCP message public inputs and runtime-scale projection now derive finality
+- SCCP message public inputs and runtime-proof projection now derive finality
   height/block hash from the source-chain envelope for non-SORA source bundles,
   and continue to use Nexus commit-QC finality for SORA-origin bundles.
 - Torii SCCP message-bundle reconstruction and publication now preserve the
@@ -107354,7 +107493,7 @@ Last updated: 2026-06-07
   - `cargo fmt -p iroha_core -p iroha_sccp -p iroha_torii`
   - `cargo test -p iroha_sccp source_chain -- --nocapture`
   - `cargo test -p iroha_sccp message_bundle_structure_rejects_wrong_finality_format_for_source_direction -- --nocapture`
-  - `cargo test -p iroha_sccp runtime_envelope_from_message_bundle_exports_scale_inputs_for_pallet -- --nocapture`
+  - `cargo test -p iroha_sccp runtime_envelope_from_message_bundle_exports_runtime_proof_inputs -- --nocapture`
   - `cargo test -p iroha_sccp --lib -- --nocapture`
   - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
   - `cargo test -p iroha get_sccp_capabilities_requests_norito_and_decodes_typed_payload -- --nocapture`

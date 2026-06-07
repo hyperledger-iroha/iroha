@@ -22,9 +22,9 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.
-  Reintroducing retired network families requires a new design pass, fresh
-  fixtures, and explicit governance approval rather than reviving diagnostic
-  code paths.
+  Retired runtime-network families are not supported for now. Reintroducing
+  them requires a new design pass, fresh fixtures, and explicit governance
+  approval rather than reviving diagnostic code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
@@ -2693,6 +2693,9 @@ and completed history lives in [`status.md`](./status.md).
   post-finality pre-GST GST-elapsed terminalization,
   post-finality pre-GST Next/GST-elapsed exclusivity,
   post-finality pre-GST spec-step stutter/GST split,
+  committed+GST spec-step terminal stuttering,
+  committed spec-step non-stuttering GST observation exclusivity,
+  committed spec-step stutter/GST closure,
   post-finality progress-action quiescence,
   honest/fault roster-budgeted vote counters, RBC delivery stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
@@ -4103,7 +4106,7 @@ operator-provided rollout bundles.
   bind the tuple to `message_bundle.commitment.message_id`,
   `message_bundle.commitment_root`, and the SORA source-domain word before
   returning a submit payload. Torii
-  production bridge-proof submit, artifact, proof-job, and runtime SCALE
+  production bridge-proof submit, artifact, proof-job, and runtime proof
   envelope generation now also require SORA-origin message bundles to pass the
   BLS-backed Nexus finality verifier before packaging, and burn bridge-proof
   submission rejects structurally valid but unsigned Nexus finality proofs.
@@ -4209,9 +4212,9 @@ operator-provided rollout bundles.
 	  epochs, transition block hashes, schedule hashes/payload hashes, nested
 	  seal proofs, and transition message hashes before deriving TRON
 	  source-finality evidence.
-	  authority-set payload, authority transition, GRANDPA justification, and
+	  authority-set payload, authority transition, finality justification, and
 	  transition-justification helpers now reject duplicate aliases for source
-	  domains, source event indexes, finalized block fields, GRANDPA set ids,
+	  domains, source event indexes, finalized block fields, finality set ids,
 	  storage roots, authority rosters/weights, payload hashes, transition
 	  hashes, signers bitmaps, nested verifier material, and runtime storage
 	  material.
@@ -4794,7 +4797,7 @@ operator-provided rollout bundles.
   proofs. The same SDKs
   also derive canonical native destination
   binding keys and hashes for SORA -> Solana, SORA -> TON, and SORA ->
-  SORA Kusama/SORA Polkadot/SORA2 runtime lanes, aligning user-side proof
+  retired runtime-network lanes, aligning user-side proof
   requests with the destination rollout evidence helpers. For EVM-family and
   TRON source
   lanes, material
@@ -5086,7 +5089,7 @@ operator-provided rollout bundles.
 	  live-account metadata cannot open the SORA -> TON lane. Direct TON
 	  evidence and all-lanes validation also reject reuse between the live
 	  account-state hash and last-transaction hash snapshot roles.
-	  renders exact SORA -> SORA Kusama/SORA Polkadot/SORA2 runtime destination
+	  renders exact SORA -> retired runtime-network destination
 	  rollout plus route allowlist TOML with the fixed
 	  `SccpBridge.submit_message_proof` verifier entrypoint. Production TOML now
 	  requires a matching `--expected-destination-binding-hash` and
@@ -5129,7 +5132,7 @@ operator-provided rollout bundles.
 	  Configured Rust readiness
 	  now carries the same finalized runtime fields in destination rollouts and
 	  rejects SORA-family launch without them. The offline
-  same three runtime lanes from governed GRANDPA/event-storage component
+  same three runtime lanes from governed finality/event-storage component
   hashes, adapter verifier key hashes, and deployment receipt hashes, and it
   rejects padded runtime-lane selectors, component hashes, and target domains
   before those record hashes are derived.
@@ -5305,7 +5308,7 @@ operator-provided rollout bundles.
   proof-result binding checks that revalidate proof context, request hashes, and
   envelope hashes before portal and mobile wallet submission.
   JavaScript, Python, Swift, Kotlin, and Java Android
-  SORA-Kusama, SORA-Polkadot, and SORA2 destination lanes, locked to SORA-origin
+  retired runtime-network destination lanes, locked to SORA-origin
   source domains and binding the source domain, canonical transparent public
   inputs, length-prefixed SCCP bundle/source proof bytes, statement hash, and
   destination binding hash
@@ -5609,7 +5612,7 @@ operator-provided rollout bundles.
   production source-proof extraction now enters through the deployment-aware
   bundle-structure gate, so configured material and source-adapter deployment
   evidence are checked consistently before accepting a source-chain proof
-  envelope. Torii's app API artifact, proof-job, runtime SCALE export,
+  envelope. Torii's app API artifact, proof-job, runtime proof export,
   bridge-proof submit, and bridge-message submit paths now resolve that same
   configured source lane from ZK config before wrapping UI-generated
   source-chain proof envelopes, so production Solana/TON/TRON/EVM-family proofs
@@ -6398,16 +6401,16 @@ operator-provided rollout bundles.
   schedule/seal transcripts fail before recursive verifier material is
   evaluated.
   derive `storage_proof_hash` from the source event digest, finalized block
-  number, GRANDPA set id, authority set hash, events root, source-event leaf
+  number, finality set id, authority set hash, events root, source-event leaf
   index, canonical `frame_system::Events` storage key, and inclusion branch
   instead of accepting a placeholder storage proof hash. They also verify an
-  embedded GRANDPA authority certificate by deriving the ordered Ed25519
+  embedded finality authority certificate by deriving the ordered Ed25519
   authority-set trust-anchor hash, recomputing the finalized precommit-message
   hash, checking the justification hash, verifying Ed25519 signatures, and
   transition proofs now derive the active authority set from a configured parent
   trust anchor by binding the parent set, canonical next authority-set payload
-  hash, payload-derived next set, transition block, and GRANDPA set-id range,
-  then requiring a strict `> 2/3` parent-set GRANDPA justification.
+  hash, payload-derived next set, transition block, and finality set-id range,
+  then requiring a strict `> 2/3` parent-set finality justification.
   templates now bind
   those validator/vote/witness certificate transcript prefixes as well as their
   inclusion-proof and TRON receipt-state prefixes, closing the inclusion-only
@@ -6502,7 +6505,7 @@ operator-provided rollout bundles.
   chain from a configured parent set into the active set, with the next
   authority-set payload and transition transcript hashes now available through
   the web, Python, Swift, Kotlin, and Java Android SDK proof-generation helpers.
-  Torii's SCCP message proof, runtime SCALE envelope, proof artifact, proof job,
+  Torii's SCCP message proof, runtime proof envelope, proof artifact, proof job,
   and recent-message read paths now recover non-SORA bundles from verified
   on-chain bridge proof records, enforcing typed artifact backend/manifest
   binding, stored proof-range/finality-height agreement, and current production
@@ -6616,7 +6619,7 @@ source verifier material, while still rejecting nested material with duplicate
 or mismatched source-domain aliases, so portal inputs can use the same flat
 witness shape without bypassing material-domain checks. Use
 the destination evidence renderer for governed material, runtime rollout, and
-allowlist material, then extend the current GRANDPA
+allowlist material, then extend the current finality
 authority-certificate and authority-set transition checks, which are now
 preflight-bounded to 2,048 authorities and 64 transition proofs and reject
 all-zero authority keys across Rust and the web/mobile SDK proof helpers. The
@@ -7827,8 +7830,13 @@ or ABI behavior.
 							  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
 							  bad-component-count, or out-of-range payloads. The accumulator artifact now
 							  carries typed packed-slot test-vector material and rejects opaque,
-							  wrong-slot-count, malformed, or all-zero accumulator payloads. Crypto now
-							  also exposes a domain-separated full-bootstrap execution proof statement
+							  wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
+							  public-input schema and prover/verifier key artifacts now also carry typed
+							  proof-profile payloads that bind the canonical backend, key format,
+							  circuit id, statement-hash layout, and governed schema digest while
+							  rejecting opaque schema/key bytes, empty key material, and duplicate
+							  prover/verifier key material. Crypto now also exposes a domain-separated
+							  full-bootstrap execution proof statement
 							  digest that validates and binds the public key, governed bootstrap
 							  key/material, concrete artifact bundle, input/output ciphertexts, exact or
 							  bounded proof mode, and input/output bound metadata for the future verifier.

@@ -2018,6 +2018,111 @@ CommittedPreGstSpecStepStuttersOrObservesGstStep ==
 CommittedGstRejectsNextStep ==
   (committed /\ gst) => ~Next
 
+CommittedGstSpecStepOnlyStuttersStep ==
+  (/\ committed
+   /\ gst
+   /\ [Next]_vars) =>
+    /\ vars' = vars
+    /\ ~Next
+    /\ ~GstElapsed
+    /\ CommittedGstRejectsNextStep
+    /\ CommittedGstStateStableStep
+    /\ CommittedGstDisablesEveryAction
+    /\ CommittedGstDisablesEveryAction'
+    /\ committed'
+    /\ gst'
+    /\ FinalityCertificateStackPresent
+    /\ FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ CommittedPhaseMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ CommitViewMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ CommitImpliesLiveVoteQuorum'
+    /\ CommitImpliesLiveStakeQuorum'
+    /\ CommitImpliesHonestSupport'
+    /\ CommitImpliesDelivered'
+    /\ CommitImpliesRbcEvidence'
+    /\ FinalityClearsNewViewHandoff'
+    /\ CommitDisablesProgressActions'
+    /\ CommitDisablesByzantineCommitVote'
+    /\ CommitViewDoesNotLeadCurrentView'
+
+CommittedSpecNonStutteringOnlyObservesGstStep ==
+  (/\ committed
+   /\ [Next]_vars
+   /\ vars' # vars) =>
+    /\ ~gst
+    /\ Next
+    /\ GstElapsed
+    /\ CommittedPreGstSpecStepStuttersOrObservesGstStep
+    /\ CommittedPreGstNextOnlyGstElapsedStep
+    /\ CommittedPreGstOnlyGstElapsedCanMoveStep
+    /\ CommittedConsensusStateStableStep
+    /\ CommittedOnlyGstObservationCanMoveStep
+    /\ CommittedViewWitnessStaysAtCommittedViewStep
+    /\ committed'
+    /\ gst'
+    /\ phase' = "Committed"
+    /\ view' = view
+    /\ commitView' = commitView
+    /\ commitView' = view'
+    /\ FinalityCertificateStackPresent
+    /\ FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ CommittedPhaseMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ CommitViewMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ CommitImpliesLiveVoteQuorum'
+    /\ CommitImpliesLiveStakeQuorum'
+    /\ CommitImpliesHonestSupport'
+    /\ CommitImpliesDelivered'
+    /\ CommitImpliesRbcEvidence'
+    /\ FinalityClearsNewViewHandoff'
+    /\ CommitDisablesProgressActions'
+    /\ CommitDisablesByzantineCommitVote'
+    /\ CommitViewDoesNotLeadCurrentView'
+    /\ CommittedGstDisablesEveryAction'
+    /\ ~GstElapsedEnabled'
+    /\ ~HonestProposeEnabled'
+    /\ ~HonestPrepareVoteEnabled'
+    /\ ~HonestCommitVoteEnabled'
+    /\ ~ByzantineCommitVoteEnabled'
+    /\ ~HonestNewViewVoteEnabled'
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~TimeoutTickEnabled'
+    /\ ~ByzantineFaultEnabled'
+    /\ ~PostGstProgressEnabled'
+
+CommittedSpecStepStuttersOrObservesGstStep ==
+  (/\ committed
+   /\ [Next]_vars) =>
+    \/ /\ vars' = vars
+       /\ committed'
+       /\ gst' = gst
+       /\ phase' = "Committed"
+       /\ (gst =>
+             /\ CommittedGstSpecStepOnlyStuttersStep
+             /\ CommittedGstDisablesEveryAction')
+       /\ (~gst =>
+             /\ CommittedPreGstSpecStepStuttersOrObservesGstStep
+             /\ CommittedPreGstOnlyEnablesGstElapsed')
+    \/ /\ vars' # vars
+       /\ CommittedSpecNonStutteringOnlyObservesGstStep
+       /\ ~gst
+       /\ committed'
+       /\ gst'
+       /\ phase' = "Committed"
+       /\ CommittedGstDisablesEveryAction'
+
 CommitArtifactsInstallOnlyAtFinalityStep ==
   (\/ commitView' # commitView
    \/ commitEvidenceVotes' # commitEvidenceVotes
@@ -5708,6 +5813,15 @@ CommittedGstNeverEnablesActions ==
 
 CommittedGstOnlyAllowsStuttering ==
   [] [CommittedGstRejectsNextStep]_vars
+
+CommittedGstSpecStepOnlyStutters ==
+  [] [CommittedGstSpecStepOnlyStuttersStep]_vars
+
+CommittedSpecNonStutteringOnlyObservesGst ==
+  [] [CommittedSpecNonStutteringOnlyObservesGstStep]_vars
+
+CommittedSpecStepStuttersOrObservesGst ==
+  [] [CommittedSpecStepStuttersOrObservesGstStep]_vars
 
 CommitArtifactsOnlyInstallAtFinality ==
   [] [CommitArtifactsInstallOnlyAtFinalityStep]_vars

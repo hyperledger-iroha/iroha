@@ -8766,6 +8766,17 @@ Temporal properties:
 - `CommittedGstOnlyAllowsStuttering` proves that the committed+GST terminal
   state rejects `Next` itself, leaving only the stuttering branch of
   `[Next]_vars`.
+- `CommittedGstSpecStepOnlyStutters` proves that the stuttering-closed
+  `[Next]_vars` relation from committed+GST terminal states can only stutter
+  while preserving the complete finality/certificate/RBC stack and disabled
+  action gates.
+- `CommittedSpecNonStutteringOnlyObservesGst` proves that the only
+  non-stuttering spec step after finality is the pre-GST `GstElapsed`
+  observation into committed+GST terminal quiescence.
+- `CommittedSpecStepStuttersOrObservesGst` proves the complete committed
+  `[Next]_vars` closure: after finality, spec steps either stutter in the
+  current committed state or observe GST and enter committed+GST terminal
+  quiescence.
 - `CommitArtifactsOnlyInstallAtFinality` proves that the latched commit-view
   and commit-certificate witnesses can change only on the `CommitVote` to
   `Committed` finality transition, where they are installed from the live

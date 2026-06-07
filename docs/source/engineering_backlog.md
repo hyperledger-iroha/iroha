@@ -268,7 +268,12 @@ redistributable schemas, and official trust/revocation bundles.
   and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
   bad-component-count, or out-of-range payloads. The accumulator artifact now
   carries typed packed-slot test-vector material and rejects opaque,
-  wrong-slot-count, malformed, or all-zero accumulator payloads. Crypto now also
+  wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
+  public-input schema and prover/verifier key artifacts now also carry typed
+  proof-profile payloads that bind the canonical backend, key format, circuit
+  id, statement-hash layout, and governed schema digest while rejecting opaque
+  schema/key bytes, empty key material, and duplicate prover/verifier key
+  material. Crypto now also
   exposes a domain-separated full-bootstrap execution proof statement digest
   that validates and binds the public key, governed bootstrap key/material,
   concrete artifact bundle, input/output ciphertexts, exact or bounded proof
