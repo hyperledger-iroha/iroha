@@ -1387,14 +1387,6 @@ fn actual_destination_rollout(
         ton_last_transaction_hash: rollout.ton_last_transaction_hash.clone(),
         ton_verifier_code_boc_root_hash: rollout.ton_verifier_code_boc_root_hash.clone(),
         ton_verifier_code_boc: rollout.ton_verifier_code_boc.clone(),
-        substrate_finalized_head: rollout.substrate_finalized_head.clone(),
-        substrate_runtime_spec_name: rollout.substrate_runtime_spec_name.clone(),
-        substrate_runtime_spec_version: rollout.substrate_runtime_spec_version.clone(),
-        substrate_runtime_transaction_version: rollout
-            .substrate_runtime_transaction_version
-            .clone(),
-        substrate_runtime_code_hash: rollout.substrate_runtime_code_hash.clone(),
-        substrate_runtime_code_base64: rollout.substrate_runtime_code_base64.clone(),
         blockers: rollout.blockers.clone(),
     }
 }

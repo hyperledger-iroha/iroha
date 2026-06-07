@@ -19,52 +19,12 @@ and completed history lives in [`status.md`](./status.md).
   suite labels/IDs are intentionally rejected. Keep future fixture and SDK work
   aligned with the regenerated `snnet-interop-nk{2,3}-v1.json` contents rather
   than adding compatibility aliases.
-- SCCP launch scope is intentionally limited to non-Substrate families for now:
-  do not advertise support for Substrate/Polkadot-family networks, including
-  Kusama, Polkadot, SORA Kusama, SORA Polkadot, or SORA2, until governance
-  explicitly re-opens that scope. Existing Substrate/SORA2 notes and evidence
-  helpers are diagnostic/backlog material only, and retained Substrate-family
-  source-adapter transition checks must remain fail-closed diagnostics rather
-  than launch-readiness signals. Complete unsupported diagnostic rows in public
-  release bundles still have to pass canonical summary-schema
-  checks and carry only the explicit unsupported launch-scope blocker. The
-  strict release verifier now also scans the Rust SCCP constants, all-lanes
-  evidence generator, and readiness reporter for the same supported-domain set,
-  unsupported blocker text, and active Ethereum launch policy. Public
-  user-prover submission surfaces are likewise limited to supported launch
-  lanes (`eth,bsc`, `tron`, `sol`, and `ton`); a reintroduced `substrate`
-  production submission row is rejected until that support scope re-opens.
-  Torii public SCCP discovery must use the same supported-domain set:
-  `/v1/sccp/capabilities`, `/v1/sccp/manifests`, and wallet route manifests
-  must not advertise SORA2, SORA Kusama, SORA Polkadot, or generic
-  Substrate/Polkadot lanes while they remain outside launch scope. Optional
-  runtime SCALE capability fields must also stay absent from public discovery
-  until that launch scope is explicitly re-opened, public SCCP proof manifest
-  helpers must return no Substrate-family manifests, native-recursive package
-  tests must cover only supported public manifests while Substrate-family
-  package attempts stop at the absent-manifest boundary, and Torii
-  configured-launch gates must use the supported launch-domain set instead of the full diagnostic
-  domain list. The direct Torii runtime SCALE export path must reject
-  unsupported launch domains even when the cached SORA-origin bundle carries
-  valid Nexus finality. Core SCCP local-admission submission packaging must also
-  require the same supported-domain inventory, so complete Substrate-family
-  source material and source-adapter deployment evidence cannot emit a SORA
-  `local_admission` package while the lane is unsupported. Torii typed proof
-  artifact, normalized proof job, and bridge proof conversion surfaces must also
-  reject unsupported launch domains even when allow-unready diagnostics are
-  enabled, so diagnostic Substrate-family bundles cannot be repackaged as
-  production proof outputs. Core source-chain proof production verifier APIs
-  must also require a supported launch remote domain, so complete
-  Substrate-family source material and matching source-adapter deployment
-  evidence remains diagnostic-only and cannot be extracted through a direct
-  `*_production*` verifier while the launch scope is closed. Those generic
-  production source-proof verifier APIs must also remain inbound-only: remote ->
-  remote source-adapter proofs may stay structurally inspectable for future
-  target-specific profiles, but they cannot be extracted as production proofs
-  unless the target is SORA. Torii configured all-lanes launch readiness must
-  also iterate only that supported-domain set, so Substrate-family diagnostic
-  records cannot satisfy or block production launch checks while they remain out
-  of scope.
+- SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
+  manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
+  helpers, and production readiness surfaces must stay limited to those lanes.
+  Reintroducing retired network families requires a new design pass, fresh
+  fixtures, and explicit governance approval rather than reviving diagnostic
+  code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
@@ -2316,7 +2276,6 @@ and completed history lives in [`status.md`](./status.md).
   Python, Swift, Kotlin/JVM, and Java Android ETH/BSC receipt-proof transcript
   builders now reject zero source-event digests before deriving source witness
   hashes. The
-  same zero-digest guard now applies to TON shard-proof and Substrate-family
   storage-proof transcripts across Rust and the web/Python/native SDK surfaces.
   Strict release evidence plus published release-bundle verification must
   include the package-root SCCP export test transcript, the JavaScript
@@ -2378,7 +2337,6 @@ and completed history lives in [`status.md`](./status.md).
   destinations; JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET
   callback regressions now assert frozen request metadata where exposed and
   copy-backed bundle and source-proof bytes across EVM-family, TRON, TON, and
-  Substrate-family proof engines, including the Java Android and .NET
   Ethereum/BSC mainnet facade witness-provider paths. The .NET Ethereum/BSC
   inbound callback snapshots now also clone nested mutable dictionary and
   enumerable evidence values before app-linked callbacks return proof bytes.
@@ -2448,7 +2406,6 @@ and completed history lives in [`status.md`](./status.md).
 - Keep the public SCCP user-prover lane inventory fixed to production
   lane/backend pairs; strict bundle verification now rejects duplicate,
   unknown, or missing rows and backend-id drift for EVM/BSC, TRON, Solana, TON,
-  and Substrate submission surfaces.
 - Keep the public SCCP cryptographic evidence inventory fixed to production
   domains; strict bundle verification now rejects duplicate, unknown, or
   missing domain rows plus chain-label drift before comparing rows with
@@ -2719,6 +2676,23 @@ and completed history lives in [`status.md`](./status.md).
   RBC delivered finality live commit-gate crossing,
   RBC delivered finality post-commit progress quiescence,
   RBC delivered finality certified source-stack matching,
+  RBC delivered finality finality-certificate stack installation,
+  RBC delivered finality committed-phase entry matching,
+  RBC delivered finality commit-artifact change matching,
+  RBC delivered finality latch-artifact coupling,
+  RBC delivered finality exact commit-vote witnesses,
+  RBC delivered finality delivered-RBC evidence preservation,
+  RBC delivered finality view/prepare handoff evidence preservation,
+  RBC delivered finality exact protocol frame,
+  RBC delivered finality exact commit-vote action frame,
+  RBC delivered finality committed post-state safety bundle,
+  RBC delivered finality post-state gate split,
+  RBC delivered finality pre-GST post-state gate branch,
+  RBC delivered finality post-GST terminal branch,
+  post-finality pre-GST only-enabled gate invariant,
+  post-finality pre-GST GST-elapsed terminalization,
+  post-finality pre-GST Next/GST-elapsed exclusivity,
+  post-finality pre-GST spec-step stutter/GST split,
   post-finality progress-action quiescence,
   honest/fault roster-budgeted vote counters, RBC delivery stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
@@ -2861,9 +2835,6 @@ and completed history lives in [`status.md`](./status.md).
   applicable alongside the final proof request and submission helpers. Release
   bundles therefore cannot claim the portal/mobile native proof paths without
   explicitly carrying the UI proof-generation surfaces for each consumer SDK;
-  Substrate runtime-storage helper maps remain diagnostic/backlog-only while
-  Substrate/Polkadot networks are outside launch scope.
-- Solana, TON, and Substrate native submission helpers now apply the same native
   recursive payload corridor to verifier-program/message-body/runtime-call
   `bundleBytes` as they already apply to proof bytes: bundles must be non-empty,
   non-all-zero, and no larger than 2 MiB before JavaScript, Python, Swift,
@@ -2877,40 +2848,28 @@ and completed history lives in [`status.md`](./status.md).
   reject standalone `bundleBytes` or `sourceProofBytes` unless a wrapped
   `proofResult` is supplied, because raw Groth16 calldata cannot bind those
   request bytes back to the user-generated request hash. JavaScript and Python
-  EVM-family, TRON, and Substrate-family submission builders now also reject
   explicit `proofResult: null` / `proof_result=None` instead of treating it as
   an omitted proof result, keeping null/omitted semantics aligned with Solana
-  and TON before wallet or runtime-call packaging. Substrate-family submission
   builders across JavaScript, Python, Swift, Kotlin/JVM, and Java Android now
   also reject non-empty standalone `sourceProofBytes` unless a wrapped
   `proofResult` is supplied, because the final runtime-call payload carries the
   recursive bundle but not those request-bound source-proof bytes. The
   tracked JavaScript `dist/` package artifact is regenerated from that source
   and the package-dist suite now exercises the published `dist/index.js`
-  Solana, TON, EVM/TRON, and Substrate submission guards, keeping the web
   portal SDK artifact aligned with the source guard. Public readiness reports
   now also require the
   JS corridor transcript to include the source SCCP tests, `package_dist`, and
   package export tests in the claimed `js-sdk` phase, so a release bundle cannot
   prove only source-side helper tests while omitting the dist artifact surface
-  used by portal builds. The Rust `iroha_sccp` Solana, TON, and Substrate
   counterparty package builders now apply the same native recursive payload cap
   to canonical bundle bytes before emitting `SolanaProgramInstruction`,
-  `TonInternalMessage`, or `SubstrateRuntimeCall` artifacts, keeping release
   tooling and portal/mobile SDKs on the same submission corridor.
 - The all-lanes readiness and release-bundle verifier now derive a required
-  `substrate_runtime_storage_gate_hash` for SORA-Kusama, SORA-Polkadot, and
-  SORA2 from the governed Substrate source material plus source-adapter
   deployment records. Ready release bundles must carry that gate in the
-  source-adapter audit hash set, giving Substrate-family runtime-storage source
   proofs the same machine-audited gate surface as the Solana, TON, and TRON
-  source-adapter gates. The Substrate source-evidence renderer now also keeps
   JSON `toml_ready` false and refuses production TOML unless the governed
   runtime-storage gate hash is supplied and matches, so source material plus
-  deployment pins alone cannot open the Substrate source lane. The all-lanes
   preflight now imports that same
-  `sccp_substrate_runtime_storage_gate_hash` source-adapter audit comment and
-  rejects missing, zero, or drifted Substrate runtime-storage gate metadata
   instead of treating a locally recomputed value as sufficient release evidence.
   Direct ETH/BSC source-evidence renderers now apply the same preimage rule to
   production TOML: hash-only source bridge code metadata remains diagnostic
@@ -2958,7 +2917,6 @@ and completed history lives in [`status.md`](./status.md).
   passes end to end with Rust SCCP verification, operator evidence scripts,
   JS/Python/Swift/Kotlin/Java Android/.NET SDK prover surfaces, EVM/TRON
   contract smoke, and core bridge-proof admission.
-- Substrate route-canary evidence now publishes the finalized runtime code hash
   alongside the finalized head and runtime versions in public readiness JSON;
   release-bundle verification rejects zero or governed-hash-reused
   finalized-head/runtime-code canary fields before release notes can pass.
@@ -3079,7 +3037,6 @@ and completed history lives in [`status.md`](./status.md).
   reused route-canary hash roles, including finality-height replay,
   Solana route-canary zero or non-canonical ProgramData addresses,
   TON zero or governed-hash-reused live-account route-canary hashes,
-  Substrate-family route-canary zero or governed-hash-reused
   finalized-head/runtime-code hashes,
   TRON zero owner/recovered route-canary addresses, zero transcript words, zero
   route-canary binding hashes, reused canary hash roles including
@@ -3117,8 +3074,6 @@ and completed history lives in [`status.md`](./status.md).
   The report now also renders the user-prover SDK submission surfaces for each
   supported production lane, distinguishing EVM/TRON Torii bridge-proof submit
   payloads from native Solana instruction and TON BOC envelopes that
-  portal/mobile provers submit on-chain. Substrate runtime-call submission
-  helper material remains diagnostic/backlog-only while Substrate/Polkadot
   networks are outside launch scope. Each surface row uses the
   user-side proof backend labels consumed by the SDK request builders
   (`sccp-solana-recursive-mainnet-v1`, `ton-contract-v1`,
@@ -4113,9 +4068,7 @@ operator-provided rollout bundles.
   away from the canonical production lane, and Torii proof-material routing
   plus capability discovery now use that effective readiness check. Rust
   destination rollout readiness now also rejects padded EVM addresses, Solana
-  program ids, TON raw addresses, TRON Base58Check addresses, and Substrate
   runtime entrypoints instead of trimming them into production verifier
-  identities. The EVM, Solana, TON, and Substrate destination evidence
   renderers now mirror that exact-input posture for verifier identities,
   fixed-width hashes, lane selectors, and deployment metadata before they can
   emit production TOML, and the all-lanes preflight now requires the
@@ -4164,9 +4117,7 @@ operator-provided rollout bundles.
   also reject duplicate aliases for network ids, verifier addresses,
   verifier-code/key hashes, backend/proof-family selectors, binding hashes, and
   proof-context destination-binding fields before request hashing or app-linked
-	  prover invocation. Their EVM/TRON/Substrate-family proof request builders now
 	  apply the same top-level guard to `publicInputs`, `bundleBytes`,
-	  `sourceProofBytes`, `sourceDomain`, and `proofContext`, and Substrate proof
 	  contexts reject duplicate nested binding-hash aliases. The dynamic
 	  JavaScript and Python EVM/TRON proof-result wrappers and contract-call
 	  submission builders now also reject duplicate aliases for request hashes,
@@ -4177,9 +4128,7 @@ operator-provided rollout bundles.
 	  public inputs, public signal words, and proof contexts, so mutating a
 	  manually supplied request object after wrapping cannot change what the
 	  portal submits on-chain.
-	  Their Substrate-family proof-result wrappers and runtime-call submission
 	  builders now apply the same guard before packaging user-generated proofs into
-	  SCALE calls for Substrate destinations. The shared dynamic JavaScript and
 	  Python transparent public-input normalizers now also reject duplicate aliases
 	  inside message ids, payload hashes, target domains, commitment roots,
 	  finality heights, and finality block hashes before any request hash, public
@@ -4260,19 +4209,15 @@ operator-provided rollout bundles.
 	  epochs, transition block hashes, schedule hashes/payload hashes, nested
 	  seal proofs, and transition message hashes before deriving TRON
 	  source-finality evidence.
-	  JavaScript and Python Substrate storage-proof, runtime-storage request,
 	  authority-set payload, authority transition, GRANDPA justification, and
 	  transition-justification helpers now reject duplicate aliases for source
 	  domains, source event indexes, finalized block fields, GRANDPA set ids,
 	  storage roots, authority rosters/weights, payload hashes, transition
 	  hashes, signers bitmaps, nested verifier material, and runtime storage
-	  proof hashes before deriving Substrate source-proof or OpenVerify request
 	  material.
   JavaScript, Python, Kotlin, and Java Android prover callbacks now pass defensive
   request snapshots into app-linked proof engines, and the Kotlin/JVM plus Java
   Android final-proof regressions now pin actual snapshot delivery for Solana,
-  TON, EVM-family, TRON, and Substrate proof engines. Swift now mirrors that
-  defensive snapshot path for Solana, TON, EVM, TRON, and Substrate final-proof
 	  engines plus the Solana source-state proof engines. The Java Android
 	  Ethereum mainnet outbound wrapper now shares the same EVM callback-request
 	  snapshot path before invoking app-linked proof engines. Kotlin Solana final-proof
@@ -4285,9 +4230,7 @@ operator-provided rollout bundles.
 	  buffers before the canonical proof request is built; Java Android Solana
 	  now also passes a distinct defensive `WitnessInput` snapshot to witness
 	  providers. Kotlin/JVM and Java Android EVM-family, TON, TRON, and
-	  Substrate-family facades now pass copied bundle/source-proof byte arrays
 	  into app-controlled witness providers before canonical request construction.
-	  Swift/iOS now routes Solana, TON, EVM-family, TRON, and Substrate-family
 	  witness-provider calls through explicit input snapshot helpers as well.
 	  JavaScript and Python portal facades now apply the same mutable
 	  deep-snapshot boundary before invoking witness providers, so resolver-side
@@ -4364,8 +4307,6 @@ operator-provided rollout bundles.
   submission metadata canonicalizers now reject duplicate aliases across
   manifest fields, destination binding hashes, public inputs, and statement
   hashes before metadata bytes are hashed into those BOCs.
-  Swift Substrate now surfaces the same field-specific
-  base64 rejection. Web/Python and Swift/Kotlin/Java Android Substrate
   authority-transition builders also bind signer bitmaps to exact signer
   counts, signed and total weights, and a strict `> 2/3` quorum before hashing
   UI witness material, while web/mobile TON validator-signature transcripts
@@ -4476,9 +4417,7 @@ operator-provided rollout bundles.
   `target_domain = False` cannot stage SORA-bound source evidence. They also
   reject padded bridge addresses, component hashes, domains, and deployment
   block numbers before deriving source material or deployment-record hashes.
-  Solana, TON, and Substrate-family source-state evidence helpers now apply the
   same exact-input posture to fixed-width component hashes, source/target
-  domains, and Substrate runtime-lane selectors before rendering source
   material, source-adapter deployment records, or full-light-client gate hashes.
   The
   Source, destination, live, and all-lanes evidence helpers now also require
@@ -4489,17 +4428,13 @@ operator-provided rollout bundles.
   values, hex forms, or signed forms cannot drift from reviewed operator
   evidence. EVM live and source-live collectors now also reject whitespace-padded
   JSON-RPC quantities and hex byte strings before rendering runtime bytecode,
-  receipt, or rollout metadata. Solana/Substrate live collectors now also
-  reject padded ProgramData executable base64, Substrate `specName`, and
   finalized runtime `:code` hex before rendering production TOML metadata.
-  Solana, TON, and Substrate destination/live evidence helpers now also reject
   non-canonical base64 pad-bit aliases for verifier program bytes, Solana
   JSON-RPC account data, ProgramData metadata, TON code BoCs, and finalized
   runtime code before TOML rendering or all-lanes preflight can normalize
   copied evidence. TON code BoC text files now also reject internal whitespace
   instead of joining it into deployable code evidence, and the TON live
   collector returns accepted remote code BoCs as canonical standard base64.
-  EVM destination/source, Solana, TON, TRON, and Substrate-family live
   collectors now bound successful HTTP response bodies and HTTP error details
   before decoding, and reject duplicate keys in remote JSON objects so live
   evidence cannot depend on last-value-wins parsing. TON and TRON runtime API
@@ -4525,9 +4460,7 @@ operator-provided rollout bundles.
   `route_canary_*` config fields and imported canary metadata comments are
   present, the all-lanes gate now requires exact agreement so a direct
   `passed` value cannot override contradictory imported evidence.
-  Solana, TON, and Substrate live destination wrappers now also require literal
   boolean readiness from the canonical destination summaries, so truthy strings
-  cannot unlock offline TOML hashes. TON and Substrate live wrappers revalidate
   direct caller-supplied live metadata before deriving destination args, so
   forged account status, BoC hash-match flags, runtime-code metadata, verifier
   entrypoints, or hash algorithm labels fail before TOML readiness. EVM live
@@ -4595,7 +4528,6 @@ operator-provided rollout bundles.
   submission constructors, so portal/mobile proof UIs can submit externally
 	  generated proof packages without fabricated source-chain witness bytes.
 		  The JavaScript TON portal request builder now presence-checks
-		  `sourceProofBytes` like EVM, TRON, and Substrate, so falsey non-byte values
 		  cannot silently become an omitted source proof before request hashing, and
 		  TON submission metadata bytes use the same presence check before BOC
 		  packaging. The JavaScript TON and Solana submission builders now also
@@ -4607,7 +4539,6 @@ operator-provided rollout bundles.
 	  context, and local BOC cell serialization, rejecting explicit falsey
 	  values instead of falling through to defaults, nested proof context, or
 	  empty cell fields.
-	  Python EVM-family, TRON, and Substrate-family request builders plus
 	  EVM/TRON destination-binding helpers now apply the same rule to
 	  backend/proof-family/context inputs, and Solana/TON source-state verifier
 	  defaults plus Solana genesis defaults no longer mask explicit falsey UI
@@ -4625,7 +4556,6 @@ operator-provided rollout bundles.
   JavaScript web SDK now applies the same v1-only preflight before deriving
   source transcript bytes for portal-generated proofs. Swift, Kotlin, and Java
   Android now mirror that first-release policy for public source-state proof
-  capsules plus ETH/BSC/TRON/TON/Substrate-family transcript builders used by
   mobile prover UIs. JavaScript, Python, and Java Android Solana source-state
   proof capsules now also reject explicit null proof-version/proof-family
   metadata instead of promoting it to production defaults. JavaScript and
@@ -4667,16 +4597,12 @@ operator-provided rollout bundles.
   metadata, and they reject duplicate camelCase/snake_case proof-byte or
   proof-base64 aliases in dynamic result maps. Rust native recursive proof
   packaging and transparent-proof structure checks now also cap
-  Solana/TON/Substrate-family proof payloads at 2 MiB, and the JavaScript,
-  Python, Swift, Kotlin, and Java Android Solana, TON, and Substrate-family
   proof-result/submission wrappers mirror that bound before deriving envelope
   hashes, accepting app-linked prover output, or packaging wallet/RPC payloads.
   Their default destination rollout blockers now track only missing live native
   verifier deployment and trust-anchor evidence, not stale relayer-wiring
   blockers for the already-modeled program instruction, TON internal-message,
-  or Substrate runtime-call packages.
   JavaScript and Python EVM-family, TRON, and
-  Substrate-family local prover callbacks now apply the same exact canonical
   check to optional returned `proofBase64` / `proof_base64` metadata before
   proof-result wrapping, so a browser proof UI or portal backend cannot display
   or forward stale base64 while submitting different proof bytes. Swift, Kotlin,
@@ -4716,7 +4642,6 @@ operator-provided rollout bundles.
   and operator evidence scripts, giving web portals, relay backends, and mobile
   apps the same pre-submit rollout transcript checks before user-generated
   proofs are sent on-chain.
-  JavaScript and Python Substrate-family runtime prover callbacks now validate
   optional returned transparent public inputs, proof context, statement hash,
   and destination-binding hash before wrapping proof bytes. JavaScript, Python,
   Swift, Kotlin, and Java Android production proof wrappers preserve omitted
@@ -4725,7 +4650,6 @@ operator-provided rollout bundles.
 	  JavaScript and Python local-prover facades now also accept plain async
 	  witness-provider functions and `resolve_witness` objects in addition to
 	  `resolveWitness`, and tests pin that browser/backend relay providers resolve
-	  Solana, TON, TRON, Substrate-family, and EVM-family proof inputs from
 	  snapshots before linked prover callbacks receive canonical requests; package
 	  declaration tests pin the same witness-provider hooks for TypeScript portal
 	  consumers. JavaScript now rejects duplicate hook aliases
@@ -4791,7 +4715,6 @@ operator-provided rollout bundles.
   proof plan, finality model, message id, payload hash, commitment root, and
   source-event digest before public inputs are derived. Source consensus proof
   material now also carries a plan-specific adapter proof variant for
-  ETH/BSC/Solana/TON/TRON/Substrate-family lanes, so generic self-consistency
   blobs or stale witness substitutions cannot masquerade as another chain's
   proof shape. Each adapter statement is now additionally wrapped in a
   FastPQ/OpenVerify proof capsule so adapter metadata, public inputs, and proof
@@ -4811,7 +4734,6 @@ operator-provided rollout bundles.
   now verify source envelopes against caller-supplied material, but production
   readiness also requires an exact domain profile: today ETH mainnet, BSC
   mainnet, Solana mainnet-beta, TON mainnet masterchain/shard, TRON mainnet
-  DPoS solid-block/transaction-source, and Substrate-family GRANDPA/event-storage source
   profiles can satisfy the material gate only with deployment-supplied
   component hashes, while generic ids and hashes remain fail-closed unless they
   match an exact profile and avoid template-derived hashes. The TRON mainnet
@@ -4820,7 +4742,6 @@ operator-provided rollout bundles.
   keeping Rust, portal, mobile, and evidence vectors aligned with the
   production adapter proof shape. The offline
   source-evidence regression suite now exercises every template-derived
-  component field across ETH, BSC, Solana, TON, TRON, and Substrate-family direct
   record hashing plus governance TOML rendering, so one live component cannot
   hide another placeholder component in production material. The same direct
   evidence helpers reject all-zero production component, bridge, adapter
@@ -4846,7 +4767,6 @@ operator-provided rollout bundles.
   receipt hash, and an `adapter_verifier_vk_hash` equal to the canonical
   lane-specific source-adapter verifier commitment and the OpenVerify `vk_hash`
   embedded in the user-submitted source proof. The ETH/BSC, Solana, TON, TRON,
-  and Substrate-family source evidence hash helpers now apply the same
   source/deployment role-hash separation before returning canonical record
   hashes, keeping live collectors and programmatic governance tooling aligned
   with TOML rendering and all-lanes preflight.
@@ -4896,7 +4816,6 @@ operator-provided rollout bundles.
   Core and Torii configured runtime all-lanes admission mirror the same global
   replay checks, and the lane-aware Rust route-canary builder refuses source
   record hash replay before config objects are minted.
-	  EVM-family destination, ETH/BSC source, Solana, TON, and Substrate-family
 	  reusable render/summary evidence APIs now run the same deployed bytecode,
 	  program bytes, runtime code, or code BoC hash derivation as their CLI paths,
 	  so portal backends and SDK automation cannot bypass byte/hash mismatch checks
@@ -4904,19 +4823,16 @@ operator-provided rollout bundles.
 	  readiness now preserve that derivation as explicit code-BoC base64,
 	  root-hash, and match metadata, and the all-lanes gate decodes the staged BoC
 	  to recompute the TON representation root. A copied TON code hash without
-	  replayable BoC evidence remains diagnostic. Substrate-family live and direct
 	  destination evidence now preserves finalized runtime code as base64, and the
 	  all-lanes gate decodes it to recompute the BLAKE2b-256 runtime code hash
 	  before accepting SORA-family runtime rollouts.
   The EVM-family, Solana, TON, and
-  Substrate-family live/offline destination evidence renderers now require that
   metadata for production TOML via `--route-canary-evidence-hash`, keeping
   operator TOML generation aligned with the stricter all-lanes launch gate. The
   direct destination and TRON full-lane renderers also reject route canary
   hashes that reuse any governed source material record hash, source-adapter
   deployment record hash, route allowlist hash, or destination binding hash
   before JSON summaries or production TOML are emitted. Solana and
-  Substrate-family destination renderers now also recompute the supplied route
   canary hash from immutable ProgramData or finalized runtime metadata, and
   the all-lanes gate rejects generic non-zero canary hashes for those lanes.
   JavaScript, Python, Swift, Kotlin, and Java Android SDKs now expose the same
@@ -5170,7 +5086,6 @@ operator-provided rollout bundles.
 	  live-account metadata cannot open the SORA -> TON lane. Direct TON
 	  evidence and all-lanes validation also reject reuse between the live
 	  account-state hash and last-transaction hash snapshot roles.
-	  The offline `scripts/sccp_substrate_destination_evidence.py` helper now
 	  renders exact SORA -> SORA Kusama/SORA Polkadot/SORA2 runtime destination
 	  rollout plus route allowlist TOML with the fixed
 	  `SccpBridge.submit_message_proof` verifier entrypoint. Production TOML now
@@ -5183,12 +5098,10 @@ operator-provided rollout bundles.
 		  and revalidate the fixed entrypoint and deployment code hash, then require
 		  the route allowlist hash to bind the source material record hash,
 		  source-adapter deployment record hash, and selected SORA ->
-		  Substrate-family destination binding hash, with the three governed
 		  hash roles required to be non-zero and pairwise distinct before the
 		  transcript is accepted. Public release-bundle verification now
 		  recomputes that route-allowlist transcript from embedded all-lanes
 		  evidence instead of trusting the self-reported expected-hash match
-		  flag. Direct Substrate-family
 		  destination evidence can derive the runtime verifier code hash from supplied
 		  runtime bytes and rejects mismatches with an explicit
 		  `--verifier-code-hash`, matching the live finalized `:code` hash
@@ -5196,14 +5109,11 @@ operator-provided rollout bundles.
 		  `--runtime-code-hex` and `--runtime-code-base64` values now reject
 		  surrounding or embedded whitespace instead of normalizing padded
 		  runtime-code preimages.
-		  Direct Substrate-family
 		  destination TOML now also requires audited finalized head, runtime spec
 	  name/version, and transaction version metadata, rejects runtime `specName`
 	  values that do not match the selected destination lane, rejects boolean
 	  runtime version placeholders before readiness is derived, and emits the
 	  same runtime comments required by all-lanes. The live
-	  `scripts/sccp_substrate_live_evidence.py` helper now collects finalized
-	  runtime evidence from read-only Substrate JSON-RPC, pins the finalized
 	  head, runtime spec/version fields, and BLAKE2b-256 hash of finalized
 	  `:code`, requires the live `specName` to match the selected destination
 	  domain, requires the same route canary evidence before production TOML, and
@@ -5211,9 +5121,6 @@ operator-provided rollout bundles.
 	  non-lowercase or non-`0x` finalized-head hex, and runtime `:code` hex
 	  before emitting live metadata
 	  comments required by the all-lanes preflight before
-	  Substrate-family destination records can pass launch readiness. The all-lanes
-	  preflight also rejects Substrate runtime comments whose `specName` belongs
-	  to another runtime lane, and it now recomputes the Substrate-family route
 	  canary hash from the governed route tuple, runtime entrypoint/code hash,
 	  finalized head, runtime version metadata, and finalized runtime bytes
 	  before accepting SORA-family runtime readiness. It also rejects runtime code
@@ -5222,8 +5129,6 @@ operator-provided rollout bundles.
 	  Configured Rust readiness
 	  now carries the same finalized runtime fields in destination rollouts and
 	  rejects SORA-family launch without them. The offline
-  `scripts/sccp_substrate_source_evidence.py` helper now renders exact
-  Substrate-family source material and source-adapter deployment TOML for the
   same three runtime lanes from governed GRANDPA/event-storage component
   hashes, adapter verifier key hashes, and deployment receipt hashes, and it
   rejects padded runtime-lane selectors, component hashes, and target domains
@@ -5232,12 +5137,10 @@ operator-provided rollout bundles.
   to domain, chain,
   exact mainnet/runtime anchor id, chain-specific verifier identity format, and
   a non-zero Groth16 verifier-key hash for EVM-family/TRON lanes before they can
-  satisfy the production gate, while native Solana/TON/Substrate-family
   rollout records now reject any unexpected verifier-key hash. ETH/BSC require
   non-zero EVM contract addresses and reject verifier/bridge wrapper address
   aliasing across direct, live, and all-lanes evidence, Solana requires a
   non-zero program id, TON requires a non-zero raw contract address, TRON
-  requires a checksummed base58 contract address, and Substrate-family lanes
   require the exact SCCP runtime entrypoint.
   EVM and TRON Groth16 relay packages are
   signer-free: they carry the verifier proof ABI tuple directly and reject
@@ -5335,7 +5238,6 @@ operator-provided rollout bundles.
   Android Torii submit/query preflights now apply the same exactness to
   string-based TRON verifier addresses and deployment/proof hex before request
   serialization while still accepting already-byte proof tuples. Swift,
-  Kotlin, and Java Android EVM-family, TON, TRON, and Substrate-family mobile
   prover request builders also reject padded fixed-width
   payload/proof-context hashes before deriving proof transcripts. Their shared
   SCCP source-proof helpers apply the same exact hash rule to source-adapter
@@ -5403,7 +5305,6 @@ operator-provided rollout bundles.
   proof-result binding checks that revalidate proof context, request hashes, and
   envelope hashes before portal and mobile wallet submission.
   JavaScript, Python, Swift, Kotlin, and Java Android
-  SDKs now also expose `substrate-runtime-v1` proof-request/prover wrappers for
   SORA-Kusama, SORA-Polkadot, and SORA2 destination lanes, locked to SORA-origin
   source domains and binding the source domain, canonical transparent public
   inputs, length-prefixed SCCP bundle/source proof bytes, statement hash, and
@@ -5556,11 +5457,9 @@ operator-provided rollout bundles.
   identities with the lane-specific address/program/runtime parsers, preserves
   helper-emitted destination binding metadata comments, stores explicit
   destination binding fields in rollout config, and recomputes or compares the
-  governed SORA -> ETH/BSC, Solana, TON, TRON, and Substrate-family destination
   binding hashes before accepting rollout records. EVM-family helpers now emit
   the canonical deployment binding key, and both the preflight and runtime
   readiness gates require that key to be present and match the deployment tuple.
-  Solana, TON, TRON, and Substrate-family records must also carry the canonical
   binding key, and runtime readiness rejects native records that include EVM/TRON
   network or bridge-wrapper fields.
   TRON rollout records also fail if their explicit `destination_network_id`
@@ -5577,7 +5476,6 @@ operator-provided rollout bundles.
   prover flows, with TRON wrappers locked to the SORA -> TRON lane, EVM-family
   wrappers locked to the governed SORA -> ETH/BSC destination lanes, and
   EVM-family, TON, and TRON wrappers rejecting empty SCCP bundle bytes before
-  local request-hash derivation. TON/Substrate proof-result wrappers now reject
   all-zero external proof bytes before deriving request-bound envelope hashes;
   EVM-family and TRON wrappers additionally enforce the canonical 384-byte
   Groth16 ABI length, and JavaScript/Python portal surfaces plus
@@ -5610,13 +5508,11 @@ operator-provided rollout bundles.
 	  prover facades now also hand app-linked proof engines request snapshots,
 	  including Solana AccountsLtHash and full-light OpenVerify/FastPQ
 	  source-state callbacks, across TON, Solana, EVM-family, TRON, and
-	  Substrate-family proof flows
 	  while wrapping returned bytes against the original canonical request,
 	  and JavaScript/Python source-state callback
 	  result metadata
 	  (`version`, proof family, circuit id, and exact canonical proof base64)
 	  must match the active request and returned proof bytes. The
-	  EVM-family/TRON/Substrate
 	  facades reject explicit callback result metadata that does not match the
 	  active request hash, envelope hash, backend, EVM-family/TRON transparent
 	  public inputs, EVM-family/TRON proof context, EVM-family/TRON public signal
@@ -5635,7 +5531,6 @@ operator-provided rollout bundles.
   strict when present, so `null`/`None` backend, request/envelope hash,
   public-input, proof-context, statement/destination-binding hash, or
   public-signal fields fail instead of collapsing to omitted metadata.
-  JavaScript and Python EVM-family, TRON, and Substrate-family local-prover
   surfaces now also rebuild the canonical production request before invoking
   app-linked callbacks and before deriving proof-result envelope hashes, so web
   portals and portal backends cannot wrap proof bytes around manually mutated
@@ -5648,13 +5543,11 @@ operator-provided rollout bundles.
   results now carry the original request bundle/source-proof bytes, and
   proof-result based submission builders rebuild the canonical request hash
   before emitting calldata, so stale UI/mobile proof results cannot be replayed
-  against a swapped SCCP bundle. Substrate-family proof results expose the same
   request bytes for runtime-proof chaining, and the JavaScript TypeScript
   declarations plus Python package `__all__` exports now publish those
   proof-result request-byte fields and wrapper helpers to portal/mobile
   integrators. The JavaScript TypeScript declarations also expose named
   local-prover callback result types for Solana, TON, EVM-family, TRON, and
-  Substrate-family facades so portal UIs can return the request/envelope hash,
   backend, binding-hash, proof-context, public-input, and public-signal
   metadata that the runtime already validates. TON TypeScript declarations now
   keep pre-proof request construction separate from post-proof message-body
@@ -5690,11 +5583,8 @@ operator-provided rollout bundles.
   message-body submission input directly from a local `TonSccpProofResult`, so
   apps no longer need to manually copy proof-context hashes between proof
   generation and wallet/liteserver packaging. Because SCCP launch support no
-  longer includes Substrate/Polkadot-family networks, the JavaScript, Python,
-  Swift, Kotlin, and Java Android SDKs no longer expose Substrate runtime proof
   builders, prover facades, or SCALE runtime-call submission helpers. Torii and
   the SDK release checks now keep the production SCCP surface limited to ETH,
-  BSC, Solana, TON, and TRON until a future Substrate launch scope is designed
   explicitly.
   The package root also re-exports the SCCP source-adapter OpenVerify circuit id, FastPQ
   parameter-set id, and verifier VK hash helper used by portal evidence
@@ -5702,7 +5592,6 @@ operator-provided rollout bundles.
   Swift, Kotlin, and Java Android proof-result wrappers now rederive the
   canonical request before hashing the proof envelope, Java Android EVM-family,
   Solana, TON, and TRON proof/submission results return defensive byte copies,
-  and Kotlin EVM-family, Solana, TON, TRON, and Substrate-family
   request/result/submission objects now also return fresh copies for request
   byte fields and proof bytes, closing the mobile path where a manually
   constructed or mutated request object could otherwise supply stale envelope
@@ -5715,7 +5604,6 @@ operator-provided rollout bundles.
   invoking the app-linked proof engine and reapply that guard when wrapping
   proof bytes, matching the Solana SDK guard pattern across web portal,
   backend, and mobile UI proof generation. Swift EVM-family, TRON, TON, and
-  Substrate production wrappers now preserve omitted optional source-proof
   bytes through proof wrapping and submission packaging while still rejecting
   non-empty all-zero source-proof placeholders. Deployment-aware SCCP
   production source-proof extraction now enters through the deployment-aware
@@ -5797,7 +5685,6 @@ operator-provided rollout bundles.
   Python now also exposes the same canonical ETH/BSC receipt-proof, BSC
   validator-set payload, BSC ValidatorSet storage-value, metadata-proof, and
   transition-message, TON shard-proof, TON validator-set transition, TRON
-  receipt-proof, and Substrate-family storage-proof transcript hash helpers as
   the web and mobile SDKs, so backend portal tooling can derive adapter-bound
   source proof hashes from collected source-chain witness material instead of
   accepting opaque placeholders.
@@ -6109,7 +5996,6 @@ operator-provided rollout bundles.
   transition-message, ETH sync-committee transition payload, TON shard-proof,
   TON masterchain block-message/signature, TON validator-set transition payload,
   TRON receipt-proof, TRON transaction-source proof, TRON
-  witness-schedule transition payload, and Substrate-family storage-proof plus
   authority-set transition-message/justification transcript helpers, so web,
   operator, and mobile tooling can derive every adapter-bound source proof hash
   from collected witness material before invoking the linked prover. The ETH/BSC
@@ -6198,7 +6084,6 @@ operator-provided rollout bundles.
   deployment and any production light-client update/state branches not
   discharged inside that deployed source-adapter circuit. The ETH/BSC,
   Solana, TON, TRON, and
-  Substrate-family source-material gates now accept only exact verifier profiles
   binding the planned backend, finality policy, and inclusion-proof layout, and
   the component hashes must be deployment-supplied rather than the built-in
   template hashes; generic source material remains rejected. Destination
@@ -6271,7 +6156,6 @@ operator-provided rollout bundles.
   context, and wrapped UI-prover results commit to that proof-context hash as
   well as the source witness hash. JavaScript, Python, and Swift now expose
   explicit proof-result wrappers for externally generated UI prover bytes
-  across Solana, TON, EVM-family, TRON, and Substrate-family lanes, while
   Kotlin and Java Android expose the same flow through public
   `wrapProofResult` helpers. Those direct wrappers bind proof bytes to the
   canonical request before deriving request-bound envelope hashes; Solana also
@@ -6513,7 +6397,6 @@ operator-provided rollout bundles.
   schedule hash, solid-block message hash, and witness seal hash, so swapped
   schedule/seal transcripts fail before recursive verifier material is
   evaluated.
-  Substrate-family adapters now
   derive `storage_proof_hash` from the source event digest, finalized block
   number, GRANDPA set id, authority set hash, events root, source-event leaf
   index, canonical `frame_system::Events` storage key, and inclusion branch
@@ -6521,12 +6404,10 @@ operator-provided rollout bundles.
   embedded GRANDPA authority certificate by deriving the ordered Ed25519
   authority-set trust-anchor hash, recomputing the finalized precommit-message
   hash, checking the justification hash, verifying Ed25519 signatures, and
-  enforcing strict `> 2/3` signed authority weight. Substrate authority-set
   transition proofs now derive the active authority set from a configured parent
   trust anchor by binding the parent set, canonical next authority-set payload
   hash, payload-derived next set, transition block, and GRANDPA set-id range,
   then requiring a strict `> 2/3` parent-set GRANDPA justification.
-  BSC, Solana, TRON, and Substrate-family production source-verifier material
   templates now bind
   those validator/vote/witness certificate transcript prefixes as well as their
   inclusion-proof and TRON receipt-state prefixes, closing the inclusion-only
@@ -6618,7 +6499,6 @@ operator-provided rollout bundles.
   non-placeholder source verifier material, matching source-state verifier
   deployment fields, adapter verifier commitment, and deployment receipt hashes
   are present;
-  Substrate-family source proofs now support an ordered authority-set transition
   chain from a configured parent set into the active set, with the next
   authority-set payload and transition transcript hashes now available through
   the web, Python, Swift, Kotlin, and Java Android SDK proof-generation helpers.
@@ -6658,15 +6538,11 @@ proof artifact wrapper first, so manifest, public-input, or submission-package
 metadata drift cannot be hidden behind otherwise valid OpenVerify proof bytes,
 and Torii/CLI artifact renderers omit OpenVerify summaries for wrappers that
 fail that typed gate.
-Substrate/Polkadot-family SCCP lanes are not part of the current supported
-launch scope; keep existing Substrate, Kusama, Polkadot, and SORA2 evidence
 helpers gated as diagnostic/backlog-only surfaces, with production
 readiness and release-evidence summaries refusing to mark those lanes ready
-until support is explicitly re-opened. BSC and Substrate-family source
 transition verifiers now also require the ordered transition chain to terminate
 at the adapter's declared active epoch/set id, so stale chains cannot pass by
 replaying the same final validator or authority-set hash. ETH, BSC, Solana,
-TON, and Substrate-family signer-certificate preflight now also rejects
 non-canonical signer bitmap width/padding, empty signer sets, signature-count
 drift, claimed stake/weight drift, and sub-quorum certificates before
 transcript hashing. ETH source-adapter preflight also recomputes the active
@@ -6726,9 +6602,7 @@ circuit. The ETH/BSC adapter proof shapes are now preflight-bounded across Rust
 and the web/mobile SDK helper surfaces: ETH caps sync committees at 512
 authorities and 64 transition proofs, while BSC caps validator sets at 255
 validators and 64 transition proofs before transcript hashing. Backlog-only
-Substrate-family work remains out of the active supported launch scope; if
 support is re-opened, use the offline
-source evidence renderer, which now rejects Substrate-family template component
 hashes, including the runtime storage-proof verifier hash, and non-canonical
 source-adapter OpenVerify VK hashes before rendering governance TOML using the
 same runtime-storage template preimage as Rust. JavaScript, Python, Swift,
@@ -6746,20 +6620,14 @@ allowlist material, then extend the current GRANDPA
 authority-certificate and authority-set transition checks, which are now
 preflight-bounded to 2,048 authorities and 64 transition proofs and reject
 all-zero authority keys across Rust and the web/mobile SDK proof helpers. The
-Substrate-family production source-adapter gate now requires matching runtime
 storage-proof verifier material, matching source-adapter deployment evidence,
 and a submitted `SccpSourceStateVerificationProofV1` OpenVerify/FastPQ capsule
 whose circuit id, schema descriptor, public inputs, verifying-key hash, and
 FastPQ proof verify against the governed runtime-storage verifier hash. The
-all-lanes summary now derives the matching `substrate_runtime_storage_gate_hash`
-for each Substrate-family lane and the release-bundle verifier requires it in
-the source-adapter audit hash set, so ready bundles cannot publish Substrate
-source material without the runtime-storage proof gate. The Substrate
 source-evidence renderer now mirrors that requirement before production TOML:
 the expected source material, source-adapter deployment, and runtime-storage
 gate hashes must all be supplied and match before `toml_ready` can become true.
 The Rust admission path no longer has a metadata-only fail-closed sentinel for
-Substrate-family lanes; the remaining blocker is governed live runtime verifier
 deployment evidence plus lane rollout across the all-lanes launch policy.
 For
 Solana, use the offline
@@ -6803,7 +6671,6 @@ audit helpers and TON shard-state request builders, so app-side proof
 generation cannot promote profile-template material before on-chain
 submission. JavaScript, Python, Swift, Kotlin, and Java Android
 now also expose canonical source-adapter verifier-key commitment helpers for
-all ETH/BSC/Solana/TON/TRON/Substrate-family source lanes, so web portals and
 mobile apps can display or audit the exact `adapter_verifier_vk_hash` accepted
 by Rust admission and the offline governance evidence renderers. The Solana
   AccountsLtHash source-state request
@@ -6836,7 +6703,6 @@ by Rust admission and the offline governance evidence renderers. The Solana
   counterparty submission
   package builders and transparent-proof structure verification now enforce the
   same non-empty, non-all-zero proof-byte preflight for Solana, TON, and
-  Substrate-family native recursive payloads before wallet/RPC envelopes are
   emitted, and transparent inner-proof plus native recursive package builders
   reject any bundle whose transparent public-input target domain is outside the
   verifier manifest's local/counterparty lane endpoints. The offline Solana
@@ -6903,7 +6769,6 @@ full-light-client gate hash, so the governed audit suffix cannot be staged from
 template verifier material through core, CLI, web, Python, Swift, Kotlin, or
 Java Android callers. The ETH, BSC, Solana,
 TON, and
-Substrate-family source evidence renderers now also include the canonical
 `SccpSourceVerifierMaterialV1` and
 `SccpSourceAdapterEngineDeploymentV1` record hashes in compact JSON dry-runs
 and TOML audit comments, matching `iroha_sccp` helper vectors before governed
@@ -6913,8 +6778,6 @@ is emitted, so governance rollout scripts can fail on digest drift before
 configuration is staged. Their direct material and source-adapter deployment
 record hash helpers now apply the same template-hash rejection as the TOML
 renderers, so programmatic rollout tooling cannot derive production-looking
-ETH, BSC, Solana, TON, or Substrate-family evidence hashes from profile-template
-source components. The ETH, BSC, Solana, TON, and Substrate-family source evidence
 helpers now also require exact `u32` domain ids on their programmatic paths, so
 Python boolean placeholders cannot be staged as SORA target-domain evidence.
 The Solana submission helpers now require UI/mobile wrapped proof results to
@@ -7006,7 +6869,6 @@ the AccountsLtHash `stark-fri-v1` circuit, and explicit TON canonicalizers only
 accept the shard-state `stark-fri-v1` circuit before hashing completed proof
 capsules for UI prover output. JavaScript FastPQ source-state and
 full-light-client audit proof request builders for Solana, TON, and
-Substrate-family runtime-storage proofs now freeze the returned request objects,
 public-input columns, transition metadata, and aggregate request maps, and
 return canonical statement, context, schema, commitment, and witness byte fields
 through defensive-copy getters, preventing browser code from mutating a
@@ -7020,14 +6882,11 @@ properties.
 The TypeScript
 declarations mark those request objects, nested arrays, transition entries, and
 aggregate maps as readonly for portal compile-time checks. Python portal-backend
-builders now return the same Solana, TON, and Substrate-family FastPQ requests
 as read-only dict/list-compatible envelopes with immutable byte payloads,
 preserving normal inspection while preventing callback-side metadata rewrites.
 Kotlin mobile request models now also store defensive copies and return fresh
 byte arrays for Solana AccountsLtHash, Solana/TON full-light audit, and
-Substrate-family runtime-storage request bytes and FastPQ transition byte values,
 matching the Java Android record/accessor surface. Java Android also freezes the
-Substrate-family runtime-storage public-input and transition lists, and Swift
 tests now pin the same value-snapshot contract for mobile proof requests.
 The Swift, Kotlin, and Java Android direct audit-request inputs now also reject
 duplicate audit role verifier hashes and reuse of any source-adapter material
@@ -7114,7 +6973,6 @@ present source-state proof capsules unless they are version `1`, use
 `stark-fri-v1`, carry a non-empty circuit id, and contain non-empty/non-all-zero
 proof bytes before Norito/OpenVerify decoding, covering nested AccountsLtHash
 material, full-light-client audit role proofs, TON source-state capsules, and
-Substrate-family runtime-storage capsules. The Solana AccountsLtHash verifier
 and role-separated full-light-client audit verifier now apply the same all-zero
 capsule guard before decoding, so direct verifier calls cannot bind placeholder
 proof bytes outside structural admission.
@@ -7223,7 +7081,6 @@ replay the root-hash derivation. The offline
 `scripts/sccp_all_lanes_evidence.py` preflight consumes the rendered source,
 destination, and route TOML snippets and reports lane-specific blockers for any
 missing or non-production record across ETH, BSC, Solana, TON, TRON, and the
-	Substrate-family lanes before governance staging. It also rejects unsupported
 	domain records in the source-material, source-adapter deployment, destination
 	rollout, and route-allowlist sections instead of ignoring stray governance
 	records while declaring the advertised lanes ready. It also recomputes the
@@ -7232,7 +7089,6 @@ missing or non-production record across ETH, BSC, Solana, TON, TRON, and the
 	template-derived component hashes, non-canonical source-adapter verifier keys,
 	reused non-zero source/deployment/audit role digests, or malformed destination
 		verifier identities. Native Solana, TON, and
-		Substrate-family destination evidence JSON now stays binding-only until the
 	expected destination binding hash and route canary evidence are pinned; route
 	allowlist hashes and paired source record hashes are rejected before that
 	independent binding pin matches. TON
@@ -7247,20 +7103,14 @@ JavaScript, Python, Swift, Kotlin, and Java Android SDK proof-request builders
 apply the same rejection before UI/mobile prover invocation. For ready lanes
 the same JSON summary reports canonical source material and source-adapter
 deployment record hashes for governance comparison. For
-Substrate-family destination lanes,
 JavaScript, Python, Swift, Kotlin, and Java Android portal/mobile SDKs
-now build request-bound `substrate-runtime-v1` prover inputs and envelope
-hashes for SORA-Kusama, SORA-Polkadot, and SORA2, so the remaining Substrate
 release blockers are governed runtime verifier deployment evidence and lane
 rollout rather than SDK request derivation for either destination runtime
 proofs or source-state runtime-storage proofs. Release summaries now also carry
-the derived `substrate_runtime_storage_gate_hash` as a required source-adapter
-audit hash for those lanes. The direct Substrate-family
 destination helper and its importable render/summary APIs can now derive the
 runtime verifier code hash from supplied runtime bytes and reject explicit hash
 mismatches before producing JSON or TOML. Rust runtime-storage verification
 also rejects all-zero source-state proof capsules before OpenVerify/FastPQ
-decode, matching the Substrate source-adapter preflight. For TRON, extend the current
 signed ancestor-linked solid-block header proof,
   which now authenticates both `txTrieRoot` and TRON `accountStateRoot`, witness
   seal, witness-schedule transition certificates, and transaction-Merkle
@@ -9056,10 +8906,12 @@ commit retry gate, TLC-cross-checked Kura persistence status counter/snapshot he
 fsync fault regression gate, State DA cursor apply fault regression gate, Kura
 pipeline sidecar queue cap gate, Kura durable budget metadata snapshot gate,
 Kura pending-budget scan guardrail/benchmark gate, Kura eviction block-store lock split
-gate, Kura background budget eviction gate, IVM WSV admin syscall permission gate,
+gate, Kura background budget eviction gate, Kura background budget eviction retry-latency gate,
+Kura long-history eviction benchmark gate,
+IVM WSV admin syscall permission gate,
 IVM WSV checkpoint durable-state dedupe/benchmark gate,
 State view generation retry gate, WSV state write lock separation gate,
-WSV state write lock telemetry alias gate,
+WSV state write lock telemetry alias gate, WSV heavy-world state-write-lock benchmark gate,
 TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
 realignment gate, frontier block-sync hint/direct-response permit gate,
 TLC-cross-checked same-height vote conflict helper gate, aggregate same-height vote-lock helper gate,

@@ -25745,30 +25745,6 @@ fn zk_policy_put_sccp_destination_rollouts(
                     .cmp(&right.ton_verifier_code_boc_root_hash)
             })
             .then_with(|| left.ton_verifier_code_boc.cmp(&right.ton_verifier_code_boc))
-            .then_with(|| {
-                left.substrate_finalized_head
-                    .cmp(&right.substrate_finalized_head)
-            })
-            .then_with(|| {
-                left.substrate_runtime_spec_name
-                    .cmp(&right.substrate_runtime_spec_name)
-            })
-            .then_with(|| {
-                left.substrate_runtime_spec_version
-                    .cmp(&right.substrate_runtime_spec_version)
-            })
-            .then_with(|| {
-                left.substrate_runtime_transaction_version
-                    .cmp(&right.substrate_runtime_transaction_version)
-            })
-            .then_with(|| {
-                left.substrate_runtime_code_hash
-                    .cmp(&right.substrate_runtime_code_hash)
-            })
-            .then_with(|| {
-                left.substrate_runtime_code_base64
-                    .cmp(&right.substrate_runtime_code_base64)
-            })
             .then_with(|| left.blockers.cmp(&right.blockers))
     });
     zk_policy_put_field(hasher, "sccp_destination_rollouts");
@@ -25924,36 +25900,6 @@ fn zk_policy_put_sccp_destination_rollouts(
             hasher,
             "ton_verifier_code_boc",
             rollout.ton_verifier_code_boc.as_deref(),
-        );
-        zk_policy_put_option_str(
-            hasher,
-            "substrate_finalized_head",
-            rollout.substrate_finalized_head.as_deref(),
-        );
-        zk_policy_put_option_str(
-            hasher,
-            "substrate_runtime_spec_name",
-            rollout.substrate_runtime_spec_name.as_deref(),
-        );
-        zk_policy_put_option_str(
-            hasher,
-            "substrate_runtime_spec_version",
-            rollout.substrate_runtime_spec_version.as_deref(),
-        );
-        zk_policy_put_option_str(
-            hasher,
-            "substrate_runtime_transaction_version",
-            rollout.substrate_runtime_transaction_version.as_deref(),
-        );
-        zk_policy_put_option_str(
-            hasher,
-            "substrate_runtime_code_hash",
-            rollout.substrate_runtime_code_hash.as_deref(),
-        );
-        zk_policy_put_option_str(
-            hasher,
-            "substrate_runtime_code_base64",
-            rollout.substrate_runtime_code_base64.as_deref(),
         );
         zk_policy_put_field(hasher, "blockers");
         Sha2Digest::update(
@@ -52985,12 +52931,6 @@ mod tests {
                 ton_last_transaction_hash: None,
                 ton_verifier_code_boc_root_hash: None,
                 ton_verifier_code_boc: None,
-                substrate_finalized_head: None,
-                substrate_runtime_spec_name: None,
-                substrate_runtime_spec_version: None,
-                substrate_runtime_transaction_version: None,
-                substrate_runtime_code_hash: None,
-                substrate_runtime_code_base64: None,
                 blockers: Vec::new(),
             },
         );
@@ -53179,14 +53119,6 @@ mod tests {
             compute_zk_consensus_policy_hash(&solana_live_metadata_changed)
         );
 
-        let mut substrate_live_metadata_changed = changed.clone();
-        substrate_live_metadata_changed.sccp_destination_rollouts[0].substrate_finalized_head =
-            Some(hex::encode([0xb1; 32]));
-        assert_eq!(
-            changed_hash,
-            compute_zk_consensus_policy_hash(&substrate_live_metadata_changed)
-        );
-
         let mut tron_raw_owner_binding_changed = changed.clone();
         tron_raw_owner_binding_changed.sccp_route_allowlists[0]
             .tron_route_canary_raw_data_owner_matches_transaction = Some(true);
@@ -53243,12 +53175,6 @@ mod tests {
                 ton_last_transaction_hash: None,
                 ton_verifier_code_boc_root_hash: None,
                 ton_verifier_code_boc: None,
-                substrate_finalized_head: None,
-                substrate_runtime_spec_name: None,
-                substrate_runtime_spec_version: None,
-                substrate_runtime_transaction_version: None,
-                substrate_runtime_code_hash: None,
-                substrate_runtime_code_base64: None,
                 blockers: Vec::new(),
             },
         );

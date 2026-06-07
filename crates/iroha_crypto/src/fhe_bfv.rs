@@ -103,6 +103,11 @@ pub const BFV_FULL_BOOTSTRAP_MAX_CIRCUIT_DEPTH: u16 = 1_024;
 pub const BFV_FULL_BOOTSTRAP_CIRCUIT_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum bytes admitted for one BFV full-bootstrap proof-profile artifact.
 pub const BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Canonical proof backend for BFV full-bootstrap proof-profile artifacts.
+pub const BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1: &str = "stark/fri/sha256-goldilocks";
+/// Canonical proof-key byte format for BFV full-bootstrap proof-profile artifacts.
+pub const BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1: &str =
+    "openverify:stark-fri-sha256-goldilocks:v1";
 /// Maximum diagonal entries admitted in one BFV full-bootstrap linear transform.
 pub const BFV_FULL_BOOTSTRAP_LINEAR_TRANSFORM_MAX_DIAGONALS: usize = 1_024;
 const BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1: u16 = 2;
@@ -1484,6 +1489,48 @@ pub struct BfvFullBootstrapExecutionProofClaimV1 {
     pub input_bound: u128,
     /// Claimed output residual/noise bound under `bound_mode`.
     pub output_bound: u128,
+}
+
+/// Public-input schema for BFV full-bootstrap execution proofs.
+///
+/// This is the typed payload for the proof public-input schema artifact. It
+/// declares the exact statement-digest layout consumed by the proof backend so
+/// admission can reject opaque schema bytes before the backend verifier exists.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapProofPublicInputSchemaV1 {
+    /// Canonical full-bootstrap circuit id.
+    pub circuit_id: String,
+    /// Domain used before hashing the execution proof statement.
+    pub statement_digest_domain: Vec<u8>,
+    /// Number of hash public inputs expected by the proof backend.
+    pub public_input_hash_count: u16,
+    /// Byte length of each hash public input.
+    pub public_input_hash_bytes: u16,
+    /// Whether exact residual-multiple proof statements are supported.
+    pub supports_exact_residual_multiple: bool,
+    /// Whether bounded-noise proof statements are supported.
+    pub supports_bounded_noise: bool,
+}
+
+/// Backend-native key material for a BFV full-bootstrap proof profile.
+///
+/// This is the typed payload for prover-key and verifier-key artifacts. The key
+/// bytes remain backend-native, but their metadata binds them to the canonical
+/// backend, key format, circuit, and public-input schema commitment.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapProofKeyV1 {
+    /// Canonical proof backend label.
+    pub backend: String,
+    /// Canonical backend-native key byte format label.
+    pub key_format: String,
+    /// Canonical full-bootstrap circuit id.
+    pub circuit_id: String,
+    /// Digest of the governed public-input schema artifact.
+    pub public_input_schema_digest: Hash,
+    /// Backend-native proof key bytes.
+    pub key_material: Vec<u8>,
 }
 
 /// One diagonal plaintext mask in a packed-slot full-bootstrap linear transform.
@@ -4974,7 +5021,7 @@ pub fn decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
 /// first-release two-component ciphertext shape.
 pub fn validate_bfv_full_bootstrap_sample_extraction_v1(
     params: &BfvParameters,
-    sample_extraction: &BfvFullBootstrapSampleExtractionV1,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
 ) -> Result<(), BfvError> {
     packed_plaintext_root(params)?;
     let degree = params.degree();
@@ -5027,10 +5074,10 @@ pub fn validate_bfv_full_bootstrap_sample_extraction_v1(
 pub fn encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
     params: &BfvParameters,
     max_bootstrap_depth: u16,
-    sample_extraction: &BfvFullBootstrapSampleExtractionV1,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
 ) -> Result<Vec<u8>, BfvError> {
     validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
-    let payload = norito::to_bytes(sample_extraction).map_err(|err| {
+    let payload = norito::to_bytes(&sample_extraction).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "BFV full-bootstrap sample extraction encoding failed: {err}"
         ))
@@ -5072,7 +5119,7 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
             "{label} payload must be a Norito-encoded BFV full-bootstrap sample extraction: {err}"
         ))
     })?;
-    validate_bfv_full_bootstrap_sample_extraction_v1(params, &sample_extraction)?;
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
     Ok(sample_extraction)
 }
 
@@ -5176,6 +5223,225 @@ pub fn decode_bfv_full_bootstrap_accumulator_artifact_v1(
     Ok(accumulator)
 }
 
+/// Return the canonical BFV full-bootstrap proof public-input schema.
+#[must_use]
+pub fn bfv_full_bootstrap_proof_public_input_schema_v1() -> BfvFullBootstrapProofPublicInputSchemaV1
+{
+    BfvFullBootstrapProofPublicInputSchemaV1 {
+        circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+        statement_digest_domain: BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN.to_vec(),
+        public_input_hash_count: 1,
+        public_input_hash_bytes: u16::try_from(Hash::LENGTH)
+            .expect("Iroha hash byte length fits in u16"),
+        supports_exact_residual_multiple: true,
+        supports_bounded_noise: true,
+    }
+}
+
+/// Validate a typed BFV full-bootstrap proof public-input schema.
+///
+/// # Errors
+/// Returns [`BfvError`] when the schema does not describe the canonical
+/// execution proof statement hash layout supported by the first-release
+/// full-bootstrap circuit.
+pub fn validate_bfv_full_bootstrap_proof_public_input_schema_v1(
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<(), BfvError> {
+    if schema.circuit_id != BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof public-input schema circuit id `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1}`",
+            schema.circuit_id
+        )));
+    }
+    if schema.statement_digest_domain.as_slice()
+        != BFV_FULL_BOOTSTRAP_EXECUTION_PROOF_STATEMENT_DOMAIN
+    {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema statement digest domain does not match canonical execution proof statement domain"
+                .to_owned(),
+        ));
+    }
+    if schema.public_input_hash_count != 1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof public-input schema hash count {} does not match canonical count 1",
+            schema.public_input_hash_count
+        )));
+    }
+    let hash_len = u16::try_from(Hash::LENGTH).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema hash length exceeds u16 metadata"
+                .to_owned(),
+        )
+    })?;
+    if schema.public_input_hash_bytes != hash_len {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof public-input schema hash byte length {} does not match canonical length {hash_len}",
+            schema.public_input_hash_bytes
+        )));
+    }
+    if !schema.supports_exact_residual_multiple {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema must support exact residual-multiple claims"
+                .to_owned(),
+        ));
+    }
+    if !schema.supports_bounded_noise {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof public-input schema must support bounded-noise claims"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Encode a typed proof public-input schema artifact.
+///
+/// The returned bytes are a governed full-bootstrap artifact envelope whose
+/// inner payload is [`BfvFullBootstrapProofPublicInputSchemaV1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when schema validation or canonical encoding fails.
+pub fn encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    schema: &BfvFullBootstrapProofPublicInputSchemaV1,
+) -> Result<Vec<u8>, BfvError> {
+    validate_bfv_full_bootstrap_proof_public_input_schema_v1(schema)?;
+    let payload = norito::to_bytes(schema).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof public-input schema encoding failed: {err}"
+        ))
+    })?;
+    encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+        params,
+        max_bootstrap_depth,
+        BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
+        &payload,
+    )
+}
+
+/// Decode and validate a governed proof public-input schema artifact.
+///
+/// # Errors
+/// Returns [`BfvError`] when the artifact envelope does not match the governed
+/// material or the typed public-input schema payload is malformed.
+pub fn decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapProofPublicInputSchemaV1, BfvError> {
+    let role = BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema;
+    let label = full_bootstrap_artifact_label_for_role(role);
+    let expected_digest = full_bootstrap_material_digest_for_role(material, role);
+    let artifact = decode_full_bootstrap_artifact_payload(
+        params,
+        material,
+        label,
+        role,
+        bytes,
+        expected_digest,
+    )?;
+    let schema =
+        norito::decode_from_bytes::<BfvFullBootstrapProofPublicInputSchemaV1>(&artifact.payload)
+            .map_err(|err| {
+                BfvError::InvalidParameters(format!(
+                    "{label} payload must be a Norito-encoded BFV full-bootstrap proof public-input schema: {err}"
+                ))
+            })?;
+    validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)?;
+    Ok(schema)
+}
+
+/// Validate typed BFV full-bootstrap prover/verifier key material.
+///
+/// # Errors
+/// Returns [`BfvError`] when the key role is not a proof-key role, key metadata
+/// does not match the canonical proof profile, key material is empty, or the key
+/// is not bound to the governed public-input schema artifact.
+pub fn validate_bfv_full_bootstrap_proof_key_v1(
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    role: BfvFullBootstrapCircuitArtifactRoleV1,
+    key: &BfvFullBootstrapProofKeyV1,
+) -> Result<(), BfvError> {
+    validate_bfv_full_bootstrap_proof_key_role(role)?;
+    validate_bfv_full_bootstrap_proof_key_profile_v1(key)?;
+    if key.circuit_id != material.circuit_id {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key circuit id does not match governed full-bootstrap material for {role:?}"
+        )));
+    }
+    if key.public_input_schema_digest != material.proof_public_input_schema_digest {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key public-input schema digest does not match governed full-bootstrap material for {role:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Encode a typed prover/verifier key artifact.
+///
+/// The returned bytes are a governed full-bootstrap artifact envelope whose
+/// inner payload is [`BfvFullBootstrapProofKeyV1`]. Only the prover-key and
+/// verifier-key roles accept this typed payload.
+///
+/// # Errors
+/// Returns [`BfvError`] when the role is not a proof-key role, key metadata is
+/// malformed, or canonical encoding fails.
+pub fn encode_bfv_full_bootstrap_proof_key_artifact_v1(
+    params: &BfvParameters,
+    max_bootstrap_depth: u16,
+    role: BfvFullBootstrapCircuitArtifactRoleV1,
+    key: &BfvFullBootstrapProofKeyV1,
+) -> Result<Vec<u8>, BfvError> {
+    validate_bfv_full_bootstrap_proof_key_role(role)?;
+    validate_bfv_full_bootstrap_proof_key_profile_v1(key)?;
+    let payload = norito::to_bytes(key).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key encoding failed: {err}"
+        ))
+    })?;
+    encode_bfv_full_bootstrap_circuit_artifact_payload_v1(
+        params,
+        max_bootstrap_depth,
+        role,
+        &payload,
+    )
+}
+
+/// Decode and validate a governed prover/verifier key artifact.
+///
+/// # Errors
+/// Returns [`BfvError`] when the artifact envelope does not match the governed
+/// material, the role is not a proof-key role, or the typed proof key payload is
+/// malformed.
+pub fn decode_bfv_full_bootstrap_proof_key_artifact_v1(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    role: BfvFullBootstrapCircuitArtifactRoleV1,
+    bytes: &[u8],
+) -> Result<BfvFullBootstrapProofKeyV1, BfvError> {
+    validate_bfv_full_bootstrap_proof_key_role(role)?;
+    let label = full_bootstrap_artifact_label_for_role(role);
+    let expected_digest = full_bootstrap_material_digest_for_role(material, role);
+    let artifact = decode_full_bootstrap_artifact_payload(
+        params,
+        material,
+        label,
+        role,
+        bytes,
+        expected_digest,
+    )?;
+    let key = norito::decode_from_bytes::<BfvFullBootstrapProofKeyV1>(&artifact.payload).map_err(
+        |err| {
+            BfvError::InvalidParameters(format!(
+                "{label} payload must be a Norito-encoded BFV full-bootstrap proof key: {err}"
+            ))
+        },
+    )?;
+    validate_bfv_full_bootstrap_proof_key_v1(material, role, &key)?;
+    Ok(key)
+}
+
 /// Validate concrete full-bootstrap artifacts against governed commitments.
 ///
 /// This is the artifact companion to
@@ -5216,30 +5482,30 @@ pub fn validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
         &artifacts.sample_extraction_key,
     )?;
     decode_bfv_full_bootstrap_accumulator_artifact_v1(params, material, &artifacts.accumulator)?;
-    validate_full_bootstrap_artifact_bytes(
+    decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
         params,
         material,
-        "BFV full-bootstrap proof public-input schema artifact",
-        BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
         &artifacts.proof_public_input_schema,
-        &material.proof_public_input_schema_digest,
     )?;
-    validate_full_bootstrap_artifact_bytes(
+    let prover_key = decode_bfv_full_bootstrap_proof_key_artifact_v1(
         params,
         material,
-        "BFV full-bootstrap prover-key artifact",
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
         &artifacts.prover_key,
-        &material.prover_key_digest,
     )?;
-    validate_full_bootstrap_artifact_bytes(
+    let verifier_key = decode_bfv_full_bootstrap_proof_key_artifact_v1(
         params,
         material,
-        "BFV full-bootstrap verifier-key artifact",
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
         &artifacts.verifier_key,
-        &material.verifier_key_digest,
-    )
+    )?;
+    if prover_key.key_material == verifier_key.key_material {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap prover-key material must be distinct from verifier-key material"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Return a stable digest over concrete full-bootstrap artifacts.
@@ -9991,6 +10257,58 @@ fn validate_bfv_full_bootstrap_linear_transform_role(
     }
 }
 
+fn validate_bfv_full_bootstrap_proof_key_role(
+    role: BfvFullBootstrapCircuitArtifactRoleV1,
+) -> Result<(), BfvError> {
+    match role {
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey
+        | BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => Ok(()),
+        _ => Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap artifact role {role:?} is not a proof-key role"
+        ))),
+    }
+}
+
+fn validate_bfv_full_bootstrap_proof_key_profile_v1(
+    key: &BfvFullBootstrapProofKeyV1,
+) -> Result<(), BfvError> {
+    if key.backend != BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key backend `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1}`",
+            key.backend
+        )));
+    }
+    if key.key_format != BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key format `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1}`",
+            key.key_format
+        )));
+    }
+    if key.circuit_id != BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key circuit id `{}` does not match canonical `{BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1}`",
+            key.circuit_id
+        )));
+    }
+    validate_nonzero_material_digest(
+        "BFV full-bootstrap proof key public-input schema digest",
+        &key.public_input_schema_digest,
+    )?;
+    if key.key_material.is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap proof key material must not be empty".to_owned(),
+        ));
+    }
+    if key.key_material.len() > BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap proof key material length {} exceeds maximum {}",
+            key.key_material.len(),
+            BFV_FULL_BOOTSTRAP_PROOF_PROFILE_ARTIFACT_MAX_BYTES
+        )));
+    }
+    Ok(())
+}
+
 fn full_bootstrap_artifact_label_for_role(
     role: BfvFullBootstrapCircuitArtifactRoleV1,
 ) -> &'static str {
@@ -10046,25 +10364,6 @@ fn full_bootstrap_material_digest_for_role(
         BfvFullBootstrapCircuitArtifactRoleV1::ProverKey => &material.prover_key_digest,
         BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey => &material.verifier_key_digest,
     }
-}
-
-fn validate_full_bootstrap_artifact_bytes(
-    params: &BfvParameters,
-    material: &BfvFullBootstrapCircuitMaterialV1,
-    label: &str,
-    expected_role: BfvFullBootstrapCircuitArtifactRoleV1,
-    bytes: &[u8],
-    expected_digest: &Hash,
-) -> Result<(), BfvError> {
-    decode_full_bootstrap_artifact_payload(
-        params,
-        material,
-        label,
-        expected_role,
-        bytes,
-        expected_digest,
-    )
-    .map(|_| ())
 }
 
 fn decode_full_bootstrap_artifact_payload(
@@ -12504,6 +12803,34 @@ mod tests {
             .expect("encode sample full-bootstrap artifact payload")
     }
 
+    fn sample_full_bootstrap_proof_public_input_schema_artifact_payload(
+        params: &BfvParameters,
+    ) -> Vec<u8> {
+        encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+            params,
+            1,
+            &bfv_full_bootstrap_proof_public_input_schema_v1(),
+        )
+        .expect("encode sample full-bootstrap proof public-input schema artifact")
+    }
+
+    fn sample_full_bootstrap_proof_key_artifact_payload(
+        params: &BfvParameters,
+        role: BfvFullBootstrapCircuitArtifactRoleV1,
+        public_input_schema_digest: Hash,
+        key_material: &[u8],
+    ) -> Vec<u8> {
+        let key = BfvFullBootstrapProofKeyV1 {
+            backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
+            key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            public_input_schema_digest,
+            key_material: key_material.to_vec(),
+        };
+        encode_bfv_full_bootstrap_proof_key_artifact_v1(params, 1, role, &key)
+            .expect("encode sample full-bootstrap proof key artifact")
+    }
+
     fn sample_identity_full_bootstrap_linear_transform(
         params: &BfvParameters,
     ) -> BfvFullBootstrapLinearTransformV1 {
@@ -12540,7 +12867,7 @@ mod tests {
 
     fn sample_full_bootstrap_sample_extraction_artifact_payload(params: &BfvParameters) -> Vec<u8> {
         let sample_extraction = sample_full_bootstrap_sample_extraction(params);
-        encode_bfv_full_bootstrap_sample_extraction_artifact_v1(params, 1, &sample_extraction)
+        encode_bfv_full_bootstrap_sample_extraction_artifact_v1(params, 1, sample_extraction)
             .expect("encode sample full-bootstrap sample-extraction artifact")
     }
 
@@ -12577,6 +12904,9 @@ mod tests {
     ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
         let accumulator = sample_full_bootstrap_accumulator_artifact_payload(params);
         let accumulator_digest = Hash::new(&accumulator);
+        let proof_public_input_schema =
+            sample_full_bootstrap_proof_public_input_schema_artifact_payload(params);
+        let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
         BfvFullBootstrapCircuitArtifactBundleV1 {
             coefficient_to_slot_key: sample_full_bootstrap_linear_transform_artifact_payload(
                 params,
@@ -12592,19 +12922,17 @@ mod tests {
             ),
             sample_extraction_key: sample_full_bootstrap_sample_extraction_artifact_payload(params),
             accumulator,
-            proof_public_input_schema: sample_full_bootstrap_artifact_payload(
-                params,
-                BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
-                b"bfv-full-bootstrap-proof-schema",
-            ),
-            prover_key: sample_full_bootstrap_artifact_payload(
+            proof_public_input_schema,
+            prover_key: sample_full_bootstrap_proof_key_artifact_payload(
                 params,
                 BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                proof_public_input_schema_digest,
                 b"bfv-full-bootstrap-prover-key",
             ),
-            verifier_key: sample_full_bootstrap_artifact_payload(
+            verifier_key: sample_full_bootstrap_proof_key_artifact_payload(
                 params,
                 BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                proof_public_input_schema_digest,
                 b"bfv-full-bootstrap-verifier-key",
             ),
         }
@@ -16555,6 +16883,185 @@ mod tests {
     }
 
     #[test]
+    fn full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let schema = bfv_full_bootstrap_proof_public_input_schema_v1();
+        validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)
+            .expect("canonical proof public-input schema is valid");
+        let schema_artifact =
+            encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(&params, 1, &schema)
+                .expect("encode proof public-input schema artifact");
+        let schema_digest = Hash::new(&schema_artifact);
+        let material = BfvFullBootstrapCircuitMaterialV1 {
+            proof_public_input_schema_digest: schema_digest,
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        let decoded_schema = decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+            &params,
+            &material,
+            &schema_artifact,
+        )
+        .expect("decode governed proof public-input schema artifact");
+        assert_eq!(decoded_schema, schema);
+
+        let prover_key = BfvFullBootstrapProofKeyV1 {
+            backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
+            key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            public_input_schema_digest: schema_digest,
+            key_material: b"bfv-full-bootstrap-proof-profile-prover-key".to_vec(),
+        };
+        validate_bfv_full_bootstrap_proof_key_v1(
+            &material,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &prover_key,
+        )
+        .expect("canonical prover key metadata is valid");
+        let prover_artifact = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &prover_key,
+        )
+        .expect("encode prover-key artifact");
+        let prover_material = BfvFullBootstrapCircuitMaterialV1 {
+            proof_public_input_schema_digest: schema_digest,
+            prover_key_digest: Hash::new(&prover_artifact),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        let decoded_prover_key = decode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            &prover_material,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &prover_artifact,
+        )
+        .expect("decode governed prover-key artifact");
+        assert_eq!(decoded_prover_key, prover_key);
+
+        let opaque_schema_payload = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
+            b"opaque-proof-public-input-schema",
+        );
+        let opaque_schema_material = BfvFullBootstrapCircuitMaterialV1 {
+            proof_public_input_schema_digest: Hash::new(&opaque_schema_payload),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+                &params,
+                &opaque_schema_material,
+                &opaque_schema_payload,
+            ),
+            "proof public-input schema",
+            "proof public-input schema artifacts must carry typed schema payloads",
+        );
+
+        let mut wrong_domain_schema = schema.clone();
+        wrong_domain_schema.statement_digest_domain = b"wrong-full-bootstrap-domain".to_vec();
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(&wrong_domain_schema),
+            "statement digest domain",
+            "proof public-input schemas must bind the execution statement domain",
+        );
+
+        let mut missing_bounded_mode = schema;
+        missing_bounded_mode.supports_bounded_noise = false;
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_public_input_schema_v1(&missing_bounded_mode),
+            "bounded-noise",
+            "proof public-input schemas must cover bounded-noise claims",
+        );
+
+        let opaque_prover_payload = sample_full_bootstrap_artifact_payload(
+            &params,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            b"opaque-proof-profile-prover-key",
+        );
+        let opaque_prover_material = BfvFullBootstrapCircuitMaterialV1 {
+            proof_public_input_schema_digest: schema_digest,
+            prover_key_digest: Hash::new(&opaque_prover_payload),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            decode_bfv_full_bootstrap_proof_key_artifact_v1(
+                &params,
+                &opaque_prover_material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &opaque_prover_payload,
+            ),
+            "proof key",
+            "proof key artifacts must carry typed key payloads",
+        );
+
+        let wrong_backend_key = BfvFullBootstrapProofKeyV1 {
+            backend: "stark/fri/dev-only".to_owned(),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &wrong_backend_key,
+            ),
+            "backend",
+            "proof keys must bind the canonical backend",
+        );
+
+        let wrong_schema_digest_key = BfvFullBootstrapProofKeyV1 {
+            public_input_schema_digest: Hash::new(b"wrong-proof-public-input-schema"),
+            ..prover_key.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                &wrong_schema_digest_key,
+            ),
+            "public-input schema digest",
+            "proof keys must bind the governed public-input schema digest",
+        );
+
+        let empty_key_material = BfvFullBootstrapProofKeyV1 {
+            key_material: Vec::new(),
+            ..prover_key
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_proof_key_v1(
+                &material,
+                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &empty_key_material,
+            ),
+            "must not be empty",
+            "proof keys must reject empty backend key material",
+        );
+
+        let mut duplicate_key_material_artifacts = sample_full_bootstrap_circuit_artifacts(&params);
+        let duplicate_schema_digest =
+            Hash::new(&duplicate_key_material_artifacts.proof_public_input_schema);
+        duplicate_key_material_artifacts.verifier_key =
+            sample_full_bootstrap_proof_key_artifact_payload(
+                &params,
+                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                duplicate_schema_digest,
+                b"bfv-full-bootstrap-prover-key",
+            );
+        let duplicate_key_material = BfvFullBootstrapCircuitMaterialV1 {
+            verifier_key_digest: Hash::new(&duplicate_key_material_artifacts.verifier_key),
+            ..sample_full_bootstrap_circuit_material(&params)
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(
+                &params,
+                &duplicate_key_material,
+                &duplicate_key_material_artifacts,
+            ),
+            "distinct from verifier-key",
+            "proof profile must reject identical prover/verifier key material",
+        );
+    }
+
+    #[test]
     fn full_bootstrap_linear_transform_artifacts_are_typed_and_executable() {
         let params = ram_lfe_bfv_parameters_v1();
         let (secret_key, public_key, _relinearization_key) =
@@ -16836,10 +17343,10 @@ mod tests {
     fn full_bootstrap_sample_extraction_artifact_is_typed_and_profile_bound() {
         let params = ram_lfe_bfv_parameters_v1();
         let sample_extraction = sample_full_bootstrap_sample_extraction(&params);
-        validate_bfv_full_bootstrap_sample_extraction_v1(&params, &sample_extraction)
+        validate_bfv_full_bootstrap_sample_extraction_v1(&params, sample_extraction)
             .expect("sample extraction is valid");
         let artifact =
-            encode_bfv_full_bootstrap_sample_extraction_artifact_v1(&params, 1, &sample_extraction)
+            encode_bfv_full_bootstrap_sample_extraction_artifact_v1(&params, 1, sample_extraction)
                 .expect("encode sample-extraction artifact");
         let material = BfvFullBootstrapCircuitMaterialV1 {
             sample_extraction_key_digest: Hash::new(&artifact),
@@ -16871,30 +17378,30 @@ mod tests {
 
         let wrong_slot_count = BfvFullBootstrapSampleExtractionV1 {
             source_slot_count: params.polynomial_degree.saturating_sub(1),
-            ..sample_extraction.clone()
+            ..sample_extraction
         };
         assert_error_contains(
-            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &wrong_slot_count),
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, wrong_slot_count),
             "source_slot_count",
             "sample extraction must bind the source packed slot count",
         );
 
         let out_of_range_coefficient = BfvFullBootstrapSampleExtractionV1 {
             extracted_coefficient_index: params.polynomial_degree,
-            ..sample_extraction.clone()
+            ..sample_extraction
         };
         assert_error_contains(
-            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &out_of_range_coefficient),
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, out_of_range_coefficient),
             "extracted_coefficient_index",
             "sample extraction must reject out-of-range coefficient indices",
         );
 
         let wrong_source_components = BfvFullBootstrapSampleExtractionV1 {
             source_ciphertext_component_count: BFV_FULL_BOOTSTRAP_CIPHERTEXT_COMPONENT_COUNT_V1 + 1,
-            ..sample_extraction.clone()
+            ..sample_extraction
         };
         assert_error_contains(
-            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &wrong_source_components),
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, wrong_source_components),
             "source_ciphertext_component_count",
             "sample extraction must reject incompatible source ciphertext shapes",
         );
@@ -16904,7 +17411,7 @@ mod tests {
             ..sample_extraction
         };
         assert_error_contains(
-            validate_bfv_full_bootstrap_sample_extraction_v1(&params, &wrong_output_components),
+            validate_bfv_full_bootstrap_sample_extraction_v1(&params, wrong_output_components),
             "output_ciphertext_component_count",
             "sample extraction must reject incompatible output ciphertext shapes",
         );

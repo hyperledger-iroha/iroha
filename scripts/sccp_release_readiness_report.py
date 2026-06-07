@@ -200,9 +200,6 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         "pytests/scripts/sccp_solana_live_evidence_test.py",
         "pytests/scripts/sccp_solana_source_state_evidence_test.py",
-        "pytests/scripts/sccp_substrate_destination_evidence_test.py",
-        "pytests/scripts/sccp_substrate_live_evidence_test.py",
-        "pytests/scripts/sccp_substrate_source_evidence_test.py",
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         "pytests/scripts/sccp_ton_live_evidence_test.py",
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
@@ -749,8 +746,6 @@ def _helper_text(helpers: tuple[str, ...]) -> str:
     return ", ".join(helpers)
 
 
-# Substrate/Polkadot-family networks are outside the current SCCP launch scope.
-# Keep those helper inventories out of public submission surfaces until support is re-opened.
 USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
     {
         "lanes": "eth,bsc",

@@ -3978,7 +3978,6 @@ fn sccp_chain_family_key(family: iroha_sccp::SccpTransparentChainFamilyV1) -> &'
         iroha_sccp::SccpTransparentChainFamilyV1::Solana => "solana",
         iroha_sccp::SccpTransparentChainFamilyV1::Ton => "ton",
         iroha_sccp::SccpTransparentChainFamilyV1::Tron => "tron",
-        iroha_sccp::SccpTransparentChainFamilyV1::Substrate => "substrate",
     }
 }
 
@@ -7179,7 +7178,7 @@ fn sccp_message_backend_descriptor(payload: &SccpPayloadV1) -> Result<(String, [
             payload.target_domain
         }
     };
-    if !iroha_sccp::is_supported_domain(counterparty_domain) {
+    if iroha_sccp::sccp_chain_key_for_domain(counterparty_domain).is_none() {
         return Err(conversion_error(format!(
             "unsupported SCCP domain for message backend selection: {counterparty_domain}"
         )));
@@ -7841,14 +7840,6 @@ fn sccp_configured_destination_rollout_for_domain(
         ton_last_transaction_hash: configured.ton_last_transaction_hash.clone(),
         ton_verifier_code_boc_root_hash: configured.ton_verifier_code_boc_root_hash.clone(),
         ton_verifier_code_boc: configured.ton_verifier_code_boc.clone(),
-        substrate_finalized_head: configured.substrate_finalized_head.clone(),
-        substrate_runtime_spec_name: configured.substrate_runtime_spec_name.clone(),
-        substrate_runtime_spec_version: configured.substrate_runtime_spec_version.clone(),
-        substrate_runtime_transaction_version: configured
-            .substrate_runtime_transaction_version
-            .clone(),
-        substrate_runtime_code_hash: configured.substrate_runtime_code_hash.clone(),
-        substrate_runtime_code_base64: configured.substrate_runtime_code_base64.clone(),
         blockers: configured.blockers.clone(),
     };
     if !iroha_sccp::sccp_destination_rollout_is_production_ready(domain, &rollout) {
@@ -8788,10 +8779,10 @@ mod sccp_message_backend_tests {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"ton:sora:xor".to_vec(),
         });
-        let outbound_sora2 = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+        let outbound_unknown = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            dest_domain: 0xFFFF_FFFE,
             nonce: 3,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
@@ -8800,9 +8791,9 @@ mod sccp_message_backend_tests {
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
             recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: b"alice@sora2".to_vec(),
+            recipient: b"alice@unsupported".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:sora2:xor".to_vec(),
+            route_id: b"nexus:unknown:xor".to_vec(),
         });
 
         let (outbound_eth_backend, _, outbound_eth_domain) =
@@ -8815,13 +8806,11 @@ mod sccp_message_backend_tests {
         assert_eq!(inbound_ton_backend, "sccp/stark-fri-v1/ton");
         assert_eq!(inbound_ton_domain, iroha_sccp::SCCP_DOMAIN_TON);
 
-        let err = sccp_message_backend_descriptor(&outbound_sora2)
-            .expect_err("SORA2 message must not select a public launch backend");
+        let err = sccp_message_backend_descriptor(&outbound_unknown)
+            .expect_err("unknown message domain must not select a public launch backend");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("message backend selection is not supported")
-                && message.contains("domain 8")
-                && message
-                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
+            message.contains("unsupported SCCP domain for message backend selection")
+                && message.contains("4294967294")
         }));
     }
 
@@ -9170,19 +9159,6 @@ mod sccp_message_backend_tests {
                 )
                 .expect("TRON SCCP source verifier material")
             }
-            iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
-            | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
-            | iroha_sccp::SCCP_DOMAIN_SORA2 => {
-                iroha_sccp::sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                    domain,
-                    [seed; 32],
-                    [seed + 1; 32],
-                    [seed + 2; 32],
-                    [seed + 4; 32],
-                    [seed + 3; 32],
-                )
-                .expect("Substrate-family SCCP source verifier material")
-            }
             _ => panic!("unsupported SCCP test domain {domain}"),
         }
     }
@@ -9273,19 +9249,6 @@ mod sccp_message_backend_tests {
                     test_sccp_hex32_string(seed + 6),
                 )
                 .expect("TRON SCCP destination rollout")
-            }
-            iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
-            | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
-            | iroha_sccp::SCCP_DOMAIN_SORA2 => {
-                iroha_sccp::sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-                    domain,
-                    iroha_sccp::SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
-                    [seed + 15; 32],
-                    1_000 + domain,
-                    7 + domain,
-                    vec![seed + 11; 64],
-                )
-                .expect("Substrate-family SCCP destination rollout")
             }
             _ => panic!("unsupported SCCP test domain {domain}"),
         }
@@ -9415,21 +9378,6 @@ mod sccp_message_backend_tests {
                 true,
             )
             .expect("TRON route canary evidence");
-        }
-        if matches!(
-            domain,
-            iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
-                | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
-                | iroha_sccp::SCCP_DOMAIN_SORA2
-        ) {
-            return iroha_sccp::sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
-                allowlist,
-                rollout,
-                destination_binding_hash,
-                iroha_sccp::sccp_source_verifier_material_hash(material),
-                iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
-            )
-            .expect("Substrate route canary evidence");
         }
         iroha_sccp::sccp_route_allowlist_with_lane_canary_evidence_v1(
             allowlist,
@@ -9591,14 +9539,6 @@ mod sccp_message_backend_tests {
             ton_last_transaction_hash: rollout.ton_last_transaction_hash.clone(),
             ton_verifier_code_boc_root_hash: rollout.ton_verifier_code_boc_root_hash.clone(),
             ton_verifier_code_boc: rollout.ton_verifier_code_boc.clone(),
-            substrate_finalized_head: rollout.substrate_finalized_head.clone(),
-            substrate_runtime_spec_name: rollout.substrate_runtime_spec_name.clone(),
-            substrate_runtime_spec_version: rollout.substrate_runtime_spec_version.clone(),
-            substrate_runtime_transaction_version: rollout
-                .substrate_runtime_transaction_version
-                .clone(),
-            substrate_runtime_code_hash: rollout.substrate_runtime_code_hash.clone(),
-            substrate_runtime_code_base64: rollout.substrate_runtime_code_base64.clone(),
             blockers: rollout.blockers.clone(),
         }
     }
@@ -9948,44 +9888,6 @@ mod sccp_message_backend_tests {
             version: 1,
             kind: SccpHubMessageKind::Transfer,
             target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            message_id: iroha_sccp::sccp_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
-                &payload,
-            )),
-        };
-        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
-        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
-        NexusSccpMessageProofV1 {
-            version: 1,
-            commitment_root,
-            commitment,
-            merkle_proof,
-            payload,
-            finality_proof: sample_sccp_finality_proof_bytes(commitment_root),
-        }
-    }
-
-    fn sample_sora2_message_bundle(nonce: u64) -> NexusSccpMessageProofV1 {
-        let payload = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
-            nonce,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
-            amount: 17,
-            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: b"sora2:alice".to_vec(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:sora2:xor".to_vec(),
-        });
-        let commitment = SccpHubCommitmentV1 {
-            version: 1,
-            kind: SccpHubMessageKind::Transfer,
-            target_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
             message_id: iroha_sccp::sccp_message_id(&payload),
             payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
                 &payload,
@@ -10354,35 +10256,6 @@ mod sccp_message_backend_tests {
             conversion_message(&err)
                 .is_some_and(|message| message.contains("unsupported SCCP domain"))
         );
-
-        let mut payload = valid;
-        payload.source_domain = iroha_sccp::SCCP_DOMAIN_SORA2;
-        payload.dest_domain = iroha_sccp::SCCP_DOMAIN_SORA;
-        let err = sccp_counterparty_for_burn_payload(&payload)
-            .expect_err("SORA2 burn must not select a public launch backend");
-        assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("burn proof backend selection is not supported")
-                && message.contains("domain 8")
-                && message
-                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-        }));
-    }
-
-    #[test]
-    fn bridge_proof_from_sccp_burn_bundle_rejects_unsupported_launch_domain() {
-        let bundle = sample_burn_bundle_for_domains(
-            42,
-            iroha_sccp::SCCP_DOMAIN_SORA2,
-            iroha_sccp::SCCP_DOMAIN_SORA,
-        );
-        let err = bridge_proof_from_sccp_burn_bundle(&bundle)
-            .expect_err("SORA2 burn bundle must not convert to a public bridge proof");
-        assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("burn proof consumption is not supported")
-                && message.contains("domain 8")
-                && message
-                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-        }));
     }
 
     #[test]
@@ -11393,100 +11266,6 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn configured_substrate_lane_remains_out_of_launch_scope_with_complete_runtime_fields() {
-        let zk = test_configured_sccp_zk_config_for_domains([iroha_sccp::SCCP_DOMAIN_SORA2]);
-        let substrate_rollout = zk
-            .sccp_destination_rollouts
-            .iter()
-            .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
-            .expect("configured SORA2 rollout");
-        assert!(substrate_rollout.substrate_finalized_head.is_some());
-        assert_eq!(
-            substrate_rollout.substrate_runtime_spec_name.as_deref(),
-            Some("sora2")
-        );
-        assert!(substrate_rollout.substrate_runtime_code_base64.is_some());
-
-        let err = match sccp_configured_source_lane_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_SORA2) {
-            Ok(_) => panic!("Substrate-family lanes must remain outside the launch scope"),
-            Err(err) => err,
-        };
-        assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-        }));
-    }
-
-    #[test]
-    fn configured_substrate_lane_rejects_missing_finalized_runtime_fields_before_scope_blocker() {
-        let mut zk = test_configured_sccp_zk_config_for_domains([iroha_sccp::SCCP_DOMAIN_SORA2]);
-
-        let substrate_rollout = zk
-            .sccp_destination_rollouts
-            .iter_mut()
-            .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
-            .expect("configured SORA2 diagnostic rollout");
-        substrate_rollout.substrate_finalized_head = None;
-        substrate_rollout.substrate_runtime_code_base64 = None;
-
-        let err = match sccp_configured_source_lane_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_SORA2) {
-            Ok(_) => panic!("Substrate route canary must preserve finalized runtime evidence"),
-            Err(err) => err,
-        };
-        let message = conversion_message(&err).expect("configured lane conversion error");
-        assert!(message.contains("SCCP destination rollout for domain 8 is not production-ready"));
-        assert!(
-            !message.contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-        );
-    }
-
-    #[test]
-    fn configured_all_lanes_launch_ignores_unsupported_substrate_diagnostics() {
-        let mut zk = test_configured_sccp_all_lanes_zk_config();
-        let material =
-            test_sccp_source_verifier_material_for_domain(iroha_sccp::SCCP_DOMAIN_SORA2, 0x90);
-        let deployment = test_sccp_source_adapter_deployment_for_domain(
-            iroha_sccp::SCCP_DOMAIN_SORA2,
-            &material,
-            0x90,
-        );
-        let rollout = test_sccp_destination_rollout_for_domain(iroha_sccp::SCCP_DOMAIN_SORA2, 0x90);
-        let allowlist = test_sccp_route_allowlist_for_domain(
-            iroha_sccp::SCCP_DOMAIN_SORA2,
-            &material,
-            &deployment,
-            &rollout,
-        );
-        zk.sccp_source_verifier_materials
-            .push(test_actual_sccp_source_verifier_material(&material));
-        zk.sccp_source_adapter_engine_deployments
-            .push(test_actual_sccp_source_adapter_deployment(
-                &material,
-                &deployment,
-            ));
-        zk.sccp_destination_rollouts
-            .push(test_actual_sccp_destination_rollout(&rollout));
-        zk.sccp_route_allowlists
-            .push(test_actual_sccp_route_allowlist(&allowlist));
-
-        let substrate_rollout = zk
-            .sccp_destination_rollouts
-            .iter_mut()
-            .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
-            .expect("configured SORA2 diagnostic rollout");
-        substrate_rollout.substrate_finalized_head = None;
-        substrate_rollout.substrate_runtime_code_base64 = None;
-
-        sccp_configured_all_lanes_launch_ready(&zk)
-            .expect("unsupported Substrate diagnostic material must not block all-lanes launch");
-
-        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_SORA2)
-            .expect_err("unsupported Substrate lane must fail closed when selected directly");
-        assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-        }));
-    }
-
-    #[test]
     fn configured_all_lanes_launch_rejects_tron_without_transaction_canary_fields() {
         let mut zk = test_configured_sccp_all_lanes_zk_config();
         let tron_route = zk
@@ -12211,22 +11990,16 @@ mod sccp_message_backend_tests {
             .into_iter()
             .filter(|domain| !iroha_sccp::sccp_domain_in_supported_launch_scope_v1(*domain))
             .collect::<Vec<_>>();
-        assert!(!unsupported_public_domains.is_empty());
+        assert!(
+            unsupported_public_domains.is_empty(),
+            "public core remote domains must be limited to the supported launch scope"
+        );
         assert!(unsupported_public_domains.iter().all(|domain| {
             !snapshot
                 .counterparties
                 .iter()
                 .any(|entry| entry.domain == *domain)
         }));
-        assert!(
-            snapshot
-                .counterparties
-                .iter()
-                .all(|entry| entry.chain != "substrate"
-                    && entry.chain != "sora-kusama"
-                    && entry.chain != "sora-polkadot"
-                    && entry.chain != "sora2")
-        );
         for counterparty in &snapshot.counterparties {
             let manifest = iroha_sccp::sccp_proof_manifest_for_domain(counterparty.domain)
                 .expect("counterparty manifest");
@@ -12309,14 +12082,6 @@ mod sccp_message_backend_tests {
                 "public proof manifests must match current launch scope for domain {domain}"
             );
         }
-        assert!(
-            snapshot
-                .manifests
-                .iter()
-                .all(|manifest| manifest.chain != "sora-kusama"
-                    && manifest.chain != "sora-polkadot"
-                    && manifest.chain != "sora2")
-        );
         assert!(snapshot.routes.is_empty());
 
         let eth = snapshot
@@ -12540,33 +12305,6 @@ mod sccp_message_backend_tests {
             routes[0].bsc_verifier_address.as_deref(),
             Some("0x4444444444444444444444444444444444444444")
         );
-    }
-
-    #[test]
-    fn configured_substrate_route_manifests_remain_private_diagnostics() {
-        let mut zk = iroha_core::state::default_zk_config();
-        zk.sccp_route_manifests.clear();
-        zk.sccp_allow_unready_transparent_proofs = true;
-
-        let mut substrate_route =
-            sample_sccp_route_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_SORA2);
-        substrate_route.production_ready = true;
-        substrate_route.disabled_reason = None;
-        zk.sccp_route_manifests.push(substrate_route);
-        zk.sccp_route_manifests
-            .push(sample_sccp_route_manifest_for_domain(
-                iroha_sccp::SCCP_DOMAIN_BSC,
-            ));
-
-        let routes = sccp_route_manifests_from_zk_config(&zk);
-
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].counterparty_domain, iroha_sccp::SCCP_DOMAIN_BSC);
-        assert!(routes.iter().all(|route| {
-            route.counterparty_domain != iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
-                && route.counterparty_domain != iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
-                && route.counterparty_domain != iroha_sccp::SCCP_DOMAIN_SORA2
-        }));
     }
 
     #[test]
@@ -12836,50 +12574,6 @@ mod sccp_message_backend_tests {
         assert!(conversion_message(&err).is_some_and(|message| {
             message.contains("failed structural verification")
                 || message.contains("source-chain proof envelope")
-        }));
-    }
-
-    #[test]
-    fn proof_outputs_reject_unsupported_substrate_when_unready_allowed() {
-        let mut bundle = sample_sora2_message_bundle(55);
-        bundle.finality_proof = sample_signed_sccp_finality_proof_bytes(bundle.commitment_root);
-        let signer = KeyPair::from_seed(
-            b"iroha:torii:routing:test:sora2-proof-scope".to_vec(),
-            Algorithm::Secp256k1,
-        );
-
-        let artifact_err = sccp_message_artifact_for_destination_material(
-            &bundle, &signer, None, None, true, None,
-        )
-        .expect_err("allow-unready artifact generation must not expose unsupported SORA2");
-        assert!(conversion_message(&artifact_err).is_some_and(|message| {
-            message.contains("proof artifact generation is not supported")
-                && message.contains("domain 8")
-                && message
-                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-        }));
-
-        let job_err = sccp_message_proof_job_for_destination_material(
-            &bundle, &signer, None, None, true, None,
-        )
-        .expect_err("allow-unready proof job generation must not expose unsupported SORA2");
-        assert!(conversion_message(&job_err).is_some_and(|message| {
-            message.contains("proof job generation is not supported")
-                && message.contains("domain 8")
-                && message
-                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-        }));
-
-        let bridge_err =
-            bridge_proof_from_sccp_message_bundle(&bundle, &signer, None, None, true, None)
-                .expect_err(
-                    "allow-unready bridge proof conversion must not expose unsupported SORA2",
-                );
-        assert!(conversion_message(&bridge_err).is_some_and(|message| {
-            message.contains("transparent proof consumption is not supported")
-                && message.contains("domain 8")
-                && message
-                    .contains(iroha_sccp::SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
         }));
     }
 

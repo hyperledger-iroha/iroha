@@ -9421,6 +9421,64 @@ mod tests {
         }
     }
 
+    struct BackgroundBudgetEvictionCase {
+        _temp_dir: TempDir,
+        kura: Arc<Kura>,
+        retry_block: Arc<SignedBlock>,
+        evictable_body_len: u64,
+    }
+
+    fn background_budget_eviction_case() -> BackgroundBudgetEvictionCase {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (mut kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+
+        let mut blocks = DummyBlocks::new();
+        let block1 = blocks.next();
+        let block2 = blocks.next();
+        let block3 = blocks.next();
+        let retry_block = blocks.next();
+
+        kura.store_block(Arc::clone(&block1)).expect("store block1");
+        kura.store_block(Arc::clone(&block2)).expect("store block2");
+        kura.store_block(Arc::clone(&block3)).expect("store block3");
+
+        let evictable_body_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block2 index").length
+        };
+        advertise_required_replicas(&kura, nonzero!(2_usize));
+
+        let used = kura.kura_disk_usage_bytes().expect("usage after block3");
+        let retry_required = Kura::block_required_bytes(&retry_block).expect("retry block bytes");
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = used
+            .saturating_sub(evictable_body_len)
+            .saturating_add(retry_required);
+
+        BackgroundBudgetEvictionCase {
+            _temp_dir: temp_dir,
+            kura,
+            retry_block,
+            evictable_body_len,
+        }
+    }
+
     impl PartialEq for BlockIndex {
         fn eq(&self, other: &Self) -> bool {
             self.start == other.start && self.length == other.length
@@ -10397,47 +10455,10 @@ mod tests {
 
     #[test]
     fn store_block_schedules_background_eviction_when_budget_exceeded() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: FSYNC_INTERVAL,
-            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
-        };
-        let (mut kura, _) =
-            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
-
-        let mut blocks = DummyBlocks::new();
-        let block1 = blocks.next();
-        let block2 = blocks.next();
-        let block3 = blocks.next();
-        let block4 = blocks.next();
-
-        kura.store_block(Arc::clone(&block1)).expect("store block1");
-        kura.store_block(Arc::clone(&block2)).expect("store block2");
-        kura.store_block(Arc::clone(&block3)).expect("store block3");
-
-        let block2_len = {
-            let mut store = kura.block_store.lock();
-            store.read_block_index(1).expect("block2 index").length
-        };
-        advertise_required_replicas(&kura, nonzero!(2_usize));
-
-        let used = kura.kura_disk_usage_bytes().expect("usage after block3");
-        let block4_required = Kura::block_required_bytes(&block4).expect("block4 bytes");
-        Arc::get_mut(&mut kura)
-            .expect("exclusive kura handle")
-            .max_disk_usage_bytes = used
-            .saturating_sub(block2_len)
-            .saturating_add(block4_required);
+        let case = background_budget_eviction_case();
+        let kura = case.kura;
+        let block4 = case.retry_block;
+        let block2_len = case.evictable_body_len;
 
         let err = kura
             .store_block(Arc::clone(&block4))
@@ -10500,6 +10521,65 @@ mod tests {
             kura.get_block(nonzero!(2_usize)).is_some(),
             "DA-sidecar-backed body should remain locally readable"
         );
+    }
+
+    #[test]
+    fn kura_background_eviction_retry_latency_threshold() {
+        const BACKGROUND_EVICTION_RETRY_THRESHOLD: Duration = Duration::from_secs(2);
+
+        let case = background_budget_eviction_case();
+        let kura = case.kura;
+        let block4 = case.retry_block;
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let shutdown_signal = ShutdownSignal::new();
+        let _handle = {
+            let _rt_guard = rt.enter();
+            Kura::start(Arc::clone(&kura), shutdown_signal.clone())
+        };
+
+        let started_at = Instant::now();
+        let err = kura
+            .store_block(Arc::clone(&block4))
+            .expect_err("over-budget store should fail fast before maintenance");
+        assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+
+        let deadline = started_at + BACKGROUND_EVICTION_RETRY_THRESHOLD;
+        loop {
+            let pending = kura.pending_budget_eviction_bytes.load(Ordering::Acquire);
+            let (index, da_path) = {
+                let mut store = kura.block_store.lock();
+                (
+                    store.read_block_index(1).expect("block2 index"),
+                    store.da_block_path(2),
+                )
+            };
+            if pending == 0 && index.is_evicted() && da_path.exists() {
+                break;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "background Kura budget eviction did not complete within {:?}",
+                BACKGROUND_EVICTION_RETRY_THRESHOLD
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        kura.store_block(Arc::clone(&block4))
+            .expect("retry should store block4 after writer maintenance");
+        wait_for_block_hash(&kura, 4, block4.hash());
+
+        let elapsed = started_at.elapsed();
+        assert!(
+            elapsed <= BACKGROUND_EVICTION_RETRY_THRESHOLD,
+            "background Kura budget eviction plus retry took {elapsed:?}, threshold {:?}",
+            BACKGROUND_EVICTION_RETRY_THRESHOLD
+        );
+        assert!(
+            kura.get_block(nonzero!(2_usize)).is_some(),
+            "evicted body should remain readable through the DA sidecar"
+        );
+        shutdown_signal.send();
     }
 
     #[test]

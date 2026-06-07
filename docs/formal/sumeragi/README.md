@@ -7794,6 +7794,7 @@ Invariants:
 - `CommitViewMatchesFinality`
 - `CommitViewDoesNotLeadCurrentView`
 - `GstElapsedGateMatchesPreGst`
+- `CommittedPreGstOnlyEnablesGstElapsed`
 - `TimeoutTickGateMatchesStalledProgress`
 - `ByzantineCommitVoteDoesNotBlockTimeoutStall`
 - `ViewEvidenceMatchesActiveView`
@@ -8742,6 +8743,20 @@ Temporal properties:
 - `CommittedOnlyGstObservationCanChange` proves that after finality all
   consensus/progress/fault actions are disabled, and any remaining post-finality
   state change is exactly `GstElapsed` observing GST.
+- `CommittedPreGstOnlyEnablesGstElapsed` proves that a committed state before
+  GST enables the `GstElapsed` observation gate while every protocol, RBC,
+  timeout, fault, Byzantine-commit, and post-GST progress gate remains disabled.
+- `CommittedPreGstOnlyGstElapsedCanMove` proves that the only real
+  post-finality movement before GST is the `GstElapsed` observation step, and
+  that this step preserves the complete finality/certificate/RBC stack while
+  reaching the committed+GST terminal state with every action disabled.
+- `CommittedPreGstNextOnlyGstElapsed` proves that the `Next` relation itself
+  is exactly the `GstElapsed` action in committed pre-GST states, and that any
+  such non-stuttering step reaches committed+GST terminal quiescence.
+- `CommittedPreGstSpecStepStuttersOrObservesGst` proves that the
+  stuttering-closed `[Next]_vars` relation from committed pre-GST states either
+  stutters while preserving the only-GST gate state or observes GST and reaches
+  committed+GST terminal quiescence.
 - `CommittedGstStateNeverChanges` proves that once finality is reached and GST
   has already been observed, every model variable is stable across real or
   stuttering steps.
@@ -9566,6 +9581,58 @@ Temporal properties:
   delivered-state finality satisfies the certified source-stack classifiers for
   finality-latch change, exact source effects, and quorum gates, while ruling
   out an RBC deliver source for this already-delivered path.
+- `RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack` proves that
+  delivered-state finality installs the complete post-state finality certificate
+  stack: finality-stack presence/completeness, committed-phase matching,
+  commit-certificate matching, commit-view matching, and live commit-gate
+  evidence matching.
+- `RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry` proves that
+  delivered-state finality follows the complete committed-phase entry bridge,
+  including finality-latch coupling, certified finality stack entry, exact
+  source effects, current-view commitment, GST preservation, and post-entry
+  delivery completion.
+- `RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange` proves that
+  delivered-state finality installs durable commit artifacts through the
+  certified finality stack, preserves GST, commits the current view, and leaves
+  only the explicit `GstElapsed` gate after finality.
+- `RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts` proves that
+  delivered-state finality changes the abstract finality latch and durable
+  commit artifacts together, with artifact installation restricted to honest or
+  Byzantine commit-vote sources rather than RBC delivery.
+- `RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses` proves that
+  delivered-state finality records exact durable commit-vote witnesses: empty
+  pre-finality artifacts become post-state vote/stake counters for the current
+  view, sourced only from honest or Byzantine commit-vote finality and never
+  from RBC delivery.
+- `RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence` proves that
+  delivered-state finality preserves already-delivered RBC evidence while the
+  live commit gate crosses: READY quorum, complete chunks, header, and digest
+  evidence are stable before and after the commit-vote finality step.
+- `RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence` proves that
+  delivered-state finality enters `Committed` without carrying a NewView
+  handoff and without mutating prepare or view evidence for the current view.
+- `RbcDeliveredFinalityAlwaysHasExactProtocolFrame` proves the full
+  delivered-state finality frame: GST, active view, prepare/view handoff
+  evidence, and delivered RBC evidence are preserved while exact commit-vote
+  witnesses and post-commit disabled-action gates are installed.
+- `RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame` proves that
+  delivered-state finality is exactly one commit-vote action and not proposal,
+  prepare, timeout, NewView, RBC, Byzantine-fault, or GST observation work.
+- `RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants` proves that
+  delivered-state finality installs the committed post-state safety bundle:
+  finality/certificate/live-gate equivalence, RBC evidence, current-view
+  binding, cleared NewView handoff, and disabled progress gates.
+- `RbcDeliveredFinalityAlwaysSplitsPostStateGate` proves the exact
+  delivered-state finality post-state gate split: pre-GST finality leaves only
+  `GstElapsed` enabled, while post-GST finality leaves the committed terminal
+  state with no enabled actions.
+- `RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed` proves the
+  pre-GST branch of delivered-state finality explicitly: the post-state is
+  committed, keeps GST unobserved, disables all progress and fault gates, and
+  leaves only `GstElapsed` enabled.
+- `RbcDeliveredFinalityPostGstPostStateIsTerminal` proves the post-GST branch
+  explicitly: delivered-state finality reaches committed+GST terminal
+  quiescence with every action gate disabled.
 - `RbcDeliveredNeverEnablesRbcProgress` proves that a delivered RBC session
   keeps INIT, CHUNK, READY, DELIVER, and Byzantine RBC-fault gates closed, so
   delivered RBC evidence cannot be reopened by RBC-side progress.

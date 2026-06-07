@@ -39,7 +39,6 @@ consistente.
 ## Grupo NCC (Servicios de criptografía APAC)
 
 - Compromisos documentados: exámenes de código gm/T (SM) para pago regional
-  proveedores de redes y HSM; revisiones anteriores de Rust para Parity Substrate, Polkadot,
   y componentes de Libra.
 - Fortalezas: banco grande de APAC con informes bilingües, capacidad de combinar
   Verificaciones de procesos de estilo de cumplimiento con revisión profunda del código.
@@ -59,7 +58,6 @@ consistente.
 
 ## Seguridad de SlowMist (Chengdu)
 
-- Compromisos documentados: revisiones de seguridad de Substrate/Polkadot Rust, incluidas
   Horquillas Guomi para operadores chinos; evaluaciones de rutina de la billetera SM2/SM3/SM4
   y código puente utilizado por los intercambios.
 - Fortalezas: práctica de auditoría centrada en blockchain, respuesta integrada a incidentes,

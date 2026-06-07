@@ -333,9 +333,6 @@ phase_evidence_scripts() {
     pytests/scripts/sccp_solana_destination_evidence_test.py
     pytests/scripts/sccp_solana_live_evidence_test.py
     pytests/scripts/sccp_solana_source_state_evidence_test.py
-    pytests/scripts/sccp_substrate_destination_evidence_test.py
-    pytests/scripts/sccp_substrate_live_evidence_test.py
-    pytests/scripts/sccp_substrate_source_evidence_test.py
     pytests/scripts/sccp_ton_destination_evidence_test.py
     pytests/scripts/sccp_ton_live_evidence_test.py
     pytests/scripts/sccp_ton_source_state_evidence_test.py

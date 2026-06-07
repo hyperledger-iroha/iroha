@@ -39,7 +39,6 @@ izchil.
 ## NCC guruhi (APAC kriptografiya xizmatlari)
 
 - Hujjatlangan majburiyatlar: mintaqaviy to'lov uchun gm/T (SM) kodini tekshirish
-  tarmoqlar va HSM sotuvchilari; Parity Substrate, Polkadot uchun Rustning oldingi sharhlari,
   va Libra komponentlari.
 - Kuchli tomonlari: ikki tilli hisobotga ega katta APAC dastgohi, birlashtirish qobiliyati
   chuqur kodni ko'rib chiqish bilan muvofiqlik uslubidagi jarayonni tekshirish.
@@ -59,7 +58,6 @@ izchil.
 
 ## SlowMist Security (Chengdu)
 
-- Hujjatlashtirilgan majburiyatlar: Substrate/Polkadot Rust xavfsizlik tekshiruvlari, shu jumladan
   Xitoy operatorlari uchun Guomi vilkalar; SM2/SM3/SM4 hamyonini muntazam baholash
   va birjalar tomonidan ishlatiladigan ko'prik kodi.
 - Kuchli tomonlari: blokcheynga yo'naltirilgan audit amaliyoti, hodisalarga integratsiyalashgan javob,

@@ -82,6 +82,28 @@ test("published TypeScript declarations cover every SCCP runtime export", () => 
   assert.deepEqual(missing, []);
 });
 
+test("published SCCP package excludes the removed legacy lane", () => {
+  const removedLaneToken = ["sub", "strate"].join("");
+  const declarations = fs.readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const exportNames = [
+    ...Object.keys(rootExports),
+    ...Object.keys(sccpExports),
+  ].sort();
+  const leakedExports = exportNames.filter((name) =>
+    name.toLowerCase().includes(removedLaneToken),
+  );
+
+  assert.deepEqual(leakedExports, []);
+  assert.equal(declarations.toLowerCase().includes(removedLaneToken), false);
+  for (const artifact of ["../dist/index.js", "../dist/sccp.js", "../dist/toriiClient.js"]) {
+    const source = fs.readFileSync(new URL(artifact, import.meta.url), "utf8");
+    assert.equal(source.toLowerCase().includes(removedLaneToken), false, artifact);
+  }
+});
+
 test("published TypeScript declarations constrain TAIRA XOR TRON settlement defaults", () => {
   const declarations = fs.readFileSync(
     new URL("../index.d.ts", import.meta.url),
@@ -169,8 +191,6 @@ test("published TypeScript declarations expose SCCP domain id inputs", () => {
     declarationInterface(declarations, "BscSccpReceiptProofInput"),
     ["sourceDomain", "source_domain"],
   );
-  assert.doesNotMatch(declarations, /export interface SubstrateSccpProofRequestInput/u);
-
   const verifierVkHash = declarationFunction(declarations, "sccpSourceAdapterVerifierVkHash");
   assert.match(verifierVkHash, /input: SccpDomainIdInput \| \{/u);
   assert.match(verifierVkHash, /target_domain\?: SccpDomainIdInput/u);
@@ -212,7 +232,6 @@ test("published TypeScript declarations expose SCCP v1 version inputs", () => {
   assertVersionInputFields(declarationInterface(declarations, "TonValidatorSignatureProofInput"));
   assertVersionInputFields(declarationInterface(declarations, "EthBeaconSyncCommitteeProofInput"));
   assertVersionInputFields(declarationInterface(declarations, "BscValidatorStorageProofInput"));
-  assert.doesNotMatch(declarations, /export interface SubstrateGrandpaJustificationProofInput/u);
   assertVersionInputFields(declarationInterface(declarations, "TronSolidBlockMessageInput"));
   assertVersionInputFields(declarationInterface(declarations, "TronWitnessSealInput"));
   assertVersionInputFields(declarationInterface(declarations, "SccpMessageTransparentPublicInputsInput"));
@@ -301,16 +320,4 @@ test("published package root exports SCCP destination binding helpers", () => {
   assert.equal(typeof canonicalSccpPayloadEnvelopeBytes, "function");
   assert.equal(typeof canonicalSccpMerkleProofBytes, "function");
   assert.equal(typeof canonicalSccpMessageProofBundleBytes, "function");
-  for (const name of [
-    "SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1",
-    "SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1",
-    "SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1",
-    "buildSubstrateSccpProofRequest",
-    "buildSubstrateSccpSubmission",
-    "wrapSubstrateSccpProofResult",
-    "SubstrateSccpProver",
-  ]) {
-    assert.equal(name in rootExports, false);
-    assert.equal(name in sccpExports, false);
-  }
 });

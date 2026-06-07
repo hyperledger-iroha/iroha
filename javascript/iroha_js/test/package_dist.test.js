@@ -3342,9 +3342,6 @@ test("package declarations expose SCCP local-prover result metadata", () => {
     DECLARATIONS_TEXT,
     /export interface TonSccpProveResult[\s\S]*requestHash\?: string;[\s\S]*sourceAdapterDeploymentBindingHash\?: string;[\s\S]*envelopeHash\?: string;/,
   );
-  assert.doesNotMatch(DECLARATIONS_TEXT, /SubstrateSccpProveResult/);
-  assert.doesNotMatch(DECLARATIONS_TEXT, /SubstrateSccpProofResult/);
-  assert.doesNotMatch(DECLARATIONS_TEXT, /SubstrateSccpRuntimeStorageProofRequest/);
 });
 
 test("package declarations expose SCCP witness-provider hooks for portal provers", () => {

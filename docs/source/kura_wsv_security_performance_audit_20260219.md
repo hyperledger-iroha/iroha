@@ -59,6 +59,12 @@ Out of scope: unrelated crates and full-system benchmark reruns.
   - Temp-file data/index replacement: `crates/iroha_core/src/kura.rs:1887`, `crates/iroha_core/src/kura.rs:1889`
   - Writer/rehydration/prune serialization: `crates/iroha_core/src/kura.rs:2978`, `crates/iroha_core/src/kura.rs:3803`, `crates/iroha_core/src/kura.rs:4813`
   - Regression test: `crates/iroha_core/src/kura.rs:12003`
+  - Long-history eviction seeding regression:
+    `bench_eviction_helpers_seed_remote_eviction`
+    (`crates/iroha_core/src/kura.rs:12060`)
+  - Criterion long-history compaction benchmark:
+    `kura_eviction_long_history_compaction`
+    (`crates/iroha_core/benches/kura.rs:260`)
 - Impact: large-history eviction no longer monopolizes `block_store` during
   the full data/index rewrite, reducing read-side stalls during compaction.
 
@@ -80,6 +86,14 @@ Out of scope: unrelated crates and full-system benchmark reruns.
   - Block commit writer lock: `crates/iroha_core/src/state.rs:27550`
   - State-write-lock telemetry with legacy view-lock aliases: `crates/iroha_core/src/telemetry.rs:716`, `crates/iroha_telemetry/src/metrics.rs:7111`
   - Lock-order regressions: `crates/iroha_core/src/state.rs:29057`, `crates/iroha_core/src/state.rs:29097`
+  - Heavy-world commit benchmark helper and regression:
+    `commit_heavy_world_accounts_for_bench` and
+    `heavy_world_commit_bench_helper_commits_accounts`
+    (`crates/iroha_core/src/state.rs:20443`,
+    `crates/iroha_core/src/state.rs:29181`)
+  - Criterion heavy-world state-write-lock benchmark:
+    `state_write_lock_heavy_world_commit`
+    (`crates/iroha_core/benches/state.rs:14`)
 - Impact: heavy commit phases no longer occupy a `view_lock`; full state
   views coordinate through generation retry, and writer-vs-writer ordering is
   explicit.
@@ -292,8 +306,14 @@ Out of scope: unrelated crates and full-system benchmark reruns.
     `kura_budget_check_scales_with_pending_depth`
   - pending-depth storage-budget benchmark coverage:
     `kura_storage_budget_cached_pending_depth`
-- Gaps:
-  - no long-history eviction latency test under lock contention
+  - long-history eviction helper and benchmark coverage:
+    `bench_eviction_helpers_seed_remote_eviction` and
+    `kura_eviction_long_history_compaction`
+  - background eviction retry-latency guardrail:
+    `kura_background_eviction_retry_latency_threshold`
+- Gaps: no current Kura security or hot-path performance gap remains open in
+  this audit; operational latency SLOs should continue to be exercised by
+  release/performance jobs.
 
 ### Production WSV
 
@@ -304,8 +324,11 @@ Out of scope: unrelated crates and full-system benchmark reruns.
     `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock`
   - apply-path DA cursor fault isolation:
     `apply_without_execution_records_da_cursor_errors_without_panic`
-- Gaps:
-  - no quantitative contention test asserting max acceptable commit hold time under heavy world commits
+  - heavy-world commit helper and benchmark coverage:
+    `heavy_world_commit_bench_helper_commits_accounts` and
+    `state_write_lock_heavy_world_commit`
+- Gaps: no current Production WSV security or hot-path performance gap remains
+  open in this audit; release jobs should keep benchmark trends under review.
 
 ### IVM WSV Mock Host
 
@@ -375,6 +398,8 @@ Out of scope: unrelated crates and full-system benchmark reruns.
   - `block_store` is available while eviction is paused after its durable
     metadata snapshot
   - existing eviction idempotence and rehydration regressions continue to pass
+  - long-history seeded-eviction regression and compaction benchmark cover the
+    remote-replica advertisement path used by production body eviction
 
 6. Shorten coarse `view_lock` critical section where feasible.
 - Status: addressed by replacing commit-path `view_lock` usage with a
@@ -384,6 +409,8 @@ Out of scope: unrelated crates and full-system benchmark reruns.
     `view_lock`
   - existing state-view generation and writer lock-order regressions continue
     to pass
+  - heavy-world commit benchmark covers account-heavy WSV mutations through the
+    production commit path
 
 ### Phase 3 (Operational guardrails)
 
@@ -398,8 +425,9 @@ Out of scope: unrelated crates and full-system benchmark reruns.
 
 ## Suggested Test Additions
 
-1. `kura_background_eviction_retry_latency_threshold` (integration/perf)
-2. `state_commit_state_write_lock_hold_under_heavy_world_commit` (perf benchmark)
+- None at the audit source-coverage level. Keep release/performance jobs
+  tracking Kura background-eviction retry latency and WSV heavy-commit
+  benchmark trends over time.
 
 ## Notes on Scope and Confidence
 

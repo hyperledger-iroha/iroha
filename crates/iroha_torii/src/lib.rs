@@ -49700,7 +49700,7 @@ pub(crate) mod tests_runtime_handlers {
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             nonce: 12,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
@@ -49708,10 +49708,10 @@ pub(crate) mod tests_runtime_handlers {
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: b"sora2:alice".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"nexus:sora2:xor".to_vec(),
+            route_id: b"nexus:eth:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload.clone());
 
@@ -49963,12 +49963,6 @@ pub(crate) mod tests_runtime_handlers {
             "/v1/sccp/jobs/message/{message_id}"
         );
         assert_eq!(decoded_json.proof_manifest_path, "/v1/sccp/manifests");
-        assert!(decoded_json.counterparties.iter().all(|entry| {
-            entry.chain != "substrate"
-                && entry.chain != "sora-kusama"
-                && entry.chain != "sora-polkadot"
-                && entry.chain != "sora2"
-        }));
         let ton = decoded_json
             .counterparties
             .iter()
@@ -50496,7 +50490,7 @@ pub(crate) mod tests_runtime_handlers {
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
             nonce: 11,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
@@ -50504,10 +50498,10 @@ pub(crate) mod tests_runtime_handlers {
             amount: 5,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: b"sora2:alice".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"sora:sora2:xor".to_vec(),
+            route_id: b"sora:eth:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         let bundle_response = match routing::handle_v1_sccp_message_bundle(

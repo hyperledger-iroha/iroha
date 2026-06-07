@@ -27,9 +27,6 @@ SCCP_DOMAIN_BSC = 2
 SCCP_DOMAIN_SOL = 3
 SCCP_DOMAIN_TON = 4
 SCCP_DOMAIN_TRON = 5
-SCCP_DOMAIN_SORA_KUSAMA = 6
-SCCP_DOMAIN_SORA_POLKADOT = 7
-SCCP_DOMAIN_SORA2 = 8
 SOLANA_UPGRADEABLE_LOADER_ID = "BPFLoaderUpgradeab1e11111111111111111111111"
 SOLANA_UPGRADEABLE_LOADER_PROGRAM_TAG = 2
 SOLANA_UPGRADEABLE_LOADER_PROGRAMDATA_TAG = 3
@@ -45,9 +42,6 @@ SCCP_CORE_REMOTE_DOMAINS = (
     SCCP_DOMAIN_SOL,
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
-    SCCP_DOMAIN_SORA_KUSAMA,
-    SCCP_DOMAIN_SORA_POLKADOT,
-    SCCP_DOMAIN_SORA2,
 )
 SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (
     SCCP_DOMAIN_ETH,
@@ -56,14 +50,7 @@ SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 )
-SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(
-    domain
-    for domain in SCCP_CORE_REMOTE_DOMAINS
-    if domain not in SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS
-)
-SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (
-    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
-)
+SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS: tuple[int, ...] = ()
 SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID = "sccp-source-adapter-v1"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 
@@ -90,7 +77,6 @@ class LaneProfile:
     tron_source_bridge_config_required: bool = False
     solana_full_light_client_audit_required: bool = False
     ton_full_light_client_audit_required: bool = False
-    substrate_runtime_storage_gate_required: bool = False
 
 
 LANE_PROFILES: dict[int, LaneProfile] = {
@@ -196,71 +182,6 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         destination_verifier_key_hash_required=True,
         tron_source_bridge_config_required=True,
     ),
-    SCCP_DOMAIN_SORA_KUSAMA: LaneProfile(
-        domain=SCCP_DOMAIN_SORA_KUSAMA,
-        chain="sora-kusama",
-        source_proof_plan="SubstrateGrandpaEventProof",
-        finality_model="SubstrateGrandpa",
-        destination_verifier_plan="SubstrateRuntimeNativeRecursive",
-        source_trust_anchor_id=(
-            "sccp:sora-kusama:source-trust-anchor:grandpa-authority-set:v1"
-        ),
-        consensus_verifier_id=(
-            "sccp:sora-kusama:consensus-verifier:grandpa-finalized-header:v1"
-        ),
-        message_inclusion_verifier_id=(
-            "sccp:sora-kusama:message-inclusion-verifier:events-storage-proof:v1"
-        ),
-        finality_policy_id="sccp:sora-kusama:finality-policy:grandpa-finality:v1",
-        destination_anchor_id="sccp:sora-kusama:destination-anchor:runtime:v1",
-        route_allowlist_id="sccp:sora-kusama:route-allowlist:runtime:v1",
-        source_state_verifier_id=(
-            "sccp:sora-kusama:source-state-verifier:runtime-storage-proof:v1"
-        ),
-        substrate_runtime_storage_gate_required=True,
-    ),
-    SCCP_DOMAIN_SORA_POLKADOT: LaneProfile(
-        domain=SCCP_DOMAIN_SORA_POLKADOT,
-        chain="sora-polkadot",
-        source_proof_plan="SubstrateGrandpaEventProof",
-        finality_model="SubstrateGrandpa",
-        destination_verifier_plan="SubstrateRuntimeNativeRecursive",
-        source_trust_anchor_id=(
-            "sccp:sora-polkadot:source-trust-anchor:grandpa-authority-set:v1"
-        ),
-        consensus_verifier_id=(
-            "sccp:sora-polkadot:consensus-verifier:grandpa-finalized-header:v1"
-        ),
-        message_inclusion_verifier_id=(
-            "sccp:sora-polkadot:message-inclusion-verifier:events-storage-proof:v1"
-        ),
-        finality_policy_id="sccp:sora-polkadot:finality-policy:grandpa-finality:v1",
-        destination_anchor_id="sccp:sora-polkadot:destination-anchor:runtime:v1",
-        route_allowlist_id="sccp:sora-polkadot:route-allowlist:runtime:v1",
-        source_state_verifier_id=(
-            "sccp:sora-polkadot:source-state-verifier:runtime-storage-proof:v1"
-        ),
-        substrate_runtime_storage_gate_required=True,
-    ),
-    SCCP_DOMAIN_SORA2: LaneProfile(
-        domain=SCCP_DOMAIN_SORA2,
-        chain="sora2",
-        source_proof_plan="SubstrateGrandpaEventProof",
-        finality_model="SubstrateGrandpa",
-        destination_verifier_plan="SubstrateRuntimeNativeRecursive",
-        source_trust_anchor_id="sccp:sora2:source-trust-anchor:grandpa-authority-set:v1",
-        consensus_verifier_id="sccp:sora2:consensus-verifier:grandpa-finalized-header:v1",
-        message_inclusion_verifier_id=(
-            "sccp:sora2:message-inclusion-verifier:events-storage-proof:v1"
-        ),
-        finality_policy_id="sccp:sora2:finality-policy:grandpa-finality:v1",
-        destination_anchor_id="sccp:sora2:destination-anchor:runtime:v1",
-        route_allowlist_id="sccp:sora2:route-allowlist:runtime:v1",
-        source_state_verifier_id=(
-            "sccp:sora2:source-state-verifier:runtime-storage-proof:v1"
-        ),
-        substrate_runtime_storage_gate_required=True,
-    ),
 }
 
 SECTION_NAMES = (
@@ -283,7 +204,6 @@ TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS = (
     "ton_full_light_client_gate_hash",
 )
 TRON_DPOS_SOURCE_GATE_FIELDS = ("tron_dpos_source_gate_hash",)
-SUBSTRATE_RUNTIME_STORAGE_GATE_FIELDS = ("substrate_runtime_storage_gate_hash",)
 EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_rpc_chain_id",
     "_comment_evm_source_block_tag",
@@ -373,20 +293,6 @@ TON_DESTINATION_LIVE_FIELDS = (
     "_comment_ton_code_boc_root_hash",
     "_comment_ton_code_boc_base64",
     "_comment_ton_code_boc_hash_matches",
-)
-SUBSTRATE_DESTINATION_LIVE_FIELDS = (
-    "substrate_finalized_head",
-    "substrate_runtime_spec_name",
-    "substrate_runtime_spec_version",
-    "substrate_runtime_transaction_version",
-    "substrate_runtime_code_hash",
-    "substrate_runtime_code_base64",
-    "_comment_substrate_finalized_head",
-    "_comment_substrate_runtime_spec_name",
-    "_comment_substrate_runtime_spec_version",
-    "_comment_substrate_runtime_transaction_version",
-    "_comment_substrate_runtime_code_hash",
-    "_comment_substrate_runtime_code_base64",
 )
 TRON_DESTINATION_VERIFIER_LIVE_COMMENT_FIELDS = (
     "_comment_tron_destination_verifier_address",
@@ -478,7 +384,6 @@ SOURCE_DEPLOYMENT_FIELDS = frozenset(
         "adapter_verifier_vk_hash",
         "deployment_receipt_hash",
         "_comment_source_adapter_engine_deployment_hash",
-        "_comment_substrate_runtime_storage_gate_hash",
         *SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
         *TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
         *TRON_DPOS_SOURCE_GATE_FIELDS,
@@ -521,12 +426,6 @@ DESTINATION_ROLLOUT_FIELDS = frozenset(
         "ton_last_transaction_hash",
         "ton_verifier_code_boc_root_hash",
         "ton_verifier_code_boc",
-        "substrate_finalized_head",
-        "substrate_runtime_spec_name",
-        "substrate_runtime_spec_version",
-        "substrate_runtime_transaction_version",
-        "substrate_runtime_code_hash",
-        "substrate_runtime_code_base64",
         "_comment_destination_network_id",
         "_comment_destination_bridge_address",
         "_comment_destination_binding_key",
@@ -569,12 +468,6 @@ DESTINATION_ROLLOUT_FIELDS = frozenset(
         "_comment_tron_destination_verifier_key_hash",
         "_comment_tron_destination_verifier_backend_hash",
         "_comment_tron_destination_proof_family_hash",
-        "_comment_substrate_finalized_head",
-        "_comment_substrate_runtime_spec_name",
-        "_comment_substrate_runtime_spec_version",
-        "_comment_substrate_runtime_transaction_version",
-        "_comment_substrate_runtime_code_hash",
-        "_comment_substrate_runtime_code_base64",
     )
 )
 ROUTE_ALLOWLIST_FIELDS = frozenset(
@@ -759,19 +652,6 @@ DESTINATION_ROLLOUT_COMMENT_KEYS = {
     "sccp_tron_destination_proof_family_hash": (
         "_comment_tron_destination_proof_family_hash"
     ),
-    "sccp_substrate_destination_binding_hash": "_comment_destination_binding_hash",
-    "sccp_substrate_finalized_head": "_comment_substrate_finalized_head",
-    "sccp_substrate_runtime_spec_name": "_comment_substrate_runtime_spec_name",
-    "sccp_substrate_runtime_spec_version": (
-        "_comment_substrate_runtime_spec_version"
-    ),
-    "sccp_substrate_runtime_transaction_version": (
-        "_comment_substrate_runtime_transaction_version"
-    ),
-    "sccp_substrate_runtime_code_hash": "_comment_substrate_runtime_code_hash",
-    "sccp_substrate_runtime_code_base64": (
-        "_comment_substrate_runtime_code_base64"
-    ),
 }
 SOURCE_RECORD_COMMENT_KEYS = {
     "sccp_eth_source_verifier_material_hash": "_comment_source_verifier_material_hash",
@@ -781,9 +661,6 @@ SOURCE_RECORD_COMMENT_KEYS = {
     ),
     "sccp_ton_source_verifier_material_hash": "_comment_source_verifier_material_hash",
     "sccp_tron_source_verifier_material_hash": "_comment_source_verifier_material_hash",
-    "sccp_substrate_source_verifier_material_hash": (
-        "_comment_source_verifier_material_hash"
-    ),
     "sccp_evm_source_rpc_chain_id": "_comment_evm_source_rpc_chain_id",
     "sccp_evm_source_block_tag": "_comment_evm_source_block_tag",
     "sccp_evm_source_bridge_address": "_comment_evm_source_bridge_address",
@@ -848,12 +725,6 @@ SOURCE_DEPLOYMENT_COMMENT_KEYS = {
     ),
     "sccp_tron_source_adapter_engine_deployment_hash": (
         "_comment_source_adapter_engine_deployment_hash"
-    ),
-    "sccp_substrate_source_adapter_engine_deployment_hash": (
-        "_comment_source_adapter_engine_deployment_hash"
-    ),
-    "sccp_substrate_runtime_storage_gate_hash": (
-        "_comment_substrate_runtime_storage_gate_hash"
     ),
 }
 
@@ -2012,14 +1883,6 @@ def _check_deployment(
         for field in TRON_DPOS_SOURCE_GATE_FIELDS:
             _expect_empty_hex_or_absent(errors, record, field)
 
-    if (
-        not profile.substrate_runtime_storage_gate_required
-        and record.get("_comment_substrate_runtime_storage_gate_hash") not in (None, "")
-    ):
-        errors.append(
-            "sccp_substrate_runtime_storage_gate_hash metadata is only valid "
-            "for Substrate-family source adapter deployments"
-        )
     deployment_role_hash_fields = SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS
     if profile.solana_full_light_client_audit_required:
         deployment_role_hash_fields += SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
@@ -2132,54 +1995,6 @@ def _evm_source_bridge_args(
         expected_source_adapter_engine_deployment_hash=None,
     )
 
-
-def _substrate_source_args(
-    material: dict[str, Any],
-    deployment: dict[str, Any],
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        domain=material["source_domain"],
-        target_domain=deployment["target_domain"],
-        source_trust_anchor_hash=_required_hex_bytes(
-            material,
-            "source_trust_anchor_hash",
-            byte_length=32,
-        ),
-        consensus_verifier_hash=_required_hex_bytes(
-            material,
-            "consensus_verifier_hash",
-            byte_length=32,
-        ),
-        message_inclusion_verifier_hash=_required_hex_bytes(
-            material,
-            "message_inclusion_verifier_hash",
-            byte_length=32,
-        ),
-        source_state_verifier_hash=_required_hex_bytes(
-            material,
-            "source_state_verifier_hash",
-            byte_length=32,
-        ),
-        finality_policy_hash=_required_hex_bytes(
-            material,
-            "finality_policy_hash",
-            byte_length=32,
-        ),
-        adapter_verifier_vk_hash=_required_hex_bytes(
-            deployment,
-            "adapter_verifier_vk_hash",
-            byte_length=32,
-        ),
-        deployment_receipt_hash=_required_hex_bytes(
-            deployment,
-            "deployment_receipt_hash",
-            byte_length=32,
-        ),
-        expected_source_verifier_material_hash=None,
-        expected_source_adapter_engine_deployment_hash=None,
-    )
-
-
 def _tron_source_bridge_args(
     material: dict[str, Any],
     deployment: dict[str, Any],
@@ -2253,7 +2068,7 @@ def _chain_specific_source_args(
         return _source_adapter_args(material, deployment)
     if profile.chain == "tron":
         return _tron_source_bridge_args(material, deployment)
-    return _substrate_source_args(material, deployment)
+    raise ValueError(f"unsupported lane chain {profile.chain!r}")
 
 
 def _check_chain_specific_source_evidence(
@@ -2292,9 +2107,6 @@ def _check_chain_specific_source_evidence(
                 args,
                 config_hash,
             )
-        elif profile.chain.startswith("sora"):
-            module = _load_sibling_module("sccp_substrate_source_evidence.py")
-            module._validate_substrate_source_evidence_args(args)
         else:
             return [f"unsupported lane chain {profile.chain!r}"]
     except (SystemExit, ValueError, RuntimeError) as exc:
@@ -2396,12 +2208,6 @@ def _canonical_source_record_hashes(
         deployment_hash = module.tron_source_adapter_engine_deployment_record_hash(
             args,
             config_hash,
-        )
-    elif profile.chain.startswith("sora"):
-        module = _load_sibling_module("sccp_substrate_source_evidence.py")
-        material_hash = module.substrate_source_verifier_material_record_hash(args)
-        deployment_hash = (
-            module.substrate_source_adapter_engine_deployment_record_hash(args)
         )
     else:
         raise ValueError(f"unsupported lane chain {profile.chain!r}")
@@ -2592,20 +2398,6 @@ def _check_tron_dpos_source_gate(
         return ["tron_dpos_source_gate_hash does not match source and deployment material"]
     return []
 
-
-def _substrate_runtime_storage_gate_hash(
-    material: dict[str, Any],
-    deployment: dict[str, Any],
-) -> tuple[str | None, list[str]]:
-    try:
-        module = _load_sibling_module("sccp_substrate_source_evidence.py")
-        args = _substrate_source_args(material, deployment)
-        gate_hash = module.substrate_runtime_storage_gate_hash(args)
-    except (SystemExit, ValueError, RuntimeError) as exc:
-        return None, [f"Substrate runtime storage gate cannot be recomputed: {exc}"]
-    return _hex(gate_hash), []
-
-
 def _source_adapter_gate_summary(
     profile: LaneProfile,
     material: dict[str, Any] | None,
@@ -2630,10 +2422,6 @@ def _source_adapter_gate_summary(
         required_fields = TRON_DPOS_SOURCE_GATE_FIELDS
         gate_field = "tron_dpos_source_gate_hash"
         gate_checker = _check_tron_dpos_source_gate
-    elif profile.substrate_runtime_storage_gate_required:
-        required_fields = ()
-        gate_field = "substrate_runtime_storage_gate_hash"
-        gate_checker = lambda _material, _deployment: []
     else:
         return {
             "required": False,
@@ -2661,39 +2449,8 @@ def _source_adapter_gate_summary(
         blockers.append("missing source verifier material")
     if deployment is None:
         blockers.append("missing source adapter deployment")
-    if material is not None and deployment is not None:
-        if profile.substrate_runtime_storage_gate_required:
-            pinned_gate_hash_raw = deployment.get(
-                "_comment_substrate_runtime_storage_gate_hash"
-            )
-            pinned_gate_hash = _hex_bytes(pinned_gate_hash_raw, byte_length=32)
-            if pinned_gate_hash is None or not any(pinned_gate_hash):
-                blockers.append(
-                    "sccp_substrate_runtime_storage_gate_hash metadata must be "
-                    "a non-zero 32-byte hex value"
-                )
-            else:
-                gate_hash = _hex(pinned_gate_hash)
-                audit_hashes[gate_field] = gate_hash
-            derived_gate_hash, gate_blockers = _substrate_runtime_storage_gate_hash(
-                material,
-                deployment,
-            )
-            blockers.extend(gate_blockers)
-            if (
-                pinned_gate_hash is not None
-                and any(pinned_gate_hash)
-                and derived_gate_hash is not None
-                and _hex(pinned_gate_hash) != derived_gate_hash
-            ):
-                blockers.append(
-                    "sccp_substrate_runtime_storage_gate_hash metadata does not "
-                    "match source and deployment material"
-                )
-            if pinned_gate_hash is None and derived_gate_hash is not None:
-                gate_hash = derived_gate_hash
-        elif not blockers:
-            blockers.extend(gate_checker(material, deployment))
+    if material is not None and deployment is not None and not blockers:
+        blockers.extend(gate_checker(material, deployment))
     source_material_hash = source_record_hashes.get("source_verifier_material_hash")
     if source_material_hash is None and material is not None:
         source_material_hash = material.get("_comment_source_verifier_material_hash")
@@ -3069,17 +2826,6 @@ def _expected_destination_binding(
             "destination_network_id": _hex(network_id),
             "recomputed": True,
         }
-    if profile.chain.startswith("sora"):
-        module = _load_sibling_module("sccp_substrate_destination_evidence.py")
-        return {
-            "destination_binding_key": module.substrate_destination_binding_key(
-                profile.domain,
-            ),
-            "destination_binding_hash": _hex(
-                module.substrate_destination_binding_hash(profile.domain),
-            ),
-            "recomputed": True,
-        }
     raise ValueError(f"unsupported destination chain {profile.chain!r}")
 
 
@@ -3245,14 +2991,6 @@ def _check_destination_rollout(profile: LaneProfile, record: dict[str, Any]) -> 
     _reject_lane_foreign_fields(
         errors,
         record,
-        SUBSTRATE_DESTINATION_LIVE_FIELDS,
-        actual_chain=profile.chain,
-        allowed_chains=("sora-kusama", "sora-polkadot", "sora2"),
-        label="Substrate destination live evidence",
-    )
-    _reject_lane_foreign_fields(
-        errors,
-        record,
         TRON_DESTINATION_VERIFIER_LIVE_COMMENT_FIELDS,
         actual_chain=profile.chain,
         allowed_chain="tron",
@@ -3282,8 +3020,6 @@ def _check_destination_rollout(profile: LaneProfile, record: dict[str, Any]) -> 
         errors.extend(_check_solana_live_programdata_evidence(record))
     if profile.chain == "ton":
         errors.extend(_check_ton_live_account_evidence(record))
-    if profile.chain.startswith("sora"):
-        errors.extend(_check_substrate_live_runtime_evidence(profile, record))
     if not _blockers_empty(record):
         errors.append("destination rollout blockers must be empty")
     return errors
@@ -4036,153 +3772,6 @@ def _check_ton_live_account_evidence(record: dict[str, Any]) -> list[str]:
                         errors.append("TON code BoC base64 root hash must match verifier code BoC")
     return errors
 
-
-def _check_substrate_live_runtime_evidence(
-    profile: LaneProfile,
-    record: dict[str, Any],
-) -> list[str]:
-    errors: list[str] = []
-    _check_hex_comment_matches_record(
-        errors,
-        record,
-        "substrate_finalized_head",
-        "_comment_substrate_finalized_head",
-        label="substrate_finalized_head",
-        byte_length=32,
-    )
-    _check_string_comment_matches_record(
-        errors,
-        record,
-        "substrate_runtime_spec_name",
-        "_comment_substrate_runtime_spec_name",
-        label="substrate_runtime_spec_name",
-    )
-    _check_string_comment_matches_record(
-        errors,
-        record,
-        "substrate_runtime_spec_version",
-        "_comment_substrate_runtime_spec_version",
-        label="substrate_runtime_spec_version",
-    )
-    _check_string_comment_matches_record(
-        errors,
-        record,
-        "substrate_runtime_transaction_version",
-        "_comment_substrate_runtime_transaction_version",
-        label="substrate_runtime_transaction_version",
-    )
-    _check_hex_comment_matches_record(
-        errors,
-        record,
-        "substrate_runtime_code_hash",
-        "_comment_substrate_runtime_code_hash",
-        label="substrate_runtime_code_hash",
-        byte_length=32,
-    )
-    _check_string_comment_matches_record(
-        errors,
-        record,
-        "substrate_runtime_code_base64",
-        "_comment_substrate_runtime_code_base64",
-        label="substrate_runtime_code_base64",
-    )
-    module = _load_sibling_module("sccp_substrate_destination_evidence.py")
-    finalized_head = _hex_bytes(
-        record.get(
-            "substrate_finalized_head",
-            record.get("_comment_substrate_finalized_head"),
-        ),
-        byte_length=32,
-    )
-    if finalized_head is None or not any(finalized_head):
-        errors.append(
-            "Substrate finalized head metadata must be a non-zero 32-byte hex value"
-        )
-
-    runtime_spec_name = record.get(
-        "substrate_runtime_spec_name",
-        record.get("_comment_substrate_runtime_spec_name"),
-    )
-    if not _is_nonempty_string(runtime_spec_name):
-        errors.append(
-            "Substrate runtime specName metadata is required from "
-            "sccp_substrate_live_evidence.py"
-        )
-    elif runtime_spec_name != profile.chain:
-        errors.append(
-            "Substrate runtime specName metadata must match the destination "
-            f"domain {profile.chain}"
-        )
-
-    spec_version = record.get(
-        "substrate_runtime_spec_version",
-        record.get("_comment_substrate_runtime_spec_version"),
-    )
-    if not _is_canonical_decimal_text(spec_version, positive=False):
-        errors.append("Substrate runtime specVersion metadata must be a decimal string")
-
-    transaction_version = record.get(
-        "substrate_runtime_transaction_version",
-        record.get("_comment_substrate_runtime_transaction_version"),
-    )
-    if not _is_canonical_decimal_text(transaction_version, positive=False):
-        errors.append(
-            "Substrate runtime transactionVersion metadata must be a decimal string"
-        )
-
-    runtime_code_hash = _hex_bytes(
-        record.get(
-            "substrate_runtime_code_hash",
-            record.get("_comment_substrate_runtime_code_hash"),
-        ),
-        byte_length=32,
-    )
-    if runtime_code_hash is None or not any(runtime_code_hash):
-        errors.append(
-            "Substrate runtime code hash metadata must be a non-zero 32-byte "
-            "hex value"
-        )
-    else:
-        verifier_code_hash = _hex_bytes(record.get("verifier_code_hash"), byte_length=32)
-        if verifier_code_hash != runtime_code_hash:
-            errors.append(
-                "Substrate runtime code hash metadata must match verifier_code_hash"
-            )
-    runtime_code_base64 = record.get(
-        "substrate_runtime_code_base64",
-        record.get("_comment_substrate_runtime_code_base64"),
-    )
-    if not _is_nonempty_string(runtime_code_base64):
-        errors.append("Substrate runtime code base64 metadata must be present")
-    else:
-        try:
-            runtime_code = module.parse_runtime_code_base64(
-                runtime_code_base64,
-                label="Substrate runtime code base64 metadata",
-            )
-            derived_runtime_code_hash = module.substrate_runtime_code_hash(runtime_code)
-        except (argparse.ArgumentTypeError, ValueError) as exc:
-            errors.append(f"Substrate runtime code base64 metadata is invalid: {exc}")
-        else:
-            verifier_code_hash = _hex_bytes(record.get("verifier_code_hash"), byte_length=32)
-            if (
-                runtime_code_hash is not None
-                and derived_runtime_code_hash != runtime_code_hash
-            ):
-                errors.append(
-                    "Substrate runtime code base64 hash must match runtime code "
-                    "hash metadata"
-                )
-            if (
-                verifier_code_hash is not None
-                and derived_runtime_code_hash != verifier_code_hash
-            ):
-                errors.append(
-                    "Substrate runtime code base64 hash must match verifier_code_hash"
-                )
-    return errors
-
-
 def _check_destination_verifier_identity(
     profile: LaneProfile,
     record: dict[str, Any],
@@ -4204,9 +3793,6 @@ def _check_destination_verifier_identity(
                 identity,
                 label="verifier_identity",
             )
-        elif profile.chain.startswith("sora"):
-            module = _load_sibling_module("sccp_substrate_destination_evidence.py")
-            module._require_runtime_entrypoint(identity)
         else:
             return [f"unsupported destination chain {profile.chain!r}"]
     except (argparse.ArgumentTypeError, SystemExit, ValueError, RuntimeError) as exc:
@@ -5968,158 +5554,6 @@ def _check_solana_route_canary_live_program_evidence(
         canary["solana_programdata_slot"] = str(programdata_slot)
     return errors
 
-
-def _check_substrate_route_canary_finalized_runtime_evidence(
-    profile: LaneProfile,
-    record: dict[str, Any],
-    *,
-    destination_record: dict[str, Any] | None,
-    source_record_hashes: dict[str, str],
-    evidence_hash: bytes | None,
-    route_allowlist_hash: bytes | None,
-    destination_binding_hash: bytes | None,
-    canary: dict[str, Any],
-) -> list[str]:
-    errors: list[str] = []
-    if destination_record is None:
-        return ["Substrate route canary finalized-runtime evidence requires destination rollout"]
-    if evidence_hash is None or route_allowlist_hash is None:
-        errors.append("Substrate route canary evidence requires canary and route hashes")
-    if destination_binding_hash is None:
-        errors.append("Substrate route canary evidence requires destination binding hash")
-
-    source_material_hash = _hex_bytes(
-        source_record_hashes.get("source_verifier_material_hash"),
-        byte_length=32,
-    )
-    source_deployment_hash = _hex_bytes(
-        source_record_hashes.get("source_adapter_engine_deployment_hash"),
-        byte_length=32,
-    )
-    if source_material_hash is None or source_deployment_hash is None:
-        errors.append("Substrate route canary evidence requires source record hashes")
-
-    finalized_head = _hex_bytes(
-        destination_record.get(
-            "substrate_finalized_head",
-            destination_record.get("_comment_substrate_finalized_head"),
-        ),
-        byte_length=32,
-    )
-    if finalized_head is None or not any(finalized_head):
-        errors.append(
-            "Substrate route canary finalized head must be a non-zero bytes32"
-        )
-    verifier_code_hash = _hex_bytes(
-        destination_record.get("verifier_code_hash"),
-        byte_length=32,
-    )
-    if verifier_code_hash is None or not any(verifier_code_hash):
-        errors.append(
-            "Substrate route canary verifier code hash must be a non-zero bytes32"
-        )
-
-    runtime_spec_name = destination_record.get(
-        "substrate_runtime_spec_name",
-        destination_record.get("_comment_substrate_runtime_spec_name"),
-    )
-    if not _is_nonempty_string(runtime_spec_name):
-        errors.append("Substrate route canary runtime specName must be present")
-    spec_version = destination_record.get(
-        "substrate_runtime_spec_version",
-        destination_record.get("_comment_substrate_runtime_spec_version"),
-    )
-    if not _is_canonical_decimal_text(spec_version, positive=False):
-        errors.append(
-            "Substrate route canary runtime specVersion must be a decimal string"
-        )
-    transaction_version = destination_record.get(
-        "substrate_runtime_transaction_version",
-        destination_record.get("_comment_substrate_runtime_transaction_version"),
-    )
-    if not _is_canonical_decimal_text(transaction_version, positive=False):
-        errors.append(
-            "Substrate route canary runtime transactionVersion must be a decimal string"
-        )
-
-    module = _load_sibling_module("sccp_substrate_destination_evidence.py")
-    runtime_code: bytes | None = None
-    runtime_code_base64 = destination_record.get(
-        "substrate_runtime_code_base64",
-        destination_record.get("_comment_substrate_runtime_code_base64"),
-    )
-    if not _is_nonempty_string(runtime_code_base64):
-        errors.append("Substrate route canary runtime code base64 must be present")
-    else:
-        try:
-            runtime_code = module.parse_runtime_code_base64(
-                runtime_code_base64,
-                label="Substrate route canary runtime code",
-            )
-        except (argparse.ArgumentTypeError, ValueError) as exc:
-            errors.append(f"Substrate route canary runtime code is invalid: {exc}")
-
-    _expect_distinct_byte_values(
-        errors,
-        (
-            ("route_allowlist_hash", route_allowlist_hash),
-            ("destination_binding_hash", destination_binding_hash),
-            ("source_verifier_material_hash", source_material_hash),
-            ("source_adapter_engine_deployment_hash", source_deployment_hash),
-            ("verifier_code_hash", verifier_code_hash),
-            ("substrate_finalized_head", finalized_head),
-        ),
-        label="Substrate route canary hash role",
-    )
-
-    if errors:
-        return errors
-
-    assert evidence_hash is not None
-    assert route_allowlist_hash is not None
-    assert destination_binding_hash is not None
-    assert source_material_hash is not None
-    assert source_deployment_hash is not None
-    assert finalized_head is not None
-    assert verifier_code_hash is not None
-    assert isinstance(runtime_spec_name, str)
-    assert isinstance(spec_version, str)
-    assert isinstance(transaction_version, str)
-    assert runtime_code is not None
-
-    try:
-        expected_hash = module.substrate_route_canary_evidence_hash(
-            domain=profile.domain,
-            route_allowlist_hash=route_allowlist_hash,
-            destination_binding_hash=destination_binding_hash,
-            source_verifier_material_hash=source_material_hash,
-            source_adapter_engine_deployment_hash=source_deployment_hash,
-            verifier_entrypoint=str(destination_record.get("verifier_identity")),
-            verifier_code_hash=verifier_code_hash,
-            finalized_head=finalized_head,
-            runtime_spec_name=runtime_spec_name,
-            runtime_spec_version=int(spec_version, 10),
-            runtime_transaction_version=int(transaction_version, 10),
-            runtime_code=runtime_code,
-        )
-    except ValueError as exc:
-        errors.append(
-            f"Substrate route canary finalized runtime metadata is invalid: {exc}"
-        )
-        return errors
-    if evidence_hash != expected_hash:
-        errors.append(
-            "Substrate route canary evidence hash must match finalized runtime metadata"
-        )
-    else:
-        canary["evidence_source"] = "substrate_finalized_runtime_snapshot"
-        canary["substrate_finalized_head"] = _hex(finalized_head)
-        canary["substrate_runtime_code_hash"] = _hex(verifier_code_hash)
-        canary["substrate_runtime_spec_version"] = spec_version
-        canary["substrate_runtime_transaction_version"] = transaction_version
-    return errors
-
-
 def _check_route_canary_evidence(
     profile: LaneProfile,
     record: dict[str, Any],
@@ -6304,19 +5738,6 @@ def _check_route_canary_evidence(
     elif profile.chain == "sol":
         errors.extend(
             _check_solana_route_canary_live_program_evidence(
-                record,
-                destination_record=destination_record,
-                source_record_hashes=source_record_hashes,
-                evidence_hash=evidence_hash,
-                route_allowlist_hash=canary_route_hash,
-                destination_binding_hash=canary_destination_binding_hash,
-                canary=canary,
-            )
-        )
-    elif profile.chain.startswith("sora"):
-        errors.extend(
-            _check_substrate_route_canary_finalized_runtime_evidence(
-                profile,
                 record,
                 destination_record=destination_record,
                 source_record_hashes=source_record_hashes,
@@ -6842,8 +6263,6 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
             for gate_blocker in source_adapter_gate.get("blockers", []):
                 if gate_blocker not in blockers:
                     blockers.append(gate_blocker)
-        if domain in SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS:
-            blockers.append(SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER)
         lanes.append(
             {
                 "domain": domain,
@@ -6880,7 +6299,6 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
         all_blockers.extend(
             f"domain {lane['domain']} ({lane['chain']}): {item}"
             for item in lane["blockers"]
-            if item != SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
         )
     for section, errors in section_errors.items():
         for error in errors:

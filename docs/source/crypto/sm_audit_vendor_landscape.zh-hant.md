@@ -39,7 +39,6 @@ translator: machine-google-reviewed
 ## NCC 集團（亞太地區密碼服務）
 
 - 記錄的約定：區域支付的 gm/T (SM) 代碼檢查
-  網絡和 HSM 供應商；之前對 Parity Substrate、Polkadot 的 Rust 評論
   和 Libra 組件。
 - 優勢：亞太地區大型工作台，雙語報告，整合能力
   通過深入的代碼審查進行合規性流程檢查。
@@ -59,7 +58,6 @@ translator: machine-google-reviewed
 
 ## 慢霧安全（成都）
 
-- 記錄的參與：Substrate/Polkadot Rust 安全審查，包括
   果米為中國運營商分叉； SM2/SM3/SM4錢包的例行評估
   以及交易所使用的橋接代碼。
 - 優勢：以區塊鍊為中心的審計實踐、綜合事件響應、

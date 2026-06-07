@@ -61,9 +61,6 @@ pub const SCCP_DOMAIN_BSC: u32 = 2;
 pub const SCCP_DOMAIN_SOL: u32 = 3;
 pub const SCCP_DOMAIN_TON: u32 = 4;
 pub const SCCP_DOMAIN_TRON: u32 = 5;
-pub const SCCP_DOMAIN_SORA_KUSAMA: u32 = 6;
-pub const SCCP_DOMAIN_SORA_POLKADOT: u32 = 7;
-pub const SCCP_DOMAIN_SORA2: u32 = 8;
 /// TAIRA testnet SCCP route id used for the initial XOR bridge to TRON Nile.
 pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
 /// TAIRA SCCP asset key for XOR in the initial TRON bridge route.
@@ -121,8 +118,6 @@ const SCCP_SOLANA_UPGRADEABLE_PROGRAM_ACCOUNT_LEN: usize = 36;
 const SCCP_SOLANA_BPF_ELF_MAGIC: &[u8; 4] = b"\x7fELF";
 const SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1: &[u8] =
     b"iroha:sccp:solana-route-canary-live-program:v1";
-const SCCP_SUBSTRATE_ROUTE_CANARY_FINALIZED_RUNTIME_LABEL_V1: &[u8] =
-    b"iroha:sccp:substrate-route-canary-finalized-runtime:v1";
 const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: &str = "norito:sccp-local-admission:v1";
 const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1: &str = "local_admission";
 const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1: &str = "SubmitBridgeProof";
@@ -211,69 +206,6 @@ pub const SCCP_TRON_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1: &str =
 /// TRON mainnet solid-block finality policy profile id for SCCP source proofs.
 pub const SCCP_TRON_MAINNET_FINALITY_POLICY_ID_V1: &str =
     "sccp:tron:finality-policy:solid-block-mainnet:v1";
-/// SORA Kusama runtime destination anchor id required for SCCP verifier rollout.
-pub const SCCP_SORA_KUSAMA_DESTINATION_ANCHOR_ID_V1: &str =
-    "sccp:sora-kusama:destination-anchor:runtime:v1";
-/// SORA Kusama route allowlist profile id required for SCCP activation.
-pub const SCCP_SORA_KUSAMA_ROUTE_ALLOWLIST_ID_V1: &str =
-    "sccp:sora-kusama:route-allowlist:runtime:v1";
-/// SORA Polkadot runtime destination anchor id required for SCCP verifier rollout.
-pub const SCCP_SORA_POLKADOT_DESTINATION_ANCHOR_ID_V1: &str =
-    "sccp:sora-polkadot:destination-anchor:runtime:v1";
-/// SORA Polkadot route allowlist profile id required for SCCP activation.
-pub const SCCP_SORA_POLKADOT_ROUTE_ALLOWLIST_ID_V1: &str =
-    "sccp:sora-polkadot:route-allowlist:runtime:v1";
-/// SORA2 runtime destination anchor id required for SCCP verifier rollout.
-pub const SCCP_SORA2_DESTINATION_ANCHOR_ID_V1: &str = "sccp:sora2:destination-anchor:runtime:v1";
-/// SORA2 route allowlist profile id required for SCCP activation.
-pub const SCCP_SORA2_ROUTE_ALLOWLIST_ID_V1: &str = "sccp:sora2:route-allowlist:runtime:v1";
-/// Substrate-family SCCP runtime verifier entrypoint required for rollout.
-pub const SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1: &str =
-    "SccpBridge.submit_message_proof";
-/// SORA Kusama GRANDPA authority-set trust anchor profile id for SCCP source proofs.
-pub const SCCP_SORA_KUSAMA_SOURCE_TRUST_ANCHOR_ID_V1: &str =
-    "sccp:sora-kusama:source-trust-anchor:grandpa-authority-set:v1";
-/// SORA Kusama GRANDPA finalized-header verifier profile id for SCCP source proofs.
-pub const SCCP_SORA_KUSAMA_CONSENSUS_VERIFIER_ID_V1: &str =
-    "sccp:sora-kusama:consensus-verifier:grandpa-finalized-header:v1";
-/// SORA Kusama event storage proof verifier profile id for SCCP source proofs.
-pub const SCCP_SORA_KUSAMA_MESSAGE_INCLUSION_VERIFIER_ID_V1: &str =
-    "sccp:sora-kusama:message-inclusion-verifier:events-storage-proof:v1";
-/// SORA Kusama runtime storage-proof verifier profile id for SCCP source proofs.
-pub const SCCP_SORA_KUSAMA_RUNTIME_STORAGE_VERIFIER_ID_V1: &str =
-    "sccp:sora-kusama:source-state-verifier:runtime-storage-proof:v1";
-/// SORA Kusama GRANDPA finality policy profile id for SCCP source proofs.
-pub const SCCP_SORA_KUSAMA_FINALITY_POLICY_ID_V1: &str =
-    "sccp:sora-kusama:finality-policy:grandpa-finality:v1";
-/// SORA Polkadot GRANDPA authority-set trust anchor profile id for SCCP source proofs.
-pub const SCCP_SORA_POLKADOT_SOURCE_TRUST_ANCHOR_ID_V1: &str =
-    "sccp:sora-polkadot:source-trust-anchor:grandpa-authority-set:v1";
-/// SORA Polkadot GRANDPA finalized-header verifier profile id for SCCP source proofs.
-pub const SCCP_SORA_POLKADOT_CONSENSUS_VERIFIER_ID_V1: &str =
-    "sccp:sora-polkadot:consensus-verifier:grandpa-finalized-header:v1";
-/// SORA Polkadot event storage proof verifier profile id for SCCP source proofs.
-pub const SCCP_SORA_POLKADOT_MESSAGE_INCLUSION_VERIFIER_ID_V1: &str =
-    "sccp:sora-polkadot:message-inclusion-verifier:events-storage-proof:v1";
-/// SORA Polkadot runtime storage-proof verifier profile id for SCCP source proofs.
-pub const SCCP_SORA_POLKADOT_RUNTIME_STORAGE_VERIFIER_ID_V1: &str =
-    "sccp:sora-polkadot:source-state-verifier:runtime-storage-proof:v1";
-/// SORA Polkadot GRANDPA finality policy profile id for SCCP source proofs.
-pub const SCCP_SORA_POLKADOT_FINALITY_POLICY_ID_V1: &str =
-    "sccp:sora-polkadot:finality-policy:grandpa-finality:v1";
-/// SORA2 GRANDPA authority-set trust anchor profile id for SCCP source proofs.
-pub const SCCP_SORA2_SOURCE_TRUST_ANCHOR_ID_V1: &str =
-    "sccp:sora2:source-trust-anchor:grandpa-authority-set:v1";
-/// SORA2 GRANDPA finalized-header verifier profile id for SCCP source proofs.
-pub const SCCP_SORA2_CONSENSUS_VERIFIER_ID_V1: &str =
-    "sccp:sora2:consensus-verifier:grandpa-finalized-header:v1";
-/// SORA2 event storage proof verifier profile id for SCCP source proofs.
-pub const SCCP_SORA2_MESSAGE_INCLUSION_VERIFIER_ID_V1: &str =
-    "sccp:sora2:message-inclusion-verifier:events-storage-proof:v1";
-/// SORA2 runtime storage-proof verifier profile id for SCCP source proofs.
-pub const SCCP_SORA2_RUNTIME_STORAGE_VERIFIER_ID_V1: &str =
-    "sccp:sora2:source-state-verifier:runtime-storage-proof:v1";
-/// SORA2 GRANDPA finality policy profile id for SCCP source proofs.
-pub const SCCP_SORA2_FINALITY_POLICY_ID_V1: &str = "sccp:sora2:finality-policy:grandpa-finality:v1";
 /// Solana mainnet-beta source trust anchor profile id for SCCP source proofs.
 pub const SCCP_SOLANA_MAINNET_SOURCE_TRUST_ANCHOR_ID_V1: &str =
     "sccp:sol:source-trust-anchor:solana-mainnet-beta-genesis:v1";
@@ -368,9 +300,6 @@ pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5] = [
 /// Standard blocker for SCCP domains that are not in the current launch scope.
 pub const SCCP_UNSUPPORTED_LAUNCH_DOMAIN_BLOCKER_V1: &str =
     "SCCP launch domain is not supported in the current launch scope";
-/// Standard blocker for Substrate/Polkadot-family domains held out of launch scope.
-pub const SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1: &str =
-    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope";
 
 pub const SCCP_MSG_PREFIX_BURN_V1: &[u8] = b"sccp:burn:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_ADD_V1: &[u8] = b"sccp:token:add:v1";
@@ -497,9 +426,6 @@ pub const SCCP_TON_VALIDATOR_SET_TRANSITION_OPEN_VERIFY_CIRCUIT_ID_V1: &str =
 /// OpenVerify circuit id for the TON shard-accounts dictionary verifier capsule.
 pub const SCCP_TON_SHARD_ACCOUNTS_DICTIONARY_OPEN_VERIFY_CIRCUIT_ID_V1: &str =
     "sccp-ton-shard-accounts-dictionary-v1";
-/// OpenVerify circuit id for Substrate-family runtime storage source-state proofs.
-pub const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1: &str =
-    "sccp-substrate-runtime-storage-v1";
 /// Fixed Solana stake account data length for `StakeStateV2`.
 pub const SCCP_SOLANA_STAKE_STATE_V2_STAKE_ACCOUNT_DATA_LEN: usize = 200;
 /// Fixed Solana vote account data length for `VoteStateV1_14_11`/`V3`/`V4`.
@@ -590,38 +516,6 @@ const SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_MESSAGE_PREFIX_V1: &[u8] =
 const SCCP_TRON_WITNESS_SCHEDULE_TRANSITION_SEAL_PREFIX_V1: &[u8] =
     b"sccp:tron:witness-schedule-transition-seal:v1";
 const SCCP_TRON_DPOS_SOURCE_GATE_PREFIX_V1: &[u8] = b"sccp:tron:dpos-source-gate:v1";
-const SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1: &[u8] = b"sccp:substrate:storage-proof:v1";
-const SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1: &[u8] =
-    b"sccp:substrate:runtime-storage-proof-public-inputs:v1";
-const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_DSID_PREFIX_V1: &[u8] =
-    b"sccp:substrate:runtime-storage:fastpq:dsid:v1";
-const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1: &str = "fastpq-lane-balanced";
-const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STATEMENT_KEY_V1: &[u8] =
-    b"sccp:substrate:runtime-storage:v1:statement";
-const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_CONTEXT_KEY_V1: &[u8] =
-    b"sccp:substrate:runtime-storage:v1:context";
-const SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STORAGE_KEY_V1: &[u8] =
-    b"sccp:substrate:runtime-storage:v1:storage-key";
-const SCCP_SUBSTRATE_RUNTIME_STORAGE_GATE_PREFIX_V1: &[u8] =
-    b"sccp:substrate:runtime-storage-gate:v1";
-/// SCALE storage key for `frame_system::Events`.
-///
-/// This is `twox_128("System") || twox_128("Events")`, the Substrate runtime
-/// item that carries emitted events for the finalized block.
-pub const SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1: [u8; 32] = [
-    0x26, 0xaa, 0x39, 0x4e, 0xea, 0x56, 0x30, 0xe0, 0x7c, 0x48, 0xae, 0x0c, 0x95, 0x58, 0xce, 0xf7,
-    0x80, 0xd4, 0x1e, 0x5e, 0x16, 0x05, 0x67, 0x65, 0xbc, 0x84, 0x61, 0x85, 0x10, 0x72, 0xc9, 0xd7,
-];
-const SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1: &[u8] = b"sccp:substrate:authority-set:v1";
-const SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1: &[u8] =
-    b"sccp:substrate:authority-set-payload:v1";
-const SCCP_SUBSTRATE_GRANDPA_PRECOMMIT_PREFIX_V1: &[u8] = b"sccp:substrate:grandpa-precommit:v1";
-const SCCP_SUBSTRATE_GRANDPA_JUSTIFICATION_PREFIX_V1: &[u8] =
-    b"sccp:substrate:grandpa-justification:v1";
-const SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1: &[u8] =
-    b"sccp:substrate:authority-set-transition-message:v1";
-const SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1: &[u8] =
-    b"sccp:substrate:authority-set-transition-justification:v1";
 const SCCP_TRANSPARENT_STATEMENT_PREFIX_V1: &[u8] = b"sccp:transparent:statement:v1";
 const SCCP_DESTINATION_BINDING_PREFIX_V1: &[u8] = b"sccp:destination:binding:v1";
 const SCCP_TRANSPARENT_FASTPQ_DSID_PREFIX_V1: &[u8] = b"sccp:transparent:fastpq:dsid:v1";
@@ -656,10 +550,6 @@ const SCCP_TON_BASECHAIN_WORKCHAIN_ID: i32 = 0;
 #[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TON_BASECHAIN_FULL_SHARD: u64 = 0x8000_0000_0000_0000;
 const SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES: usize = 64;
-const SCCP_SUBSTRATE_MAX_AUTHORITIES: usize = 2048;
-const SCCP_SUBSTRATE_MAX_AUTHORITY_SET_TRANSITIONS: usize = 64;
-const SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES: usize =
-    1 + 4 + SCCP_SUBSTRATE_MAX_AUTHORITIES * (32 + 8);
 const SCCP_BSC_PARLIA_EXTRA_VANITY_BYTES: usize = 32;
 const SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES: usize = 65;
 const SCCP_BSC_PARLIA_VALIDATOR_ADDRESS_BYTES: usize = 20;
@@ -2943,134 +2833,6 @@ pub struct SccpTronDposSourceProofV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-pub struct SccpSubstrateGrandpaJustificationProofV1 {
-    pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub total_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub signed_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub precommit_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
-    pub authority_public_keys: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub authority_weights: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub signers_bitmap: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
-    pub signatures: Vec<Vec<u8>>,
-}
-
-impl Default for SccpSubstrateGrandpaJustificationProofV1 {
-    fn default() -> Self {
-        Self {
-            version: 0,
-            total_weight: 0,
-            signed_weight: 0,
-            precommit_message_hash: [0u8; 32],
-            authority_public_keys: Vec::new(),
-            authority_weights: Vec::new(),
-            signers_bitmap: Vec::new(),
-            signatures: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-/// Signed transition from one Substrate GRANDPA authority set to the next.
-pub struct SccpSubstrateAuthoritySetTransitionProofV1 {
-    pub version: u8,
-    pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub from_grandpa_set_id: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub to_grandpa_set_id: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub transition_block_number: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub transition_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub parent_authority_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub next_authority_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
-    #[norito(default)]
-    pub next_authority_set_payload: Vec<u8>,
-    #[cfg_attr(
-        feature = "serde",
-        serde(
-            with = "serde_utils::hex32",
-            alias = "next_authority_set_proof_hash",
-            alias = "nextAuthoritySetProofHash"
-        )
-    )]
-    pub next_authority_set_payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub transition_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub transition_justification_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub grandpa_justification: SccpSubstrateGrandpaJustificationProofV1,
-}
-
-impl Default for SccpSubstrateAuthoritySetTransitionProofV1 {
-    fn default() -> Self {
-        Self {
-            version: 0,
-            source_domain: 0,
-            from_grandpa_set_id: 0,
-            to_grandpa_set_id: 0,
-            transition_block_number: 0,
-            transition_block_hash: [0u8; 32],
-            parent_authority_set_hash: [0u8; 32],
-            next_authority_set_hash: [0u8; 32],
-            next_authority_set_payload: Vec::new(),
-            next_authority_set_payload_hash: [0u8; 32],
-            transition_message_hash: [0u8; 32],
-            transition_justification_hash: [0u8; 32],
-            grandpa_justification: SccpSubstrateGrandpaJustificationProofV1::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-pub struct SccpSubstrateGrandpaSourceProofV1 {
-    pub version: u8,
-    pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub finalized_block_number: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
-    pub grandpa_set_id: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub authority_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub events_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub grandpa_justification_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub storage_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub runtime_storage_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub grandpa_justification: SccpSubstrateGrandpaJustificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub authority_set_transition_proofs: Vec<SccpSubstrateAuthoritySetTransitionProofV1>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::large_enum_variant)]
 pub enum SccpSourceAdapterProofV1 {
     EthereumBeaconReceipt(SccpEvmBeaconSourceProofV1),
@@ -3078,7 +2840,6 @@ pub enum SccpSourceAdapterProofV1 {
     SolanaFinalizedTransaction(SccpSolanaFinalizedSourceProofV1),
     TonMasterchainShard(SccpTonMasterchainSourceProofV1),
     TronDposReceipt(SccpTronDposSourceProofV1),
-    SubstrateGrandpaEvent(SccpSubstrateGrandpaSourceProofV1),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3159,7 +2920,6 @@ pub enum SccpTransparentChainFamilyV1 {
     Solana,
     Ton,
     Tron,
-    Substrate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3348,7 +3108,6 @@ pub enum SccpProofFinalityModelV1 {
     SolanaFinalizedSlot,
     TonMasterchain,
     TronDpos,
-    SubstrateGrandpa,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3359,7 +3118,6 @@ pub enum SccpProofVerifierTargetV1 {
     SolanaProgram,
     TonContract,
     TronContract,
-    SubstrateRuntime,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3413,7 +3171,6 @@ pub enum SccpSourceProofPlanV1 {
     SolanaFinalizedTransactionProof,
     TonMasterchainShardProof,
     TronDposReceiptProof,
-    SubstrateGrandpaEventProof,
 }
 
 macro_rules! impl_str_json_enum {
@@ -3485,7 +3242,6 @@ impl_str_json_enum!(SccpSourceProofPlanV1, "unsupported SCCP source proof plan",
     SccpSourceProofPlanV1::SolanaFinalizedTransactionProof => "SolanaFinalizedTransactionProof",
     SccpSourceProofPlanV1::TonMasterchainShardProof => "TonMasterchainShardProof",
     SccpSourceProofPlanV1::TronDposReceiptProof => "TronDposReceiptProof",
-    SccpSourceProofPlanV1::SubstrateGrandpaEventProof => "SubstrateGrandpaEventProof",
 });
 
 impl_str_json_enum!(
@@ -3497,7 +3253,6 @@ impl_str_json_enum!(
         SccpProofFinalityModelV1::SolanaFinalizedSlot => "SolanaFinalizedSlot",
         SccpProofFinalityModelV1::TonMasterchain => "TonMasterchain",
         SccpProofFinalityModelV1::TronDpos => "TronDpos",
-        SccpProofFinalityModelV1::SubstrateGrandpa => "SubstrateGrandpa",
     }
 );
 
@@ -3857,7 +3612,6 @@ pub enum SccpDestinationVerifierPlanV1 {
     SolanaProgramNativeRecursive,
     TonContractNativeRecursive,
     TronContractNativeRecursive,
-    SubstrateRuntimeNativeRecursive,
     TronContractGroth16Bn254,
 }
 
@@ -3869,7 +3623,6 @@ impl SccpDestinationVerifierPlanV1 {
             Self::SolanaProgramNativeRecursive => "SolanaProgramNativeRecursive",
             Self::TonContractNativeRecursive => "TonContractNativeRecursive",
             Self::TronContractNativeRecursive => "TronContractNativeRecursive",
-            Self::SubstrateRuntimeNativeRecursive => "SubstrateRuntimeNativeRecursive",
             Self::TronContractGroth16Bn254 => "TronContractGroth16Bn254",
         }
     }
@@ -3885,7 +3638,6 @@ impl core::str::FromStr for SccpDestinationVerifierPlanV1 {
             "SolanaProgramNativeRecursive" => Ok(Self::SolanaProgramNativeRecursive),
             "TonContractNativeRecursive" => Ok(Self::TonContractNativeRecursive),
             "TronContractNativeRecursive" => Ok(Self::TronContractNativeRecursive),
-            "SubstrateRuntimeNativeRecursive" => Ok(Self::SubstrateRuntimeNativeRecursive),
             "TronContractGroth16Bn254" => Ok(Self::TronContractGroth16Bn254),
             _ => Err("unsupported SCCP destination verifier plan"),
         }
@@ -4009,24 +3761,6 @@ pub struct SccpDestinationRolloutV1 {
     pub ton_verifier_code_boc: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
-    pub substrate_finalized_head: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub substrate_runtime_spec_name: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub substrate_runtime_spec_version: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub substrate_runtime_transaction_version: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub substrate_runtime_code_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
-    pub substrate_runtime_code_base64: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[norito(default)]
     pub blockers: Vec<String>,
 }
 
@@ -4067,12 +3801,6 @@ impl Default for SccpDestinationRolloutV1 {
             ton_last_transaction_hash: None,
             ton_verifier_code_boc_root_hash: None,
             ton_verifier_code_boc: None,
-            substrate_finalized_head: None,
-            substrate_runtime_spec_name: None,
-            substrate_runtime_spec_version: None,
-            substrate_runtime_transaction_version: None,
-            substrate_runtime_code_hash: None,
-            substrate_runtime_code_base64: None,
             blockers: Vec::new(),
         }
     }
@@ -4122,7 +3850,6 @@ pub enum SccpVerifierBackendFamilyV1 {
     SolanaProgram,
     TonContract,
     TronStarkFri,
-    SubstrateRuntime,
     EvmGroth16Bn254,
     TronGroth16Bn254,
     Unknown,
@@ -4398,21 +4125,6 @@ pub struct SccpTonInternalMessageSubmissionPayloadV1 {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::struct_field_names)]
-pub struct SccpSubstrateRuntimeSubmissionPayloadV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub proof_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub public_inputs_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
-    pub bundle_bytes: Vec<u8>,
-}
-
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
-)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-#[allow(clippy::struct_field_names)]
 pub struct SccpLocalAdmissionSubmissionPayloadV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
@@ -4442,7 +4154,6 @@ pub enum SccpPlatformSubmissionPayloadV1 {
     SolanaProgramInstruction(SccpSolanaProgramSubmissionPayloadV1),
     TonInternalMessage(SccpTonInternalMessageSubmissionPayloadV1),
     TronContractCall(SccpTronContractSubmissionPayloadV1),
-    SubstrateRuntimeCall(SccpSubstrateRuntimeSubmissionPayloadV1),
     LocalAdmission(SccpLocalAdmissionSubmissionPayloadV1),
 }
 
@@ -4514,13 +4225,8 @@ pub fn sccp_domain_in_supported_launch_scope_v1(domain_id: u32) -> bool {
     SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1.contains(&domain_id)
 }
 
-fn sccp_unsupported_launch_domain_blocker_for_domain_v1(domain_id: u32) -> &'static str {
-    match domain_id {
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1
-        }
-        _ => SCCP_UNSUPPORTED_LAUNCH_DOMAIN_BLOCKER_V1,
-    }
+fn sccp_unsupported_launch_domain_blocker_for_domain_v1(_domain_id: u32) -> &'static str {
+    SCCP_UNSUPPORTED_LAUNCH_DOMAIN_BLOCKER_V1
 }
 
 fn sccp_source_chain_proof_in_inbound_launch_scope_v1(
@@ -4805,12 +4511,6 @@ pub fn sccp_destination_rollout_for_domain(domain: u32) -> Option<SccpDestinatio
         ton_last_transaction_hash: None,
         ton_verifier_code_boc_root_hash: None,
         ton_verifier_code_boc: None,
-        substrate_finalized_head: None,
-        substrate_runtime_spec_name: None,
-        substrate_runtime_spec_version: None,
-        substrate_runtime_transaction_version: None,
-        substrate_runtime_code_hash: None,
-        substrate_runtime_code_base64: None,
         blockers: sccp_destination_rollout_blockers_for_domain(domain)?,
     })
 }
@@ -4822,9 +4522,6 @@ fn sccp_destination_anchor_id_for_domain(domain: u32) -> Option<&'static str> {
         SCCP_DOMAIN_SOL => Some(SCCP_SOLANA_MAINNET_DESTINATION_ANCHOR_ID_V1),
         SCCP_DOMAIN_TON => Some(SCCP_TON_MAINNET_DESTINATION_ANCHOR_ID_V1),
         SCCP_DOMAIN_TRON => Some(SCCP_TRON_MAINNET_DESTINATION_ANCHOR_ID_V1),
-        SCCP_DOMAIN_SORA_KUSAMA => Some(SCCP_SORA_KUSAMA_DESTINATION_ANCHOR_ID_V1),
-        SCCP_DOMAIN_SORA_POLKADOT => Some(SCCP_SORA_POLKADOT_DESTINATION_ANCHOR_ID_V1),
-        SCCP_DOMAIN_SORA2 => Some(SCCP_SORA2_DESTINATION_ANCHOR_ID_V1),
         _ => None,
     }
 }
@@ -4860,14 +4557,7 @@ fn sccp_profiled_destination_rollout_unchecked_v1(
 }
 
 fn sccp_domain_uses_static_destination_binding(domain: u32) -> bool {
-    matches!(
-        domain,
-        SCCP_DOMAIN_SOL
-            | SCCP_DOMAIN_TON
-            | SCCP_DOMAIN_SORA_KUSAMA
-            | SCCP_DOMAIN_SORA_POLKADOT
-            | SCCP_DOMAIN_SORA2
-    )
+    matches!(domain, SCCP_DOMAIN_SOL | SCCP_DOMAIN_TON)
 }
 
 fn sccp_apply_static_destination_binding(rollout: &mut SccpDestinationRolloutV1) -> Option<()> {
@@ -4894,39 +4584,6 @@ fn sccp_profiled_destination_rollout_with_key_hash_v1(
         verifier_key_hash,
     )?;
     sccp_apply_static_destination_binding(&mut rollout)?;
-    sccp_destination_rollout_is_production_ready(domain, &rollout).then_some(rollout)
-}
-
-/// Build a Substrate-family destination rollout bound to a finalized runtime snapshot.
-pub fn sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-    domain: u32,
-    verifier_identity: String,
-    finalized_head: H256,
-    runtime_spec_version: u32,
-    runtime_transaction_version: u32,
-    runtime_code: Vec<u8>,
-) -> Option<SccpDestinationRolloutV1> {
-    if !matches!(
-        domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) || !h256_is_nonzero(&finalized_head)
-    {
-        return None;
-    }
-    let runtime_code_hash = sccp_substrate_runtime_code_hash_v1(&runtime_code)?;
-    let mut rollout = sccp_profiled_destination_rollout_unchecked_v1(
-        domain,
-        verifier_identity,
-        encode_0x_lower_hex(&runtime_code_hash),
-        None,
-    )?;
-    sccp_apply_static_destination_binding(&mut rollout)?;
-    rollout.substrate_finalized_head = Some(encode_0x_lower_hex(&finalized_head));
-    rollout.substrate_runtime_spec_name = Some(sccp_chain_key_for_domain(domain)?.to_owned());
-    rollout.substrate_runtime_spec_version = Some(runtime_spec_version.to_string());
-    rollout.substrate_runtime_transaction_version = Some(runtime_transaction_version.to_string());
-    rollout.substrate_runtime_code_hash = Some(encode_0x_lower_hex(&runtime_code_hash));
-    rollout.substrate_runtime_code_base64 = Some(encode_standard_base64(&runtime_code));
     sccp_destination_rollout_is_production_ready(domain, &rollout).then_some(rollout)
 }
 
@@ -5228,10 +4885,6 @@ pub fn sccp_tron_verifier_contract_address_is_valid(value: &str) -> bool {
     tron_verifier_contract_address_is_valid(value)
 }
 
-fn substrate_runtime_verifier_identity_is_valid(value: &str) -> bool {
-    value == SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1
-}
-
 fn sccp_destination_rollout_matches_domain_profile(
     domain: u32,
     rollout: &SccpDestinationRolloutV1,
@@ -5251,9 +4904,6 @@ fn sccp_destination_rollout_matches_domain_profile(
         SCCP_DOMAIN_SOL => solana_verifier_program_id_is_valid(verifier_identity),
         SCCP_DOMAIN_TON => ton_verifier_contract_address_is_valid(verifier_identity),
         SCCP_DOMAIN_TRON => tron_verifier_contract_address_is_valid(verifier_identity),
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            substrate_runtime_verifier_identity_is_valid(verifier_identity)
-        }
         _ => false,
     }
 }
@@ -5414,11 +5064,7 @@ fn sccp_destination_rollout_binding_metadata_is_ready(
             sccp_evm_destination_rollout_binding_metadata_is_ready(domain, rollout)
         }
         SCCP_DOMAIN_TRON => sccp_tron_destination_rollout_binding_metadata_is_ready(rollout),
-        SCCP_DOMAIN_SOL
-        | SCCP_DOMAIN_TON
-        | SCCP_DOMAIN_SORA_KUSAMA
-        | SCCP_DOMAIN_SORA_POLKADOT
-        | SCCP_DOMAIN_SORA2 => {
+        SCCP_DOMAIN_SOL | SCCP_DOMAIN_TON => {
             sccp_static_destination_rollout_binding_metadata_is_ready(domain, rollout)
         }
         _ => false,
@@ -5438,18 +5084,6 @@ fn sccp_canonical_positive_u64(value: &str) -> Option<u64> {
         return None;
     }
     value.parse::<u64>().ok()
-}
-
-fn sccp_canonical_u32_decimal(value: &str) -> Option<u32> {
-    let raw = value.as_bytes();
-    if raw.is_empty()
-        || value != value.trim()
-        || raw.iter().any(|byte| !byte.is_ascii_digit())
-        || (raw.len() > 1 && raw[0] == b'0')
-    {
-        return None;
-    }
-    value.parse::<u32>().ok()
 }
 
 fn base64_standard_value(byte: u8) -> Option<u8> {
@@ -5558,14 +5192,6 @@ pub fn sccp_solana_verifier_program_code_hash_v1(program_bytes: &[u8]) -> Option
         return None;
     }
     Some(blake2b256_bytes(program_bytes))
-}
-
-/// Return the deployed Substrate runtime code hash used by SCCP evidence.
-pub fn sccp_substrate_runtime_code_hash_v1(runtime_code: &[u8]) -> Option<H256> {
-    if runtime_code.is_empty() || !runtime_code.iter().copied().any(|byte| byte != 0) {
-        return None;
-    }
-    Some(blake2b256_bytes(runtime_code))
 }
 
 fn solana_upgradeable_program_account_data(programdata_address: [u8; 32]) -> Vec<u8> {
@@ -5763,67 +5389,6 @@ fn sccp_ton_destination_rollout_live_account_evidence_is_ready(
     sccp_ton_boc_single_root_hash(&code_boc) == Some(code_boc_root_hash)
 }
 
-fn substrate_destination_rollout_finalized_runtime_evidence(
-    domain: u32,
-    rollout: &SccpDestinationRolloutV1,
-) -> Option<(H256, String, u32, u32, Vec<u8>)> {
-    if !matches!(
-        domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) || rollout.domain != domain
-        || !substrate_runtime_verifier_identity_is_valid(rollout.verifier_identity.as_deref()?)
-    {
-        return None;
-    }
-    let expected_chain = sccp_chain_key_for_domain(domain)?;
-    if rollout.substrate_runtime_spec_name.as_deref()? != expected_chain {
-        return None;
-    }
-
-    let verifier_code_hash =
-        required_hex_string_is_nonzero::<32>(rollout.verifier_code_hash.as_deref())?;
-    let finalized_head =
-        required_hex_string_is_nonzero::<32>(rollout.substrate_finalized_head.as_deref())?;
-    let runtime_spec_version =
-        sccp_canonical_u32_decimal(rollout.substrate_runtime_spec_version.as_deref()?)?;
-    let runtime_transaction_version =
-        sccp_canonical_u32_decimal(rollout.substrate_runtime_transaction_version.as_deref()?)?;
-    let runtime_code = decode_standard_base64(rollout.substrate_runtime_code_base64.as_deref()?)?;
-    let runtime_code_hash = sccp_substrate_runtime_code_hash_v1(&runtime_code)?;
-    if required_hex_string_is_nonzero::<32>(rollout.substrate_runtime_code_hash.as_deref()).as_ref()
-        != Some(&runtime_code_hash)
-        || runtime_code_hash != verifier_code_hash
-    {
-        return None;
-    }
-
-    Some((
-        finalized_head,
-        expected_chain.to_owned(),
-        runtime_spec_version,
-        runtime_transaction_version,
-        runtime_code,
-    ))
-}
-
-fn sccp_destination_rollout_substrate_live_fields_are_absent(
-    rollout: &SccpDestinationRolloutV1,
-) -> bool {
-    rollout.substrate_finalized_head.is_none()
-        && rollout.substrate_runtime_spec_name.is_none()
-        && rollout.substrate_runtime_spec_version.is_none()
-        && rollout.substrate_runtime_transaction_version.is_none()
-        && rollout.substrate_runtime_code_hash.is_none()
-        && rollout.substrate_runtime_code_base64.is_none()
-}
-
-fn sccp_substrate_destination_rollout_finalized_runtime_evidence_is_ready(
-    domain: u32,
-    rollout: &SccpDestinationRolloutV1,
-) -> bool {
-    substrate_destination_rollout_finalized_runtime_evidence(domain, rollout).is_some()
-}
-
 fn sccp_destination_rollout_live_chain_metadata_is_ready(
     domain: u32,
     rollout: &SccpDestinationRolloutV1,
@@ -5831,25 +5396,15 @@ fn sccp_destination_rollout_live_chain_metadata_is_ready(
     match domain {
         SCCP_DOMAIN_SOL => {
             sccp_destination_rollout_ton_live_fields_are_absent(rollout)
-                && sccp_destination_rollout_substrate_live_fields_are_absent(rollout)
                 && sccp_solana_destination_rollout_live_programdata_evidence_is_ready(rollout)
         }
         SCCP_DOMAIN_TON => {
             sccp_destination_rollout_solana_live_fields_are_absent(rollout)
-                && sccp_destination_rollout_substrate_live_fields_are_absent(rollout)
                 && sccp_ton_destination_rollout_live_account_evidence_is_ready(rollout)
-        }
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            sccp_destination_rollout_solana_live_fields_are_absent(rollout)
-                && sccp_destination_rollout_ton_live_fields_are_absent(rollout)
-                && sccp_substrate_destination_rollout_finalized_runtime_evidence_is_ready(
-                    domain, rollout,
-                )
         }
         _ => {
             sccp_destination_rollout_solana_live_fields_are_absent(rollout)
                 && sccp_destination_rollout_ton_live_fields_are_absent(rollout)
-                && sccp_destination_rollout_substrate_live_fields_are_absent(rollout)
         }
     }
 }
@@ -5892,9 +5447,6 @@ fn sccp_route_allowlist_id_for_domain(domain: u32) -> Option<&'static str> {
         SCCP_DOMAIN_SOL => Some(SCCP_SOLANA_MAINNET_ROUTE_ALLOWLIST_ID_V1),
         SCCP_DOMAIN_TON => Some(SCCP_TON_MAINNET_ROUTE_ALLOWLIST_ID_V1),
         SCCP_DOMAIN_TRON => Some(SCCP_TRON_MAINNET_ROUTE_ALLOWLIST_ID_V1),
-        SCCP_DOMAIN_SORA_KUSAMA => Some(SCCP_SORA_KUSAMA_ROUTE_ALLOWLIST_ID_V1),
-        SCCP_DOMAIN_SORA_POLKADOT => Some(SCCP_SORA_POLKADOT_ROUTE_ALLOWLIST_ID_V1),
-        SCCP_DOMAIN_SORA2 => Some(SCCP_SORA2_ROUTE_ALLOWLIST_ID_V1),
         _ => None,
     }
 }
@@ -6573,85 +6125,6 @@ pub fn sccp_solana_route_canary_evidence_hash_v1(
     ))
 }
 
-/// Return canonical Substrate-family route-canary evidence bytes for a finalized runtime snapshot.
-pub fn canonical_sccp_substrate_route_canary_evidence_bytes_v1(
-    domain: u32,
-    route_allowlist_hash: H256,
-    destination_binding_hash: H256,
-    source_verifier_material_hash: H256,
-    source_adapter_engine_deployment_hash: H256,
-    destination_rollout: &SccpDestinationRolloutV1,
-) -> Option<Vec<u8>> {
-    if !matches!(
-        domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) || !h256_is_nonzero(&route_allowlist_hash)
-        || !h256_is_nonzero(&destination_binding_hash)
-        || !h256_is_nonzero(&source_verifier_material_hash)
-        || !h256_is_nonzero(&source_adapter_engine_deployment_hash)
-        || !sccp_destination_rollout_is_production_ready(domain, destination_rollout)
-    {
-        return None;
-    }
-    if destination_binding_hash
-        != required_hex_string_is_nonzero::<32>(
-            destination_rollout.destination_binding_hash.as_deref(),
-        )?
-    {
-        return None;
-    }
-    let verifier_entrypoint = destination_rollout.verifier_identity.as_deref()?;
-    let verifier_code_hash =
-        required_hex_string_is_nonzero::<32>(destination_rollout.verifier_code_hash.as_deref())?;
-    let (
-        finalized_head,
-        runtime_spec_name,
-        runtime_spec_version,
-        runtime_transaction_version,
-        runtime_code,
-    ) = substrate_destination_rollout_finalized_runtime_evidence(domain, destination_rollout)?;
-
-    let mut out = Vec::new();
-    push_u8(&mut out, 1);
-    push_u32(&mut out, SCCP_DOMAIN_SORA);
-    push_u32(&mut out, domain);
-    out.extend_from_slice(&route_allowlist_hash);
-    out.extend_from_slice(&destination_binding_hash);
-    out.extend_from_slice(&source_verifier_material_hash);
-    out.extend_from_slice(&source_adapter_engine_deployment_hash);
-    push_vec(&mut out, sccp_chain_key_for_domain(domain)?.as_bytes());
-    push_vec(&mut out, verifier_entrypoint.as_bytes());
-    out.extend_from_slice(&verifier_code_hash);
-    out.extend_from_slice(&finalized_head);
-    push_vec(&mut out, runtime_spec_name.as_bytes());
-    push_u32(&mut out, runtime_spec_version);
-    push_u32(&mut out, runtime_transaction_version);
-    push_vec(&mut out, &runtime_code);
-    Some(out)
-}
-
-/// Return the canonical Substrate-family route-canary evidence hash.
-pub fn sccp_substrate_route_canary_evidence_hash_v1(
-    domain: u32,
-    route_allowlist_hash: H256,
-    destination_binding_hash: H256,
-    source_verifier_material_hash: H256,
-    source_adapter_engine_deployment_hash: H256,
-    destination_rollout: &SccpDestinationRolloutV1,
-) -> Option<H256> {
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_ROUTE_CANARY_FINALIZED_RUNTIME_LABEL_V1,
-        &canonical_sccp_substrate_route_canary_evidence_bytes_v1(
-            domain,
-            route_allowlist_hash,
-            destination_binding_hash,
-            source_verifier_material_hash,
-            source_adapter_engine_deployment_hash,
-            destination_rollout,
-        )?,
-    ))
-}
-
 /// Return the canonical route-allowlist hash from concrete governed lane records.
 pub fn sccp_route_allowlist_hash_from_deployment_materials_v1(
     domain: u32,
@@ -7006,40 +6479,6 @@ pub fn sccp_solana_route_allowlist_with_lane_canary_evidence_v1(
     )
 }
 
-/// Attach Substrate-family route canary evidence derived from finalized runtime metadata.
-pub fn sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
-    allowlist: SccpRouteAllowlistReadinessV1,
-    destination_rollout: &SccpDestinationRolloutV1,
-    destination_binding_hash: H256,
-    source_verifier_material_hash: H256,
-    source_adapter_engine_deployment_hash: H256,
-) -> Option<SccpRouteAllowlistReadinessV1> {
-    if !matches!(
-        allowlist.domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) || destination_rollout.domain != allowlist.domain
-    {
-        return None;
-    }
-    let route_allowlist_hash =
-        required_hex_string_is_nonzero::<32>(allowlist.route_allowlist_hash.as_deref())?;
-    let route_canary_evidence_hash = sccp_substrate_route_canary_evidence_hash_v1(
-        allowlist.domain,
-        route_allowlist_hash,
-        destination_binding_hash,
-        source_verifier_material_hash,
-        source_adapter_engine_deployment_hash,
-        destination_rollout,
-    )?;
-    sccp_route_allowlist_with_lane_canary_evidence_v1(
-        allowlist,
-        route_canary_evidence_hash,
-        destination_binding_hash,
-        source_verifier_material_hash,
-        source_adapter_engine_deployment_hash,
-    )
-}
-
 #[allow(clippy::similar_names)]
 fn sccp_route_allowlist_matches_domain_profile(
     domain: u32,
@@ -7058,10 +6497,7 @@ fn sccp_route_allowlist_matches_domain_profile(
         }
         SCCP_DOMAIN_TON => evm_canary_fields_absent && tron_specific_fields_absent,
         SCCP_DOMAIN_TRON => evm_canary_fields_absent && ton_canary_fields_absent,
-        SCCP_DOMAIN_SOL
-        | SCCP_DOMAIN_SORA_KUSAMA
-        | SCCP_DOMAIN_SORA_POLKADOT
-        | SCCP_DOMAIN_SORA2 => {
+        SCCP_DOMAIN_SOL => {
             evm_canary_fields_absent && ton_canary_fields_absent && tron_specific_fields_absent
         }
         _ => evm_canary_fields_absent && ton_canary_fields_absent && tron_specific_fields_absent,
@@ -7456,27 +6892,6 @@ fn sccp_route_allowlist_solana_canary_evidence_is_bound(
         == Some(route_canary_evidence_hash)
 }
 
-fn sccp_route_allowlist_substrate_canary_evidence_is_bound(
-    domain: u32,
-    destination_rollout: &SccpDestinationRolloutV1,
-    route_canary_evidence_hash: &H256,
-    expected_route_allowlist_hash: &H256,
-    destination_binding_hash: &H256,
-    source_verifier_material_hash: &H256,
-    source_adapter_engine_deployment_hash: &H256,
-) -> bool {
-    sccp_substrate_route_canary_evidence_hash_v1(
-        domain,
-        *expected_route_allowlist_hash,
-        *destination_binding_hash,
-        *source_verifier_material_hash,
-        *source_adapter_engine_deployment_hash,
-        destination_rollout,
-    )
-    .as_ref()
-        == Some(route_canary_evidence_hash)
-}
-
 fn sccp_route_allowlist_canary_evidence_is_bound(
     domain: u32,
     allowlist: &SccpRouteAllowlistReadinessV1,
@@ -7562,23 +6977,6 @@ fn sccp_route_allowlist_canary_evidence_is_bound(
                 destination_binding_hash,
             );
     }
-    if matches!(
-        domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) {
-        return sccp_route_allowlist_evm_canary_fields_absent(allowlist)
-            && sccp_route_allowlist_ton_canary_fields_absent(allowlist)
-            && sccp_route_allowlist_tron_canary_fields_absent(allowlist)
-            && sccp_route_allowlist_substrate_canary_evidence_is_bound(
-                domain,
-                destination_rollout,
-                &route_canary_evidence_hash,
-                expected_route_allowlist_hash,
-                destination_binding_hash,
-                source_verifier_material_hash,
-                source_adapter_engine_deployment_hash,
-            );
-    }
     sccp_route_allowlist_evm_canary_fields_absent(allowlist)
         && sccp_route_allowlist_ton_canary_fields_absent(allowlist)
         && sccp_route_allowlist_tron_canary_fields_absent(allowlist)
@@ -7655,9 +7053,6 @@ pub fn sccp_source_proof_plan_for_domain(domain: u32) -> Option<SccpSourceProofP
         SCCP_DOMAIN_SOL => Some(SccpSourceProofPlanV1::SolanaFinalizedTransactionProof),
         SCCP_DOMAIN_TON => Some(SccpSourceProofPlanV1::TonMasterchainShardProof),
         SCCP_DOMAIN_TRON => Some(SccpSourceProofPlanV1::TronDposReceiptProof),
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            Some(SccpSourceProofPlanV1::SubstrateGrandpaEventProof)
-        }
         _ => None,
     }
 }
@@ -7678,9 +7073,6 @@ fn sccp_source_proof_blocker_for_domain(domain: u32) -> Option<&'static str> {
         ),
         SCCP_DOMAIN_TRON => Some(
             "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
-        ),
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => Some(
-            "Substrate GRANDPA authority-set transition/runtime storage proofs and recursive source-adapter verifier deployment are not complete for the SCCP inbound path",
         ),
         _ => None,
     }
@@ -7703,9 +7095,6 @@ fn sccp_source_consensus_engine_blocker_for_domain(domain: u32) -> Option<&'stat
         SCCP_DOMAIN_TRON => {
             Some("TRON DPoS solid-block verifier is not deployed for SCCP source proofs")
         }
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            Some("Substrate GRANDPA finality verifier is not deployed for SCCP source proofs")
-        }
         _ => None,
     }
 }
@@ -7723,9 +7112,6 @@ fn sccp_source_inclusion_engine_blocker_for_domain(domain: u32) -> Option<&'stat
         ),
         SCCP_DOMAIN_TRON => Some(
             "TRON transaction Merkle branch and successful TriggerSmartContract source-call verifier is not deployed for SCCP source proofs",
-        ),
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => Some(
-            "Substrate event/storage inclusion verifier is not deployed for SCCP source proofs",
         ),
         _ => None,
     }
@@ -7748,9 +7134,6 @@ fn sccp_source_trust_anchor_blocker_for_domain(domain: u32) -> Option<&'static s
         SCCP_DOMAIN_TRON => {
             Some("TRON witness-schedule trust anchor is not active for SCCP source proofs")
         }
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => Some(
-            "Substrate GRANDPA authority-set trust anchor is not active for SCCP source proofs",
-        ),
         _ => None,
     }
 }
@@ -7808,18 +7191,6 @@ fn sccp_source_adapter_deployment_unblocks_production_for_domain(
         }
         SCCP_DOMAIN_TRON => {
             sccp_tron_dpos_source_gate_hash_from_deployment_v1(material, deployment).is_some()
-        }
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            let storage_verifier_matches = sccp_source_state_verifier_id_for_domain(domain)
-                .is_some_and(|expected_id| material.source_state_verifier_id == expected_id)
-                && sccp_source_state_verifier_is_production_ready(material)
-                && deployment.source_state_verifier_id == material.source_state_verifier_id
-                && deployment.source_state_verifier_hash == material.source_state_verifier_hash;
-            if !storage_verifier_matches {
-                return false;
-            }
-            sccp_substrate_runtime_storage_gate_hash_from_deployment_v1(material, deployment)
-                .is_some()
         }
         SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
             sccp_evm_source_adapter_deployment_unblocks_production_for_domain(
@@ -8188,9 +7559,6 @@ fn sccp_lane_disabled_reason_for_plan(plan: SccpDestinationVerifierPlanV1) -> &'
         SccpDestinationVerifierPlanV1::TronContractGroth16Bn254 => {
             "disabled until the immutable TRON Groth16/bn254 SCCP verifier contract and cryptographic trust anchors are live for this lane"
         }
-        SccpDestinationVerifierPlanV1::SubstrateRuntimeNativeRecursive => {
-            "disabled until the immutable Substrate runtime SCCP verifier and cryptographic trust anchors are live for this lane"
-        }
         SccpDestinationVerifierPlanV1::Unknown => SCCP_PRODUCTION_DISABLED_REASON_V1,
     }
 }
@@ -8473,7 +7841,6 @@ fn sccp_proof_finality_model_code(model: SccpProofFinalityModelV1) -> u8 {
         SccpProofFinalityModelV1::SolanaFinalizedSlot => 3,
         SccpProofFinalityModelV1::TonMasterchain => 4,
         SccpProofFinalityModelV1::TronDpos => 5,
-        SccpProofFinalityModelV1::SubstrateGrandpa => 6,
     }
 }
 
@@ -8485,7 +7852,6 @@ fn sccp_source_proof_plan_code(plan: SccpSourceProofPlanV1) -> u8 {
         SccpSourceProofPlanV1::SolanaFinalizedTransactionProof => 3,
         SccpSourceProofPlanV1::TonMasterchainShardProof => 4,
         SccpSourceProofPlanV1::TronDposReceiptProof => 5,
-        SccpSourceProofPlanV1::SubstrateGrandpaEventProof => 6,
     }
 }
 
@@ -8496,7 +7862,6 @@ fn sccp_source_adapter_proof_code(proof: &SccpSourceAdapterProofV1) -> u8 {
         SccpSourceAdapterProofV1::SolanaFinalizedTransaction(_) => 3,
         SccpSourceAdapterProofV1::TonMasterchainShard(_) => 4,
         SccpSourceAdapterProofV1::TronDposReceipt(_) => 5,
-        SccpSourceAdapterProofV1::SubstrateGrandpaEvent(_) => 6,
     }
 }
 
@@ -8506,7 +7871,6 @@ fn sccp_proof_verifier_target_code(target: SccpProofVerifierTargetV1) -> u8 {
         SccpProofVerifierTargetV1::SolanaProgram => 2,
         SccpProofVerifierTargetV1::TonContract => 3,
         SccpProofVerifierTargetV1::TronContract => 4,
-        SccpProofVerifierTargetV1::SubstrateRuntime => 5,
     }
 }
 
@@ -8528,7 +7892,6 @@ fn sccp_verifier_backend_family_code(family: SccpVerifierBackendFamilyV1) -> u8 
         SccpVerifierBackendFamilyV1::SolanaProgram => 2,
         SccpVerifierBackendFamilyV1::TonContract => 3,
         SccpVerifierBackendFamilyV1::TronStarkFri => 4,
-        SccpVerifierBackendFamilyV1::SubstrateRuntime => 5,
         SccpVerifierBackendFamilyV1::EvmGroth16Bn254 => 6,
         SccpVerifierBackendFamilyV1::TronGroth16Bn254 => 7,
         SccpVerifierBackendFamilyV1::Unknown => 0,
@@ -8541,9 +7904,6 @@ fn sccp_transparent_chain_family_for_domain(domain: u32) -> Option<SccpTranspare
         SCCP_DOMAIN_SOL => Some(SccpTransparentChainFamilyV1::Solana),
         SCCP_DOMAIN_TON => Some(SccpTransparentChainFamilyV1::Ton),
         SCCP_DOMAIN_TRON => Some(SccpTransparentChainFamilyV1::Tron),
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            Some(SccpTransparentChainFamilyV1::Substrate)
-        }
         _ => None,
     }
 }
@@ -8554,7 +7914,6 @@ fn sccp_transparent_chain_family_code(family: SccpTransparentChainFamilyV1) -> u
         SccpTransparentChainFamilyV1::Solana => 2,
         SccpTransparentChainFamilyV1::Ton => 3,
         SccpTransparentChainFamilyV1::Tron => 4,
-        SccpTransparentChainFamilyV1::Substrate => 5,
     }
 }
 
@@ -9981,61 +9340,6 @@ pub fn sccp_tron_dpos_source_gate_hash_from_deployment_v1(
     sccp_tron_dpos_source_gate_hash_v1(material, deployment)
 }
 
-pub fn sccp_substrate_runtime_storage_gate_hash_v1(
-    material: &SccpSourceVerifierMaterialV1,
-    deployment: &SccpSourceAdapterEngineDeploymentV1,
-) -> Option<H256> {
-    if !matches!(
-        material.source_domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) || deployment.source_domain != material.source_domain
-        || deployment.target_domain != SCCP_DOMAIN_SORA
-        || !sccp_source_adapter_engine_deployment_matches_material(material, deployment)
-        || !sccp_source_state_verifier_id_for_domain(material.source_domain)
-            .is_some_and(|expected_id| material.source_state_verifier_id == expected_id)
-        || !sccp_source_state_verifier_is_production_ready(material)
-    {
-        return None;
-    }
-
-    let mut out = Vec::new();
-    push_u8(&mut out, 1);
-    push_u32(&mut out, material.source_domain);
-    push_u32(&mut out, deployment.target_domain);
-    push_vec(&mut out, material.source_chain.as_bytes());
-    push_u8(
-        &mut out,
-        sccp_source_proof_plan_code(material.source_proof_plan),
-    );
-    push_u8(
-        &mut out,
-        sccp_proof_finality_model_code(material.finality_model),
-    );
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-    );
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1.as_bytes(),
-    );
-    push_vec(&mut out, material.source_state_verifier_id.as_bytes());
-    out.extend_from_slice(&material.source_state_verifier_hash);
-    out.extend_from_slice(&sccp_source_verifier_material_hash(material));
-    out.extend_from_slice(&sccp_source_adapter_engine_deployment_hash(deployment));
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_GATE_PREFIX_V1,
-        &out,
-    ))
-}
-
-pub fn sccp_substrate_runtime_storage_gate_hash_from_deployment_v1(
-    material: &SccpSourceVerifierMaterialV1,
-    deployment: &SccpSourceAdapterEngineDeploymentV1,
-) -> Option<H256> {
-    sccp_substrate_runtime_storage_gate_hash_v1(material, deployment)
-}
-
 pub fn canonical_sccp_source_adapter_verification_proof_bytes(
     proof: &SccpSourceAdapterVerificationProofV1,
 ) -> Vec<u8> {
@@ -10645,59 +9949,6 @@ fn push_tron_witness_schedule_transition_proof(
     push_tron_witness_seal_proof(out, &proof.seal_proof);
 }
 
-fn push_substrate_grandpa_justification_proof(
-    out: &mut Vec<u8>,
-    proof: &SccpSubstrateGrandpaJustificationProofV1,
-) {
-    push_u8(out, proof.version);
-    push_u64(out, proof.total_weight);
-    push_u64(out, proof.signed_weight);
-    out.extend_from_slice(&proof.precommit_message_hash);
-    push_u32(
-        out,
-        u32::try_from(proof.authority_public_keys.len())
-            .expect("Substrate authority public-key count fits u32"),
-    );
-    for public_key in &proof.authority_public_keys {
-        push_vec(out, public_key);
-    }
-    push_u32(
-        out,
-        u32::try_from(proof.authority_weights.len())
-            .expect("Substrate authority weight count fits u32"),
-    );
-    for weight in &proof.authority_weights {
-        push_u64(out, *weight);
-    }
-    push_vec(out, &proof.signers_bitmap);
-    push_u32(
-        out,
-        u32::try_from(proof.signatures.len()).expect("Substrate GRANDPA signature count fits u32"),
-    );
-    for signature in &proof.signatures {
-        push_vec(out, signature);
-    }
-}
-
-fn push_substrate_authority_set_transition_proof(
-    out: &mut Vec<u8>,
-    proof: &SccpSubstrateAuthoritySetTransitionProofV1,
-) {
-    push_u8(out, proof.version);
-    push_u32(out, proof.source_domain);
-    push_u64(out, proof.from_grandpa_set_id);
-    push_u64(out, proof.to_grandpa_set_id);
-    push_u64(out, proof.transition_block_number);
-    out.extend_from_slice(&proof.transition_block_hash);
-    out.extend_from_slice(&proof.parent_authority_set_hash);
-    out.extend_from_slice(&proof.next_authority_set_hash);
-    push_vec(out, &proof.next_authority_set_payload);
-    out.extend_from_slice(&proof.next_authority_set_payload_hash);
-    out.extend_from_slice(&proof.transition_message_hash);
-    out.extend_from_slice(&proof.transition_justification_hash);
-    push_substrate_grandpa_justification_proof(out, &proof.grandpa_justification);
-}
-
 pub fn canonical_sccp_source_adapter_proof_bytes(proof: &SccpSourceAdapterProofV1) -> Vec<u8> {
     let mut out = Vec::new();
     push_u8(&mut out, sccp_source_adapter_proof_code(proof));
@@ -10939,45 +10190,6 @@ pub fn canonical_sccp_source_adapter_proof_bytes(proof: &SccpSourceAdapterProofV
                 push_tron_witness_schedule_transition_proof(&mut out, transition);
             }
         }
-        SccpSourceAdapterProofV1::SubstrateGrandpaEvent(proof) => {
-            push_u8(&mut out, proof.version);
-            push_u32(&mut out, proof.source_domain);
-            push_u64(&mut out, proof.finalized_block_number);
-            push_u64(&mut out, proof.grandpa_set_id);
-            out.extend_from_slice(&proof.block_hash);
-            out.extend_from_slice(&proof.authority_set_hash);
-            out.extend_from_slice(&proof.events_root);
-            out.extend_from_slice(&proof.grandpa_justification_hash);
-            out.extend_from_slice(&proof.storage_proof_hash);
-            if proof.runtime_storage_verification_proof.version != 0
-                || !proof
-                    .runtime_storage_verification_proof
-                    .proof_family
-                    .is_empty()
-                || !proof
-                    .runtime_storage_verification_proof
-                    .circuit_id
-                    .is_empty()
-                || !proof
-                    .runtime_storage_verification_proof
-                    .proof_bytes
-                    .is_empty()
-            {
-                push_source_state_verification_proof(
-                    &mut out,
-                    &proof.runtime_storage_verification_proof,
-                );
-            }
-            push_substrate_grandpa_justification_proof(&mut out, &proof.grandpa_justification);
-            push_u32(
-                &mut out,
-                u32::try_from(proof.authority_set_transition_proofs.len())
-                    .expect("Substrate authority-set transition proof count fits u32"),
-            );
-            for transition in &proof.authority_set_transition_proofs {
-                push_substrate_authority_set_transition_proof(&mut out, transition);
-            }
-        }
     }
     out
 }
@@ -10985,7 +10197,7 @@ pub fn canonical_sccp_source_adapter_proof_bytes(proof: &SccpSourceAdapterProofV
 pub fn canonical_sccp_source_adapter_proof_bytes_checked(
     proof: &SccpSourceAdapterProofV1,
 ) -> Option<Vec<u8>> {
-    if !sccp_source_adapter_proof_shape_is_bounded(proof) {
+    if !sccp_source_adapter_proof_encoding_shape_is_bounded(proof) {
         return None;
     }
     Some(canonical_sccp_source_adapter_proof_bytes(proof))
@@ -11351,197 +10563,6 @@ pub fn sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_
         }
         material.source_bridge_config_hash = source_bridge_config_hash;
     }
-    Some(material)
-}
-
-fn sccp_substrate_family_source_verifier_component_hash(
-    source_domain: u32,
-    component_id: &str,
-    component_kind: &str,
-) -> Option<H256> {
-    let mut out = Vec::new();
-    push_u8(&mut out, 1);
-    push_u32(&mut out, source_domain);
-    push_vec(
-        &mut out,
-        sccp_chain_key_for_domain(source_domain)?.as_bytes(),
-    );
-    push_u8(
-        &mut out,
-        sccp_source_proof_plan_code(sccp_source_proof_plan_for_domain(source_domain)?),
-    );
-    push_u8(
-        &mut out,
-        sccp_proof_finality_model_code(sccp_proof_finality_model_for_domain(source_domain)?),
-    );
-    push_vec(
-        &mut out,
-        SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-    );
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-    );
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1.as_bytes(),
-    );
-    push_vec(
-        &mut out,
-        sccp_verifier_backend_key_for_domain(source_domain)?.as_bytes(),
-    );
-    push_vec(&mut out, SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1);
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
-    );
-    push_vec(&mut out, SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1);
-    push_vec(&mut out, SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1);
-    push_vec(&mut out, SCCP_SUBSTRATE_GRANDPA_PRECOMMIT_PREFIX_V1);
-    push_vec(&mut out, SCCP_SUBSTRATE_GRANDPA_JUSTIFICATION_PREFIX_V1);
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1,
-    );
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1,
-    );
-    push_vec(&mut out, component_kind.as_bytes());
-    push_vec(&mut out, component_id.as_bytes());
-    Some(prefixed_blake2b(
-        b"sccp:substrate-family:source-verifier-material:v1",
-        &out,
-    ))
-}
-
-fn sccp_substrate_family_source_profile_ids(
-    source_domain: u32,
-) -> Option<(
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-)> {
-    match source_domain {
-        SCCP_DOMAIN_SORA_KUSAMA => Some((
-            SCCP_SORA_KUSAMA_SOURCE_TRUST_ANCHOR_ID_V1,
-            SCCP_SORA_KUSAMA_CONSENSUS_VERIFIER_ID_V1,
-            SCCP_SORA_KUSAMA_MESSAGE_INCLUSION_VERIFIER_ID_V1,
-            SCCP_SORA_KUSAMA_RUNTIME_STORAGE_VERIFIER_ID_V1,
-            SCCP_SORA_KUSAMA_FINALITY_POLICY_ID_V1,
-        )),
-        SCCP_DOMAIN_SORA_POLKADOT => Some((
-            SCCP_SORA_POLKADOT_SOURCE_TRUST_ANCHOR_ID_V1,
-            SCCP_SORA_POLKADOT_CONSENSUS_VERIFIER_ID_V1,
-            SCCP_SORA_POLKADOT_MESSAGE_INCLUSION_VERIFIER_ID_V1,
-            SCCP_SORA_POLKADOT_RUNTIME_STORAGE_VERIFIER_ID_V1,
-            SCCP_SORA_POLKADOT_FINALITY_POLICY_ID_V1,
-        )),
-        SCCP_DOMAIN_SORA2 => Some((
-            SCCP_SORA2_SOURCE_TRUST_ANCHOR_ID_V1,
-            SCCP_SORA2_CONSENSUS_VERIFIER_ID_V1,
-            SCCP_SORA2_MESSAGE_INCLUSION_VERIFIER_ID_V1,
-            SCCP_SORA2_RUNTIME_STORAGE_VERIFIER_ID_V1,
-            SCCP_SORA2_FINALITY_POLICY_ID_V1,
-        )),
-        _ => None,
-    }
-}
-
-pub fn sccp_substrate_family_runtime_source_verifier_material_v1(
-    source_domain: u32,
-) -> Option<SccpSourceVerifierMaterialV1> {
-    let mut material = sccp_source_verifier_material_for_domain(source_domain)?;
-    let (
-        source_trust_anchor_id,
-        consensus_verifier_id,
-        message_inclusion_verifier_id,
-        source_state_verifier_id,
-        finality_policy_id,
-    ) = sccp_substrate_family_source_profile_ids(source_domain)?;
-    material.placeholder_material = false;
-    material.source_trust_anchor_id = source_trust_anchor_id.to_owned();
-    material.source_trust_anchor_hash = sccp_substrate_family_source_verifier_component_hash(
-        source_domain,
-        &material.source_trust_anchor_id,
-        "source-trust-anchor",
-    )?;
-    material.consensus_verifier_id = consensus_verifier_id.to_owned();
-    material.consensus_verifier_hash = sccp_substrate_family_source_verifier_component_hash(
-        source_domain,
-        &material.consensus_verifier_id,
-        "consensus-verifier",
-    )?;
-    material.message_inclusion_verifier_id = message_inclusion_verifier_id.to_owned();
-    material.message_inclusion_verifier_hash =
-        sccp_substrate_family_source_verifier_component_hash(
-            source_domain,
-            &material.message_inclusion_verifier_id,
-            "message-inclusion-verifier",
-        )?;
-    material.source_state_verifier_id = source_state_verifier_id.to_owned();
-    material.source_state_verifier_hash = sccp_substrate_family_source_verifier_component_hash(
-        source_domain,
-        &material.source_state_verifier_id,
-        "source-state-verifier",
-    )?;
-    material.finality_policy_id = finality_policy_id.to_owned();
-    material.finality_policy_hash = sccp_substrate_family_source_verifier_component_hash(
-        source_domain,
-        &material.finality_policy_id,
-        "finality-policy",
-    )?;
-    Some(material)
-}
-
-pub fn sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-    source_domain: u32,
-    source_trust_anchor_hash: H256,
-    consensus_verifier_hash: H256,
-    message_inclusion_verifier_hash: H256,
-    finality_policy_hash: H256,
-) -> Option<SccpSourceVerifierMaterialV1> {
-    let mut material = sccp_substrate_family_runtime_source_verifier_material_v1(source_domain)?;
-    if !sccp_source_verifier_deployed_role_hashes_are_valid(
-        &material,
-        source_trust_anchor_hash,
-        consensus_verifier_hash,
-        message_inclusion_verifier_hash,
-        finality_policy_hash,
-    ) {
-        return None;
-    }
-    material.source_trust_anchor_hash = source_trust_anchor_hash;
-    material.consensus_verifier_hash = consensus_verifier_hash;
-    material.message_inclusion_verifier_hash = message_inclusion_verifier_hash;
-    material.finality_policy_hash = finality_policy_hash;
-    Some(material)
-}
-
-pub fn sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-    source_domain: u32,
-    source_trust_anchor_hash: H256,
-    consensus_verifier_hash: H256,
-    message_inclusion_verifier_hash: H256,
-    source_state_verifier_hash: H256,
-    finality_policy_hash: H256,
-) -> Option<SccpSourceVerifierMaterialV1> {
-    if !h256_is_nonzero(&source_state_verifier_hash) {
-        return None;
-    }
-    let mut material = sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-        source_domain,
-        source_trust_anchor_hash,
-        consensus_verifier_hash,
-        message_inclusion_verifier_hash,
-        finality_policy_hash,
-    )?;
-    if !sccp_deployed_hash_is_distinct_from_material_roles(&source_state_verifier_hash, &material) {
-        return None;
-    }
-    material.source_state_verifier_hash = source_state_verifier_hash;
     Some(material)
 }
 
@@ -11994,23 +11015,13 @@ pub fn sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
 }
 
 fn sccp_source_state_verifier_required(source_domain: u32) -> bool {
-    matches!(
-        source_domain,
-        SCCP_DOMAIN_SOL
-            | SCCP_DOMAIN_TON
-            | SCCP_DOMAIN_SORA_KUSAMA
-            | SCCP_DOMAIN_SORA_POLKADOT
-            | SCCP_DOMAIN_SORA2
-    )
+    matches!(source_domain, SCCP_DOMAIN_SOL | SCCP_DOMAIN_TON)
 }
 
 fn sccp_source_state_verifier_id_for_domain(source_domain: u32) -> Option<&'static str> {
     match source_domain {
         SCCP_DOMAIN_SOL => Some(SCCP_SOLANA_MAINNET_ACCOUNTS_DB_VERIFIER_ID_V1),
         SCCP_DOMAIN_TON => Some(SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1),
-        SCCP_DOMAIN_SORA_KUSAMA => Some(SCCP_SORA_KUSAMA_RUNTIME_STORAGE_VERIFIER_ID_V1),
-        SCCP_DOMAIN_SORA_POLKADOT => Some(SCCP_SORA_POLKADOT_RUNTIME_STORAGE_VERIFIER_ID_V1),
-        SCCP_DOMAIN_SORA2 => Some(SCCP_SORA2_RUNTIME_STORAGE_VERIFIER_ID_V1),
         _ => None,
     }
 }
@@ -12076,9 +11087,6 @@ fn sccp_source_state_verifier_is_production_ready(material: &SccpSourceVerifierM
         let template = match material.source_domain {
             SCCP_DOMAIN_SOL => sccp_solana_mainnet_source_verifier_material_v1(),
             SCCP_DOMAIN_TON => sccp_ton_mainnet_source_verifier_material_v1(),
-            SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-                sccp_substrate_family_runtime_source_verifier_material_v1(material.source_domain)
-            }
             _ => None,
         };
         let Some(template) = template else {
@@ -12325,9 +11333,6 @@ fn sccp_source_verifier_material_matches_domain_profile(
         SCCP_DOMAIN_SOL => sccp_solana_mainnet_source_verifier_material_v1(),
         SCCP_DOMAIN_TON => sccp_ton_mainnet_source_verifier_material_v1(),
         SCCP_DOMAIN_TRON => sccp_tron_mainnet_source_verifier_material_v1(),
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-            sccp_substrate_family_runtime_source_verifier_material_v1(material.source_domain)
-        }
         _ => None,
     };
     let Some(template) = template else {
@@ -17463,20 +16468,6 @@ fn build_sccp_platform_submission_payload(
                 )?,
             )
         }
-        SccpProofVerifierTargetV1::SubstrateRuntime => {
-            if !sccp_transparent_proof_bytes_are_packagable(native_proof_bytes)
-                || !sccp_native_recursive_payload_bytes_are_packagable(&canonical_bundle)
-            {
-                return None;
-            }
-            SccpPlatformSubmissionPayloadV1::SubstrateRuntimeCall(
-                SccpSubstrateRuntimeSubmissionPayloadV1 {
-                    proof_bytes: native_proof_bytes.to_vec(),
-                    public_inputs_bytes: canonical_public_inputs,
-                    bundle_bytes: canonical_bundle,
-                },
-            )
-        }
     })
 }
 
@@ -17576,17 +16567,6 @@ fn sccp_submission_argument_values(
                 (SccpPlatformSubmissionPayloadV1::TronContractCall(payload), "statement_hash") => {
                     ("abi_bytes32".to_owned(), payload.statement_hash.to_vec())
                 }
-                (SccpPlatformSubmissionPayloadV1::SubstrateRuntimeCall(payload), "proof_bytes") => {
-                    ("raw_bytes".to_owned(), payload.proof_bytes.clone())
-                }
-                (
-                    SccpPlatformSubmissionPayloadV1::SubstrateRuntimeCall(payload),
-                    "public_inputs",
-                ) => ("raw_bytes".to_owned(), payload.public_inputs_bytes.clone()),
-                (
-                    SccpPlatformSubmissionPayloadV1::SubstrateRuntimeCall(payload),
-                    "bundle_bytes",
-                ) => ("raw_bytes".to_owned(), payload.bundle_bytes.clone()),
                 _ => return None,
             };
             Some(SccpSubmissionArgumentValueV1 {
@@ -21983,6 +20963,14 @@ fn sccp_source_state_verification_proof_is_present(
         || !proof.proof_bytes.is_empty()
 }
 
+fn sccp_source_state_verification_proof_encoding_shape_is_bounded(
+    proof: &SccpSourceStateVerificationProofV1,
+) -> bool {
+    proof.proof_family.len() <= SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES
+        && proof.circuit_id.len() <= SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES
+        && proof.proof_bytes.len() <= SCCP_SOURCE_STATE_MAX_PROOF_BYTES
+}
+
 fn sccp_solana_fixed_width_vectors_are_bounded(fields: &[Vec<u8>], max_fields: usize) -> bool {
     fields.len() <= max_fields && fields.iter().all(|field| field.len() <= 32)
 }
@@ -22185,6 +21173,116 @@ fn sccp_solana_finality_context_shape_is_bounded(context: &SccpSolanaFinalityCon
     context.version == 1
         && context.tower_vote_slots.len() <= tower_vote_stack_depth
         && context.bank_hash_hard_fork_data.len() <= SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES
+}
+
+fn sccp_solana_vote_proof_encoding_shape_is_bounded(
+    proof: &SccpSolanaFinalizedVoteProofV1,
+) -> bool {
+    proof.validator_public_keys.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_stakes.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_delegated_stakes.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_activation_epochs.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_deactivation_epochs.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_vote_account_addresses.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_stake_account_addresses.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_vote_account_hashes.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_stake_account_hashes.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_vote_account_openings.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_stake_account_openings.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_vote_account_data.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_stake_account_data.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_vote_account_raw_data.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_stake_account_raw_data.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_vote_account_inclusion_branches.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.validator_stake_account_inclusion_branches.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && proof.signatures.len() <= SCCP_SOLANA_MAX_VALIDATORS
+        && sccp_solana_fixed_width_vectors_are_bounded(
+            &proof.validator_public_keys,
+            SCCP_SOLANA_MAX_VALIDATORS,
+        )
+        && sccp_solana_fixed_width_vectors_are_bounded(
+            &proof.validator_vote_account_addresses,
+            SCCP_SOLANA_MAX_VALIDATORS,
+        )
+        && sccp_solana_fixed_width_vectors_are_bounded(
+            &proof.validator_stake_account_addresses,
+            SCCP_SOLANA_MAX_VALIDATORS,
+        )
+        && sccp_solana_fixed_width_vectors_are_bounded(
+            &proof.validator_vote_account_hashes,
+            SCCP_SOLANA_MAX_VALIDATORS,
+        )
+        && sccp_solana_fixed_width_vectors_are_bounded(
+            &proof.validator_stake_account_hashes,
+            SCCP_SOLANA_MAX_VALIDATORS,
+        )
+        && proof
+            .validator_vote_account_openings
+            .iter()
+            .all(sccp_solana_account_opening_shape_is_bounded)
+        && proof
+            .validator_stake_account_openings
+            .iter()
+            .all(sccp_solana_account_opening_shape_is_bounded)
+        && proof
+            .validator_vote_account_data
+            .iter()
+            .all(sccp_solana_vote_account_data_shape_is_bounded)
+        && proof
+            .validator_stake_account_data
+            .iter()
+            .all(sccp_solana_stake_account_data_shape_is_bounded)
+        && sccp_solana_raw_account_data_shape_is_bounded(
+            &proof.validator_vote_account_raw_data,
+            SCCP_SOLANA_VOTE_STATE_ACCOUNT_DATA_LEN,
+        )
+        && sccp_solana_raw_account_data_shape_is_bounded(
+            &proof.validator_stake_account_raw_data,
+            SCCP_SOLANA_STAKE_STATE_V2_STAKE_ACCOUNT_DATA_LEN,
+        )
+        && proof
+            .validator_vote_account_inclusion_branches
+            .iter()
+            .all(sccp_solana_account_inclusion_branch_shape_is_bounded)
+        && proof
+            .validator_stake_account_inclusion_branches
+            .iter()
+            .all(sccp_solana_account_inclusion_branch_shape_is_bounded)
+        && sccp_solana_account_opening_shape_is_bounded(&proof.stake_history_sysvar_opening)
+        && proof.stake_history_sysvar_raw_data.len() <= SCCP_SOLANA_MAX_ACCOUNT_RAW_DATA_BYTES
+        && sccp_solana_account_inclusion_branch_shape_is_bounded(
+            &proof.stake_history_sysvar_inclusion_branch,
+        )
+        && proof.stake_history_entries.len() <= SCCP_SOLANA_MAX_STAKE_HISTORY_ENTRIES
+        && proof.accounts_lt_hash.len() <= SCCP_SOLANA_ACCOUNTS_LT_HASH_BYTES
+        && sccp_source_state_verification_proof_encoding_shape_is_bounded(
+            &proof.accounts_lt_hash_proof,
+        )
+        && sccp_source_state_verification_proof_encoding_shape_is_bounded(
+            &proof.tower_replay_verification_proof,
+        )
+        && sccp_source_state_verification_proof_encoding_shape_is_bounded(
+            &proof.full_accountsdb_lattice_verification_proof,
+        )
+        && sccp_source_state_verification_proof_encoding_shape_is_bounded(
+            &proof.bank_fork_choice_verification_proof,
+        )
+        && proof.signers_bitmap.len() <= SCCP_SOLANA_MAX_VALIDATORS.div_ceil(8)
+        && proof
+            .signatures
+            .iter()
+            .all(|signature| signature.len() <= 64)
+}
+
+fn sccp_solana_source_adapter_encoding_shape_is_bounded(
+    adapter: &SccpSolanaFinalizedSourceProofV1,
+) -> bool {
+    adapter.version == 1
+        && adapter.source_domain == SCCP_DOMAIN_SOL
+        && adapter.transaction_signature.len() == SCCP_SOLANA_TRANSACTION_SIGNATURE_BYTES
+        && adapter.emitter_program_id.len() == SCCP_SOLANA_PROGRAM_ID_BYTES
+        && sccp_solana_finality_context_shape_is_bounded(&adapter.finality_context)
+        && sccp_solana_vote_proof_encoding_shape_is_bounded(&adapter.vote_proof)
 }
 
 fn sccp_solana_source_adapter_shape_is_bounded(adapter: &SccpSolanaFinalizedSourceProofV1) -> bool {
@@ -22528,165 +21626,16 @@ fn sccp_source_adapter_proof_shape_is_bounded(proof: &SccpSourceAdapterProofV1) 
         SccpSourceAdapterProofV1::TronDposReceipt(adapter) => {
             sccp_tron_source_adapter_shape_is_bounded(adapter)
         }
-        SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter) => {
-            sccp_substrate_source_adapter_shape_is_bounded(adapter)
+    }
+}
+
+fn sccp_source_adapter_proof_encoding_shape_is_bounded(proof: &SccpSourceAdapterProofV1) -> bool {
+    match proof {
+        SccpSourceAdapterProofV1::SolanaFinalizedTransaction(adapter) => {
+            sccp_solana_source_adapter_encoding_shape_is_bounded(adapter)
         }
+        _ => sccp_source_adapter_proof_shape_is_bounded(proof),
     }
-}
-
-fn sccp_substrate_grandpa_justification_shape_is_bounded(
-    proof: &SccpSubstrateGrandpaJustificationProofV1,
-) -> bool {
-    let roster_len = proof.authority_public_keys.len();
-    let Some(signer_indices) = signer_indices_from_bitmap(&proof.signers_bitmap, roster_len) else {
-        return false;
-    };
-    if proof.version != 1
-        || proof.total_weight == 0
-        || proof.signed_weight == 0
-        || roster_len == 0
-        || roster_len > SCCP_SUBSTRATE_MAX_AUTHORITIES
-        || roster_len != proof.authority_weights.len()
-        || !signer_bitmap_shape_is_canonical(&proof.signers_bitmap, roster_len)
-        || signer_indices.is_empty()
-        || proof.signatures.len() != signer_indices.len()
-        || canonical_sccp_substrate_authority_set_bytes(
-            &proof.authority_public_keys,
-            &proof.authority_weights,
-        )
-        .is_none()
-        || proof
-            .signatures
-            .iter()
-            .any(|signature| signature.len() != 64)
-    {
-        return false;
-    }
-
-    let total_weight = proof.authority_weights.iter().fold(0u128, |total, weight| {
-        total.saturating_add(u128::from(*weight))
-    });
-    let Some(signed_weight) = signer_indices.iter().try_fold(0u128, |total, index| {
-        proof
-            .authority_weights
-            .get(*index)
-            .map(|weight| total.saturating_add(u128::from(*weight)))
-    }) else {
-        return false;
-    };
-
-    total_weight == u128::from(proof.total_weight)
-        && signed_weight == u128::from(proof.signed_weight)
-        && signed_weight.saturating_mul(3) > total_weight.saturating_mul(2)
-}
-
-fn sccp_substrate_authority_set_transition_shape_is_bounded(
-    transition: &SccpSubstrateAuthoritySetTransitionProofV1,
-    adapter_source_domain: u32,
-    adapter_grandpa_set_id: u64,
-    adapter_finalized_block_number: u64,
-) -> bool {
-    if transition.version != 1
-        || !matches!(
-            transition.source_domain,
-            SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-        )
-        || transition.source_domain != adapter_source_domain
-        || transition.from_grandpa_set_id.checked_add(1) != Some(transition.to_grandpa_set_id)
-        || transition.to_grandpa_set_id > adapter_grandpa_set_id
-        || transition.transition_block_number == 0
-        || transition.transition_block_number > adapter_finalized_block_number
-        || !h256_is_nonzero(&transition.transition_block_hash)
-        || !h256_is_nonzero(&transition.parent_authority_set_hash)
-        || !h256_is_nonzero(&transition.next_authority_set_hash)
-        || transition.next_authority_set_payload.is_empty()
-        || transition.next_authority_set_payload.len()
-            > SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES
-        || !h256_is_nonzero(&transition.next_authority_set_payload_hash)
-        || !h256_is_nonzero(&transition.transition_message_hash)
-        || !h256_is_nonzero(&transition.transition_justification_hash)
-        || !sccp_substrate_grandpa_justification_shape_is_bounded(&transition.grandpa_justification)
-    {
-        return false;
-    }
-
-    let Some(parent_authority_set_hash) = sccp_substrate_authority_set_hash(
-        &transition.grandpa_justification.authority_public_keys,
-        &transition.grandpa_justification.authority_weights,
-    ) else {
-        return false;
-    };
-    let Some(next_authority_set_hash) =
-        sccp_substrate_authority_set_hash_from_payload(&transition.next_authority_set_payload)
-    else {
-        return false;
-    };
-    let expected_payload_hash =
-        sccp_substrate_authority_set_payload_hash(&transition.next_authority_set_payload);
-    let expected_transition_message_hash = sccp_substrate_authority_set_transition_message_hash(
-        transition.source_domain,
-        transition.from_grandpa_set_id,
-        transition.to_grandpa_set_id,
-        transition.transition_block_number,
-        transition.transition_block_hash,
-        transition.parent_authority_set_hash,
-        transition.next_authority_set_hash,
-        transition.next_authority_set_payload_hash,
-    );
-    let Some(expected_transition_justification_hash) =
-        sccp_substrate_authority_set_transition_justification_hash(transition)
-    else {
-        return false;
-    };
-
-    parent_authority_set_hash == transition.parent_authority_set_hash
-        && next_authority_set_hash == transition.next_authority_set_hash
-        && expected_payload_hash == transition.next_authority_set_payload_hash
-        && expected_transition_message_hash == transition.transition_message_hash
-        && transition.grandpa_justification.precommit_message_hash
-            == expected_transition_message_hash
-        && expected_transition_justification_hash == transition.transition_justification_hash
-}
-
-fn sccp_substrate_authority_set_transition_chain_shape_is_bounded(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-) -> bool {
-    if adapter.authority_set_transition_proofs.len() > SCCP_SUBSTRATE_MAX_AUTHORITY_SET_TRANSITIONS
-    {
-        return false;
-    }
-
-    let mut expected_from_set_id = None;
-    for transition in &adapter.authority_set_transition_proofs {
-        if !sccp_substrate_authority_set_transition_shape_is_bounded(
-            transition,
-            adapter.source_domain,
-            adapter.grandpa_set_id,
-            adapter.finalized_block_number,
-        ) || expected_from_set_id.is_some_and(|set_id| transition.from_grandpa_set_id != set_id)
-        {
-            return false;
-        }
-        expected_from_set_id = Some(transition.to_grandpa_set_id);
-    }
-
-    adapter
-        .authority_set_transition_proofs
-        .last()
-        .is_none_or(|transition| {
-            transition.next_authority_set_hash == adapter.authority_set_hash
-                && transition.to_grandpa_set_id == adapter.grandpa_set_id
-        })
-}
-
-fn sccp_substrate_source_adapter_shape_is_bounded(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-) -> bool {
-    sccp_substrate_grandpa_justification_shape_is_bounded(&adapter.grandpa_justification)
-        && sccp_source_state_verification_proof_shape_is_bounded(
-            &adapter.runtime_storage_verification_proof,
-        )
-        && sccp_substrate_authority_set_transition_chain_shape_is_bounded(adapter)
 }
 
 fn sccp_ton_validator_signature_proof_shape_is_bounded(
@@ -25514,8 +24463,7 @@ fn sccp_source_message_inclusion_leaf_hash_for_adapter(
         SccpSourceAdapterProofV1::EthereumBeaconReceipt(_)
         | SccpSourceAdapterProofV1::BscValidatorSetReceipt(_)
         | SccpSourceAdapterProofV1::TonMasterchainShard(_)
-        | SccpSourceAdapterProofV1::TronDposReceipt(_)
-        | SccpSourceAdapterProofV1::SubstrateGrandpaEvent(_) => {
+        | SccpSourceAdapterProofV1::TronDposReceipt(_) => {
             Some(sccp_source_event_leaf_hash(source_event_digest))
         }
     }
@@ -31198,649 +30146,6 @@ pub fn sccp_tron_receipt_state_proof_hash(
         )?,
     ))
 }
-
-pub fn canonical_sccp_substrate_authority_set_bytes(
-    authority_public_keys: &[Vec<u8>],
-    authority_weights: &[u64],
-) -> Option<Vec<u8>> {
-    if authority_public_keys.is_empty()
-        || authority_public_keys.len() > SCCP_SUBSTRATE_MAX_AUTHORITIES
-        || authority_public_keys.len() != authority_weights.len()
-    {
-        return None;
-    }
-
-    let mut out = Vec::new();
-    let mut seen_keys = Vec::with_capacity(authority_public_keys.len());
-    push_u8(&mut out, 1);
-    push_u32(&mut out, u32::try_from(authority_public_keys.len()).ok()?);
-    for (public_key, weight) in authority_public_keys.iter().zip(authority_weights.iter()) {
-        let public_key: [u8; 32] = public_key.as_slice().try_into().ok()?;
-        if !h256_is_nonzero(&public_key) || *weight == 0 || seen_keys.contains(&public_key) {
-            return None;
-        }
-        seen_keys.push(public_key);
-        out.extend_from_slice(&public_key);
-        push_u64(&mut out, *weight);
-    }
-    Some(out)
-}
-
-pub fn decode_sccp_substrate_authority_set_payload(
-    payload: &[u8],
-) -> Option<(Vec<[u8; 32]>, Vec<u64>)> {
-    if payload.len() > SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES {
-        return None;
-    }
-    let mut cursor = 0usize;
-    if *payload.get(cursor)? != 1 {
-        return None;
-    }
-    cursor = cursor.checked_add(1)?;
-    let authority_count = usize::try_from(read_le_u32_at(payload, &mut cursor)?).ok()?;
-    if authority_count == 0
-        || authority_count > SCCP_SUBSTRATE_MAX_AUTHORITIES
-        || payload.len().checked_sub(cursor)? != authority_count.checked_mul(40)?
-    {
-        return None;
-    }
-
-    let mut authority_public_keys = Vec::<[u8; 32]>::with_capacity(authority_count);
-    let mut authority_weights = Vec::<u64>::with_capacity(authority_count);
-    for _ in 0..authority_count {
-        let public_key_end = cursor.checked_add(32)?;
-        let mut public_key = [0u8; 32];
-        public_key.copy_from_slice(payload.get(cursor..public_key_end)?);
-        cursor = public_key_end;
-        if !h256_is_nonzero(&public_key)
-            || authority_public_keys
-                .iter()
-                .any(|known_public_key| known_public_key == &public_key)
-        {
-            return None;
-        }
-        let weight = read_le_u64_at(payload, &mut cursor)?;
-        if weight == 0 {
-            return None;
-        }
-        authority_public_keys.push(public_key);
-        authority_weights.push(weight);
-    }
-
-    (cursor == payload.len()).then_some((authority_public_keys, authority_weights))
-}
-
-pub fn sccp_substrate_authority_set_hash_from_payload(payload: &[u8]) -> Option<H256> {
-    decode_sccp_substrate_authority_set_payload(payload)?;
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1,
-        payload,
-    ))
-}
-
-pub fn sccp_substrate_authority_set_hash(
-    authority_public_keys: &[Vec<u8>],
-    authority_weights: &[u64],
-) -> Option<H256> {
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1,
-        &canonical_sccp_substrate_authority_set_bytes(authority_public_keys, authority_weights)?,
-    ))
-}
-
-pub fn sccp_substrate_authority_set_payload_hash(payload: &[u8]) -> H256 {
-    prefixed_blake2b(SCCP_SUBSTRATE_AUTHORITY_SET_PAYLOAD_PREFIX_V1, payload)
-}
-
-pub fn canonical_sccp_substrate_grandpa_precommit_bytes(
-    source_domain: u32,
-    finalized_block_number: u64,
-    grandpa_set_id: u64,
-    block_hash: H256,
-    authority_set_hash: H256,
-    events_root: H256,
-    storage_proof_hash: H256,
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    push_u8(&mut out, 1);
-    push_u32(&mut out, source_domain);
-    push_u64(&mut out, finalized_block_number);
-    push_u64(&mut out, grandpa_set_id);
-    out.extend_from_slice(&block_hash);
-    out.extend_from_slice(&authority_set_hash);
-    out.extend_from_slice(&events_root);
-    out.extend_from_slice(&storage_proof_hash);
-    out
-}
-
-pub fn sccp_substrate_grandpa_precommit_hash(
-    source_domain: u32,
-    finalized_block_number: u64,
-    grandpa_set_id: u64,
-    block_hash: H256,
-    authority_set_hash: H256,
-    events_root: H256,
-    storage_proof_hash: H256,
-) -> H256 {
-    prefixed_blake2b(
-        SCCP_SUBSTRATE_GRANDPA_PRECOMMIT_PREFIX_V1,
-        &canonical_sccp_substrate_grandpa_precommit_bytes(
-            source_domain,
-            finalized_block_number,
-            grandpa_set_id,
-            block_hash,
-            authority_set_hash,
-            events_root,
-            storage_proof_hash,
-        ),
-    )
-}
-
-pub fn canonical_sccp_substrate_grandpa_justification_bytes(
-    proof: &SccpSubstrateGrandpaJustificationProofV1,
-) -> Option<Vec<u8>> {
-    if !sccp_substrate_grandpa_justification_shape_is_bounded(proof) {
-        return None;
-    }
-    let authority_set_hash =
-        sccp_substrate_authority_set_hash(&proof.authority_public_keys, &proof.authority_weights)?;
-    let mut out = Vec::new();
-    push_substrate_grandpa_justification_proof(&mut out, proof);
-    out.extend_from_slice(&authority_set_hash);
-    Some(out)
-}
-
-pub fn sccp_substrate_grandpa_justification_hash(
-    proof: &SccpSubstrateGrandpaJustificationProofV1,
-) -> Option<H256> {
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_GRANDPA_JUSTIFICATION_PREFIX_V1,
-        &canonical_sccp_substrate_grandpa_justification_bytes(proof)?,
-    ))
-}
-
-/// Build the canonical Substrate authority-set transition message preimage.
-pub fn canonical_sccp_substrate_authority_set_transition_message_bytes(
-    source_domain: u32,
-    from_grandpa_set_id: u64,
-    to_grandpa_set_id: u64,
-    transition_block_number: u64,
-    transition_block_hash: H256,
-    parent_authority_set_hash: H256,
-    next_authority_set_hash: H256,
-    next_authority_set_payload_hash: H256,
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    push_u8(&mut out, 1);
-    push_u32(&mut out, source_domain);
-    push_u64(&mut out, from_grandpa_set_id);
-    push_u64(&mut out, to_grandpa_set_id);
-    push_u64(&mut out, transition_block_number);
-    out.extend_from_slice(&transition_block_hash);
-    out.extend_from_slice(&parent_authority_set_hash);
-    out.extend_from_slice(&next_authority_set_hash);
-    out.extend_from_slice(&next_authority_set_payload_hash);
-    out
-}
-
-/// Hash a canonical Substrate authority-set transition message.
-pub fn sccp_substrate_authority_set_transition_message_hash(
-    source_domain: u32,
-    from_grandpa_set_id: u64,
-    to_grandpa_set_id: u64,
-    transition_block_number: u64,
-    transition_block_hash: H256,
-    parent_authority_set_hash: H256,
-    next_authority_set_hash: H256,
-    next_authority_set_payload_hash: H256,
-) -> H256 {
-    prefixed_blake2b(
-        SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_PREFIX_V1,
-        &canonical_sccp_substrate_authority_set_transition_message_bytes(
-            source_domain,
-            from_grandpa_set_id,
-            to_grandpa_set_id,
-            transition_block_number,
-            transition_block_hash,
-            parent_authority_set_hash,
-            next_authority_set_hash,
-            next_authority_set_payload_hash,
-        ),
-    )
-}
-
-/// Build the canonical Substrate authority-set transition justification preimage.
-pub fn canonical_sccp_substrate_authority_set_transition_justification_bytes(
-    proof: &SccpSubstrateAuthoritySetTransitionProofV1,
-) -> Option<Vec<u8>> {
-    if proof.next_authority_set_payload.len() > SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES
-        || !sccp_substrate_grandpa_justification_shape_is_bounded(&proof.grandpa_justification)
-    {
-        return None;
-    }
-    let parent_authority_set_hash = sccp_substrate_authority_set_hash(
-        &proof.grandpa_justification.authority_public_keys,
-        &proof.grandpa_justification.authority_weights,
-    )?;
-    let mut out = Vec::new();
-    push_u8(&mut out, proof.version);
-    push_u32(&mut out, proof.source_domain);
-    push_u64(&mut out, proof.from_grandpa_set_id);
-    push_u64(&mut out, proof.to_grandpa_set_id);
-    push_u64(&mut out, proof.transition_block_number);
-    out.extend_from_slice(&proof.transition_block_hash);
-    out.extend_from_slice(&proof.parent_authority_set_hash);
-    out.extend_from_slice(&proof.next_authority_set_hash);
-    push_vec(&mut out, &proof.next_authority_set_payload);
-    out.extend_from_slice(&proof.next_authority_set_payload_hash);
-    out.extend_from_slice(&proof.transition_message_hash);
-    out.extend_from_slice(&parent_authority_set_hash);
-    push_substrate_grandpa_justification_proof(&mut out, &proof.grandpa_justification);
-    Some(out)
-}
-
-/// Hash a canonical Substrate authority-set transition justification.
-pub fn sccp_substrate_authority_set_transition_justification_hash(
-    proof: &SccpSubstrateAuthoritySetTransitionProofV1,
-) -> Option<H256> {
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_PREFIX_V1,
-        &canonical_sccp_substrate_authority_set_transition_justification_bytes(proof)?,
-    ))
-}
-
-pub fn canonical_sccp_substrate_storage_proof_bytes(
-    source_domain: u32,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    finalized_block_number: u64,
-    grandpa_set_id: u64,
-    block_hash: H256,
-    authority_set_hash: H256,
-    events_root: H256,
-    inclusion_branch: &[Vec<u8>],
-) -> Option<Vec<u8>> {
-    if !h256_is_nonzero(&source_event_digest) {
-        return None;
-    }
-    let mut out = Vec::new();
-    push_u8(&mut out, 1);
-    push_u32(&mut out, source_domain);
-    out.extend_from_slice(&source_event_digest);
-    out.extend_from_slice(&SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1);
-    push_u64(&mut out, source_event_leaf_index);
-    push_u64(&mut out, finalized_block_number);
-    push_u64(&mut out, grandpa_set_id);
-    out.extend_from_slice(&block_hash);
-    out.extend_from_slice(&authority_set_hash);
-    out.extend_from_slice(&events_root);
-    push_h256_inclusion_branch(&mut out, inclusion_branch)?;
-    Some(out)
-}
-
-pub fn sccp_substrate_storage_proof_hash(
-    source_domain: u32,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    finalized_block_number: u64,
-    grandpa_set_id: u64,
-    block_hash: H256,
-    authority_set_hash: H256,
-    events_root: H256,
-    inclusion_branch: &[Vec<u8>],
-) -> Option<H256> {
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1,
-        &canonical_sccp_substrate_storage_proof_bytes(
-            source_domain,
-            source_event_digest,
-            source_event_leaf_index,
-            finalized_block_number,
-            grandpa_set_id,
-            block_hash,
-            authority_set_hash,
-            events_root,
-            inclusion_branch,
-        )?,
-    ))
-}
-
-pub fn canonical_sccp_substrate_runtime_storage_verification_statement_bytes(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    inclusion_branch: &[Vec<u8>],
-) -> Option<Vec<u8>> {
-    let statement = canonical_sccp_substrate_storage_proof_bytes(
-        adapter.source_domain,
-        source_event_digest,
-        source_event_leaf_index,
-        adapter.finalized_block_number,
-        adapter.grandpa_set_id,
-        adapter.block_hash,
-        adapter.authority_set_hash,
-        adapter.events_root,
-        inclusion_branch,
-    )?;
-    let expected_storage_proof_hash =
-        prefixed_blake2b(SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1, &statement);
-    (adapter.storage_proof_hash == expected_storage_proof_hash).then_some(statement)
-}
-
-fn sccp_substrate_runtime_storage_proof_public_inputs_hash(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    inclusion_branch: &[Vec<u8>],
-) -> Option<H256> {
-    Some(prefixed_blake2b(
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_PROOF_PUBLIC_INPUTS_PREFIX_V1,
-        &canonical_sccp_substrate_runtime_storage_verification_statement_bytes(
-            adapter,
-            source_event_digest,
-            source_event_leaf_index,
-            inclusion_branch,
-        )?,
-    ))
-}
-
-fn canonical_sccp_substrate_runtime_storage_verification_context_bytes(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    inclusion_branch: &[Vec<u8>],
-    material: &SccpSourceVerifierMaterialV1,
-) -> Option<Vec<u8>> {
-    if adapter.source_domain != material.source_domain {
-        return None;
-    }
-    let mut out = Vec::new();
-    push_u8(&mut out, 1);
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-    );
-    push_vec(
-        &mut out,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1.as_bytes(),
-    );
-    push_vec(&mut out, material.source_state_verifier_id.as_bytes());
-    out.extend_from_slice(&material.source_state_verifier_hash);
-    push_vec(&mut out, material.source_trust_anchor_id.as_bytes());
-    out.extend_from_slice(&material.source_trust_anchor_hash);
-    push_vec(&mut out, material.consensus_verifier_id.as_bytes());
-    out.extend_from_slice(&material.consensus_verifier_hash);
-    push_vec(&mut out, material.message_inclusion_verifier_id.as_bytes());
-    out.extend_from_slice(&material.message_inclusion_verifier_hash);
-    push_vec(&mut out, material.finality_policy_id.as_bytes());
-    out.extend_from_slice(&material.finality_policy_hash);
-    out.extend_from_slice(&sccp_substrate_runtime_storage_proof_public_inputs_hash(
-        adapter,
-        source_event_digest,
-        source_event_leaf_index,
-        inclusion_branch,
-    )?);
-    Some(out)
-}
-
-pub fn sccp_substrate_runtime_storage_public_input_columns(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    inclusion_branch: &[Vec<u8>],
-) -> Option<Vec<Vec<[u8; 32]>>> {
-    Some(vec![
-        vec![sccp_word_u32_le(adapter.source_domain)],
-        vec![sccp_word_u64_le(adapter.finalized_block_number)],
-        vec![sccp_word_u64_le(adapter.grandpa_set_id)],
-        vec![adapter.block_hash],
-        vec![adapter.authority_set_hash],
-        vec![adapter.events_root],
-        vec![adapter.storage_proof_hash],
-        vec![source_event_digest],
-        vec![SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1],
-        vec![sccp_word_u64_le(source_event_leaf_index)],
-        vec![sccp_substrate_runtime_storage_proof_public_inputs_hash(
-            adapter,
-            source_event_digest,
-            source_event_leaf_index,
-            inclusion_branch,
-        )?],
-    ])
-}
-
-pub fn sccp_substrate_runtime_storage_open_verify_schema_descriptor(
-    source_domain: u32,
-) -> Option<Vec<u8>> {
-    let mut descriptor = Vec::new();
-    push_u8(&mut descriptor, 1);
-    push_vec(
-        &mut descriptor,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-    );
-    push_vec(
-        &mut descriptor,
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1.as_bytes(),
-    );
-    push_vec(
-        &mut descriptor,
-        sccp_chain_key_for_domain(source_domain)?.as_bytes(),
-    );
-    push_u32(&mut descriptor, source_domain);
-    for required_input in [
-        "source_domain",
-        "finalized_block_number",
-        "grandpa_set_id",
-        "block_hash",
-        "authority_set_hash",
-        "events_root",
-        "storage_proof_hash",
-        "source_event_digest",
-        "system_events_storage_key",
-        "source_event_leaf_index",
-        "runtime_storage_proof_public_inputs_hash",
-    ] {
-        push_vec(&mut descriptor, required_input.as_bytes());
-    }
-    Some(descriptor)
-}
-
-fn sccp_substrate_runtime_storage_fastpq_public_inputs(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    inclusion_branch: &[Vec<u8>],
-) -> Option<FastpqPublicInputs> {
-    let public_inputs_hash = sccp_substrate_runtime_storage_proof_public_inputs_hash(
-        adapter,
-        source_event_digest,
-        source_event_leaf_index,
-        inclusion_branch,
-    )?;
-    let dsid_hash = prefixed_blake2b(
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_DSID_PREFIX_V1,
-        &public_inputs_hash,
-    );
-    let mut dsid = [0u8; 16];
-    dsid.copy_from_slice(&dsid_hash[..16]);
-    Some(FastpqPublicInputs {
-        dsid,
-        slot: adapter.finalized_block_number,
-        old_root: adapter.authority_set_hash,
-        new_root: adapter.block_hash,
-        perm_root: adapter.events_root,
-        tx_set_hash: public_inputs_hash,
-    })
-}
-
-pub fn build_sccp_substrate_runtime_storage_fastpq_batch(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    inclusion_branch: &[Vec<u8>],
-    material: &SccpSourceVerifierMaterialV1,
-) -> Option<FastpqTransitionBatch> {
-    if !matches!(
-        adapter.source_domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) || adapter.source_domain != material.source_domain
-        || !sccp_source_verifier_material_is_production_ready(material)
-        || !sccp_substrate_source_adapter_shape_is_bounded(adapter)
-    {
-        return None;
-    }
-
-    let statement = canonical_sccp_substrate_runtime_storage_verification_statement_bytes(
-        adapter,
-        source_event_digest,
-        source_event_leaf_index,
-        inclusion_branch,
-    )?;
-    let context = canonical_sccp_substrate_runtime_storage_verification_context_bytes(
-        adapter,
-        source_event_digest,
-        source_event_leaf_index,
-        inclusion_branch,
-        material,
-    )?;
-    let mut batch = FastpqTransitionBatch::new(
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1,
-        sccp_substrate_runtime_storage_fastpq_public_inputs(
-            adapter,
-            source_event_digest,
-            source_event_leaf_index,
-            inclusion_branch,
-        )?,
-    );
-    batch.push(FastpqStateTransition::new(
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STATEMENT_KEY_V1.to_vec(),
-        Vec::new(),
-        statement,
-        FastpqOperationKind::MetaSet,
-    ));
-    batch.push(FastpqStateTransition::new(
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_CONTEXT_KEY_V1.to_vec(),
-        Vec::new(),
-        context,
-        FastpqOperationKind::MetaSet,
-    ));
-    batch.push(FastpqStateTransition::new(
-        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_STORAGE_KEY_V1.to_vec(),
-        Vec::new(),
-        SCCP_SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY_V1.to_vec(),
-        FastpqOperationKind::MetaSet,
-    ));
-    batch.sort();
-    Some(batch)
-}
-
-pub fn build_sccp_substrate_runtime_storage_verification_proof(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_event_digest: H256,
-    source_event_leaf_index: u64,
-    inclusion_branch: &[Vec<u8>],
-    material: &SccpSourceVerifierMaterialV1,
-) -> Option<SccpSourceStateVerificationProofV1> {
-    let batch = build_sccp_substrate_runtime_storage_fastpq_batch(
-        adapter,
-        source_event_digest,
-        source_event_leaf_index,
-        inclusion_branch,
-        material,
-    )?;
-    let raw_proof_bytes =
-        FastpqProver::canonical(SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET_V1)
-            .ok()?
-            .prove(&batch)
-            .ok()
-            .and_then(|proof| to_bytes(&proof).ok())?;
-    let open = StarkFriOpenProofV1 {
-        version: 1,
-        public_inputs: sccp_substrate_runtime_storage_public_input_columns(
-            adapter,
-            source_event_digest,
-            source_event_leaf_index,
-            inclusion_branch,
-        )?,
-        envelope_bytes: raw_proof_bytes,
-    };
-    let env = OpenVerifyEnvelope {
-        backend: BackendTag::Stark,
-        circuit_id: SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
-        vk_hash: material.source_state_verifier_hash,
-        public_inputs: sccp_substrate_runtime_storage_open_verify_schema_descriptor(
-            adapter.source_domain,
-        )?,
-        proof_bytes: to_bytes(&open).ok()?,
-        aux: Vec::new(),
-    };
-    let proof_bytes = to_bytes(&env).ok()?;
-    if proof_bytes.len() > SCCP_SOURCE_STATE_MAX_PROOF_BYTES {
-        return None;
-    }
-    Some(SccpSourceStateVerificationProofV1 {
-        version: 1,
-        proof_family: SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
-        circuit_id: SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
-        proof_bytes,
-    })
-}
-
-fn verify_sccp_substrate_runtime_storage_verification_proof(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    proof: &SccpSourceChainProofEnvelopeV1,
-    material: &SccpSourceVerifierMaterialV1,
-) -> bool {
-    let Some(inclusion_proof) =
-        decode_sccp_source_message_inclusion_proof(&proof.message_inclusion_proof)
-    else {
-        return false;
-    };
-    let source_state_proof = &adapter.runtime_storage_verification_proof;
-    if source_state_proof.version != 1
-        || source_state_proof.proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1
-        || source_state_proof.circuit_id != SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1
-        || source_state_proof.proof_bytes.is_empty()
-        || source_state_proof.proof_bytes.len() > SCCP_SOURCE_STATE_MAX_PROOF_BYTES
-        || source_state_proof.proof_bytes.iter().all(|byte| *byte == 0)
-    {
-        return false;
-    }
-    let Some(batch) = build_sccp_substrate_runtime_storage_fastpq_batch(
-        adapter,
-        proof.source_event_digest,
-        inclusion_proof.leaf_index,
-        &proof.inclusion_branch,
-        material,
-    ) else {
-        return false;
-    };
-    let Some((env, open, raw_proof)) =
-        decode_sccp_stark_open_verify_proof(&source_state_proof.proof_bytes)
-    else {
-        return false;
-    };
-    let Some(expected_public_inputs) = sccp_substrate_runtime_storage_public_input_columns(
-        adapter,
-        proof.source_event_digest,
-        inclusion_proof.leaf_index,
-        &proof.inclusion_branch,
-    ) else {
-        return false;
-    };
-    if env.circuit_id != SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1
-        || env.vk_hash != material.source_state_verifier_hash
-        || env.public_inputs
-            != sccp_substrate_runtime_storage_open_verify_schema_descriptor(adapter.source_domain)
-                .unwrap_or_default()
-        || !env.aux.is_empty()
-        || open.public_inputs != expected_public_inputs
-    {
-        return false;
-    }
-    fastpq_prover::verify(&batch, &raw_proof).is_ok()
-}
-
 pub fn sccp_source_finalized_header_hash(
     source_domain: u32,
     finality_model: SccpProofFinalityModelV1,
@@ -32338,9 +30643,6 @@ fn verify_sccp_source_adapter_external_engine_proof(
                     sccp_tron_dpos_source_gate_hash_from_deployment_v1(material, deployment)
                         .is_some()
                 })
-        }
-        SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter) => {
-            verify_sccp_substrate_grandpa_justification_proof(adapter, proof, material)
         }
     }
 }
@@ -33989,286 +32291,6 @@ fn verify_sccp_tron_witness_schedule_transition_step(
         transition.parent_witness_schedule_hash,
     )
 }
-
-fn verify_sccp_substrate_grandpa_justification_proof(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    proof: &SccpSourceChainProofEnvelopeV1,
-    material: &SccpSourceVerifierMaterialV1,
-) -> bool {
-    if !sccp_substrate_source_adapter_shape_is_bounded(adapter) {
-        return false;
-    }
-
-    let justification = &adapter.grandpa_justification;
-    let Some(authority_set_hash) = sccp_substrate_authority_set_hash(
-        &justification.authority_public_keys,
-        &justification.authority_weights,
-    ) else {
-        return false;
-    };
-    if authority_set_hash != adapter.authority_set_hash {
-        return false;
-    }
-
-    let expected_precommit_message_hash = sccp_substrate_grandpa_precommit_hash(
-        adapter.source_domain,
-        adapter.finalized_block_number,
-        adapter.grandpa_set_id,
-        adapter.block_hash,
-        adapter.authority_set_hash,
-        adapter.events_root,
-        adapter.storage_proof_hash,
-    );
-    if justification.precommit_message_hash != expected_precommit_message_hash {
-        return false;
-    }
-    let Some(expected_justification_hash) =
-        sccp_substrate_grandpa_justification_hash(justification)
-    else {
-        return false;
-    };
-    if expected_justification_hash != adapter.grandpa_justification_hash {
-        return false;
-    }
-
-    if !verify_sccp_substrate_grandpa_justification_signatures(
-        justification,
-        adapter.authority_set_hash,
-    ) {
-        return false;
-    }
-    if sccp_source_state_verifier_is_production_ready(material)
-        && !verify_sccp_substrate_runtime_storage_verification_proof(adapter, proof, material)
-    {
-        return false;
-    }
-
-    if !material.placeholder_material {
-        let anchor_matches_active_set = authority_set_hash == material.source_trust_anchor_hash;
-        let transition_chain_matches_anchor = verify_sccp_substrate_authority_set_transition_chain(
-            adapter,
-            material.source_trust_anchor_hash,
-        );
-        if !anchor_matches_active_set && !transition_chain_matches_anchor {
-            return false;
-        }
-        if anchor_matches_active_set && !adapter.authority_set_transition_proofs.is_empty() {
-            return false;
-        }
-    } else if !adapter.authority_set_transition_proofs.is_empty() {
-        return false;
-    }
-
-    matches!(
-        proof.source_domain,
-        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-    ) && proof.source_domain == adapter.source_domain
-        && proof.finality_height == adapter.finalized_block_number
-        && proof.finality_block_hash == adapter.block_hash
-        && proof.receipt_or_message_root == adapter.events_root
-}
-
-fn verify_sccp_substrate_grandpa_justification_signatures(
-    justification: &SccpSubstrateGrandpaJustificationProofV1,
-    expected_authority_set_hash: H256,
-) -> bool {
-    if justification.version != 1
-        || justification.total_weight == 0
-        || justification.signed_weight == 0
-        || justification.authority_public_keys.is_empty()
-        || justification.authority_public_keys.len() > SCCP_SUBSTRATE_MAX_AUTHORITIES
-        || justification.authority_public_keys.len() != justification.authority_weights.len()
-        || justification.signers_bitmap.len()
-            != justification.authority_public_keys.len().div_ceil(8)
-    {
-        return false;
-    }
-    let Some(authority_set_hash) = sccp_substrate_authority_set_hash(
-        &justification.authority_public_keys,
-        &justification.authority_weights,
-    ) else {
-        return false;
-    };
-    if authority_set_hash != expected_authority_set_hash {
-        return false;
-    }
-
-    let roster_len = justification.authority_public_keys.len();
-    let mut total_weight = 0u128;
-    for (idx, (public_key, weight)) in justification
-        .authority_public_keys
-        .iter()
-        .zip(justification.authority_weights.iter())
-        .enumerate()
-    {
-        if public_key.len() != 32 || public_key.iter().all(|byte| *byte == 0) || *weight == 0 {
-            return false;
-        }
-        if justification.authority_public_keys[..idx]
-            .iter()
-            .any(|known| known == public_key)
-        {
-            return false;
-        }
-        total_weight = total_weight.saturating_add(u128::from(*weight));
-    }
-    if total_weight != u128::from(justification.total_weight) {
-        return false;
-    }
-
-    let Some(signer_indices) =
-        signer_indices_from_bitmap(&justification.signers_bitmap, roster_len)
-    else {
-        return false;
-    };
-    if signer_indices.is_empty() || justification.signatures.len() != signer_indices.len() {
-        return false;
-    }
-
-    let mut signed_weight = 0u128;
-    let mut signer_public_keys = Vec::with_capacity(signer_indices.len());
-    for idx in &signer_indices {
-        signed_weight =
-            signed_weight.saturating_add(u128::from(justification.authority_weights[*idx]));
-        signer_public_keys.push(justification.authority_public_keys[*idx].as_slice());
-    }
-    if signed_weight != u128::from(justification.signed_weight)
-        || signed_weight.saturating_mul(3) <= total_weight.saturating_mul(2)
-    {
-        return false;
-    }
-
-    let messages = vec![&justification.precommit_message_hash[..]; justification.signatures.len()];
-    let signatures = justification
-        .signatures
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
-    iroha_crypto::ed25519_verify_batch_deterministic(
-        &messages,
-        &signatures,
-        &signer_public_keys,
-        justification.precommit_message_hash,
-    )
-    .is_ok()
-}
-
-fn verify_sccp_substrate_authority_set_transition_chain(
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    source_trust_anchor_hash: H256,
-) -> bool {
-    if adapter.authority_set_transition_proofs.is_empty()
-        || adapter.authority_set_transition_proofs.len()
-            > SCCP_SUBSTRATE_MAX_AUTHORITY_SET_TRANSITIONS
-    {
-        return false;
-    }
-
-    let mut expected_parent = source_trust_anchor_hash;
-    let mut expected_from_set_id = None;
-    for transition in &adapter.authority_set_transition_proofs {
-        if !verify_sccp_substrate_authority_set_transition_step(
-            transition,
-            adapter,
-            expected_parent,
-            expected_from_set_id,
-        ) {
-            return false;
-        }
-        expected_parent = transition.next_authority_set_hash;
-        expected_from_set_id = Some(transition.to_grandpa_set_id);
-    }
-
-    expected_parent == adapter.authority_set_hash
-        && expected_from_set_id == Some(adapter.grandpa_set_id)
-}
-
-fn verify_sccp_substrate_authority_set_transition_step(
-    transition: &SccpSubstrateAuthoritySetTransitionProofV1,
-    adapter: &SccpSubstrateGrandpaSourceProofV1,
-    expected_parent: H256,
-    expected_from_set_id: Option<u64>,
-) -> bool {
-    if transition.version != 1
-        || !matches!(
-            transition.source_domain,
-            SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-        )
-        || transition.source_domain != adapter.source_domain
-        || transition.from_grandpa_set_id >= transition.to_grandpa_set_id
-        || expected_from_set_id.is_some_and(|set_id| transition.from_grandpa_set_id != set_id)
-        || transition.to_grandpa_set_id > adapter.grandpa_set_id
-        || transition.transition_block_number == 0
-        || transition.transition_block_number > adapter.finalized_block_number
-        || !h256_is_nonzero(&transition.transition_block_hash)
-        || !h256_is_nonzero(&transition.parent_authority_set_hash)
-        || !h256_is_nonzero(&transition.next_authority_set_hash)
-        || transition.next_authority_set_payload.is_empty()
-        || transition.next_authority_set_payload.len()
-            > SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES
-        || !h256_is_nonzero(&transition.next_authority_set_payload_hash)
-        || !h256_is_nonzero(&transition.transition_message_hash)
-        || !h256_is_nonzero(&transition.transition_justification_hash)
-        || transition.parent_authority_set_hash != expected_parent
-    {
-        return false;
-    }
-
-    let Some(parent_authority_set_hash) = sccp_substrate_authority_set_hash(
-        &transition.grandpa_justification.authority_public_keys,
-        &transition.grandpa_justification.authority_weights,
-    ) else {
-        return false;
-    };
-    if parent_authority_set_hash != transition.parent_authority_set_hash {
-        return false;
-    }
-
-    if sccp_substrate_authority_set_payload_hash(&transition.next_authority_set_payload)
-        != transition.next_authority_set_payload_hash
-    {
-        return false;
-    }
-    let Some(next_authority_set_hash) =
-        sccp_substrate_authority_set_hash_from_payload(&transition.next_authority_set_payload)
-    else {
-        return false;
-    };
-    if next_authority_set_hash != transition.next_authority_set_hash {
-        return false;
-    }
-
-    let expected_transition_message_hash = sccp_substrate_authority_set_transition_message_hash(
-        transition.source_domain,
-        transition.from_grandpa_set_id,
-        transition.to_grandpa_set_id,
-        transition.transition_block_number,
-        transition.transition_block_hash,
-        transition.parent_authority_set_hash,
-        transition.next_authority_set_hash,
-        transition.next_authority_set_payload_hash,
-    );
-    if transition.transition_message_hash != expected_transition_message_hash
-        || transition.grandpa_justification.precommit_message_hash
-            != expected_transition_message_hash
-    {
-        return false;
-    }
-    let Some(expected_transition_justification_hash) =
-        sccp_substrate_authority_set_transition_justification_hash(transition)
-    else {
-        return false;
-    };
-    if transition.transition_justification_hash != expected_transition_justification_hash {
-        return false;
-    }
-
-    verify_sccp_substrate_grandpa_justification_signatures(
-        &transition.grandpa_justification,
-        transition.parent_authority_set_hash,
-    )
-}
-
 fn verify_sccp_solana_finality_context_shape(adapter: &SccpSolanaFinalizedSourceProofV1) -> bool {
     let context = &adapter.finality_context;
     let Some(epoch_stake_root) = sccp_solana_epoch_stake_root(
@@ -35057,43 +33079,6 @@ fn verify_sccp_source_adapter_proof_binding(
                 && verify_sccp_tron_witness_schedule_and_seal_binding(adapter).is_some()
                 && verify_sccp_tron_solid_block_header_proof(adapter, &adapter.witness_seal_proof)
                 && adapter.receipt_proof_hash == expected_receipt_proof_hash
-        }
-        SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter) => {
-            let Some(inclusion_proof) =
-                decode_sccp_source_message_inclusion_proof(&proof.message_inclusion_proof)
-            else {
-                return false;
-            };
-            let Some(expected_storage_proof_hash) = sccp_substrate_storage_proof_hash(
-                proof.source_domain,
-                proof.source_event_digest,
-                inclusion_proof.leaf_index,
-                adapter.finalized_block_number,
-                adapter.grandpa_set_id,
-                adapter.block_hash,
-                adapter.authority_set_hash,
-                adapter.events_root,
-                &proof.inclusion_branch,
-            ) else {
-                return false;
-            };
-            let finalized_block_matches_finality_height =
-                adapter.finalized_block_number == proof.finality_height;
-            matches!(
-                proof.source_domain,
-                SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
-            ) && proof.source_proof_plan == SccpSourceProofPlanV1::SubstrateGrandpaEventProof
-                && proof.finality_model == SccpProofFinalityModelV1::SubstrateGrandpa
-                && adapter.version == 1
-                && sccp_substrate_source_adapter_shape_is_bounded(adapter)
-                && adapter.source_domain == proof.source_domain
-                && finalized_block_matches_finality_height
-                && adapter.grandpa_set_id != 0
-                && adapter.block_hash == proof.finality_block_hash
-                && adapter.events_root == proof.receipt_or_message_root
-                && h256_is_nonzero(&adapter.authority_set_hash)
-                && h256_is_nonzero(&adapter.grandpa_justification_hash)
-                && adapter.storage_proof_hash == expected_storage_proof_hash
         }
     }
 }
@@ -38086,205 +36071,6 @@ mod tests {
             .expect("TRON witness-schedule transition seal hash");
         proof
     }
-
-    fn sample_substrate_authority_keypairs() -> [KeyPair; 4] {
-        [
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority:0".to_vec(),
-                Algorithm::Ed25519,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority:1".to_vec(),
-                Algorithm::Ed25519,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority:2".to_vec(),
-                Algorithm::Ed25519,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority:3".to_vec(),
-                Algorithm::Ed25519,
-            ),
-        ]
-    }
-
-    fn sample_substrate_next_authority_keypairs() -> [KeyPair; 4] {
-        [
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority-next:0".to_vec(),
-                Algorithm::Ed25519,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority-next:1".to_vec(),
-                Algorithm::Ed25519,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority-next:2".to_vec(),
-                Algorithm::Ed25519,
-            ),
-            KeyPair::from_seed(
-                b"iroha:sccp:test:substrate-authority-next:3".to_vec(),
-                Algorithm::Ed25519,
-            ),
-        ]
-    }
-
-    fn sample_substrate_authority_public_keys(signers: &[KeyPair; 4]) -> Vec<Vec<u8>> {
-        signers
-            .iter()
-            .map(|signer| {
-                let (algorithm, bytes) = signer
-                    .public_key()
-                    .try_to_bytes()
-                    .expect("valid Substrate test key");
-                assert_eq!(algorithm, Algorithm::Ed25519);
-                bytes.to_vec()
-            })
-            .collect()
-    }
-
-    fn sample_substrate_authority_set_payload_for(signers: &[KeyPair; 4]) -> Vec<u8> {
-        canonical_sccp_substrate_authority_set_bytes(
-            &sample_substrate_authority_public_keys(signers),
-            &[1, 1, 1, 1],
-        )
-        .expect("Substrate authority set payload")
-    }
-
-    fn sample_substrate_authority_set_hash_for(signers: &[KeyPair; 4]) -> H256 {
-        sccp_substrate_authority_set_hash_from_payload(&sample_substrate_authority_set_payload_for(
-            signers,
-        ))
-        .expect("Substrate authority set hash")
-    }
-
-    fn sample_substrate_authority_set_hash() -> H256 {
-        let signers = sample_substrate_authority_keypairs();
-        sample_substrate_authority_set_hash_for(&signers)
-    }
-
-    fn sample_substrate_grandpa_justification_proof_for(
-        signers: &[KeyPair; 4],
-        source_domain: u32,
-        finalized_block_number: u64,
-        grandpa_set_id: u64,
-        block_hash: H256,
-        authority_set_hash: H256,
-        events_root: H256,
-        storage_proof_hash: H256,
-    ) -> SccpSubstrateGrandpaJustificationProofV1 {
-        let precommit_message_hash = sccp_substrate_grandpa_precommit_hash(
-            source_domain,
-            finalized_block_number,
-            grandpa_set_id,
-            block_hash,
-            authority_set_hash,
-            events_root,
-            storage_proof_hash,
-        );
-        let signatures = signers[..3]
-            .iter()
-            .map(|signer| {
-                iroha_crypto::Signature::new(signer.private_key(), &precommit_message_hash)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        SccpSubstrateGrandpaJustificationProofV1 {
-            version: 1,
-            total_weight: 4,
-            signed_weight: 3,
-            precommit_message_hash,
-            authority_public_keys: sample_substrate_authority_public_keys(signers),
-            authority_weights: vec![1, 1, 1, 1],
-            signers_bitmap: vec![0b0000_0111],
-            signatures,
-        }
-    }
-
-    fn sample_substrate_grandpa_justification_proof(
-        source_domain: u32,
-        finalized_block_number: u64,
-        grandpa_set_id: u64,
-        block_hash: H256,
-        authority_set_hash: H256,
-        events_root: H256,
-        storage_proof_hash: H256,
-    ) -> SccpSubstrateGrandpaJustificationProofV1 {
-        let signers = sample_substrate_authority_keypairs();
-        sample_substrate_grandpa_justification_proof_for(
-            &signers,
-            source_domain,
-            finalized_block_number,
-            grandpa_set_id,
-            block_hash,
-            authority_set_hash,
-            events_root,
-            storage_proof_hash,
-        )
-    }
-
-    fn sample_substrate_authority_set_transition_proof(
-        source_domain: u32,
-        parent_signers: &[KeyPair; 4],
-        from_grandpa_set_id: u64,
-        to_grandpa_set_id: u64,
-        transition_block_number: u64,
-        transition_block_hash: H256,
-        parent_authority_set_hash: H256,
-        next_authority_set_hash: H256,
-        next_authority_set_payload: Vec<u8>,
-    ) -> SccpSubstrateAuthoritySetTransitionProofV1 {
-        let next_authority_set_payload_hash =
-            sccp_substrate_authority_set_payload_hash(&next_authority_set_payload);
-        let transition_message_hash = sccp_substrate_authority_set_transition_message_hash(
-            source_domain,
-            from_grandpa_set_id,
-            to_grandpa_set_id,
-            transition_block_number,
-            transition_block_hash,
-            parent_authority_set_hash,
-            next_authority_set_hash,
-            next_authority_set_payload_hash,
-        );
-        let signatures = parent_signers[..3]
-            .iter()
-            .map(|signer| {
-                iroha_crypto::Signature::new(signer.private_key(), &transition_message_hash)
-                    .payload()
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let mut proof = SccpSubstrateAuthoritySetTransitionProofV1 {
-            version: 1,
-            source_domain,
-            from_grandpa_set_id,
-            to_grandpa_set_id,
-            transition_block_number,
-            transition_block_hash,
-            parent_authority_set_hash,
-            next_authority_set_hash,
-            next_authority_set_payload,
-            next_authority_set_payload_hash,
-            transition_message_hash,
-            transition_justification_hash: [0u8; 32],
-            grandpa_justification: SccpSubstrateGrandpaJustificationProofV1 {
-                version: 1,
-                total_weight: 4,
-                signed_weight: 3,
-                precommit_message_hash: transition_message_hash,
-                authority_public_keys: sample_substrate_authority_public_keys(parent_signers),
-                authority_weights: vec![1, 1, 1, 1],
-                signers_bitmap: vec![0b0000_0111],
-                signatures,
-            },
-        };
-        proof.transition_justification_hash =
-            sccp_substrate_authority_set_transition_justification_hash(&proof)
-                .expect("Substrate authority-set transition justification hash");
-        proof
-    }
-
     fn sample_solana_vote_keypairs() -> [KeyPair; 4] {
         [
             KeyPair::from_seed(b"iroha:sccp:test:sol-vote:0".to_vec(), Algorithm::Ed25519),
@@ -39000,9 +36786,6 @@ mod tests {
             SCCP_DOMAIN_SOL => sample_solana_vote_roster_hash(),
             SCCP_DOMAIN_TON => sample_ton_validator_set_hash(),
             SCCP_DOMAIN_TRON => sample_tron_witness_schedule_hash(),
-            SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-                sample_substrate_authority_set_hash()
-            }
             _ => prefixed_blake2b(
                 b"sccp:test:ready-source-material:trust-anchor",
                 &source_domain.to_le_bytes(),
@@ -39558,46 +37341,6 @@ mod tests {
         push_vec(&mut out, component_kind.as_bytes());
         push_vec(&mut out, component_id.as_bytes());
         prefixed_blake2b(b"sccp:tron:source-verifier-material:v1", &out)
-    }
-
-    fn legacy_substrate_source_material_component_hash_without_transition_prefixes(
-        source_domain: u32,
-        component_id: &str,
-        component_kind: &str,
-    ) -> Option<H256> {
-        let mut out = Vec::new();
-        push_u8(&mut out, 1);
-        push_u32(&mut out, source_domain);
-        push_vec(
-            &mut out,
-            sccp_chain_key_for_domain(source_domain)?.as_bytes(),
-        );
-        push_u8(
-            &mut out,
-            sccp_source_proof_plan_code(sccp_source_proof_plan_for_domain(source_domain)?),
-        );
-        push_u8(
-            &mut out,
-            sccp_proof_finality_model_code(sccp_proof_finality_model_for_domain(source_domain)?),
-        );
-        push_vec(
-            &mut out,
-            SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1.as_bytes(),
-        );
-        push_vec(
-            &mut out,
-            sccp_verifier_backend_key_for_domain(source_domain)?.as_bytes(),
-        );
-        push_vec(&mut out, SCCP_SUBSTRATE_STORAGE_PROOF_PREFIX_V1);
-        push_vec(&mut out, SCCP_SUBSTRATE_AUTHORITY_SET_PREFIX_V1);
-        push_vec(&mut out, SCCP_SUBSTRATE_GRANDPA_PRECOMMIT_PREFIX_V1);
-        push_vec(&mut out, SCCP_SUBSTRATE_GRANDPA_JUSTIFICATION_PREFIX_V1);
-        push_vec(&mut out, component_kind.as_bytes());
-        push_vec(&mut out, component_id.as_bytes());
-        Some(prefixed_blake2b(
-            b"sccp:substrate-family:source-verifier-material:v1",
-            &out,
-        ))
     }
 
     fn sample_reference_evm_attestation_manifest() -> SccpProofManifestV1 {
@@ -40794,49 +38537,6 @@ mod tests {
                     witness_schedule_transition_proofs: Vec::new(),
                 })
             }
-            SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
-                let grandpa_set_id = 42;
-                let authority_set_hash = sample_substrate_authority_set_hash();
-                let storage_proof_hash = sccp_substrate_storage_proof_hash(
-                    source_domain,
-                    source_event_digest,
-                    0,
-                    finality_height,
-                    grandpa_set_id,
-                    finality_block_hash,
-                    authority_set_hash,
-                    receipt_or_message_root,
-                    &inclusion_branch,
-                )
-                .expect("Substrate source storage proof hash");
-                let grandpa_justification = sample_substrate_grandpa_justification_proof(
-                    source_domain,
-                    finality_height,
-                    grandpa_set_id,
-                    finality_block_hash,
-                    authority_set_hash,
-                    receipt_or_message_root,
-                    storage_proof_hash,
-                );
-                let grandpa_justification_hash =
-                    sccp_substrate_grandpa_justification_hash(&grandpa_justification)
-                        .expect("Substrate GRANDPA justification hash");
-                SccpSourceAdapterProofV1::SubstrateGrandpaEvent(SccpSubstrateGrandpaSourceProofV1 {
-                    version: 1,
-                    source_domain,
-                    finalized_block_number: finality_height,
-                    grandpa_set_id,
-                    block_hash: finality_block_hash,
-                    authority_set_hash,
-                    events_root: receipt_or_message_root,
-                    grandpa_justification_hash,
-                    storage_proof_hash,
-                    runtime_storage_verification_proof: SccpSourceStateVerificationProofV1::default(
-                    ),
-                    grandpa_justification,
-                    authority_set_transition_proofs: Vec::new(),
-                })
-            }
             _ => panic!("unsupported sample SCCP source domain {source_domain}"),
         };
         if let (Some(material), SccpSourceAdapterProofV1::SolanaFinalizedTransaction(adapter)) =
@@ -40896,20 +38596,6 @@ mod tests {
                     )
                     .expect("build TON shard-accounts dictionary verification proof");
             }
-        }
-        if let (Some(material), SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter)) =
-            (source_material, &mut adapter_proof)
-            && sccp_source_state_verifier_is_production_ready(material)
-        {
-            adapter.runtime_storage_verification_proof =
-                build_sccp_substrate_runtime_storage_verification_proof(
-                    adapter,
-                    source_event_digest,
-                    0,
-                    &inclusion_branch,
-                    material,
-                )
-                .expect("build Substrate runtime storage verification proof");
         }
         let adapter_transcript_hash = sccp_source_adapter_transcript_hash(
             source_domain,
@@ -41163,10 +38849,7 @@ mod tests {
 
     fn sample_account_bytes(domain: u32) -> Vec<u8> {
         match domain {
-            SCCP_DOMAIN_SORA
-            | SCCP_DOMAIN_SORA_KUSAMA
-            | SCCP_DOMAIN_SORA_POLKADOT
-            | SCCP_DOMAIN_SORA2 => format!(
+            SCCP_DOMAIN_SORA => format!(
                 "account@{}",
                 sccp_chain_key_for_domain(domain).expect("domain chain key")
             )
@@ -41693,9 +39376,6 @@ mod tests {
             SccpSourceAdapterProofV1::TronDposReceipt(proof) => {
                 proof.source_domain = source_domain;
             }
-            SccpSourceAdapterProofV1::SubstrateGrandpaEvent(proof) => {
-                proof.source_domain = source_domain;
-            }
         }
     }
 
@@ -41715,9 +39395,6 @@ mod tests {
             }
             SccpSourceAdapterProofV1::TronDposReceipt(proof) => {
                 proof.receipt_proof_hash = [0; 32];
-            }
-            SccpSourceAdapterProofV1::SubstrateGrandpaEvent(proof) => {
-                proof.storage_proof_hash = [0; 32];
             }
         }
     }
@@ -41739,9 +39416,6 @@ mod tests {
             SccpSourceAdapterProofV1::TronDposReceipt(proof) => {
                 proof.witness_schedule_hash[0] ^= 0x01;
             }
-            SccpSourceAdapterProofV1::SubstrateGrandpaEvent(proof) => {
-                proof.authority_set_hash[0] ^= 0x01;
-            }
         }
     }
 
@@ -41761,9 +39435,6 @@ mod tests {
             }
             SccpSourceAdapterProofV1::TronDposReceipt(proof) => {
                 proof.receipt_root[0] ^= 0x01;
-            }
-            SccpSourceAdapterProofV1::SubstrateGrandpaEvent(proof) => {
-                proof.events_root[0] ^= 0x01;
             }
         }
     }
@@ -47519,931 +45190,6 @@ mod tests {
             &valid,
             &material,
         ));
-    }
-
-    #[test]
-    fn evm_bsc_and_substrate_source_adapters_bind_proof_hashes_to_inclusion_witnesses() {
-        let eth_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 705);
-        let eth_valid = source_chain_proof_from_bundle(&eth_bundle);
-        let eth_consensus = source_consensus_proof_from_envelope(&eth_valid);
-        let SccpSourceAdapterProofV1::EthereumBeaconReceipt(eth_adapter) =
-            &eth_consensus.adapter_proof
-        else {
-            panic!("expected EVM adapter proof");
-        };
-        let eth_expected = sccp_evm_receipt_proof_hash(
-            eth_valid.source_domain,
-            eth_valid.source_event_digest,
-            eth_adapter.beacon_slot,
-            eth_adapter.execution_block_number,
-            eth_adapter.execution_block_hash,
-            eth_adapter.execution_receipts_root,
-            eth_adapter.beacon_finalized_root,
-            eth_adapter.sync_committee_root,
-            eth_adapter.receipt_root_index,
-            &eth_adapter.receipt_trie_proof_nodes,
-            &eth_valid.inclusion_branch,
-        )
-        .expect("EVM receipt proof hash");
-        assert_eq!(eth_adapter.receipt_trie_proof_hash, eth_expected);
-        assert!(verify_sccp_source_adapter_proof_binding(
-            &eth_consensus.adapter_proof,
-            &eth_valid,
-        ));
-
-        let mut eth_wrong_hash = eth_consensus.adapter_proof.clone();
-        let SccpSourceAdapterProofV1::EthereumBeaconReceipt(adapter) = &mut eth_wrong_hash else {
-            panic!("expected EVM adapter proof");
-        };
-        adapter.receipt_trie_proof_hash[0] ^= 0x01;
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &eth_wrong_hash,
-            &eth_valid,
-        ));
-        let mut eth_wrong_branch = eth_valid.clone();
-        eth_wrong_branch.inclusion_branch[0][0] ^= 0x01;
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &eth_consensus.adapter_proof,
-            &eth_wrong_branch,
-        ));
-        assert!(
-            sccp_evm_receipt_proof_hash(
-                eth_valid.source_domain,
-                eth_valid.source_event_digest,
-                eth_adapter.beacon_slot,
-                eth_adapter.execution_block_number,
-                eth_adapter.execution_block_hash,
-                eth_adapter.execution_receipts_root,
-                eth_adapter.beacon_finalized_root,
-                eth_adapter.sync_committee_root,
-                eth_adapter.receipt_root_index,
-                &eth_adapter.receipt_trie_proof_nodes,
-                &[vec![0xAA; 31]],
-            )
-            .is_none()
-        );
-
-        let bsc_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA, 706);
-        let bsc_valid = source_chain_proof_from_bundle(&bsc_bundle);
-        let bsc_consensus = source_consensus_proof_from_envelope(&bsc_valid);
-        let SccpSourceAdapterProofV1::BscValidatorSetReceipt(bsc_adapter) =
-            &bsc_consensus.adapter_proof
-        else {
-            panic!("expected BSC adapter proof");
-        };
-        let bsc_expected = sccp_bsc_receipt_proof_hash(
-            bsc_valid.source_domain,
-            bsc_valid.source_event_digest,
-            bsc_adapter.validator_epoch,
-            bsc_adapter.block_number,
-            bsc_adapter.block_hash,
-            bsc_adapter.receipts_root,
-            bsc_adapter.validator_set_hash,
-            bsc_adapter.commit_seal_hash,
-            bsc_adapter.receipt_root_index,
-            &bsc_adapter.receipt_trie_proof_nodes,
-            &bsc_valid.inclusion_branch,
-        )
-        .expect("BSC receipt proof hash");
-        assert_eq!(bsc_adapter.receipt_trie_proof_hash, bsc_expected);
-        assert!(verify_sccp_source_adapter_proof_binding(
-            &bsc_consensus.adapter_proof,
-            &bsc_valid,
-        ));
-
-        let mut bsc_wrong_hash = bsc_consensus.adapter_proof.clone();
-        let SccpSourceAdapterProofV1::BscValidatorSetReceipt(adapter) = &mut bsc_wrong_hash else {
-            panic!("expected BSC adapter proof");
-        };
-        adapter.receipt_trie_proof_hash[0] ^= 0x01;
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &bsc_wrong_hash,
-            &bsc_valid,
-        ));
-        let mut bsc_wrong_branch = bsc_valid.clone();
-        bsc_wrong_branch.inclusion_branch[0][0] ^= 0x01;
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &bsc_consensus.adapter_proof,
-            &bsc_wrong_branch,
-        ));
-        assert!(
-            sccp_bsc_receipt_proof_hash(
-                bsc_valid.source_domain,
-                bsc_valid.source_event_digest,
-                bsc_adapter.validator_epoch,
-                bsc_adapter.block_number,
-                bsc_adapter.block_hash,
-                bsc_adapter.receipts_root,
-                bsc_adapter.validator_set_hash,
-                bsc_adapter.commit_seal_hash,
-                bsc_adapter.receipt_root_index,
-                &bsc_adapter.receipt_trie_proof_nodes,
-                &[vec![0xAA; 31]],
-            )
-            .is_none()
-        );
-
-        let substrate_bundle =
-            sample_transfer_bundle(SCCP_DOMAIN_SORA_KUSAMA, SCCP_DOMAIN_SORA, 707);
-        let substrate_valid = source_chain_proof_from_bundle(&substrate_bundle);
-        let substrate_consensus = source_consensus_proof_from_envelope(&substrate_valid);
-        let SccpSourceAdapterProofV1::SubstrateGrandpaEvent(substrate_adapter) =
-            &substrate_consensus.adapter_proof
-        else {
-            panic!("expected Substrate adapter proof");
-        };
-        let substrate_inclusion = source_inclusion_proof_from_envelope(&substrate_valid);
-        let substrate_expected = sccp_substrate_storage_proof_hash(
-            substrate_valid.source_domain,
-            substrate_valid.source_event_digest,
-            substrate_inclusion.leaf_index,
-            substrate_adapter.finalized_block_number,
-            substrate_adapter.grandpa_set_id,
-            substrate_adapter.block_hash,
-            substrate_adapter.authority_set_hash,
-            substrate_adapter.events_root,
-            &substrate_valid.inclusion_branch,
-        )
-        .expect("Substrate storage proof hash");
-        assert_eq!(substrate_adapter.storage_proof_hash, substrate_expected);
-        assert_eq!(
-            sccp_substrate_grandpa_justification_hash(&substrate_adapter.grandpa_justification,),
-            Some(substrate_adapter.grandpa_justification_hash),
-        );
-        assert!(verify_sccp_source_adapter_proof_binding(
-            &substrate_consensus.adapter_proof,
-            &substrate_valid,
-        ));
-
-        let mut substrate_wrong_hash = substrate_consensus.adapter_proof.clone();
-        let SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter) = &mut substrate_wrong_hash
-        else {
-            panic!("expected Substrate adapter proof");
-        };
-        adapter.storage_proof_hash[0] ^= 0x01;
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &substrate_wrong_hash,
-            &substrate_valid,
-        ));
-        let mut substrate_wrong_branch = substrate_valid.clone();
-        substrate_wrong_branch.inclusion_branch[0][0] ^= 0x01;
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &substrate_consensus.adapter_proof,
-            &substrate_wrong_branch,
-        ));
-        let mut substrate_wrong_leaf_index = substrate_valid.clone();
-        let mut wrong_leaf_inclusion =
-            source_inclusion_proof_from_envelope(&substrate_wrong_leaf_index);
-        wrong_leaf_inclusion.leaf_index = 1;
-        replace_source_inclusion_proof(&mut substrate_wrong_leaf_index, &wrong_leaf_inclusion);
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &substrate_consensus.adapter_proof,
-            &substrate_wrong_leaf_index,
-        ));
-        assert!(
-            sccp_substrate_storage_proof_hash(
-                substrate_valid.source_domain,
-                substrate_valid.source_event_digest,
-                substrate_inclusion.leaf_index,
-                substrate_adapter.finalized_block_number,
-                substrate_adapter.grandpa_set_id,
-                substrate_adapter.block_hash,
-                substrate_adapter.authority_set_hash,
-                substrate_adapter.events_root,
-                &[vec![0xAA; 31]],
-            )
-            .is_none()
-        );
-        assert!(
-            sccp_substrate_storage_proof_hash(
-                substrate_valid.source_domain,
-                [0; 32],
-                substrate_inclusion.leaf_index,
-                substrate_adapter.finalized_block_number,
-                substrate_adapter.grandpa_set_id,
-                substrate_adapter.block_hash,
-                substrate_adapter.authority_set_hash,
-                substrate_adapter.events_root,
-                &substrate_valid.inclusion_branch,
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn substrate_source_adapter_verifies_grandpa_justification_certificate() {
-        let material =
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-            SCCP_DOMAIN_SORA_KUSAMA,
-            sample_substrate_authority_set_hash(),
-            [0xB2; 32],
-            [0xC3; 32],
-            [0xE5; 32],
-            [0xD4; 32],
-        )
-        .expect("Substrate runtime source material");
-        let bundle = sample_transfer_bundle_with_source_material(
-            SCCP_DOMAIN_SORA_KUSAMA,
-            SCCP_DOMAIN_SORA,
-            708,
-            Some(&material),
-        );
-        let valid = source_chain_proof_from_bundle(&bundle);
-        let consensus = source_consensus_proof_from_envelope(&valid);
-        let SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter) = &consensus.adapter_proof
-        else {
-            panic!("expected Substrate adapter proof");
-        };
-
-        assert!(verify_sccp_substrate_grandpa_justification_proof(
-            adapter, &valid, &material,
-        ));
-        assert!(verify_sccp_substrate_runtime_storage_verification_proof(
-            adapter, &valid, &material,
-        ));
-        assert_eq!(
-            adapter.runtime_storage_verification_proof.circuit_id,
-            SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
-        );
-        let template_material =
-            sccp_substrate_family_runtime_source_verifier_material_v1(SCCP_DOMAIN_SORA_KUSAMA)
-                .expect("Substrate runtime source material template");
-        assert!(
-            build_sccp_substrate_runtime_storage_verification_proof(
-                adapter,
-                valid.source_event_digest,
-                source_inclusion_proof_from_envelope(&valid).leaf_index,
-                &valid.inclusion_branch,
-                &template_material,
-            )
-            .is_none(),
-            "UI/runtime storage proof requests must reject template Substrate verifier material",
-        );
-        let mut missing_runtime_storage_proof = adapter.clone();
-        missing_runtime_storage_proof.runtime_storage_verification_proof =
-            SccpSourceStateVerificationProofV1::default();
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &missing_runtime_storage_proof,
-            &valid,
-            &material,
-        ));
-        let mut all_zero_runtime_storage_proof = adapter.clone();
-        let runtime_storage_proof_len =
-            adapter.runtime_storage_verification_proof.proof_bytes.len();
-        all_zero_runtime_storage_proof
-            .runtime_storage_verification_proof
-            .proof_bytes = vec![0; runtime_storage_proof_len];
-        assert!(
-            !verify_sccp_substrate_runtime_storage_verification_proof(
-                &all_zero_runtime_storage_proof,
-                &valid,
-                &material,
-            ),
-            "Substrate runtime-storage verifier must reject all-zero source-state proof capsules"
-        );
-        assert!(
-            !verify_sccp_substrate_grandpa_justification_proof(
-                &all_zero_runtime_storage_proof,
-                &valid,
-                &material,
-            ),
-            "Substrate production source proofs must not bind all-zero runtime-storage proof capsules"
-        );
-        assert!(
-            !sccp_source_adapter_proof_shape_is_bounded(
-                &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(all_zero_runtime_storage_proof),
-            ),
-            "Substrate source-adapter preflight must reject all-zero runtime-storage proof capsules"
-        );
-        let mut tampered_runtime_storage_proof = adapter.clone();
-        tampered_runtime_storage_proof
-            .runtime_storage_verification_proof
-            .proof_bytes[0] ^= 0x01;
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &tampered_runtime_storage_proof,
-            &valid,
-            &material,
-        ));
-        assert_eq!(
-            sccp_substrate_authority_set_hash(
-                &adapter.grandpa_justification.authority_public_keys,
-                &adapter.grandpa_justification.authority_weights,
-            ),
-            Some(material.source_trust_anchor_hash),
-        );
-        assert_eq!(
-            adapter.grandpa_justification.precommit_message_hash,
-            sccp_substrate_grandpa_precommit_hash(
-                adapter.source_domain,
-                adapter.finalized_block_number,
-                adapter.grandpa_set_id,
-                adapter.block_hash,
-                adapter.authority_set_hash,
-                adapter.events_root,
-                adapter.storage_proof_hash,
-            ),
-        );
-        assert_eq!(
-            sccp_substrate_grandpa_justification_hash(&adapter.grandpa_justification),
-            Some(adapter.grandpa_justification_hash),
-        );
-
-        let mut padded_bitmap = adapter.clone();
-        padded_bitmap.grandpa_justification.signers_bitmap[0] |= 0b1000_0000;
-        assert!(
-            !sccp_source_adapter_proof_shape_is_bounded(
-                &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(padded_bitmap.clone()),
-            ),
-            "Substrate structural preflight must reject signer bitmap padding bits"
-        );
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &padded_bitmap,
-            &valid,
-            &material,
-        ));
-
-        let mut missing_signature = adapter.clone();
-        missing_signature.grandpa_justification.signatures.pop();
-        assert!(
-            !sccp_source_adapter_proof_shape_is_bounded(
-                &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(missing_signature.clone()),
-            ),
-            "Substrate structural preflight must reject signer/signature count drift"
-        );
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &missing_signature,
-            &valid,
-            &material,
-        ));
-
-        let mut wrong_signature = adapter.clone();
-        wrong_signature.grandpa_justification.signatures[0][0] ^= 0x01;
-        wrong_signature.grandpa_justification_hash =
-            sccp_substrate_grandpa_justification_hash(&wrong_signature.grandpa_justification)
-                .expect("Substrate GRANDPA justification hash");
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_signature,
-            &valid,
-            &material,
-        ));
-
-        let mut insufficient_weight = adapter.clone();
-        insufficient_weight.grandpa_justification.signers_bitmap = vec![0b0000_0011];
-        insufficient_weight
-            .grandpa_justification
-            .signatures
-            .truncate(2);
-        insufficient_weight.grandpa_justification.signed_weight = 2;
-        assert!(
-            sccp_substrate_grandpa_justification_hash(&insufficient_weight.grandpa_justification)
-                .is_none(),
-            "Substrate GRANDPA justification hash must reject sub-quorum signatures"
-        );
-        insufficient_weight.grandpa_justification_hash = [0; 32];
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &insufficient_weight,
-            &valid,
-            &material,
-        ));
-
-        let mut wrong_anchor = material.clone();
-        wrong_anchor.source_trust_anchor_hash[0] ^= 0x01;
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            adapter,
-            &valid,
-            &wrong_anchor,
-        ));
-
-        let mut wrong_precommit = adapter.clone();
-        wrong_precommit.grandpa_justification.precommit_message_hash[0] ^= 0x01;
-        wrong_precommit.grandpa_justification_hash =
-            sccp_substrate_grandpa_justification_hash(&wrong_precommit.grandpa_justification)
-                .expect("Substrate GRANDPA justification hash");
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_precommit,
-            &valid,
-            &material,
-        ));
-
-        let mut wrong_justification_hash = adapter.clone();
-        wrong_justification_hash.grandpa_justification_hash[0] ^= 0x01;
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_justification_hash,
-            &valid,
-            &material,
-        ));
-    }
-
-    #[test]
-    fn substrate_source_adapter_verifies_authority_set_transition_chain() {
-        let parent_signers = sample_substrate_authority_keypairs();
-        let active_signers = sample_substrate_next_authority_keypairs();
-        let parent_authority_set_hash = sample_substrate_authority_set_hash_for(&parent_signers);
-        let active_authority_set_payload =
-            sample_substrate_authority_set_payload_for(&active_signers);
-        let active_authority_set_hash =
-            sccp_substrate_authority_set_hash_from_payload(&active_authority_set_payload)
-                .expect("active Substrate authority set hash");
-        let material =
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-            SCCP_DOMAIN_SORA_KUSAMA,
-            parent_authority_set_hash,
-            [0xB2; 32],
-            [0xC3; 32],
-            [0xE5; 32],
-            [0xD4; 32],
-        )
-        .expect("Substrate source material anchored to parent authority set");
-
-        let bundle = sample_transfer_bundle_with_source_material(
-            SCCP_DOMAIN_SORA_KUSAMA,
-            SCCP_DOMAIN_SORA,
-            711,
-            Some(&material),
-        );
-        let mut valid = source_chain_proof_from_bundle(&bundle);
-        let consensus = source_consensus_proof_from_envelope(&valid);
-        let SccpSourceAdapterProofV1::SubstrateGrandpaEvent(mut adapter) = consensus.adapter_proof
-        else {
-            panic!("expected Substrate adapter proof");
-        };
-
-        adapter.authority_set_hash = active_authority_set_hash;
-        adapter.storage_proof_hash = sccp_substrate_storage_proof_hash(
-            valid.source_domain,
-            valid.source_event_digest,
-            source_inclusion_proof_from_envelope(&valid).leaf_index,
-            adapter.finalized_block_number,
-            adapter.grandpa_set_id,
-            adapter.block_hash,
-            adapter.authority_set_hash,
-            adapter.events_root,
-            &valid.inclusion_branch,
-        )
-        .expect("active Substrate storage proof hash");
-        adapter.grandpa_justification = sample_substrate_grandpa_justification_proof_for(
-            &active_signers,
-            adapter.source_domain,
-            adapter.finalized_block_number,
-            adapter.grandpa_set_id,
-            adapter.block_hash,
-            adapter.authority_set_hash,
-            adapter.events_root,
-            adapter.storage_proof_hash,
-        );
-        adapter.grandpa_justification_hash =
-            sccp_substrate_grandpa_justification_hash(&adapter.grandpa_justification)
-                .expect("active Substrate GRANDPA justification hash");
-        adapter.authority_set_transition_proofs =
-            vec![sample_substrate_authority_set_transition_proof(
-                adapter.source_domain,
-                &parent_signers,
-                adapter.grandpa_set_id - 1,
-                adapter.grandpa_set_id,
-                adapter.finalized_block_number - 1,
-                [0xDB; 32],
-                parent_authority_set_hash,
-                active_authority_set_hash,
-                active_authority_set_payload.clone(),
-            )];
-        adapter.runtime_storage_verification_proof =
-            build_sccp_substrate_runtime_storage_verification_proof(
-                &adapter,
-                valid.source_event_digest,
-                source_inclusion_proof_from_envelope(&valid).leaf_index,
-                &valid.inclusion_branch,
-                &material,
-            )
-            .expect("active Substrate runtime storage verification proof");
-        assert_eq!(
-            sccp_substrate_authority_set_payload_hash(&active_authority_set_payload),
-            adapter.authority_set_transition_proofs[0].next_authority_set_payload_hash
-        );
-        assert!(sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter.clone()),
-        ));
-        replace_source_adapter_proof_with_material(
-            &mut valid,
-            SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter.clone()),
-            &material,
-        );
-
-        assert!(
-            verify_sccp_source_chain_proof_envelope_structure_with_material(&valid, &material,)
-        );
-        assert!(verify_sccp_substrate_grandpa_justification_proof(
-            &adapter, &valid, &material,
-        ));
-
-        let refresh_substrate_transition =
-            |transition: &mut SccpSubstrateAuthoritySetTransitionProofV1,
-             signers: &[KeyPair; 4]| {
-                let transition_message_hash = sccp_substrate_authority_set_transition_message_hash(
-                    transition.source_domain,
-                    transition.from_grandpa_set_id,
-                    transition.to_grandpa_set_id,
-                    transition.transition_block_number,
-                    transition.transition_block_hash,
-                    transition.parent_authority_set_hash,
-                    transition.next_authority_set_hash,
-                    transition.next_authority_set_payload_hash,
-                );
-                transition.transition_message_hash = transition_message_hash;
-                transition.grandpa_justification.precommit_message_hash = transition_message_hash;
-                transition.grandpa_justification.signatures = signers[..3]
-                    .iter()
-                    .map(|signer| {
-                        iroha_crypto::Signature::new(signer.private_key(), &transition_message_hash)
-                            .payload()
-                            .to_vec()
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(hash) =
-                    sccp_substrate_authority_set_transition_justification_hash(transition)
-                {
-                    transition.transition_justification_hash = hash;
-                }
-            };
-
-        let mut malformed_next_payload = adapter.clone();
-        malformed_next_payload.authority_set_transition_proofs[0].next_authority_set_payload[1] ^=
-            0x01;
-        malformed_next_payload.authority_set_transition_proofs[0].next_authority_set_payload_hash =
-            sccp_substrate_authority_set_payload_hash(
-                &malformed_next_payload.authority_set_transition_proofs[0]
-                    .next_authority_set_payload,
-            );
-        refresh_substrate_transition(
-            &mut malformed_next_payload.authority_set_transition_proofs[0],
-            &parent_signers,
-        );
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(malformed_next_payload.clone()),
-        ));
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &malformed_next_payload,
-            &valid,
-            &material,
-        ));
-
-        let mut stale_grandpa_set = adapter.clone();
-        stale_grandpa_set.authority_set_transition_proofs =
-            vec![sample_substrate_authority_set_transition_proof(
-                adapter.source_domain,
-                &parent_signers,
-                adapter.grandpa_set_id - 2,
-                adapter.grandpa_set_id - 1,
-                adapter.finalized_block_number - 2,
-                [0xDA; 32],
-                parent_authority_set_hash,
-                active_authority_set_hash,
-                active_authority_set_payload.clone(),
-            )];
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(stale_grandpa_set.clone()),
-        ));
-        assert!(
-            !verify_sccp_substrate_grandpa_justification_proof(
-                &stale_grandpa_set,
-                &valid,
-                &material,
-            ),
-            "Substrate authority-set transitions must advance to the adapter's declared GRANDPA set id, not only the active authority-set hash"
-        );
-
-        let mut missing_transition = adapter.clone();
-        missing_transition.authority_set_transition_proofs.clear();
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &missing_transition,
-            &valid,
-            &material,
-        ));
-
-        let mut wrong_parent = adapter.clone();
-        wrong_parent.authority_set_transition_proofs[0].parent_authority_set_hash[0] ^= 0x01;
-        wrong_parent.authority_set_transition_proofs[0].transition_justification_hash =
-            sccp_substrate_authority_set_transition_justification_hash(
-                &wrong_parent.authority_set_transition_proofs[0],
-            )
-            .expect("Substrate transition justification hash");
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(wrong_parent.clone()),
-        ));
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_parent,
-            &valid,
-            &material,
-        ));
-
-        let mut wrong_payload_hash = adapter.clone();
-        wrong_payload_hash.authority_set_transition_proofs[0].next_authority_set_payload[0] ^= 0x01;
-        wrong_payload_hash.authority_set_transition_proofs[0].transition_justification_hash =
-            sccp_substrate_authority_set_transition_justification_hash(
-                &wrong_payload_hash.authority_set_transition_proofs[0],
-            )
-            .expect("Substrate transition justification hash");
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(wrong_payload_hash.clone()),
-        ));
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_payload_hash,
-            &valid,
-            &material,
-        ));
-
-        let wrong_next_payload = sample_substrate_authority_set_payload_for(&parent_signers);
-        let mut wrong_next_payload_proof = adapter.clone();
-        let wrong_next_transition =
-            wrong_next_payload_proof.authority_set_transition_proofs[0].clone();
-        wrong_next_payload_proof.authority_set_transition_proofs[0] =
-            sample_substrate_authority_set_transition_proof(
-                adapter.source_domain,
-                &parent_signers,
-                wrong_next_transition.from_grandpa_set_id,
-                wrong_next_transition.to_grandpa_set_id,
-                wrong_next_transition.transition_block_number,
-                wrong_next_transition.transition_block_hash,
-                parent_authority_set_hash,
-                active_authority_set_hash,
-                wrong_next_payload,
-            );
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(wrong_next_payload_proof.clone(),),
-        ));
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_next_payload_proof,
-            &valid,
-            &material,
-        ));
-
-        let mut wrong_next_set = adapter.clone();
-        wrong_next_set.authority_set_transition_proofs[0].next_authority_set_hash[0] ^= 0x01;
-        wrong_next_set.authority_set_transition_proofs[0].transition_message_hash =
-            sccp_substrate_authority_set_transition_message_hash(
-                wrong_next_set.authority_set_transition_proofs[0].source_domain,
-                wrong_next_set.authority_set_transition_proofs[0].from_grandpa_set_id,
-                wrong_next_set.authority_set_transition_proofs[0].to_grandpa_set_id,
-                wrong_next_set.authority_set_transition_proofs[0].transition_block_number,
-                wrong_next_set.authority_set_transition_proofs[0].transition_block_hash,
-                wrong_next_set.authority_set_transition_proofs[0].parent_authority_set_hash,
-                wrong_next_set.authority_set_transition_proofs[0].next_authority_set_hash,
-                wrong_next_set.authority_set_transition_proofs[0].next_authority_set_payload_hash,
-            );
-        wrong_next_set.authority_set_transition_proofs[0].transition_justification_hash =
-            sccp_substrate_authority_set_transition_justification_hash(
-                &wrong_next_set.authority_set_transition_proofs[0],
-            )
-            .expect("Substrate transition justification hash");
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(wrong_next_set.clone()),
-        ));
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_next_set,
-            &valid,
-            &material,
-        ));
-
-        let mut wrong_transition_signature = adapter;
-        wrong_transition_signature.authority_set_transition_proofs[0]
-            .grandpa_justification
-            .signatures[0][0] ^= 0x01;
-        wrong_transition_signature.authority_set_transition_proofs[0]
-            .transition_justification_hash =
-            sccp_substrate_authority_set_transition_justification_hash(
-                &wrong_transition_signature.authority_set_transition_proofs[0],
-            )
-            .expect("Substrate transition justification hash");
-        assert!(!verify_sccp_substrate_grandpa_justification_proof(
-            &wrong_transition_signature,
-            &valid,
-            &material,
-        ));
-    }
-
-    #[test]
-    fn substrate_source_adapter_preflight_rejects_oversized_shapes() {
-        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA_KUSAMA, SCCP_DOMAIN_SORA, 707);
-        let valid = source_chain_proof_from_bundle(&bundle);
-        let consensus = source_consensus_proof_from_envelope(&valid);
-        let SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter) = consensus.adapter_proof
-        else {
-            panic!("expected Substrate adapter proof");
-        };
-        assert!(sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter.clone()),
-        ));
-        assert!(verify_sccp_source_adapter_proof_binding(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter.clone()),
-            &valid,
-        ));
-
-        let mut too_many_authorities = adapter.clone();
-        too_many_authorities
-            .grandpa_justification
-            .authority_public_keys = vec![vec![0x11; 32]; SCCP_SUBSTRATE_MAX_AUTHORITIES + 1];
-        too_many_authorities.grandpa_justification.authority_weights =
-            vec![1; SCCP_SUBSTRATE_MAX_AUTHORITIES + 1];
-        too_many_authorities.grandpa_justification.signers_bitmap =
-            vec![0xFF; (SCCP_SUBSTRATE_MAX_AUTHORITIES + 1).div_ceil(8)];
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(too_many_authorities.clone()),
-        ));
-        assert!(!verify_sccp_source_adapter_proof_binding(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(too_many_authorities),
-            &valid,
-        ));
-
-        let mut oversized_signers_bitmap = adapter.clone();
-        oversized_signers_bitmap
-            .grandpa_justification
-            .signers_bitmap = vec![0xFF; SCCP_SUBSTRATE_MAX_AUTHORITIES.div_ceil(8) + 1];
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(oversized_signers_bitmap),
-        ));
-
-        let mut too_many_transitions = adapter.clone();
-        too_many_transitions.authority_set_transition_proofs = vec![
-            SccpSubstrateAuthoritySetTransitionProofV1::default();
-            SCCP_SUBSTRATE_MAX_AUTHORITY_SET_TRANSITIONS + 1
-        ];
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(too_many_transitions),
-        ));
-
-        let mut oversized_transition_payload = adapter;
-        let transition = SccpSubstrateAuthoritySetTransitionProofV1 {
-            next_authority_set_payload: vec![
-                0xAA;
-                SCCP_SUBSTRATE_MAX_AUTHORITY_SET_PAYLOAD_BYTES + 1
-            ],
-            ..SccpSubstrateAuthoritySetTransitionProofV1::default()
-        };
-        oversized_transition_payload.authority_set_transition_proofs = vec![transition];
-        assert!(!sccp_source_adapter_proof_shape_is_bounded(
-            &SccpSourceAdapterProofV1::SubstrateGrandpaEvent(oversized_transition_payload),
-        ));
-
-        let oversized_public_keys = vec![vec![0x22; 32]; SCCP_SUBSTRATE_MAX_AUTHORITIES + 1];
-        let oversized_weights = vec![1; SCCP_SUBSTRATE_MAX_AUTHORITIES + 1];
-        let oversized_payload = canonical_sccp_substrate_authority_set_bytes(
-            &oversized_public_keys,
-            &oversized_weights,
-        );
-        assert!(oversized_payload.is_none());
-    }
-
-    #[test]
-    fn substrate_authority_set_transition_transcript_matches_sdk_fixture() {
-        let parent_authority_public_keys = vec![vec![0x11; 32], vec![0x22; 32], vec![0x33; 32]];
-        let parent_authority_weights = vec![5, 7, 11];
-        let parent_authority_set_payload = canonical_sccp_substrate_authority_set_bytes(
-            &parent_authority_public_keys,
-            &parent_authority_weights,
-        )
-        .expect("Substrate parent authority-set payload");
-        assert_eq!(
-            encode_lower_hex(&parent_authority_set_payload),
-            "0103000000111111111111111111111111111111111111111111111111111111111111111105000000000000002222222222222222222222222222222222222222222222222222222222222222070000000000000033333333333333333333333333333333333333333333333333333333333333330b00000000000000",
-        );
-        let parent_authority_set_hash =
-            sccp_substrate_authority_set_hash_from_payload(&parent_authority_set_payload)
-                .expect("Substrate parent authority-set hash");
-        assert_eq!(
-            parent_authority_set_hash,
-            test_h256_from_hex(
-                "0xb2efd5d86304ea728a8a9ed4013aab8f3e10c0cf862e859c9cade55e660934ef"
-            )
-        );
-
-        let next_authority_public_keys = vec![vec![0xaa; 32], vec![0xbb; 32], vec![0xcc; 32]];
-        let next_authority_weights = vec![13, 17, 19];
-        let next_authority_set_payload = canonical_sccp_substrate_authority_set_bytes(
-            &next_authority_public_keys,
-            &next_authority_weights,
-        )
-        .expect("Substrate next authority-set payload");
-        assert_eq!(
-            encode_lower_hex(&next_authority_set_payload),
-            "0103000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0d00000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1100000000000000cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc1300000000000000",
-        );
-        let next_authority_set_hash =
-            sccp_substrate_authority_set_hash_from_payload(&next_authority_set_payload)
-                .expect("Substrate next authority-set hash");
-        let next_authority_set_payload_hash =
-            sccp_substrate_authority_set_payload_hash(&next_authority_set_payload);
-        assert_eq!(
-            next_authority_set_hash,
-            test_h256_from_hex(
-                "0x07cdbba0d61fdd4324b571dd793965e52acbf7f4c163af328e26c92c047501b3"
-            )
-        );
-        assert_eq!(
-            next_authority_set_payload_hash,
-            test_h256_from_hex(
-                "0x12ce972498ba5cd8a760aee0429fdc30d8b6447890e1bf77d8dde46f86b40d85"
-            )
-        );
-
-        let transition_message_hash = sccp_substrate_authority_set_transition_message_hash(
-            SCCP_DOMAIN_SORA_KUSAMA,
-            41,
-            42,
-            9001,
-            [0x44; 32],
-            parent_authority_set_hash,
-            next_authority_set_hash,
-            next_authority_set_payload_hash,
-        );
-        assert_eq!(
-            canonical_sccp_substrate_authority_set_transition_message_bytes(
-                SCCP_DOMAIN_SORA_KUSAMA,
-                41,
-                42,
-                9001,
-                [0x44; 32],
-                parent_authority_set_hash,
-                next_authority_set_hash,
-                next_authority_set_payload_hash,
-            )
-            .len(),
-            157
-        );
-        assert_eq!(
-            transition_message_hash,
-            test_h256_from_hex(
-                "0x60589333bf798bf592b2642d0fbac39b4e9305576cd2ebe9dd1f448a97a0596b"
-            )
-        );
-
-        let mut proof = SccpSubstrateAuthoritySetTransitionProofV1 {
-            version: 1,
-            source_domain: SCCP_DOMAIN_SORA_KUSAMA,
-            from_grandpa_set_id: 41,
-            to_grandpa_set_id: 42,
-            transition_block_number: 9001,
-            transition_block_hash: [0x44; 32],
-            parent_authority_set_hash,
-            next_authority_set_hash,
-            next_authority_set_payload,
-            next_authority_set_payload_hash,
-            transition_message_hash,
-            transition_justification_hash: [0u8; 32],
-            grandpa_justification: SccpSubstrateGrandpaJustificationProofV1 {
-                version: 1,
-                total_weight: 23,
-                signed_weight: 12,
-                precommit_message_hash: transition_message_hash,
-                authority_public_keys: parent_authority_public_keys,
-                authority_weights: parent_authority_weights,
-                signers_bitmap: vec![0x03],
-                signatures: vec![vec![0x77; 64], vec![0x88; 64]],
-            },
-        };
-        proof.transition_justification_hash =
-            sccp_substrate_authority_set_transition_justification_hash(&proof)
-                .expect("Substrate authority-set transition justification hash");
-        assert_eq!(
-            canonical_sccp_substrate_authority_set_transition_justification_bytes(&proof)
-                .expect("Substrate transition justification bytes")
-                .len(),
-            684
-        );
-        assert_eq!(
-            proof.transition_justification_hash,
-            test_h256_from_hex(
-                "0x20b1996d21f10ffacc430735eeea2ad9c64a32bebd85c5186c4435b77480dd36"
-            )
-        );
-    }
-
-    #[test]
-    fn substrate_authority_set_rejects_zero_public_keys() {
-        let zero_authority_keys = vec![vec![0u8; 32]];
-        let authority_weights = vec![1];
-        assert!(
-            canonical_sccp_substrate_authority_set_bytes(&zero_authority_keys, &authority_weights)
-                .is_none()
-        );
-
-        let mut raw_payload = Vec::new();
-        raw_payload.push(1);
-        raw_payload.extend_from_slice(&1u32.to_le_bytes());
-        raw_payload.extend_from_slice(&[0u8; 32]);
-        raw_payload.extend_from_slice(&1u64.to_le_bytes());
-        assert!(decode_sccp_substrate_authority_set_payload(&raw_payload).is_none());
-        assert!(sccp_substrate_authority_set_hash_from_payload(&raw_payload).is_none());
-
-        let proof = SccpSubstrateGrandpaJustificationProofV1 {
-            version: 1,
-            total_weight: 1,
-            signed_weight: 1,
-            precommit_message_hash: [0x44; 32],
-            authority_public_keys: zero_authority_keys,
-            authority_weights,
-            signers_bitmap: vec![0x01],
-            signatures: vec![vec![0x55; 64]],
-        };
-        assert!(canonical_sccp_substrate_grandpa_justification_bytes(&proof).is_none());
     }
 
     #[test]
@@ -57579,7 +54325,7 @@ mod tests {
     }
 
     #[test]
-    fn supported_launch_scope_is_exact_non_substrate_inbound_set() {
+    fn supported_launch_scope_is_exact_inbound_set() {
         assert_eq!(
             SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1,
             [
@@ -57598,23 +54344,6 @@ mod tests {
                         != Some(SCCP_UNSUPPORTED_LAUNCH_DOMAIN_BLOCKER_V1))
         );
 
-        for domain in [
-            SCCP_DOMAIN_SORA_KUSAMA,
-            SCCP_DOMAIN_SORA_POLKADOT,
-            SCCP_DOMAIN_SORA2,
-        ] {
-            assert!(!is_supported_domain(domain));
-            assert!(!sccp_domain_in_supported_launch_scope_v1(domain));
-            assert_eq!(
-                sccp_lane_disabled_reason_for_domain(domain),
-                Some(SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1)
-            );
-            assert!(
-                sccp_proof_manifest_for_domain(domain).is_none(),
-                "unsupported Substrate-family domain {domain} must not publish a proof manifest"
-            );
-        }
-
         let bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 575);
         let mut proof = source_chain_proof_from_bundle(&bundle);
         assert!(sccp_source_chain_proof_in_inbound_launch_scope_v1(&proof));
@@ -57624,13 +54353,39 @@ mod tests {
             !sccp_source_chain_proof_in_inbound_launch_scope_v1(&proof),
             "production source proofs must stay inbound to SORA"
         );
+    }
 
-        proof.source_domain = SCCP_DOMAIN_SORA2;
-        proof.target_domain = SCCP_DOMAIN_SORA;
+    #[test]
+    fn public_launch_scope_excludes_removed_legacy_lane_surface() {
+        let removed_lane_token = ["sub", "strate"].concat();
+
         assert!(
-            !sccp_source_chain_proof_in_inbound_launch_scope_v1(&proof),
-            "diagnostic Substrate-family source proofs must stay outside launch scope"
+            !include_str!("lib.rs")
+                .to_ascii_lowercase()
+                .contains(&removed_lane_token)
         );
+        for domain in 6..=8 {
+            assert!(!is_supported_domain(domain));
+            assert!(!sccp_domain_in_supported_launch_scope_v1(domain));
+            assert!(sccp_chain_key_for_domain(domain).is_none());
+            assert!(sccp_proof_manifest_for_domain(domain).is_none());
+        }
+        for manifest in sccp_proof_manifests_v1() {
+            let public_fields = [
+                manifest.proof_family.as_str(),
+                manifest.verifier_backend.key.as_str(),
+                manifest.message_backend.as_str(),
+                manifest.registry_backend.as_str(),
+                manifest.manifest_seed.as_str(),
+                manifest.destination_rollout.chain.as_str(),
+            ];
+
+            assert!(
+                public_fields
+                    .iter()
+                    .all(|field| !field.to_ascii_lowercase().contains(&removed_lane_token))
+            );
+        }
     }
 
     #[test]
@@ -57686,15 +54441,6 @@ mod tests {
             true,
             true,
         ));
-        assert!(
-            !sccp_lane_production_ready_under_launch_policy_v1(
-                &all_lanes_policy,
-                SCCP_DOMAIN_SORA2,
-                true,
-                true,
-            ),
-            "AllLanesAtOnce must not open Substrate/Polkadot-family lanes while they are out of scope"
-        );
 
         let bsc_policy = SccpProductionPolicyV1 {
             launch_mode: SccpLaunchModeV1::BscMainnetLane,
@@ -58759,112 +55505,6 @@ mod tests {
         assert!(!sccp_destination_rollout_is_production_ready(
             SCCP_DOMAIN_SOL,
             &drifted_metadata,
-        ));
-    }
-
-    #[test]
-    fn substrate_lane_route_canary_evidence_binds_finalized_runtime_snapshot() {
-        let runtime_code = vec![0x55; 64];
-        let destination_rollout =
-            sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-                SCCP_DOMAIN_SORA2,
-                SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
-                [0x5e; 32],
-                1234,
-                7,
-                runtime_code,
-            )
-            .expect("Substrate destination rollout");
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
-            destination_rollout.destination_binding_hash.as_deref(),
-        )
-        .expect("destination binding hash");
-        assert_eq!(
-            destination_binding_hash,
-            decode_fixed_hex_bytes::<32>(
-                "da5d48fe26518cd8cff6bdaa7cf8e37c7302d1e66469efed4ef2cf340c55b9e4",
-            )
-            .expect("Substrate destination binding script vector"),
-        );
-
-        let route_allowlist_hash = [0x31; 32];
-        let source_material_hash = [0x33; 32];
-        let source_deployment_hash = [0x34; 32];
-        let route_canary_hash = sccp_substrate_route_canary_evidence_hash_v1(
-            SCCP_DOMAIN_SORA2,
-            route_allowlist_hash,
-            destination_binding_hash,
-            source_material_hash,
-            source_deployment_hash,
-            &destination_rollout,
-        )
-        .expect("Substrate route canary hash");
-        assert_eq!(
-            route_canary_hash,
-            decode_fixed_hex_bytes::<32>(
-                "0312a75a9ce8aea566bcba57f9c4c405dac3de6497769b1eaf31e155f146435f",
-            )
-            .expect("Substrate route canary script vector"),
-            "Rust Substrate route canary transcript must match the Python rollout script"
-        );
-
-        let allowlist = sccp_profiled_route_allowlist_v1(
-            SCCP_DOMAIN_SORA2,
-            encode_0x_lower_hex(&route_allowlist_hash),
-        )
-        .expect("Substrate route allowlist");
-        let allowlist = sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
-            allowlist,
-            &destination_rollout,
-            destination_binding_hash,
-            source_material_hash,
-            source_deployment_hash,
-        )
-        .expect("Substrate route canary evidence");
-        assert_eq!(
-            allowlist.route_canary_evidence_hash.as_deref(),
-            Some(encode_0x_lower_hex(&route_canary_hash).as_str())
-        );
-        assert!(sccp_route_allowlist_canary_evidence_is_bound(
-            SCCP_DOMAIN_SORA2,
-            &allowlist,
-            &destination_rollout,
-            &route_allowlist_hash,
-            &destination_binding_hash,
-            &source_material_hash,
-            &source_deployment_hash,
-        ));
-
-        let generic_allowlist = sccp_route_allowlist_with_lane_canary_evidence_v1(
-            sccp_profiled_route_allowlist_v1(
-                SCCP_DOMAIN_SORA2,
-                encode_0x_lower_hex(&route_allowlist_hash),
-            )
-            .expect("Substrate route allowlist"),
-            [0xe8; 32],
-            destination_binding_hash,
-            source_material_hash,
-            source_deployment_hash,
-        )
-        .expect("generic canary evidence");
-        assert!(
-            !sccp_route_allowlist_canary_evidence_is_bound(
-                SCCP_DOMAIN_SORA2,
-                &generic_allowlist,
-                &destination_rollout,
-                &route_allowlist_hash,
-                &destination_binding_hash,
-                &source_material_hash,
-                &source_deployment_hash,
-            ),
-            "Substrate route canaries must replay the finalized runtime transcript"
-        );
-
-        let mut drifted_runtime = destination_rollout;
-        drifted_runtime.substrate_runtime_transaction_version = Some("08".to_owned());
-        assert!(!sccp_destination_rollout_is_production_ready(
-            SCCP_DOMAIN_SORA2,
-            &drifted_runtime,
         ));
     }
 
@@ -60722,49 +57362,6 @@ mod tests {
             ),
             None
         );
-
-        let substrate_vectors = [
-            (
-                SCCP_DOMAIN_SORA_KUSAMA,
-                "012c66498a85190d6075c441fad30fe01816796ee1713838fe8bb97f2ad1c924",
-                "da47a31715813ef5bff0882cd0e0e8b0cc89d426e005e37e0f94a2bdba2043cd",
-            ),
-            (
-                SCCP_DOMAIN_SORA_POLKADOT,
-                "40cd55d64e92d688b839242e170f1722485cddf2e42b4ff22e53c5e7723e570d",
-                "2a57fe4beb69e8201299f2c01259a025cafc8388bb38e2a727c2fc872893e13a",
-            ),
-            (
-                SCCP_DOMAIN_SORA2,
-                "6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d",
-                "dac819bff0aa57f7596f06297dfec39027aaab63213497020b772c355a6eaecb",
-            ),
-        ];
-        for (domain, expected_material_hash, expected_deployment_hash) in substrate_vectors {
-            let material =
-                sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                    domain,
-                    [0x44; 32],
-                    [0x55; 32],
-                    [0x66; 32],
-                    [0x77; 32],
-                    [0x88; 32],
-                )
-                .expect("Substrate source verifier material");
-            let deployment =
-                sccp_source_adapter_engine_deployment_from_material_v1(&material, [0xaa; 32])
-                    .expect("Substrate source adapter deployment");
-            assert_eq!(
-                sccp_source_verifier_material_hash(&material),
-                decode_fixed_hex_bytes::<32>(expected_material_hash)
-                    .expect("Substrate source verifier material vector")
-            );
-            assert_eq!(
-                sccp_source_adapter_engine_deployment_hash(&deployment),
-                decode_fixed_hex_bytes::<32>(expected_deployment_hash)
-                    .expect("Substrate source adapter deployment vector")
-            );
-        }
     }
 
     #[test]
@@ -62289,53 +58886,6 @@ mod tests {
             "TRON rollout material must not carry EVM bridge-wrapper binding fields"
         );
 
-        assert!(
-            sccp_profiled_destination_rollout_v1(
-                SCCP_DOMAIN_SORA2,
-                SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
-                code_hash.clone(),
-            )
-            .is_none(),
-            "Substrate destination rollout must fail closed while SCCP launch support excludes Substrate-family domains"
-        );
-        let substrate_runtime_code = vec![0x55; 64];
-        assert!(
-            sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-                SCCP_DOMAIN_SORA2,
-                SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
-                [0x5e; 32],
-                1234,
-                7,
-                substrate_runtime_code.clone(),
-            )
-            .is_none(),
-            "Substrate finalized-runtime rollout material must not create an SCCP production profile while the domain family is unsupported"
-        );
-        assert!(
-            sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-                SCCP_DOMAIN_SORA2,
-                SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
-                [0x5e; 32],
-                1234,
-                7,
-                Vec::new(),
-            )
-            .is_none(),
-            "Substrate destination rollout construction must still fail closed with empty runtime code"
-        );
-        assert!(
-            sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-                SCCP_DOMAIN_SORA2,
-                format!(" {SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1} "),
-                [0x5e; 32],
-                1234,
-                7,
-                substrate_runtime_code,
-            )
-            .is_none(),
-            "Substrate destination rollout construction must still reject padded runtime entrypoints"
-        );
-
         let mut generic_tron =
             sccp_destination_rollout_for_domain(SCCP_DOMAIN_TRON).expect("tron rollout");
         generic_tron.immutable_verifier_ready = true;
@@ -62911,532 +59461,6 @@ mod tests {
                 "finality-policy",
             ),
             "TRON finality policy material must commit to witness schedule transitions"
-        );
-
-        let substrate =
-            sccp_substrate_family_runtime_source_verifier_material_v1(SCCP_DOMAIN_SORA_KUSAMA)
-                .expect("Substrate source material template");
-        assert_ne!(
-            substrate.finality_policy_hash,
-            legacy_substrate_source_material_component_hash_without_transition_prefixes(
-                SCCP_DOMAIN_SORA_KUSAMA,
-                SCCP_SORA_KUSAMA_FINALITY_POLICY_ID_V1,
-                "finality-policy",
-            )
-            .expect("legacy Substrate source material hash"),
-            "Substrate finality policy material must commit to authority-set transitions"
-        );
-    }
-
-    fn assert_substrate_family_source_profile(
-        source_domain: u32,
-        source_trust_anchor_id: &str,
-        consensus_verifier_id: &str,
-        message_inclusion_verifier_id: &str,
-        source_state_verifier_id: &str,
-        finality_policy_id: &str,
-        deployed_hashes: [H256; 5],
-        nonce: u64,
-    ) {
-        let placeholder =
-            sccp_source_verifier_material_for_domain(source_domain).expect("Substrate material");
-        assert!(placeholder.placeholder_material);
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &placeholder
-        ));
-
-        let generic_ready = sample_ready_source_verifier_material(source_domain);
-        assert!(!sccp_source_verifier_material_uses_builtin_placeholder_components(&generic_ready));
-        assert!(
-            !sccp_source_verifier_material_is_production_ready(&generic_ready),
-            "generic ready-looking Substrate material must not satisfy the runtime profile"
-        );
-
-        let template = sccp_substrate_family_runtime_source_verifier_material_v1(source_domain)
-            .expect("Substrate runtime source material template");
-        assert!(!template.placeholder_material);
-        assert!(!sccp_source_verifier_material_uses_builtin_placeholder_components(&template));
-        assert_eq!(template.source_trust_anchor_id, source_trust_anchor_id);
-        assert_eq!(template.consensus_verifier_id, consensus_verifier_id);
-        assert_eq!(
-            template.message_inclusion_verifier_id,
-            message_inclusion_verifier_id
-        );
-        assert_eq!(template.source_state_verifier_id, source_state_verifier_id);
-        assert_eq!(template.finality_policy_id, finality_policy_id);
-        assert!(
-            !sccp_source_verifier_material_is_production_ready(&template),
-            "template-derived Substrate component hashes must not be treated as deployed verifier material"
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-                source_domain,
-                [0u8; 32],
-                deployed_hashes[1],
-                deployed_hashes[2],
-                deployed_hashes[4],
-            )
-            .is_none(),
-            "Substrate source material constructors must reject all-zero role hashes"
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-                source_domain,
-                deployed_hashes[0],
-                template.consensus_verifier_hash,
-                deployed_hashes[2],
-                deployed_hashes[4],
-            )
-            .is_none(),
-            "Substrate source material constructors must reject template role hashes"
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-                source_domain,
-                deployed_hashes[1],
-                deployed_hashes[1],
-                deployed_hashes[2],
-                deployed_hashes[4],
-            )
-            .is_none(),
-            "Substrate source material constructors must reject reused role hashes"
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                source_domain,
-                deployed_hashes[0],
-                deployed_hashes[1],
-                deployed_hashes[2],
-                [0u8; 32],
-                deployed_hashes[4],
-            )
-            .is_none(),
-            "Substrate source material constructors must reject all-zero runtime-storage verifier hashes"
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                source_domain,
-                deployed_hashes[0],
-                deployed_hashes[1],
-                deployed_hashes[2],
-                template.source_state_verifier_hash,
-                deployed_hashes[4],
-            )
-            .is_none(),
-            "Substrate source material constructors must reject template runtime-storage verifier hashes"
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                source_domain,
-                deployed_hashes[0],
-                deployed_hashes[1],
-                deployed_hashes[2],
-                deployed_hashes[1],
-                deployed_hashes[4],
-            )
-            .is_none(),
-            "Substrate source material constructors must reject runtime-storage verifier hashes reused from verifier roles"
-        );
-
-        let legacy_without_storage =
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-                source_domain,
-                deployed_hashes[0],
-                deployed_hashes[1],
-                deployed_hashes[2],
-                deployed_hashes[4],
-            )
-            .expect("legacy Substrate source material without runtime storage verifier");
-        assert!(
-            !sccp_source_verifier_material_is_production_ready(&legacy_without_storage),
-            "Substrate material must bind a deployed runtime storage-proof verifier"
-        );
-
-        let material =
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-            source_domain,
-            deployed_hashes[0],
-            deployed_hashes[1],
-            deployed_hashes[2],
-            deployed_hashes[3],
-            deployed_hashes[4],
-        )
-        .expect("Substrate deployed source material");
-        assert!(!material.placeholder_material);
-        assert!(!sccp_source_verifier_material_uses_builtin_placeholder_components(&material));
-        assert!(sccp_source_verifier_material_is_production_ready(&material));
-
-        let bundle = sample_transfer_bundle_with_source_material(
-            source_domain,
-            SCCP_DOMAIN_SORA,
-            nonce,
-            Some(&material),
-        );
-        let proof =
-            assert_source_chain_proof_binds_material_but_adapter_is_not_ready(&bundle, &material);
-        assert_eq!(proof.source_domain, source_domain);
-        assert!(
-            verified_sccp_message_source_chain_proof_envelope_for_production(&bundle).is_none(),
-            "default built-in catalog remains placeholder-only"
-        );
-
-        let mut wrong_anchor_id = material.clone();
-        wrong_anchor_id.source_trust_anchor_id.push_str(":replay");
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &wrong_anchor_id
-        ));
-
-        let mut template_consensus_hash = material.clone();
-        template_consensus_hash.consensus_verifier_hash = template.consensus_verifier_hash;
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &template_consensus_hash
-        ));
-
-        let mut zero_inclusion_hash = material.clone();
-        zero_inclusion_hash.message_inclusion_verifier_hash = [0u8; 32];
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &zero_inclusion_hash
-        ));
-
-        let mut zero_source_state_hash = material.clone();
-        zero_source_state_hash.source_state_verifier_hash = [0u8; 32];
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &zero_source_state_hash
-        ));
-
-        let mut template_source_state_hash = material.clone();
-        template_source_state_hash.source_state_verifier_hash = template.source_state_verifier_hash;
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &template_source_state_hash
-        ));
-
-        let mut template_policy_hash = material;
-        template_policy_hash.finality_policy_hash = template.finality_policy_hash;
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &template_policy_hash
-        ));
-    }
-
-    #[test]
-    fn substrate_family_source_verifier_material_requires_deployed_runtime_profile_hashes() {
-        assert_substrate_family_source_profile(
-            SCCP_DOMAIN_SORA_KUSAMA,
-            SCCP_SORA_KUSAMA_SOURCE_TRUST_ANCHOR_ID_V1,
-            SCCP_SORA_KUSAMA_CONSENSUS_VERIFIER_ID_V1,
-            SCCP_SORA_KUSAMA_MESSAGE_INCLUSION_VERIFIER_ID_V1,
-            SCCP_SORA_KUSAMA_RUNTIME_STORAGE_VERIFIER_ID_V1,
-            SCCP_SORA_KUSAMA_FINALITY_POLICY_ID_V1,
-            [
-                sample_substrate_authority_set_hash(),
-                [0x42; 32],
-                [0x43; 32],
-                [0x44; 32],
-                [0x45; 32],
-            ],
-            709,
-        );
-        assert_substrate_family_source_profile(
-            SCCP_DOMAIN_SORA_POLKADOT,
-            SCCP_SORA_POLKADOT_SOURCE_TRUST_ANCHOR_ID_V1,
-            SCCP_SORA_POLKADOT_CONSENSUS_VERIFIER_ID_V1,
-            SCCP_SORA_POLKADOT_MESSAGE_INCLUSION_VERIFIER_ID_V1,
-            SCCP_SORA_POLKADOT_RUNTIME_STORAGE_VERIFIER_ID_V1,
-            SCCP_SORA_POLKADOT_FINALITY_POLICY_ID_V1,
-            [
-                sample_substrate_authority_set_hash(),
-                [0x46; 32],
-                [0x47; 32],
-                [0x48; 32],
-                [0x49; 32],
-            ],
-            710,
-        );
-        assert_substrate_family_source_profile(
-            SCCP_DOMAIN_SORA2,
-            SCCP_SORA2_SOURCE_TRUST_ANCHOR_ID_V1,
-            SCCP_SORA2_CONSENSUS_VERIFIER_ID_V1,
-            SCCP_SORA2_MESSAGE_INCLUSION_VERIFIER_ID_V1,
-            SCCP_SORA2_RUNTIME_STORAGE_VERIFIER_ID_V1,
-            SCCP_SORA2_FINALITY_POLICY_ID_V1,
-            [
-                sample_substrate_authority_set_hash(),
-                [0x4A; 32],
-                [0x4B; 32],
-                [0x4C; 32],
-                [0x4D; 32],
-            ],
-            711,
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_v1(SCCP_DOMAIN_SOL).is_none()
-        );
-        assert!(
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-                SCCP_DOMAIN_TON,
-                [0x41; 32],
-                [0x42; 32],
-                [0x43; 32],
-                [0x44; 32],
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn substrate_source_adapter_deployment_requires_runtime_storage_verifier() {
-        let legacy_material_without_storage =
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_v1(
-                SCCP_DOMAIN_SORA_KUSAMA,
-                sample_substrate_authority_set_hash(),
-                [0x42; 32],
-                [0x43; 32],
-                [0x44; 32],
-            )
-            .expect("Substrate source material without runtime storage verifier");
-        assert!(!sccp_source_verifier_material_is_production_ready(
-            &legacy_material_without_storage
-        ));
-        assert!(
-            sccp_source_adapter_engine_deployment_from_material_v1(
-                &legacy_material_without_storage,
-                [0x45; 32],
-            )
-            .is_none(),
-            "Substrate source deployment must require runtime storage verifier material"
-        );
-
-        let material =
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                SCCP_DOMAIN_SORA_KUSAMA,
-                sample_substrate_authority_set_hash(),
-                [0x42; 32],
-                [0x43; 32],
-                [0x45; 32],
-                [0x44; 32],
-            )
-            .expect("Substrate deployed source material");
-        assert!(sccp_source_verifier_material_is_production_ready(&material));
-        let deployment =
-            sccp_source_adapter_engine_deployment_from_material_v1(&material, [0x46; 32])
-                .expect("Substrate source adapter deployment");
-        assert!(sccp_source_adapter_engine_deployment_matches_material(
-            &material,
-            &deployment,
-        ));
-        assert!(h256_is_nonzero(
-            &sccp_substrate_runtime_storage_gate_hash_from_deployment_v1(&material, &deployment)
-                .expect("Substrate runtime storage gate hash")
-        ));
-
-        let readiness =
-            sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
-                SCCP_DOMAIN_SORA_KUSAMA,
-                &material,
-                &deployment,
-            )
-            .expect("Substrate deployment-backed source readiness");
-        assert!(readiness.source_verifier_material_ready);
-        assert!(readiness.external_consensus_verifier_ready);
-        assert!(readiness.external_message_inclusion_verifier_ready);
-        assert!(readiness.source_trust_anchor_ready);
-        assert!(readiness.production_ready);
-        assert!(readiness.blockers.is_empty());
-        assert!(
-            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
-                SCCP_DOMAIN_SORA_KUSAMA,
-                &material,
-                &deployment,
-            )
-        );
-
-        let deployment_bound_bundle = sample_transfer_bundle_with_source_material_and_deployment(
-            SCCP_DOMAIN_SORA_KUSAMA,
-            SCCP_DOMAIN_SORA,
-            712,
-            Some(&material),
-            Some(&deployment),
-        );
-        let deployment_bound_proof =
-            decode_sccp_source_chain_proof_envelope(&deployment_bound_bundle.finality_proof)
-                .expect("decode Substrate deployment-bound source proof");
-        assert!(
-            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
-                &deployment_bound_proof,
-                &material,
-                &deployment,
-            ),
-            "Substrate deployment-bound source proof should remain structurally inspectable"
-        );
-        assert!(sccp_source_chain_proof_matches_adapter_deployment(
-            &deployment_bound_proof,
-            &deployment,
-        ));
-        assert!(
-            !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
-                &deployment_bound_proof,
-                &material,
-                &deployment,
-            ),
-            "Substrate deployment-bound source proof must remain outside production launch scope"
-        );
-        assert!(
-            verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
-                &deployment_bound_bundle,
-                &material,
-                &deployment,
-            )
-            .is_none()
-        );
-
-        let mut missing_runtime_storage_proof = deployment_bound_proof.clone();
-        mutate_source_adapter_proof(&mut missing_runtime_storage_proof, |adapter_proof| {
-            let SccpSourceAdapterProofV1::SubstrateGrandpaEvent(adapter) = adapter_proof else {
-                panic!("expected Substrate adapter proof");
-            };
-            adapter.runtime_storage_verification_proof =
-                SccpSourceStateVerificationProofV1::default();
-        });
-        assert!(
-            !verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
-                &missing_runtime_storage_proof,
-                &material,
-                &deployment,
-            ),
-            "Substrate diagnostic structure must reject proofs missing runtime storage OpenVerify bytes"
-        );
-    }
-
-    #[test]
-    fn substrate_family_lane_remains_unsupported_with_complete_evidence() {
-        let material =
-            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                SCCP_DOMAIN_SORA2,
-                sample_substrate_authority_set_hash(),
-                [0x42; 32],
-                [0x43; 32],
-                [0x45; 32],
-                [0x44; 32],
-            )
-            .expect("Substrate deployed source material");
-        let deployment =
-            sccp_source_adapter_engine_deployment_from_material_v1(&material, [0x46; 32])
-                .expect("Substrate source adapter deployment");
-        let destination_rollout =
-            sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-                SCCP_DOMAIN_SORA2,
-                SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
-                [0x5e; 32],
-                1234,
-                7,
-                vec![0x55; 64],
-            )
-            .expect("Substrate destination rollout");
-        let route_allowlist = sccp_profiled_route_allowlist_for_lane_evidence_v1(
-            SCCP_DOMAIN_SORA2,
-            &material,
-            &deployment,
-            &destination_rollout,
-        )
-        .expect("Substrate route allowlist");
-        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
-            destination_rollout.destination_binding_hash.as_deref(),
-        )
-        .expect("destination binding hash");
-        let route_allowlist = sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
-            route_allowlist,
-            &destination_rollout,
-            destination_binding_hash,
-            sccp_source_verifier_material_hash(&material),
-            sccp_source_adapter_engine_deployment_hash(&deployment),
-        )
-        .expect("Substrate route canary evidence");
-
-        let readiness = sccp_lane_production_readiness_with_deployment_materials_for_domain(
-            SCCP_DOMAIN_SORA2,
-            &material,
-            &deployment,
-            &destination_rollout,
-            &route_allowlist,
-        )
-        .expect("Substrate lane readiness");
-
-        assert!(readiness.source_adapter_ready);
-        assert!(readiness.immutable_verifier_ready);
-        assert!(readiness.anchors_ready);
-        assert!(readiness.routes_allowlisted);
-        assert!(!readiness.production_ready);
-        assert_eq!(
-            readiness.blockers,
-            vec![SCCP_UNSUPPORTED_LAUNCH_DOMAIN_BLOCKER_V1.to_owned()]
-        );
-        assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_SORA2));
-
-        let deployment_bound_bundle = sample_transfer_bundle_with_source_material_and_deployment(
-            SCCP_DOMAIN_SORA2,
-            SCCP_DOMAIN_SORA,
-            713,
-            Some(&material),
-            Some(&deployment),
-        );
-        let deployment_bound_proof =
-            decode_sccp_source_chain_proof_envelope(&deployment_bound_bundle.finality_proof)
-                .expect("decode Substrate deployment-bound source proof");
-        assert!(
-            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
-                &deployment_bound_proof,
-                &material,
-                &deployment,
-            ),
-            "unsupported Substrate evidence remains structurally inspectable"
-        );
-        assert!(
-            !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
-                &deployment_bound_proof,
-                &material,
-                &deployment,
-            ),
-            "direct production source-proof verifier must reject unsupported Substrate launch scope"
-        );
-        assert!(
-            verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
-                &deployment_bound_bundle,
-                &material,
-                &deployment,
-            )
-            .is_none(),
-            "bundle-level production source-proof extraction must reject unsupported Substrate launch scope"
-        );
-        assert!(
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment(
-                &deployment_bound_bundle,
-                &material,
-                &deployment,
-            )
-            .is_none(),
-            "unsupported Substrate/Polkadot lanes must not build launch submission artifacts"
-        );
-        let diagnostic_artifact =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
-                &deployment_bound_bundle,
-                &material,
-                &deployment,
-                true,
-            )
-            .expect("diagnostic Substrate artifact");
-        assert!(
-            sccp_proof_manifest_for_domain(SCCP_DOMAIN_SORA2).is_none(),
-            "unsupported Substrate/Polkadot lanes must not publish public proof manifests"
-        );
-        assert!(
-            matches!(
-                diagnostic_artifact.submission_package.platform_payload,
-                SccpPlatformSubmissionPayloadV1::SubstrateRuntimeCall(_)
-            ),
-            "allow-unready Substrate artifacts remain diagnostic runtime-call material, not local admission"
-        );
-        assert_ne!(
-            diagnostic_artifact.submission_package.submission_kind,
-            SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1
         );
     }
 
@@ -67559,15 +63583,6 @@ mod tests {
 
         production.verifier_backend = reference.verifier_backend;
         assert!(!sccp_manifest_is_production_ready(&production));
-
-        let mut substrate =
-            sccp_proof_manifest_for_domain(SCCP_DOMAIN_SORA2).expect("Substrate manifest");
-        substrate.production_ready = true;
-        substrate.disabled_reason = None;
-        assert!(
-            !sccp_manifest_is_production_ready(&substrate),
-            "Substrate/Polkadot-family manifests must not be manually promoted while out of scope"
-        );
     }
 
     #[test]
@@ -70156,26 +66171,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_substrate_submission_package_has_no_public_manifest() {
-        assert!(
-            sccp_proof_manifest_for_domain(SCCP_DOMAIN_SORA2).is_none(),
-            "Substrate runtime-call package builders must not have a public manifest while the lane is unsupported",
-        );
-    }
-
-    #[test]
     fn native_recursive_submission_packages_reject_placeholder_proof_bytes() {
-        for domain in [
-            SCCP_DOMAIN_SORA_KUSAMA,
-            SCCP_DOMAIN_SORA_POLKADOT,
-            SCCP_DOMAIN_SORA2,
-        ] {
-            assert!(
-                sccp_proof_manifest_for_domain(domain).is_none(),
-                "unsupported Substrate-family domain {domain} must not publish a proof manifest"
-            );
-        }
-
         for domain in [SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON] {
             let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, domain, 62);
             let manifest = sccp_proof_manifest_for_domain(domain).expect("manifest");
@@ -70280,7 +66276,6 @@ mod tests {
         for (bundle_domain, manifest_domain) in [
             (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON),
             (SCCP_DOMAIN_TON, SCCP_DOMAIN_SOL),
-            (SCCP_DOMAIN_SORA_KUSAMA, SCCP_DOMAIN_SOL),
         ] {
             let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, bundle_domain, 64);
             let manifest =

@@ -12396,15 +12396,13 @@ export type ToriiSccpProofFinalityModel =
   | "BscValidatorSet"
   | "SolanaFinalizedSlot"
   | "TonMasterchain"
-  | "TronDpos"
-  | "SubstrateGrandpa";
+  | "TronDpos";
 
 export type ToriiSccpProofVerifierTarget =
   | "EvmContract"
   | "SolanaProgram"
   | "TonContract"
-  | "TronContract"
-  | "SubstrateRuntime";
+  | "TronContract";
 
 export type ToriiSccpProofSecurityModel = "RecursiveZk";
 
@@ -12422,8 +12420,7 @@ export type ToriiSccpDestinationVerifierPlan =
   | "SolanaProgramNativeRecursive"
   | "TonContractNativeRecursive"
   | "TronContractNativeRecursive"
-  | "TronContractGroth16Bn254"
-  | "SubstrateRuntimeNativeRecursive";
+  | "TronContractGroth16Bn254";
 
 export interface ToriiSccpDestinationRollout {
   version: number;
@@ -12575,14 +12572,6 @@ export type ToriiSccpPlatformSubmissionPayload =
       };
     }
   | {
-      kind: "substrate_runtime_call";
-      value: {
-        proofBytes: string;
-        publicInputsBytes: string;
-        bundleBytes: string;
-      };
-    }
-  | {
       kind: "ton_internal_message";
       value: {
         messageBodyBoc: string;
@@ -12651,8 +12640,7 @@ export type ToriiSccpChainFamily =
   | "Evm"
   | "Solana"
   | "Ton"
-  | "Tron"
-  | "Substrate";
+  | "Tron";
 
 export type ToriiSccpNormalizedCodecValue =
   | { kind: "TextUtf8"; value: string }

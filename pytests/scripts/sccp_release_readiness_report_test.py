@@ -1511,8 +1511,8 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
     assert report.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
-def test_release_readiness_submission_surfaces_exclude_substrate_launch_scope() -> None:
-    """Public submission surfaces must not advertise Substrate/Polkadot lanes."""
+def test_release_readiness_submission_surfaces_match_supported_launch_scope() -> None:
+    """Public submission surfaces must match the supported SCCP launch lanes."""
 
     report = load_report_module()
     passed_phases = {
@@ -1533,10 +1533,6 @@ def test_release_readiness_submission_surfaces_exclude_substrate_launch_scope() 
         "sol",
         "ton",
     ]
-    assert all("substrate" not in surface["lanes"] for surface in surfaces)
-    assert all(
-        surface["proof_backend"] != "substrate-runtime-v1" for surface in surfaces
-    )
 
 
 def test_release_readiness_evidence_phase_requires_evm_script_suites() -> None:
@@ -3582,14 +3578,11 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "`1700144`" in completed.stdout
     assert "`solana_live_programdata_snapshot`" in completed.stdout
     assert "`ton_live_account_snapshot`" in completed.stdout
-    assert "`substrate_finalized_runtime_snapshot`" in completed.stdout
     assert "## User Prover Submission Surfaces" in completed.stdout
     assert "| `eth,bsc` | `evm-groth16-bn254-v1`" in completed.stdout
     assert "| `tron` | `tron-groth16-bn254-v1`" in completed.stdout
     assert "| `sol` | `sccp-solana-recursive-mainnet-v1`" in completed.stdout
     assert "| `ton` | `ton-contract-v1`" in completed.stdout
-    assert "| `substrate` | `substrate-runtime-v1`" not in completed.stdout
-    assert "Substrate runtime call envelope" not in completed.stdout
     assert " | passed |" in completed.stdout
     assert "`governed_deployment_evidence` | ready" in completed.stdout
     assert "`live_route_canary_evidence` | ready" in completed.stdout

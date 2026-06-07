@@ -13424,14 +13424,18 @@ mod tests {
     use iroha_crypto::{
         Algorithm, KeyPair,
         fhe_bfv::{
-            BfvFullBootstrapAccumulatorV1, BfvFullBootstrapCircuitArtifactRoleV1,
-            BfvFullBootstrapLinearTransformDiagonalV1, BfvFullBootstrapLinearTransformV1,
+            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
+            BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1, BfvFullBootstrapAccumulatorV1,
+            BfvFullBootstrapCircuitArtifactRoleV1, BfvFullBootstrapLinearTransformDiagonalV1,
+            BfvFullBootstrapLinearTransformV1, BfvFullBootstrapProofKeyV1,
             BfvFullBootstrapSampleExtractionV1,
             bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1,
+            bfv_full_bootstrap_proof_public_input_schema_v1,
             encode_bfv_full_bootstrap_accumulator_artifact_v1,
             encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
-            encode_bfv_full_bootstrap_circuit_artifact_payload_v1,
             encode_bfv_full_bootstrap_linear_transform_artifact_v1,
+            encode_bfv_full_bootstrap_proof_key_artifact_v1,
+            encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1,
             encode_bfv_full_bootstrap_sample_extraction_artifact_v1, encode_packed_plaintext_slots,
             ram_lfe_bfv_parameters_v1,
         },
@@ -14223,10 +14227,6 @@ mod tests {
 
     fn sample_full_bootstrap_circuit_artifacts() -> BfvFullBootstrapCircuitArtifactBundleV1 {
         let params = ram_lfe_bfv_parameters_v1();
-        let artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1, payload: &[u8]| {
-            encode_bfv_full_bootstrap_circuit_artifact_payload_v1(&params, 1, role, payload)
-                .expect("encode sample full-bootstrap artifact payload")
-        };
         let linear_transform_artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1| {
             let transform = BfvFullBootstrapLinearTransformV1 {
                 input_slot_count: params.polynomial_degree,
@@ -14266,6 +14266,26 @@ mod tests {
             1,
         )
         .expect("build sample full-bootstrap blind-rotation key");
+        let proof_public_input_schema =
+            encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+                &params,
+                1,
+                &bfv_full_bootstrap_proof_public_input_schema_v1(),
+            )
+            .expect("encode sample full-bootstrap proof public-input schema artifact");
+        let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
+        let proof_key_artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1,
+                                  key_material: &[u8]| {
+            let key = BfvFullBootstrapProofKeyV1 {
+                backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
+                key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
+                circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+                public_input_schema_digest: proof_public_input_schema_digest,
+                key_material: key_material.to_vec(),
+            };
+            encode_bfv_full_bootstrap_proof_key_artifact_v1(&params, 1, role, &key)
+                .expect("encode sample full-bootstrap proof key artifact")
+        };
         BfvFullBootstrapCircuitArtifactBundleV1 {
             coefficient_to_slot_key: linear_transform_artifact(
                 BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
@@ -14282,19 +14302,16 @@ mod tests {
             sample_extraction_key: encode_bfv_full_bootstrap_sample_extraction_artifact_v1(
                 &params,
                 1,
-                &sample_extraction,
+                sample_extraction,
             )
             .expect("encode sample full-bootstrap sample-extraction artifact"),
             accumulator: accumulator_artifact,
-            proof_public_input_schema: artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::ProofPublicInputSchema,
-                b"soracloud-full-bootstrap-proof-schema",
-            ),
-            prover_key: artifact(
+            proof_public_input_schema,
+            prover_key: proof_key_artifact(
                 BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
                 b"soracloud-full-bootstrap-prover-key",
             ),
-            verifier_key: artifact(
+            verifier_key: proof_key_artifact(
                 BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
                 b"soracloud-full-bootstrap-verifier-key",
             ),

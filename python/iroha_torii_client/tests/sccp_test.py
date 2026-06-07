@@ -325,57 +325,6 @@ from iroha_torii_client import (  # noqa: E402
 )
 from iroha_torii_client.sccp import _keccak_256  # noqa: E402
 
-SCCP_DOMAIN_SORA2 = sccp_module.SCCP_DOMAIN_SORA2
-SCCP_DOMAIN_SORA_KUSAMA = sccp_module.SCCP_DOMAIN_SORA_KUSAMA
-SCCP_DOMAIN_SORA_POLKADOT = sccp_module.SCCP_DOMAIN_SORA_POLKADOT
-SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 = (
-    sccp_module.SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1
-)
-build_substrate_sccp_runtime_storage_proof_request = (
-    sccp_module.build_substrate_sccp_runtime_storage_proof_request
-)
-canonical_substrate_authority_set_payload_bytes = (
-    sccp_module.canonical_substrate_authority_set_payload_bytes
-)
-canonical_substrate_authority_set_transition_justification_bytes = (
-    sccp_module.canonical_substrate_authority_set_transition_justification_bytes
-)
-canonical_substrate_authority_set_transition_message_bytes = (
-    sccp_module.canonical_substrate_authority_set_transition_message_bytes
-)
-canonical_substrate_sccp_storage_proof_bytes = (
-    sccp_module.canonical_substrate_sccp_storage_proof_bytes
-)
-canonical_substrate_sccp_runtime_storage_verification_context_bytes = (
-    sccp_module.canonical_substrate_sccp_runtime_storage_verification_context_bytes
-)
-canonical_substrate_sccp_runtime_storage_verification_statement_bytes = (
-    sccp_module.canonical_substrate_sccp_runtime_storage_verification_statement_bytes
-)
-substrate_authority_set_hash_from_payload = (
-    sccp_module.substrate_authority_set_hash_from_payload
-)
-substrate_authority_set_payload_hash = (
-    sccp_module.substrate_authority_set_payload_hash
-)
-substrate_authority_set_transition_justification_hash = (
-    sccp_module.substrate_authority_set_transition_justification_hash
-)
-substrate_authority_set_transition_message_hash = (
-    sccp_module.substrate_authority_set_transition_message_hash
-)
-substrate_sccp_runtime_storage_open_verify_schema_descriptor = (
-    sccp_module.substrate_sccp_runtime_storage_open_verify_schema_descriptor
-)
-substrate_sccp_runtime_storage_proof_public_inputs_hash = (
-    sccp_module.substrate_sccp_runtime_storage_proof_public_inputs_hash
-)
-substrate_sccp_runtime_storage_public_input_columns = (
-    sccp_module.substrate_sccp_runtime_storage_public_input_columns
-)
-substrate_sccp_storage_proof_hash = sccp_module.substrate_sccp_storage_proof_hash
-
-
 HEX32_A = "0x" + "aa" * 32
 HEX32_B = "0x" + "bb" * 32
 HEX32_C = "0x" + "cc" * 32
@@ -459,10 +408,6 @@ def test_package_all_exports_public_sccp_symbols() -> None:
         name
         for name, value in vars(sccp_module).items()
         if not name.startswith("_")
-        and "substrate" not in name.lower()
-        and "SORA_KUSAMA" not in name
-        and "SORA_POLKADOT" not in name
-        and "SORA2" not in name
         and (
             (
                 name.startswith("SCCP_")
@@ -478,6 +423,28 @@ def test_package_all_exports_public_sccp_symbols() -> None:
     assert public_sccp_symbols <= exported
     for name in sorted(public_sccp_symbols):
         assert getattr(iroha_torii_client_package, name) is getattr(sccp_module, name)
+
+
+def test_package_public_surface_excludes_removed_legacy_lane() -> None:
+    removed_lane_token = "".join(("sub", "strate"))
+    exported_names = set(iroha_torii_client_package.__all__)
+    module_names = {
+        name for name in vars(sccp_module) if not name.startswith("_")
+    }
+    leaked_names = sorted(
+        name
+        for name in exported_names | module_names
+        if removed_lane_token in name.lower()
+    )
+
+    assert leaked_names == []
+    for relative_path in (
+        "iroha_torii_client/__init__.py",
+        "iroha_torii_client/client.py",
+        "iroha_torii_client/sccp.py",
+    ):
+        source = (PACKAGE_ROOT / relative_path).read_text(encoding="utf8")
+        assert removed_lane_token not in source.lower()
 
 
 def assert_immutable_fastpq_proof_request(
@@ -887,40 +854,6 @@ TRON_TRANSACTION_SOURCE_ROOT = (
 TRON_TRANSACTION_SOURCE_PROOF_HASH = (
     "0xfc98a09ae9e7f63ccd383b2f3e104efce0d2c291dc7900ffd49e4f391e6016b6"
 )
-SUBSTRATE_AUTHORITY_SET_PAYLOAD_HEX = (
-    "0102000000"
-    + "11" * 32
-    + "0100000000000000"
-    + "22" * 32
-    + "0200000000000000"
-)
-SUBSTRATE_AUTHORITY_SET_PAYLOAD_HASH = "0xdedc4ebe5f91162a5029cb67f88cdbbf94c2bf2b9d0d373bd3e670321565cc16"
-SUBSTRATE_AUTHORITY_SET_HASH = "0xde84b8b7a5409c0f2cff1191173d6caa681d902b35e42669106ec6ea3193a117"
-SUBSTRATE_PARENT_AUTHORITY_SET_PAYLOAD_HEX = (
-    "0103000000"
-    + "11" * 32
-    + "0500000000000000"
-    + "22" * 32
-    + "0700000000000000"
-    + "33" * 32
-    + "0b00000000000000"
-)
-SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HEX = (
-    "0103000000"
-    + "aa" * 32
-    + "0d00000000000000"
-    + "bb" * 32
-    + "1100000000000000"
-    + "cc" * 32
-    + "1300000000000000"
-)
-SUBSTRATE_PARENT_AUTHORITY_SET_HASH = "0xb2efd5d86304ea728a8a9ed4013aab8f3e10c0cf862e859c9cade55e660934ef"
-SUBSTRATE_NEXT_AUTHORITY_SET_HASH = "0x07cdbba0d61fdd4324b571dd793965e52acbf7f4c163af328e26c92c047501b3"
-SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH = "0x12ce972498ba5cd8a760aee0429fdc30d8b6447890e1bf77d8dde46f86b40d85"
-SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH = "0x60589333bf798bf592b2642d0fbac39b4e9305576cd2ebe9dd1f448a97a0596b"
-SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_HASH = "0x9528bad2f181eb20a86a9c106cf529e60abf5db81f05cce9c9c3027b78c6cf01"
-
-
 def _minimal_be_length_bytes(length: int) -> bytes:
     return length.to_bytes((length.bit_length() + 7) // 8 or 1, "big")
 
@@ -1603,33 +1536,6 @@ def sample_evm_production_request_input(**overrides: Any) -> Dict[str, Any]:
         destination_binding=sample_evm_destination_binding(),
         destination_binding_hash=None,
     )
-    request.update(overrides)
-    return request
-
-
-def sample_substrate_public_inputs(**overrides: Any) -> Dict[str, Any]:
-    public_inputs = {
-        "version": 1,
-        "message_id": "0x" + "21" * 32,
-        "payload_hash": "0x" + "22" * 32,
-        "target_domain": SCCP_DOMAIN_SORA2,
-        "commitment_root": "0x" + "23" * 32,
-        "finality_height": "42",
-        "finality_block_hash": "0x" + "24" * 32,
-    }
-    public_inputs.update(overrides)
-    return public_inputs
-
-
-def sample_substrate_request_input(**overrides: Any) -> Dict[str, Any]:
-    request = {
-        "public_inputs": sample_substrate_public_inputs(),
-        "bundle_bytes": bytes([5, 6, 7]),
-        "source_proof_bytes": bytes([9, 10]),
-        "source_domain": SCCP_DOMAIN_SORA,
-        "statement_hash": "0x" + "55" * 32,
-        "destination_binding_hash": "0x" + "66" * 32,
-    }
     request.update(overrides)
     return request
 
@@ -5308,65 +5214,6 @@ def test_derives_all_source_proof_hashes_from_canonical_witness_material() -> No
             }
         )
 
-    authority_payload_input = {
-        "authority_public_keys": ["0x" + "11" * 32, "0x" + "22" * 32],
-        "authority_weights": ["1", "2"],
-    }
-    authority_payload = canonical_substrate_authority_set_payload_bytes(authority_payload_input)
-    assert authority_payload.hex() == SUBSTRATE_AUTHORITY_SET_PAYLOAD_HEX
-    assert (
-        substrate_authority_set_payload_hash(authority_payload_input)
-        == SUBSTRATE_AUTHORITY_SET_PAYLOAD_HASH
-    )
-    assert substrate_authority_set_payload_hash(authority_payload) == SUBSTRATE_AUTHORITY_SET_PAYLOAD_HASH
-    assert (
-        substrate_authority_set_hash_from_payload(authority_payload_input)
-        == SUBSTRATE_AUTHORITY_SET_HASH
-    )
-    with pytest.raises(TypeError, match="authorityPublicKeys must not use multiple aliases"):
-        canonical_substrate_authority_set_payload_bytes(
-            {
-                **authority_payload_input,
-                "authorityPublicKeys": authority_payload_input["authority_public_keys"],
-            }
-        )
-    with pytest.raises(TypeError, match="authorityWeights must not use multiple aliases"):
-        canonical_substrate_authority_set_payload_bytes(
-            {
-                **authority_payload_input,
-                "authorityWeights": authority_payload_input["authority_weights"],
-            }
-        )
-    with pytest.raises(ValueError, match="unique"):
-        canonical_substrate_authority_set_payload_bytes(
-            {
-                "authority_public_keys": ["0x" + "11" * 32, "0x" + "11" * 32],
-                "authority_weights": ["1", "2"],
-            }
-        )
-    with pytest.raises(ValueError, match="must not be zero"):
-        canonical_substrate_authority_set_payload_bytes(
-            {"authority_public_keys": ["0x" + "00" * 32], "authority_weights": ["1"]}
-        )
-    zero_authority_payload = bytearray(45)
-    zero_authority_payload[0] = 1
-    zero_authority_payload[1] = 1
-    zero_authority_payload[37] = 1
-    with pytest.raises(ValueError, match="must not be zero"):
-        substrate_authority_set_hash_from_payload(bytes(zero_authority_payload))
-    with pytest.raises(ValueError, match="must not be zero"):
-        canonical_substrate_authority_set_payload_bytes(
-            {"authority_public_keys": ["0x" + "11" * 32], "authority_weights": ["0"]}
-        )
-    with pytest.raises(ValueError, match="at most 2048"):
-        canonical_substrate_authority_set_payload_bytes(
-            {
-                "authority_public_keys": ["0x" + "11" * 32] * 2049,
-                "authority_weights": ["1"] * 2049,
-            }
-        )
-    with pytest.raises(ValueError, match="at most"):
-        substrate_authority_set_payload_hash(bytes(81926))
 
 
 def test_derives_tron_witness_schedule_transition_transcripts_from_ui_witness_material() -> None:
@@ -5522,244 +5369,8 @@ def test_derives_tron_witness_schedule_transition_transcripts_from_ui_witness_ma
         )
 
 
-def test_derives_substrate_authority_set_transition_transcripts_from_ui_witness_material() -> None:
-    parent = {
-        "authority_public_keys": ["0x" + "11" * 32, "0x" + "22" * 32, "0x" + "33" * 32],
-        "authority_weights": ["5", "7", "11"],
-    }
-    next_set = {
-        "authority_public_keys": ["0x" + "aa" * 32, "0x" + "bb" * 32, "0x" + "cc" * 32],
-        "authority_weights": ["13", "17", "19"],
-    }
-    parent_payload = canonical_substrate_authority_set_payload_bytes(parent)
-    next_payload = canonical_substrate_authority_set_payload_bytes(next_set)
 
-    assert parent_payload.hex() == SUBSTRATE_PARENT_AUTHORITY_SET_PAYLOAD_HEX
-    assert next_payload.hex() == SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HEX
-    assert substrate_authority_set_hash_from_payload(parent_payload) == SUBSTRATE_PARENT_AUTHORITY_SET_HASH
-    assert substrate_authority_set_hash_from_payload(next_payload) == SUBSTRATE_NEXT_AUTHORITY_SET_HASH
-    assert substrate_authority_set_payload_hash(next_payload) == SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH
-
-    message_input = {
-        "source_domain": SCCP_DOMAIN_SORA_KUSAMA,
-        "from_grandpa_set_id": "41",
-        "to_grandpa_set_id": "42",
-        "transition_block_number": "9001",
-        "transition_block_hash": "0x" + "44" * 32,
-        "parent_authority_set_hash": SUBSTRATE_PARENT_AUTHORITY_SET_HASH,
-        "next_authority_set_hash": SUBSTRATE_NEXT_AUTHORITY_SET_HASH,
-        "next_authority_set_payload_hash": SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH,
-    }
-    assert len(canonical_substrate_authority_set_transition_message_bytes(message_input)) == 157
-    assert (
-        substrate_authority_set_transition_message_hash(message_input)
-        == SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH
-    )
-    for patch, pattern in [
-        ({"sourceDomain": SCCP_DOMAIN_SORA_KUSAMA}, "sourceDomain must not use multiple aliases"),
-        ({"fromGrandpaSetId": "41"}, "fromGrandpaSetId must not use multiple aliases"),
-        ({"toGrandpaSetId": "42"}, "toGrandpaSetId must not use multiple aliases"),
-        ({"transitionBlockNumber": "9001"}, "transitionBlockNumber must not use multiple aliases"),
-        ({"transitionBlockHash": "0x" + "44" * 32}, "transitionBlockHash must not use multiple aliases"),
-        (
-            {"parentAuthoritySetHash": SUBSTRATE_PARENT_AUTHORITY_SET_HASH},
-            "parentAuthoritySetHash must not use multiple aliases",
-        ),
-        (
-            {"nextAuthoritySetHash": SUBSTRATE_NEXT_AUTHORITY_SET_HASH},
-            "nextAuthoritySetHash must not use multiple aliases",
-        ),
-        (
-            {"nextAuthoritySetPayloadHash": SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH},
-            "nextAuthoritySetPayloadHash must not use multiple aliases",
-        ),
-        (
-            {"nextAuthoritySetProofHash": SUBSTRATE_NEXT_AUTHORITY_SET_PAYLOAD_HASH},
-            "nextAuthoritySetPayloadHash must not use multiple aliases",
-        ),
-    ]:
-        with pytest.raises(TypeError, match=pattern):
-            canonical_substrate_authority_set_transition_message_bytes(
-                {**message_input, **patch}
-            )
-
-    justification_input = {
-        **message_input,
-        "version": 1,
-        "next_authority_set_payload": next_payload,
-        "transition_message_hash": SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH,
-        "grandpa_justification": {
-            "version": 1,
-            "total_weight": "23",
-            "signed_weight": "23",
-            "precommit_message_hash": SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH,
-            **parent,
-            "signers_bitmap": "0x07",
-            "signatures": [
-                "0x" + "77" * 64,
-                "0x" + "88" * 64,
-                "0x" + "99" * 64,
-            ],
-        },
-    }
-    assert (
-        len(canonical_substrate_authority_set_transition_justification_bytes(justification_input))
-        == 752
-    )
-    assert (
-        substrate_authority_set_transition_justification_hash(justification_input)
-        == SUBSTRATE_AUTHORITY_SET_TRANSITION_JUSTIFICATION_HASH
-    )
-    for patch, pattern in [
-        (
-            {"grandpaJustification": justification_input["grandpa_justification"]},
-            "grandpaJustification must not use multiple aliases",
-        ),
-        (
-            {"nextAuthoritySetPayload": next_payload},
-            "nextAuthoritySetPayload must not use multiple aliases",
-        ),
-        (
-            {"transitionMessageHash": SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH},
-            "transitionMessageHash must not use multiple aliases",
-        ),
-        ({"sourceDomain": SCCP_DOMAIN_SORA_KUSAMA}, "sourceDomain must not use multiple aliases"),
-    ]:
-        with pytest.raises(TypeError, match=pattern):
-            canonical_substrate_authority_set_transition_justification_bytes(
-                {**justification_input, **patch}
-            )
-    for patch, pattern in [
-        ({"totalWeight": "23"}, "totalWeight must not use multiple aliases"),
-        ({"signedWeight": "23"}, "signedWeight must not use multiple aliases"),
-        (
-            {"precommitMessageHash": SUBSTRATE_AUTHORITY_SET_TRANSITION_MESSAGE_HASH},
-            "precommitMessageHash must not use multiple aliases",
-        ),
-        (
-            {"authorityPublicKeys": parent["authority_public_keys"]},
-            "authorityPublicKeys must not use multiple aliases",
-        ),
-        (
-            {"authorityWeights": parent["authority_weights"]},
-            "authorityWeights must not use multiple aliases",
-        ),
-        ({"signersBitmap": "0x07"}, "signersBitmap must not use multiple aliases"),
-    ]:
-        with pytest.raises(TypeError, match=pattern):
-            canonical_substrate_authority_set_transition_justification_bytes(
-                {
-                    **justification_input,
-                    "grandpa_justification": {
-                        **justification_input["grandpa_justification"],
-                        **patch,
-                    },
-                }
-            )
-    with pytest.raises(
-        ValueError,
-        match="Substrate authority-set transition justification version",
-    ):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {**justification_input, "version": 0}
-        )
-    with pytest.raises(ValueError, match="Substrate GRANDPA justification version"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {
-                **justification_input,
-                "grandpa_justification": {
-                    **justification_input["grandpa_justification"],
-                    "version": 0,
-                },
-            }
-        )
-
-    with pytest.raises(TypeError, match="nextAuthoritySetPayloadHash must match"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {**justification_input, "next_authority_set_payload_hash": HEX32_B}
-        )
-    with pytest.raises(TypeError, match="nextAuthoritySetHash must match"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {**justification_input, "next_authority_set_hash": HEX32_B}
-        )
-    with pytest.raises(TypeError, match="parentAuthoritySetHash must match"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {**justification_input, "parent_authority_set_hash": HEX32_B}
-        )
-    with pytest.raises(ValueError, match="two thirds"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {
-                **justification_input,
-                "grandpa_justification": {
-                    **justification_input["grandpa_justification"],
-                    "signed_weight": "12",
-                    "signers_bitmap": "0x03",
-                    "signatures": [
-                        "0x" + "77" * 64,
-                        "0x" + "88" * 64,
-                    ],
-                },
-            }
-        )
-    with pytest.raises(ValueError, match="signersBitmap"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {
-                **justification_input,
-                "grandpa_justification": {
-                    **justification_input["grandpa_justification"],
-                    "signers_bitmap": "0x" + "ff" * 257,
-                },
-            }
-        )
-    with pytest.raises(TypeError, match="signatures length"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {
-                **justification_input,
-                "grandpa_justification": {
-                    **justification_input["grandpa_justification"],
-                    "signatures": ["0x" + "77" * 64, "0x" + "88" * 64],
-                },
-            }
-        )
-    with pytest.raises(ValueError, match="signedWeight"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {
-                **justification_input,
-                "grandpa_justification": {
-                    **justification_input["grandpa_justification"],
-                    "signed_weight": "12",
-                },
-            }
-        )
-    with pytest.raises(ValueError, match="greater than two thirds"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {
-                **justification_input,
-                "grandpa_justification": {
-                    **justification_input["grandpa_justification"],
-                    "signed_weight": "12",
-                    "signers_bitmap": "0x03",
-                    "signatures": ["0x" + "77" * 64, "0x" + "88" * 64],
-                },
-            }
-        )
-    with pytest.raises(TypeError, match="must not be all zero"):
-        canonical_substrate_authority_set_transition_justification_bytes(
-            {
-                **justification_input,
-                "grandpa_justification": {
-                    **justification_input["grandpa_justification"],
-                    "signatures": [
-                        "0x" + "77" * 64,
-                        bytes(64),
-                        "0x" + "99" * 64,
-                    ],
-                },
-            }
-        )
-
-
-def test_derives_ton_and_substrate_source_proof_transcripts_from_witness_material() -> None:
+def test_derives_ton_source_proof_transcripts_from_witness_material() -> None:
     source_event_digest = "0x" + "34" * 32
     inclusion_branch = [HEX32_E]
     changed_branch = [HEX32_F]
@@ -7055,168 +6666,6 @@ def test_derives_ton_and_substrate_source_proof_transcripts_from_witness_materia
             {**solid_header_proof, "witness_signature": bytes(zero_r_signature)}
         )
 
-    substrate_input = {
-        "source_domain": SCCP_DOMAIN_SORA_KUSAMA,
-        "source_event_digest": source_event_digest,
-        "source_event_leaf_index": "0",
-        "finalized_block_number": "31",
-        "grandpa_set_id": "32",
-        "block_hash": HEX32_A,
-        "authority_set_hash": HEX32_C,
-        "events_root": HEX32_B,
-        "inclusion_branch": inclusion_branch,
-    }
-    assert len(canonical_substrate_sccp_storage_proof_bytes(substrate_input)) == 225
-    with pytest.raises(TypeError, match="sourceEventDigest must not be zero"):
-        canonical_substrate_sccp_storage_proof_bytes(
-            {**substrate_input, "source_event_digest": SCCP_ZERO_HASH_V1}
-        )
-    for patch, pattern in [
-        ({"sourceDomain": SCCP_DOMAIN_SORA_KUSAMA}, "sourceDomain must not use multiple aliases"),
-        ({"sourceEventDigest": source_event_digest}, "sourceEventDigest must not use multiple aliases"),
-        ({"leafIndex": "0"}, "sourceEventLeafIndex must not use multiple aliases"),
-        ({"finalityHeight": "31"}, "finalizedBlockNumber must not use multiple aliases"),
-        ({"grandpaSetId": "32"}, "grandpaSetId must not use multiple aliases"),
-        ({"finalityBlockHash": HEX32_A}, "blockHash must not use multiple aliases"),
-        ({"authoritySetHash": HEX32_C}, "authoritySetHash must not use multiple aliases"),
-        ({"receiptOrMessageRoot": HEX32_B}, "eventsRoot must not use multiple aliases"),
-        ({"inclusionBranch": inclusion_branch}, "inclusionBranch must not use multiple aliases"),
-    ]:
-        with pytest.raises(TypeError, match=pattern):
-            canonical_substrate_sccp_storage_proof_bytes({**substrate_input, **patch})
-    assert (
-        substrate_sccp_storage_proof_hash(substrate_input)
-        == "0x1ff06ab7e38182e9b276a4967fba604fd85ed81ddd6f2a97093031a13e701386"
-    )
-    substrate_runtime_storage_input = {
-        **substrate_input,
-        "source_trust_anchor_hash": HEX32_A,
-        "consensus_verifier_hash": HEX32_B,
-        "message_inclusion_verifier_hash": HEX32_C,
-        "finality_policy_hash": HEX32_D,
-        "source_state_verifier_hash": HEX32_F,
-    }
-    assert (
-        canonical_substrate_sccp_runtime_storage_verification_statement_bytes(
-            substrate_runtime_storage_input
-        )
-        == canonical_substrate_sccp_storage_proof_bytes(substrate_input)
-    )
-    runtime_storage_public_inputs_hash = (
-        substrate_sccp_runtime_storage_proof_public_inputs_hash(
-            substrate_runtime_storage_input
-        )
-    )
-    assert runtime_storage_public_inputs_hash.startswith("0x")
-    assert len(runtime_storage_public_inputs_hash) == 66
-    runtime_storage_columns = substrate_sccp_runtime_storage_public_input_columns(
-        substrate_runtime_storage_input
-    )
-    assert len(runtime_storage_columns) == 11
-    assert runtime_storage_columns[6] == [substrate_sccp_storage_proof_hash(substrate_input)]
-    assert runtime_storage_columns[8] == [
-        "0x26aa394eea5630e07c48ae0c9558cef780d41e5e16056765bc8461851072c9d7"
-    ]
-    assert runtime_storage_columns[10] == [runtime_storage_public_inputs_hash]
-    runtime_storage_context = (
-        canonical_substrate_sccp_runtime_storage_verification_context_bytes(
-            substrate_runtime_storage_input
-        )
-    )
-    assert runtime_storage_context != (
-        canonical_substrate_sccp_runtime_storage_verification_context_bytes(
-            {**substrate_runtime_storage_input, "source_state_verifier_hash": HEX32_G}
-        )
-    )
-    runtime_storage_request = build_substrate_sccp_runtime_storage_proof_request(
-        substrate_runtime_storage_input
-    )
-    assert_immutable_fastpq_proof_request(
-        runtime_storage_request,
-        ("statement_bytes", "verification_context_bytes", "schema_descriptor"),
-    )
-    assert (
-        runtime_storage_request["circuit_id"]
-        == SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1
-    )
-    assert (
-        runtime_storage_request["runtime_storage_proof_public_inputs_hash"]
-        == runtime_storage_public_inputs_hash
-    )
-    assert runtime_storage_request["fastpq_public_inputs"]["slot"] == "31"
-    assert [
-        transition["key"] for transition in runtime_storage_request["fastpq_transitions"]
-    ] == [
-        "sccp:substrate:runtime-storage:v1:context",
-        "sccp:substrate:runtime-storage:v1:statement",
-        "sccp:substrate:runtime-storage:v1:storage-key",
-    ]
-    assert len(
-        substrate_sccp_runtime_storage_open_verify_schema_descriptor(
-            substrate_runtime_storage_input
-        )
-    ) == len(runtime_storage_request["schema_descriptor"])
-    with pytest.raises(TypeError, match="storageProofHash must not use multiple aliases"):
-        build_substrate_sccp_runtime_storage_proof_request(
-            {
-                **substrate_runtime_storage_input,
-                "storage_proof_hash": substrate_sccp_storage_proof_hash(substrate_input),
-                "storageProofHash": substrate_sccp_storage_proof_hash(substrate_input),
-            }
-        )
-    with pytest.raises(TypeError, match="sourceVerifierMaterial must not use multiple aliases"):
-        build_substrate_sccp_runtime_storage_proof_request(
-            {
-                **substrate_runtime_storage_input,
-                "source_verifier_material": {"source_domain": SCCP_DOMAIN_SORA_KUSAMA},
-                "sourceVerifierMaterial": {"source_domain": SCCP_DOMAIN_SORA_KUSAMA},
-            }
-        )
-    with pytest.raises(TypeError, match="sourceDomain must not use multiple aliases"):
-        substrate_sccp_runtime_storage_open_verify_schema_descriptor(
-            {
-                "source_domain": SCCP_DOMAIN_SORA_KUSAMA,
-                "sourceDomain": SCCP_DOMAIN_SORA_KUSAMA,
-            }
-        )
-    with pytest.raises(TypeError, match="storageProofHash"):
-        build_substrate_sccp_runtime_storage_proof_request(
-            {**substrate_runtime_storage_input, "storage_proof_hash": HEX32_A}
-        )
-    with pytest.raises(TypeError, match="template verifier hash"):
-        build_substrate_sccp_runtime_storage_proof_request(
-            {
-                **substrate_runtime_storage_input,
-                "source_state_verifier_hash": (
-                    "0xaf2d28b3e07447239f28e90ce4fdee7e6cd3778c087eaeda7170781eb4b76b9c"
-                ),
-            }
-        )
-    with pytest.raises(ValueError, match="sourceVerifierMaterial.sourceDomain"):
-        build_substrate_sccp_runtime_storage_proof_request(
-            {
-                **substrate_runtime_storage_input,
-                "source_verifier_material": {"source_domain": SCCP_DOMAIN_ETH},
-            }
-        )
-    with pytest.raises(TypeError, match="sourceVerifierMaterial.sourceDomain"):
-        build_substrate_sccp_runtime_storage_proof_request(
-            {
-                **substrate_runtime_storage_input,
-                "source_verifier_material": {
-                    "sourceDomain": SCCP_DOMAIN_SORA_KUSAMA,
-                    "source_domain": SCCP_DOMAIN_SORA_KUSAMA,
-                },
-            }
-        )
-    assert substrate_sccp_storage_proof_hash(substrate_input) != (
-        substrate_sccp_storage_proof_hash({**substrate_input, "inclusion_branch": changed_branch})
-    )
-    assert substrate_sccp_storage_proof_hash(substrate_input) != (
-        substrate_sccp_storage_proof_hash(
-            {**substrate_input, "source_event_leaf_index": "1"}
-        )
-    )
 
     with pytest.raises(TypeError, match="inclusionBranch\\[0\\] must be 32 bytes"):
         canonical_tron_sccp_receipt_proof_bytes(
@@ -7226,11 +6675,6 @@ def test_derives_ton_and_substrate_source_proof_transcripts_from_witness_materia
         canonical_tron_sccp_receipt_state_proof_bytes(
             {**tron_receipt_state_input, "receipt_trie_proof_nodes": []}
         )
-    with pytest.raises(TypeError, match="sourceDomain must be a u32 domain id"):
-        canonical_substrate_sccp_storage_proof_bytes(
-            {**substrate_input, "source_domain": None}
-        )
-
 
 def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_material() -> None:
     def sync_committee_fixture(public_key_byte: int, pop_byte: int) -> dict[str, list[Any]]:
@@ -7792,9 +7236,6 @@ def test_derives_source_adapter_verifier_vk_hashes_for_ui_tooling() -> None:
         SCCP_DOMAIN_SOL: "0xe7bc29d06bf56184183c3fc59a0e934cd1d8e16751f1eda2efaaf88aa350b9d6",
         SCCP_DOMAIN_TON: "0xf03f70e8cb504e69b0611df224c2783d04d8f4ee93beae7a62e1cd0a49703bad",
         SCCP_DOMAIN_TRON: "0x0e12ad03def9d75887d4d6437e63539cef97c54db4769881eeda757a88826364",
-        SCCP_DOMAIN_SORA_KUSAMA: "0xf7768653132995511594e6e7edb4af22f78bba615650d9dda72f14bb18984daf",
-        SCCP_DOMAIN_SORA_POLKADOT: "0x4f8456bf8626436a16d763c40bf23dffb962232f0766c4ae33d6e594f8be1635",
-        SCCP_DOMAIN_SORA2: "0x96bbfa08489249b28a1444d0dcb9d5b4023bd688091f31c0b435601dad48dbb4",
     }
     for source_domain, expected in vectors.items():
         assert sccp_source_adapter_verifier_vk_hash(source_domain) == expected
@@ -7811,18 +7252,6 @@ def test_derives_native_destination_binding_hashes_for_ui_tooling() -> None:
         SCCP_DOMAIN_TON: (
             "sccp:0:4:ton:ton-contract-v1:3",
             "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799",
-        ),
-        SCCP_DOMAIN_SORA_KUSAMA: (
-            "sccp:0:6:sora-kusama:substrate-runtime-v1:5",
-            "0x2ee5c37634c3fab7e9086ea43af7553089fc24dc2ce27d76c46ef4c3da57bb56",
-        ),
-        SCCP_DOMAIN_SORA_POLKADOT: (
-            "sccp:0:7:sora-polkadot:substrate-runtime-v1:5",
-            "0x570ec340d4fee4a84eaa7a53b19baa53c9f4f8d7f64c3c43639fde0c6b3fdef0",
-        ),
-        SCCP_DOMAIN_SORA2: (
-            "sccp:0:8:sora2:substrate-runtime-v1:5",
-            "0xda5d48fe26518cd8cff6bdaa7cf8e37c7302d1e66469efed4ef2cf340c55b9e4",
         ),
     }
     for target_domain, (expected_key, expected_hash) in vectors.items():
@@ -8181,13 +7610,7 @@ def sample_source_record_input(source_domain: int) -> Dict[str, Any]:
     if source_domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, SCCP_DOMAIN_TRON):
         input_value["bridge_address"] = "0x" + "11" * 20
         input_value["source_bridge_emitter_code_hash"] = "0x" + "77" * 32
-    if source_domain in (
-        SCCP_DOMAIN_SOL,
-        SCCP_DOMAIN_TON,
-        SCCP_DOMAIN_SORA_KUSAMA,
-        SCCP_DOMAIN_SORA_POLKADOT,
-        SCCP_DOMAIN_SORA2,
-    ):
+    if source_domain in (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON):
         input_value["source_state_verifier_hash"] = "0x" + "77" * 32
     if source_domain == SCCP_DOMAIN_TRON:
         input_value["network_id"] = "0x" + "33" * 32
@@ -8205,9 +7628,6 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
         SCCP_DOMAIN_SOL: "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331",
         SCCP_DOMAIN_TON: "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc",
         SCCP_DOMAIN_TRON: "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
-        SCCP_DOMAIN_SORA_KUSAMA: "0x012c66498a85190d6075c441fad30fe01816796ee1713838fe8bb97f2ad1c924",
-        SCCP_DOMAIN_SORA_POLKADOT: "0x40cd55d64e92d688b839242e170f1722485cddf2e42b4ff22e53c5e7723e570d",
-        SCCP_DOMAIN_SORA2: "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d",
     }
     deployment_vectors = {
         SCCP_DOMAIN_ETH: "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
@@ -8215,9 +7635,6 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
         SCCP_DOMAIN_SOL: "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc",
         SCCP_DOMAIN_TON: "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887",
         SCCP_DOMAIN_TRON: "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
-        SCCP_DOMAIN_SORA_KUSAMA: "0xda47a31715813ef5bff0882cd0e0e8b0cc89d426e005e37e0f94a2bdba2043cd",
-        SCCP_DOMAIN_SORA_POLKADOT: "0x2a57fe4beb69e8201299f2c01259a025cafc8388bb38e2a727c2fc872893e13a",
-        SCCP_DOMAIN_SORA2: "0xdac819bff0aa57f7596f06297dfec39027aaab63213497020b772c355a6eaecb",
     }
     for source_domain, expected_material_hash in material_vectors.items():
         input_value = sample_source_record_input(source_domain)
@@ -10221,20 +9638,6 @@ def test_builds_evm_family_sccp_groth16_proof_request_with_public_signals() -> N
             build_evm_sccp_proof_request(
                 sample_evm_request_input(proof_context=bad_context)
             )
-
-
-def test_package_root_does_not_export_substrate_runtime_sccp_helpers() -> None:
-    for name in (
-        "SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1",
-        "SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1",
-        "SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1",
-        "build_substrate_sccp_proof_request",
-        "build_substrate_sccp_submission",
-        "wrap_substrate_sccp_proof_result",
-        "SubstrateSccpProver",
-        "SubstrateSccpProverUnavailableError",
-    ):
-        assert not hasattr(iroha_torii_client_package, name)
 
 
 def test_sccp_proof_requests_reject_all_zero_source_proof_bytes() -> None:

@@ -8248,14 +8248,6 @@ pub mod isi {
             ton_last_transaction_hash: configured.ton_last_transaction_hash.clone(),
             ton_verifier_code_boc_root_hash: configured.ton_verifier_code_boc_root_hash.clone(),
             ton_verifier_code_boc: configured.ton_verifier_code_boc.clone(),
-            substrate_finalized_head: configured.substrate_finalized_head.clone(),
-            substrate_runtime_spec_name: configured.substrate_runtime_spec_name.clone(),
-            substrate_runtime_spec_version: configured.substrate_runtime_spec_version.clone(),
-            substrate_runtime_transaction_version: configured
-                .substrate_runtime_transaction_version
-                .clone(),
-            substrate_runtime_code_hash: configured.substrate_runtime_code_hash.clone(),
-            substrate_runtime_code_base64: configured.substrate_runtime_code_base64.clone(),
             blockers: configured.blockers.clone(),
         };
         if !iroha_sccp::sccp_destination_rollout_is_production_ready(domain, &rollout) {
@@ -15994,19 +15986,6 @@ pub mod isi {
                     )
                     .expect("TRON SCCP source verifier material")
                 }
-                iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
-                | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
-                | iroha_sccp::SCCP_DOMAIN_SORA2 => {
-                    iroha_sccp::sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
-                        domain,
-                        [seed; 32],
-                        [seed + 1; 32],
-                        [seed + 2; 32],
-                        [seed + 4; 32],
-                        [seed + 3; 32],
-                    )
-                    .expect("Substrate-family SCCP source verifier material")
-                }
                 _ => panic!("unsupported SCCP test domain {domain}"),
             }
         }
@@ -16100,19 +16079,6 @@ pub mod isi {
                         test_sccp_hex32(seed + 6),
                     )
                     .expect("TRON SCCP destination rollout")
-                }
-                iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
-                | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
-                | iroha_sccp::SCCP_DOMAIN_SORA2 => {
-                    iroha_sccp::sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
-                        domain,
-                        iroha_sccp::SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
-                        [seed + 15; 32],
-                        1_000 + domain,
-                        7 + domain,
-                        vec![seed + 11; 64],
-                    )
-                    .expect("Substrate-family SCCP destination rollout")
                 }
                 _ => panic!("unsupported SCCP test domain {domain}"),
             }
@@ -16242,21 +16208,6 @@ pub mod isi {
                     true,
                 )
                 .expect("TRON route canary evidence");
-            }
-            if matches!(
-                domain,
-                iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA
-                    | iroha_sccp::SCCP_DOMAIN_SORA_POLKADOT
-                    | iroha_sccp::SCCP_DOMAIN_SORA2
-            ) {
-                return iroha_sccp::sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
-                    allowlist,
-                    rollout,
-                    destination_binding_hash,
-                    iroha_sccp::sccp_source_verifier_material_hash(material),
-                    iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
-                )
-                .expect("Substrate route canary evidence");
             }
             iroha_sccp::sccp_route_allowlist_with_lane_canary_evidence_v1(
                 allowlist,
@@ -16430,14 +16381,6 @@ pub mod isi {
                 ton_last_transaction_hash: rollout.ton_last_transaction_hash.clone(),
                 ton_verifier_code_boc_root_hash: rollout.ton_verifier_code_boc_root_hash.clone(),
                 ton_verifier_code_boc: rollout.ton_verifier_code_boc.clone(),
-                substrate_finalized_head: rollout.substrate_finalized_head.clone(),
-                substrate_runtime_spec_name: rollout.substrate_runtime_spec_name.clone(),
-                substrate_runtime_spec_version: rollout.substrate_runtime_spec_version.clone(),
-                substrate_runtime_transaction_version: rollout
-                    .substrate_runtime_transaction_version
-                    .clone(),
-                substrate_runtime_code_hash: rollout.substrate_runtime_code_hash.clone(),
-                substrate_runtime_code_base64: rollout.substrate_runtime_code_base64.clone(),
                 blockers: rollout.blockers.clone(),
             }
         }
@@ -16705,7 +16648,7 @@ pub mod isi {
         }
 
         #[test]
-        fn configured_sccp_all_lanes_launch_accepts_substrate_runtime_storage_verifier_evidence() {
+        fn configured_sccp_all_lanes_launch_accepts_supported_lane_evidence() {
             let zk = test_configured_sccp_all_lanes_zk_config();
 
             let eth_route = zk
@@ -16758,17 +16701,6 @@ pub mod isi {
                 tron_route.tron_route_canary_proof_source_domain,
                 Some(iroha_sccp::SCCP_DOMAIN_SORA)
             );
-            let substrate_rollout = zk
-                .sccp_destination_rollouts
-                .iter()
-                .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
-                .expect("configured SORA2 rollout");
-            assert!(substrate_rollout.substrate_finalized_head.is_some());
-            assert_eq!(
-                substrate_rollout.substrate_runtime_spec_name.as_deref(),
-                Some("sora2")
-            );
-
             super::validate_configured_sccp_all_lanes_launch_ready(&zk)
                 .expect("complete configured SCCP material should satisfy all-lanes launch");
         }
@@ -16949,53 +16881,6 @@ pub mod isi {
                 |route| {
                     route.tron_route_canary_block_timestamp = None;
                 },
-            );
-        }
-
-        #[test]
-        fn configured_sccp_all_lanes_launch_rejects_substrate_without_finalized_runtime_fields() {
-            let mut zk = test_configured_sccp_all_lanes_zk_config();
-            let substrate_rollout = zk
-                .sccp_destination_rollouts
-                .iter_mut()
-                .find(|rollout| rollout.domain == iroha_sccp::SCCP_DOMAIN_SORA2)
-                .expect("configured SORA2 rollout");
-            substrate_rollout.substrate_finalized_head = None;
-            substrate_rollout.substrate_runtime_code_base64 = None;
-
-            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
-                .expect_err("Substrate route canary must preserve finalized runtime evidence");
-            let err = format!("{err:?}");
-            assert!(
-                err.contains("SCCP destination rollout for domain 8 is not production-ready"),
-                "unexpected error: {err}",
-            );
-        }
-
-        #[test]
-        fn configured_sccp_all_lanes_launch_rejects_cross_lane_route_canary_replay() {
-            let mut zk = test_configured_sccp_all_lanes_zk_config();
-            let replayed_canary_hash = zk
-                .sccp_route_allowlists
-                .iter()
-                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_SOL)
-                .expect("SOL route allowlist")
-                .route_canary_evidence_hash
-                .clone();
-            let substrate_route = zk
-                .sccp_route_allowlists
-                .iter_mut()
-                .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_SORA_KUSAMA)
-                .expect("SORA Kusama route allowlist");
-            substrate_route.route_canary_evidence_hash = replayed_canary_hash;
-
-            let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
-                .expect_err("cross-lane route canary replay must not satisfy launch");
-            let err = format!("{err:?}");
-            assert!(
-                err.contains("production-ready lane material for domain 6")
-                    && err.contains("route canary evidence is not bound"),
-                "unexpected error: {err}",
             );
         }
 

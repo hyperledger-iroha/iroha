@@ -8,12 +8,10 @@ track detailed unfinished engineering work.
 
 ## SCCP launch-scope note
 
-- Substrate/Polkadot-family networks are not supported in the current SCCP
-  launch scope, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and
-  SORA2. Existing Substrate-family runtime wrappers, evidence helpers, and
-  relay notes are diagnostic/backlog material only; they should not be treated
-  as remaining release blockers or advertised as production network support
-  unless governance explicitly re-opens that scope.
+The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Backlog
+notes for unsupported network families are diagnostic only; they should not be
+treated as release blockers or advertised as production network support unless
+governance explicitly re-opens that scope.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
@@ -3386,7 +3384,6 @@ redistributable schemas, and official trust/revocation bundles.
     rendering, and telemetry peer compatibility handling.
   - Completed 2026-06-06: Torii's configured SCCP all-lanes launch diagnostic
     now uses the shared supported launch-domain set (ETH, BSC, Solana, TON,
-    TRON) instead of the full core diagnostic-domain list. Substrate/SORA2
     configured material remains explicitly tested as out of launch scope, and
     `cargo test -p iroha_torii --lib --features app_api -- --nocapture` is
     green with `2309` passed and `2` ignored.
