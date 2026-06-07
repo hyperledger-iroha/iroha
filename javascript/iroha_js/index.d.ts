@@ -642,6 +642,9 @@ export const SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1: "sccp-native-evm-groth16-p
 export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-testnet-native-evm-prover-self-test-v1";
+export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1: Readonly<{
   javascript: "pure-typescript";
   swift: "native-swift";
@@ -4792,6 +4795,251 @@ export function verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
   },
 ): Promise<EthereumMainnetNativeEvmProverArtifacts>;
 
+export type BscTestnetNativeEvmProverBundleSdkArtifactInput =
+  EthereumMainnetNativeEvmProverBundleSdkArtifactInput;
+export type BscTestnetNativeEvmProverAuditHashesInput =
+  EthereumMainnetNativeEvmProverAuditHashesInput;
+export type BscTestnetNativeEvmProverAuditHashes =
+  EthereumMainnetNativeEvmProverAuditHashes;
+
+export interface BscTestnetNativeEvmProverBundleInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverBundleInput,
+    "bundleId" | "bundle_id" | "chain"
+  > {
+  bundleId?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  bundle_id?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  chain?: "bsc-testnet";
+}
+
+export type BscTestnetNativeEvmProverBundleSdkArtifact =
+  EthereumMainnetNativeEvmProverBundleSdkArtifact;
+
+export interface BscTestnetNativeEvmProverBundle
+  extends Omit<EthereumMainnetNativeEvmProverBundle, "bundleId" | "chain"> {
+  readonly bundleId: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  readonly chain: "bsc-testnet";
+}
+
+export function validateBscTestnetNativeEvmProverBundle(
+  manifest: BscTestnetNativeEvmProverBundleInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscTestnetNativeEvmProverBundle;
+
+export function parseBscTestnetNativeEvmProverBundleManifest(
+  json: string,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscTestnetNativeEvmProverBundle;
+
+export type BscTestnetNativeEvmProverParitySdkResultInput =
+  EthereumMainnetNativeEvmProverParitySdkResultInput;
+export type BscTestnetNativeEvmProverParitySdkResult =
+  EthereumMainnetNativeEvmProverParitySdkResult;
+
+export interface BscTestnetNativeEvmProverParityFixtureInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverParityFixtureInput,
+    "schema" | "chain"
+  > {
+  schema?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  chain?: "bsc-testnet";
+}
+
+export interface BscTestnetNativeEvmProverParityFixture
+  extends Omit<
+    EthereumMainnetNativeEvmProverParityFixture,
+    "schema" | "chain"
+  > {
+  readonly schema: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  readonly chain: "bsc-testnet";
+}
+
+export function validateBscTestnetNativeEvmProverParityFixture(
+  fixture: BscTestnetNativeEvmProverParityFixtureInput,
+  nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
+): BscTestnetNativeEvmProverParityFixture;
+
+export function parseBscTestnetNativeEvmProverParityFixture(
+  json: string,
+  nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
+): BscTestnetNativeEvmProverParityFixture;
+
+export type BscTestnetNativeEvmProverSelfTestSdkResultInput =
+  EthereumMainnetNativeEvmProverSelfTestSdkResultInput;
+export type BscTestnetNativeEvmProverSelfTestSdkResult =
+  EthereumMainnetNativeEvmProverSelfTestSdkResult;
+
+export interface BscTestnetNativeEvmProverSelfTestFixtureInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverSelfTestFixtureInput,
+    "schema" | "chain"
+  > {
+  schema?: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  chain?: "bsc-testnet";
+}
+
+export interface BscTestnetNativeEvmProverSelfTestFixture
+  extends Omit<
+    EthereumMainnetNativeEvmProverSelfTestFixture,
+    "schema" | "chain"
+  > {
+  readonly schema: typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  readonly chain: "bsc-testnet";
+}
+
+export function validateBscTestnetNativeEvmProverSelfTestFixture(
+  fixture: BscTestnetNativeEvmProverSelfTestFixtureInput,
+  nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
+): BscTestnetNativeEvmProverSelfTestFixture;
+
+export function parseBscTestnetNativeEvmProverSelfTestFixture(
+  json: string,
+  nativeProverBundle: BscTestnetNativeEvmProverBundleInput,
+): BscTestnetNativeEvmProverSelfTestFixture;
+
+export interface BscTestnetNativeEvmProverArtifacts
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifacts,
+    "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
+  > {
+  readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
+  readonly crossSdkFixtureParity: Readonly<BscTestnetNativeEvmProverParityFixture>;
+  readonly nativeProverSelfTest: Readonly<BscTestnetNativeEvmProverSelfTestFixture>;
+}
+
+export interface BscTestnetNativeEvmProverArtifactsInput
+  extends Omit<EthereumMainnetNativeEvmProverArtifactsInput, "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest"> {
+  nativeProverBundle?: BscTestnetNativeEvmProverBundleInput | string;
+  native_prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
+  proverBundle?: BscTestnetNativeEvmProverBundleInput | string;
+  prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
+  manifest?: BscTestnetNativeEvmProverBundleInput | string;
+}
+
+export function verifyBscTestnetNativeEvmProverArtifacts(
+  input: BscTestnetNativeEvmProverArtifactsInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscTestnetNativeEvmProverArtifacts;
+
+export interface BscTestnetNativeEvmProverArtifactResolverMetadata
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+    "nativeProverBundle"
+  > {
+  readonly nativeProverBundle: Readonly<BscTestnetNativeEvmProverBundle>;
+}
+
+export interface BscTestnetNativeEvmProverArtifactBundleInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifactBundleInput,
+    "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest" | "artifactResolver" | "artifact_resolver" | "resolveArtifact" | "resolve_artifact" | "resolveArtifactBytes" | "resolve_artifact_bytes"
+  > {
+  nativeProverBundle?: BscTestnetNativeEvmProverBundleInput | string;
+  native_prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
+  proverBundle?: BscTestnetNativeEvmProverBundleInput | string;
+  prover_bundle?: BscTestnetNativeEvmProverBundleInput | string;
+  manifest?: BscTestnetNativeEvmProverBundleInput | string;
+  artifactResolver?: (
+    path: string,
+    metadata: BscTestnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  artifact_resolver?: (
+    path: string,
+    metadata: BscTestnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifact?: (
+    path: string,
+    metadata: BscTestnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact?: (
+    path: string,
+    metadata: BscTestnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifactBytes?: (
+    path: string,
+    metadata: BscTestnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact_bytes?: (
+    path: string,
+    metadata: BscTestnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+}
+
+export function verifyBscTestnetNativeEvmProverArtifactsFromBundle(
+  input: BscTestnetNativeEvmProverArtifactBundleInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): Promise<BscTestnetNativeEvmProverArtifacts>;
+
+export interface BscTestnetNativeProverSelfTestContext
+  extends Omit<
+    EthereumMainnetNativeProverSelfTestContext,
+    "nativeProverArtifacts" | "nativeProverSelfTest" | "expectedResult"
+  > {
+  readonly nativeProverArtifacts: Readonly<BscTestnetNativeEvmProverArtifacts>;
+  readonly nativeProverSelfTest: Readonly<BscTestnetNativeEvmProverSelfTestFixture>;
+  readonly expectedResult: Readonly<BscTestnetNativeEvmProverSelfTestSdkResult>;
+}
+
+export type BscTestnetNativeProverSelfTestFn = (
+  context: Readonly<BscTestnetNativeProverSelfTestContext>,
+  options?: Record<string, unknown>,
+) =>
+  | BscTestnetNativeEvmProverSelfTestSdkResultInput
+  | Promise<BscTestnetNativeEvmProverSelfTestSdkResultInput>;
+
+export interface BscTestnetNativeProverSelfTestRunInput
+  extends Omit<
+    EthereumMainnetNativeProverSelfTestRunInput,
+    "nativeProverArtifacts" | "native_prover_artifacts" | "verifiedNativeProverArtifacts" | "verified_native_prover_artifacts" | "nativeProverSelfTest" | "native_prover_self_test" | "selfTestNativeProver" | "self_test_native_prover"
+  > {
+  nativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+  native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+  verifiedNativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+  verified_native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+  nativeProverSelfTest?: BscTestnetNativeProverSelfTestFn;
+  native_prover_self_test?: BscTestnetNativeProverSelfTestFn;
+  selfTestNativeProver?: BscTestnetNativeProverSelfTestFn;
+  self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
+}
+
+export function runBscTestnetNativeProverSelfTest(
+  input: BscTestnetNativeProverSelfTestRunInput,
+  options?: {
+    nativeProverSelfTest?: BscTestnetNativeProverSelfTestFn;
+    native_prover_self_test?: BscTestnetNativeProverSelfTestFn;
+    selfTestNativeProver?: BscTestnetNativeProverSelfTestFn;
+    self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
+  } & Record<string, unknown>,
+): Promise<BscTestnetNativeEvmProverSelfTestSdkResult>;
+
 export interface EvmSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
@@ -6138,8 +6386,20 @@ export type BscTestnetSccpOptions = BscTestnetSccpProverOptions & {
   submitOutboundToBsc?: BscTestnetSubmitOutboundFn;
   submit_outbound_to_bsc?: BscTestnetSubmitOutboundFn;
   submitToBsc?: BscTestnetSubmitOutboundFn;
+  nativeProverSelfTest?: BscTestnetNativeProverSelfTestFn;
+  native_prover_self_test?: BscTestnetNativeProverSelfTestFn;
+  selfTestNativeProver?: BscTestnetNativeProverSelfTestFn;
+  self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
   destinationBinding?: EvmSccpDestinationBindingInput;
   destination_binding?: EvmSccpDestinationBindingInput;
+  nativeProverBundle?: BscTestnetNativeEvmProverBundleInput;
+  native_prover_bundle?: BscTestnetNativeEvmProverBundleInput;
+  proverBundle?: BscTestnetNativeEvmProverBundleInput;
+  prover_bundle?: BscTestnetNativeEvmProverBundleInput;
+  nativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+  native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+  verifiedNativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+  verified_native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
   outboundProver?: BscTestnetSccpProver;
   outbound_prover?: BscTestnetSccpProver;
   prover?: BscTestnetSccpProver;
@@ -6148,6 +6408,10 @@ export type BscTestnetSccpOptions = BscTestnetSccpProverOptions & {
 };
 
 export class BscTestnetSccp {
+  static fromNativeProverBundle(
+    options?: BscTestnetSccpOptions &
+      BscTestnetNativeEvmProverArtifactBundleInput,
+  ): Promise<BscTestnetSccp>;
   constructor(options?: BscTestnetSccpOptions);
   validateExecutionProviderTestnet(options?: {
     executionProvider?: BscTestnetExecutionProvider;
@@ -6188,9 +6452,28 @@ export class BscTestnetSccp {
   buildOutboundProofRequest(
     input: BscTestnetSccpProofRequestInput,
   ): BscTestnetSccpProofRequest;
+  runNativeProverSelfTest(options?: {
+    nativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+    native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+    verifiedNativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+    verified_native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+    nativeProverSelfTest?: BscTestnetNativeProverSelfTestFn;
+    native_prover_self_test?: BscTestnetNativeProverSelfTestFn;
+    selfTestNativeProver?: BscTestnetNativeProverSelfTestFn;
+    self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
+  } & Record<string, unknown>): Promise<BscTestnetNativeEvmProverSelfTestSdkResult>;
   proveOutboundToBsc(
     input: BscTestnetSccpProofRequestInput,
-    options?: Record<string, unknown>,
+    options?: {
+      nativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+      native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+      verifiedNativeProverArtifacts?: BscTestnetNativeEvmProverArtifacts;
+      verified_native_prover_artifacts?: BscTestnetNativeEvmProverArtifacts;
+      nativeProverSelfTest?: BscTestnetNativeProverSelfTestFn;
+      native_prover_self_test?: BscTestnetNativeProverSelfTestFn;
+      selfTestNativeProver?: BscTestnetNativeProverSelfTestFn;
+      self_test_native_prover?: BscTestnetNativeProverSelfTestFn;
+    } & Record<string, unknown>,
   ): Promise<BscTestnetSccpProofResult>;
   buildBscCalldata(
     input: BscTestnetSccpSubmissionInput,

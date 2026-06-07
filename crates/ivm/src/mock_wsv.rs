@@ -715,37 +715,23 @@ impl MockWorldStateView {
         true
     }
 
-    /// Unshield: consume nullifiers and credit public balance.
-    /// Change output accounting and full proof semantics remain unimplemented in this mock.
+    /// Unshield: consume nullifiers, append private change commitments, and credit public balance.
+    /// Merkle root binding and full proof public-input semantics are not modelled in this mock.
     pub fn unshield(
         &mut self,
         to: &AccountId,
         asset: &AssetDefinitionId,
         public_amount: Numeric,
         inputs: &[[u8; 32]],
+        outputs: &[[u8; 32]],
         proof: &ProofAttachment,
     ) -> bool {
         if !self.account_is_linked(to) {
             return false;
         }
-        let st = self.zk_assets.entry(asset.clone()).or_default();
-        if st.mode != ZkAssetMode::Hybrid || !st.allow_unshield {
-            return false;
-        }
         if !Self::is_unsigned_scale0(&public_amount) {
             return false;
         }
-        if let Some(binding) = st.vk_unshield.as_ref()
-            && !binding.matches(proof)
-        {
-            return false;
-        }
-        for n in inputs {
-            if !st.nullifiers.insert(*n) {
-                return false;
-            }
-        }
-        // Credit public balance
         let to_subject = Self::account_subject(to);
         let key = (to_subject.clone(), asset.clone());
         let current = self
@@ -753,11 +739,39 @@ impl MockWorldStateView {
             .get(&key)
             .cloned()
             .unwrap_or_else(Numeric::zero);
-        let next = match current.checked_add(public_amount.clone()) {
-            Some(val) => val,
-            None => return false,
+        let Some(next) = current.checked_add(public_amount.clone()) else {
+            return false;
         };
+        let Some(st) = self.zk_assets.get_mut(asset) else {
+            return false;
+        };
+        if st.mode != ZkAssetMode::Hybrid || !st.allow_unshield {
+            return false;
+        }
+        if let Some(binding) = st.vk_unshield.as_ref()
+            && !binding.matches(proof)
+        {
+            return false;
+        }
+        let mut new_nullifiers = HashSet::with_capacity(inputs.len());
+        for n in inputs {
+            if st.nullifiers.contains(n) || !new_nullifiers.insert(*n) {
+                return false;
+            }
+        }
+        st.nullifiers.extend(new_nullifiers);
+        let mut output_events = Vec::with_capacity(outputs.len());
+        for c in outputs {
+            let root = st.push_commitment(*c);
+            output_events.push(ZkEvent::CommitmentAdded {
+                asset: asset.clone(),
+                commitment: *c,
+                new_root: *root.as_ref(),
+            });
+        }
+        // Credit public balance
         self.balances.insert(key, next);
+        self.zk_events.extend(output_events);
         // Emit an unshield event (no new root)
         self.zk_events.push(ZkEvent::Unshielded {
             asset: asset.clone(),
@@ -5585,6 +5599,7 @@ impl IVMHost for WsvHost {
                         instr.asset(),
                         amount,
                         instr.inputs().as_slice(),
+                        instr.outputs().as_slice(),
                         instr.proof(),
                     );
                     return if ok {
@@ -7099,6 +7114,100 @@ mod tests_zk_asset_bindings {
             Numeric::from(10_u64),
         );
         assert!(wsv.shield(&caller, &asset, Numeric::from(3_u64), [7u8; 32]));
+    }
+
+    #[test]
+    fn unshield_appends_private_change_outputs_and_rejects_duplicate_inputs_without_mutation() {
+        let caller: AccountId = test_account_id(
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+            "domain",
+        );
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("domain", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let mut wsv = MockWorldStateView::with_balances(&[(
+            (caller.clone(), asset.clone()),
+            Numeric::from(10_u64),
+        )]);
+        assert!(wsv.register_zk_asset(
+            asset.clone(),
+            ZkPolicyConfig {
+                mode: ZkAssetMode::Hybrid,
+                allow_shield: true,
+                allow_unshield: true,
+                vk_transfer: None,
+                vk_unshield: None,
+                vk_shield: None,
+            },
+        ));
+        wsv.drain_zk_events();
+
+        let proof = iroha_data_model::proof::ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0xA5]),
+            iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "unshield_vk"),
+        );
+        let inputs = [[1u8; 32], [2u8; 32]];
+        let outputs = [[9u8; 32], [10u8; 32]];
+        assert!(wsv.unshield(
+            &caller,
+            &asset,
+            Numeric::from(4_u64),
+            &inputs,
+            &outputs,
+            &proof,
+        ));
+        assert_eq!(
+            wsv.balance(caller.clone(), asset.clone()),
+            Numeric::from(14_u64)
+        );
+        let (latest_root, roots, depth) = wsv.get_roots(&asset, 8);
+        assert_eq!(depth, 2);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(latest_root, roots[1]);
+
+        let events = wsv.drain_zk_events();
+        assert_eq!(
+            events,
+            vec![
+                ZkEvent::CommitmentAdded {
+                    asset: asset.clone(),
+                    commitment: outputs[0],
+                    new_root: roots[0],
+                },
+                ZkEvent::CommitmentAdded {
+                    asset: asset.clone(),
+                    commitment: outputs[1],
+                    new_root: roots[1],
+                },
+                ZkEvent::Unshielded {
+                    asset: asset.clone(),
+                    to: caller.clone(),
+                    public_amount: Numeric::from(4_u64),
+                },
+            ]
+        );
+
+        let duplicate_inputs = [[3u8; 32], [3u8; 32]];
+        assert!(!wsv.unshield(
+            &caller,
+            &asset,
+            Numeric::from(1_u64),
+            &duplicate_inputs,
+            &[[11u8; 32]],
+            &proof,
+        ));
+        assert_eq!(
+            wsv.balance(caller.clone(), asset.clone()),
+            Numeric::from(14_u64)
+        );
+        let (latest_after_failure, roots_after_failure, depth_after_failure) =
+            wsv.get_roots(&asset, 8);
+        assert_eq!(depth_after_failure, 2);
+        assert_eq!(roots_after_failure, roots);
+        assert_eq!(latest_after_failure, latest_root);
+        assert!(wsv.drain_zk_events().is_empty());
     }
 
     #[test]

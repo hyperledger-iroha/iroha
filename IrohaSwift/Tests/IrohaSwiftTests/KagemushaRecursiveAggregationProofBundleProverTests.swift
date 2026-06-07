@@ -87,6 +87,50 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
         }
     }
 
+    func testRejectsOversizedInputArchivesBeforeBridgeCall() {
+        let validArchive = validKagemushaNoritoArchive()
+        let oversizedArchive = Data(
+            repeating: 0x7f,
+            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+        )
+        let oversizedMessage =
+            "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: oversizedArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive aggregation body must not run for oversized record bundles")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .oversizedRecordBundleArchive
+            )
+            XCTAssertTrue(error.localizedDescription.contains(oversizedMessage))
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: oversizedArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive aggregation body must not run for oversized Pallas openings")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .oversizedPallasOpenEnvelopesArchive
+            )
+            XCTAssertTrue(error.localizedDescription.contains(oversizedMessage))
+        }
+    }
+
     func testRejectsEmptyPayloadInputArchivesBeforeBridgeCall() {
         let validArchive = validKagemushaNoritoArchive()
         let emptyPayloadArchive = emptyPayloadKagemushaNoritoArchive()

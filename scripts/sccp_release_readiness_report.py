@@ -23,6 +23,10 @@ ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
     "eth": "`eth_chainId == 0x1` (1)",
     "bsc": "`eth_chainId == 0x38` (56)",
 }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID = {
+    "eth": "1",
+    "bsc": "56",
+}.get(ACTIVE_LAUNCH_CHAIN)
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
@@ -762,6 +766,9 @@ SUBSTRATE_JAVA_ANDROID_USER_PROVER_HELPERS = (
     "SubstrateSccpProver.buildSubmission",
 )
 
+# Substrate helper inventories remain here for backlog/diagnostic checks, but
+# Substrate/Polkadot-family networks are not advertised in launch submission
+# surfaces until that support scope is explicitly re-opened.
 
 def _sdk_helper_sets(
     js: tuple[str, ...],
@@ -864,21 +871,6 @@ USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
         "on_chain_submission": "TON internal message body BOC",
         "required_phases": USER_PROVER_CHAIN_PHASES,
     },
-    {
-        "lanes": "substrate",
-        "proof_backend": "substrate-runtime-v1",
-        "sdk_helper_symbols": SUBSTRATE_JS_USER_PROVER_HELPERS,
-        "sdk_helper_symbols_by_sdk": _sdk_helper_sets(
-            SUBSTRATE_JS_USER_PROVER_HELPERS,
-            SUBSTRATE_PYTHON_USER_PROVER_HELPERS,
-            SUBSTRATE_SWIFT_USER_PROVER_HELPERS,
-            SUBSTRATE_KOTLIN_USER_PROVER_HELPERS,
-            SUBSTRATE_JAVA_ANDROID_USER_PROVER_HELPERS,
-        ),
-        "sdk_helpers": _helper_text(SUBSTRATE_JS_USER_PROVER_HELPERS),
-        "on_chain_submission": "Substrate runtime call envelope",
-        "required_phases": USER_PROVER_CHAIN_PHASES,
-    },
 )
 
 
@@ -954,6 +946,16 @@ def _path_control_character(path: str) -> str | None:
     return None
 
 
+MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset("|`<>")
+
+
+def _path_markdown_unsafe_character(path: str) -> str | None:
+    for character in path:
+        if character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
+            return repr(character)
+    return None
+
+
 def _artifact(path: Path) -> dict[str, Any]:
     if path.is_symlink():
         raise ValueError(f"release artifact path must not be a symlink: {path}")
@@ -963,6 +965,12 @@ def _artifact(path: Path) -> dict[str, Any]:
         raise ValueError(
             "release artifact path contains control character "
             f"{control_character}: {artifact_path!r}"
+        )
+    markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
+    if markdown_unsafe_character is not None:
+        raise ValueError(
+            "release artifact path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {artifact_path!r}"
         )
     payload = path.read_bytes()
     return {
@@ -1005,6 +1013,12 @@ def _native_evm_manifest_relative_path(
     if control_character is not None:
         return None, [
             f"{prefix} path contains control character {control_character}: {value!r}"
+        ]
+    markdown_unsafe_character = _path_markdown_unsafe_character(value)
+    if markdown_unsafe_character is not None:
+        return None, [
+            f"{prefix} path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {value!r}"
         ]
     if "\\" in value:
         return None, [f"{prefix} path must use POSIX separators"]
@@ -1499,6 +1513,49 @@ def _native_evm_prover_hash_role_blockers(payload: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def _native_evm_prover_path_role_blockers(payload: dict[str, Any]) -> list[str]:
+    roles = [
+        ("proof_artifact", payload.get("proof_artifact")),
+        ("proving_key", payload.get("proving_key")),
+        ("verifier_key", payload.get("verifier_key")),
+        (
+            "cross_sdk_fixture_parity_artifact",
+            payload.get("cross_sdk_fixture_parity_artifact"),
+        ),
+        (
+            "native_prover_self_test_artifact",
+            payload.get("native_prover_self_test_artifact"),
+        ),
+    ]
+    sdk_artifacts = payload.get("native_sdk_artifacts")
+    if isinstance(sdk_artifacts, list):
+        for index, artifact in enumerate(sdk_artifacts):
+            if isinstance(artifact, dict):
+                roles.append(
+                    (
+                        f"native_sdk_artifacts[{index}].implementation_artifact",
+                        artifact.get("implementation_artifact"),
+                    )
+                )
+
+    blockers: list[str] = []
+    seen: dict[str, str] = {}
+    for role, value in roles:
+        relative_path, path_errors = _native_evm_manifest_relative_path(value, role)
+        if path_errors or relative_path is None:
+            continue
+        path = relative_path.as_posix()
+        previous_role = seen.get(path)
+        if previous_role is not None:
+            blockers.append(
+                f"native EVM Groth16 prover bundle {role} path must not reuse "
+                f"{previous_role}: {path}"
+            )
+            continue
+        seen[path] = role
+    return blockers
+
+
 def _native_evm_prover_bundle_status(
     path: Path | None,
     evidence: dict[str, Any],
@@ -1563,6 +1620,7 @@ def _native_evm_prover_bundle_status(
                 f"native EVM Groth16 prover bundle {key} must be a canonical non-zero 32-byte hex value"
             )
     blockers.extend(_native_evm_prover_hash_role_blockers(payload))
+    blockers.extend(_native_evm_prover_path_role_blockers(payload))
 
     lane = _active_launch_lane(evidence) or {}
     destination_binding = lane.get("destination_binding")
@@ -1797,11 +1855,25 @@ def _parse_phase_evidence(
     phase_evidence_dir: Path | None,
 ) -> dict[str, dict[str, Any]]:
     artifacts: dict[str, dict[str, Any]] = {}
+    source_labels: dict[str, str] = {}
+
+    def assign(phase: str, artifact: dict[str, Any], label: str) -> None:
+        previous = source_labels.get(phase)
+        if previous is not None:
+            raise argparse.ArgumentTypeError(
+                f"duplicate SCCP corridor phase evidence for {phase}: "
+                f"already set by {previous}, cannot set from {label}"
+            )
+        artifacts[phase] = artifact
+        source_labels[phase] = label
+
     if phase_evidence_dir is not None:
         for phase in phases:
             if phase_status.get(phase) == "passed":
-                artifacts[phase] = _artifact(
-                    _phase_log_from_dir(phase_evidence_dir, phase)
+                assign(
+                    phase,
+                    _artifact(_phase_log_from_dir(phase_evidence_dir, phase)),
+                    "--phase-evidence-dir",
                 )
     for raw in values:
         if "=" not in raw:
@@ -1815,13 +1887,14 @@ def _parse_phase_evidence(
                 f"phase evidence path must not be empty: {raw}"
             )
         artifact = _artifact(Path(path_text))
+        label = f"--phase-evidence {raw}"
         if name == "all":
             for phase in phases:
-                artifacts[phase] = artifact
+                assign(phase, artifact, label)
             continue
         if name not in phases:
             raise argparse.ArgumentTypeError(f"unknown SCCP corridor phase: {name}")
-        artifacts[name] = artifact
+        assign(name, artifact, label)
     return artifacts
 
 
@@ -1864,21 +1937,27 @@ def _active_launch_evm_live_metadata_blockers(
     evm_live_metadata = lane.get("evm_live_metadata")
     if not isinstance(evm_live_metadata, dict):
         evm_live_metadata = {}
-    expected_chain_ids = {
-        "eth": {"1", "0x1"},
-        "bsc": {"56", "0x38"},
-    }.get(ACTIVE_LAUNCH_CHAIN, set())
-    expected_chain_id_label = {
-        "eth": "1 (0x1)",
-        "bsc": "56 (0x38)",
-    }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+    expected_chain_id = ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
+    expected_chain_id_label = (
+        f"canonical decimal chain id {expected_chain_id}"
+        if expected_chain_id is not None
+        else "the configured mainnet chain id"
+    )
 
     blockers: list[str] = []
-    if evm_live_metadata.get("source_rpc_chain_id") not in expected_chain_ids:
+    source_chain_id = evm_live_metadata.get("source_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(source_chain_id, positive=True)
+        and source_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live eth_chainId must be {expected_chain_id_label}"
         )
-    if evm_live_metadata.get("destination_rpc_chain_id") not in expected_chain_ids:
+    destination_chain_id = evm_live_metadata.get("destination_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(destination_chain_id, positive=True)
+        and destination_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId must be {expected_chain_id_label}"
         )
@@ -1891,6 +1970,18 @@ def _active_launch_evm_live_metadata_blockers(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live block tag must be finalized"
         )
     return blockers
+
+
+def _is_canonical_decimal_text(value: Any, *, positive: bool) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if not all(symbol in "0123456789" for symbol in value):
+        return False
+    if len(value) > 1 and value.startswith("0"):
+        return False
+    if positive and value == "0":
+        return False
+    return True
 
 
 def _active_launch_release_checklist(

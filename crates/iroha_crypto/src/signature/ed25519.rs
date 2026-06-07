@@ -1,4 +1,4 @@
-use core::convert::{Infallible, TryFrom};
+use core::convert::TryFrom;
 
 use blake2::{Blake2b, digest::consts::U32};
 use curve25519_dalek::edwards::CompressedEdwardsY;
@@ -409,35 +409,16 @@ pub(crate) fn is_verify_ok_cached(pk: &PublicKey, message: &[u8], signature: &[u
     })
 }
 
-fn parse_fixed_size<T, E, F, const SIZE: usize>(
-    payload: &[u8],
-    fixed_parser: F,
-) -> Result<T, ParseError>
-where
-    F: FnOnce(&[u8; SIZE]) -> Result<T, E>,
-    E: core::fmt::Display,
-{
-    let fixed_payload: [u8; SIZE] = payload.try_into().map_err(|_| {
-        ParseError(format!(
-            "the payload size is incorrect: expected {}, but got {}",
-            SIZE,
-            payload.len()
-        ))
-    })?;
-
-    fixed_parser(&fixed_payload).map_err(|err| ParseError(err.to_string()))
-}
-
-fn ed25519_seed_from_material(seed: &[u8]) -> [u8; 32] {
+fn ed25519_seed_from_material(seed: &[u8]) -> Zeroizing<[u8; 32]> {
+    let mut out = Zeroizing::new([0u8; 32]);
     if seed.len() == 32 {
-        let mut out = [0u8; 32];
-        out.copy_from_slice(seed);
+        out.as_mut().copy_from_slice(seed);
         return out;
     }
 
-    let digest = Sha256::digest(seed);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest);
+    let mut digest = Sha256::digest(seed);
+    out.as_mut().copy_from_slice(&digest);
+    digest.zeroize();
     out
 }
 
@@ -522,12 +503,14 @@ impl Ed25519Sha512 {
 
     pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
         match payload.len() {
-            32 => parse_fixed_size(payload, |bytes| {
-                Ok::<_, Infallible>(PrivateKey::from_bytes(bytes))
-            }),
+            32 => {
+                let mut seed = Zeroizing::new([0u8; 32]);
+                seed.as_mut().copy_from_slice(payload);
+                Ok(PrivateKey::from_bytes(&seed))
+            }
             64 => {
-                let mut seed = [0u8; 32];
-                seed.copy_from_slice(&payload[..32]);
+                let mut seed = Zeroizing::new([0u8; 32]);
+                seed.as_mut().copy_from_slice(&payload[..32]);
                 let mut public = [0u8; 32];
                 public.copy_from_slice(&payload[32..]);
                 let signing_key = PrivateKey::from_bytes(&seed);
@@ -536,7 +519,6 @@ impl Ed25519Sha512 {
                         "ed25519 private key payload has mismatched public key".to_string(),
                     ));
                 }
-                seed.zeroize();
                 Ok(signing_key)
             }
             len => Err(ParseError(format!(

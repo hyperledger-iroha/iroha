@@ -274,7 +274,7 @@ Host/syscall builtins (ካርታ ወደ SCALL፤ ትክክለኛ ቁጥሮች �
 የመገልገያ ግንባታዎች
 - `info(string|int)`: በOUTPUT በኩል የተዋቀረ ክስተት/መልእክት ያወጣል።
 - `hash(blob) -> Blob*`፡ Norito-encoded hash እንደ ብሎብ ይመልሳል።
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` እና `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: የመስመር ውስጥ ISI ግንበኞች; ሁሉም ነጋሪ እሴቶች የተጠናቀረ-ጊዜ ቀጥተኛ (የሕብረቁምፊ ቃል በቃል ወይም የጠቋሚ አዘጋጆች ከጽሑፋዊ) መሆን አለባቸው። `nullifier32` እና `inputs32` በትክክል 32 ባይት (ጥሬ ገመድ ወይም `0x` hex) መሆን አለባቸው እና `amount` አሉታዊ ያልሆኑ መሆን አለባቸው።
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` እና `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: የመስመር ውስጥ ISI ግንበኞች; ሁሉም ነጋሪ እሴቶች የተጠናቀረ-ጊዜ ቀጥተኛ (የሕብረቁምፊ ቃል በቃል ወይም የጠቋሚ አዘጋጆች ከጽሑፋዊ) መሆን አለባቸው። `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`፡ የአስተናጋጁን እቅድ መዝገብ በመጠቀም JSON ን ኮድ ያደርጋል (DefaultRegistry `QueryRequest` እና `QueryResponse` ከትእዛዝ/የንግድ ናሙናዎች በተጨማሪ ይደግፋል)።
 - `decode_schema(Name*, Blob|bytes) -> Json*`: የአስተናጋጅ schema መዝገብ በመጠቀም Norito ባይት መፍታት.

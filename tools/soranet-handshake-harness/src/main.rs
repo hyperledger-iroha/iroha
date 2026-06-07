@@ -554,11 +554,38 @@ fn suite_list_from_caps(
         ));
     }
     let mut suites = Vec::with_capacity(cap.value.len());
+    let mut ignored = Vec::new();
+    let mut pre_release = Vec::new();
     for &raw in &cap.value {
-        let suite = HandshakeSuite::try_from(raw)?;
-        if !suites.contains(&suite) {
-            suites.push(suite);
+        match HandshakeSuite::try_from(raw) {
+            Ok(suite) => {
+                if !suites.contains(&suite) {
+                    suites.push(suite);
+                }
+            }
+            Err(_) if matches!(raw, 0x02 | 0x03) => pre_release.push(raw),
+            Err(_) => ignored.push(raw),
         }
+    }
+    if !pre_release.is_empty() {
+        let rejected = pre_release
+            .iter()
+            .map(|id| format!("{id:#04x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HarnessError::Validation(format!(
+            "pre-release handshake suite identifiers are not accepted: {rejected}"
+        )));
+    }
+    if suites.is_empty() {
+        let unsupported = ignored
+            .iter()
+            .map(|id| format!("{id:#04x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HarnessError::Validation(format!(
+            "suite_list capability must include at least one supported identifier; got {unsupported}"
+        )));
     }
     Ok(Some(suites))
 }
@@ -778,8 +805,10 @@ mod tests {
             ty: CAPABILITY_SUITE_LIST,
             value: vec![
                 u8::from(HandshakeSuite::Nk2Hybrid),
+                0x7D,
                 u8::from(HandshakeSuite::Nk2Hybrid),
                 u8::from(HandshakeSuite::Nk3PqForwardSecure),
+                0x7E,
             ],
             required: false,
         }];
@@ -793,6 +822,25 @@ mod tests {
                 HandshakeSuite::Nk3PqForwardSecure
             ]
         );
+    }
+
+    #[test]
+    fn suite_list_from_caps_rejects_only_pre_release_ids() {
+        let caps = vec![CapabilityTlv {
+            ty: CAPABILITY_SUITE_LIST,
+            value: vec![0x02, 0x03],
+            required: true,
+        }];
+        let err = suite_list_from_caps(&caps)
+            .expect_err("pre-release-only suite list must not negotiate");
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("pre-release handshake suite identifiers"));
+                assert!(message.contains("0x02"));
+                assert!(message.contains("0x03"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
     }
 
     #[test]

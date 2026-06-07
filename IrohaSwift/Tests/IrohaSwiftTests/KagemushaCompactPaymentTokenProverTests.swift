@@ -50,6 +50,33 @@ final class KagemushaCompactPaymentTokenProverTests: XCTestCase {
         }
     }
 
+    func testRejectsOversizedRecordBundleArchiveBeforeBridgeCall() {
+        let oversizedArchive = Data(
+            repeating: 0x7f,
+            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+        )
+        XCTAssertThrowsError(
+            try KagemushaCompactPaymentTokenProver
+                .proveVerifiedCompactPaymentTokenWithRecords(
+                    recordBundleArchive: oversizedArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native compact-token prover body must not run for oversized record bundles")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaCompactPaymentTokenProverError,
+                .oversizedRecordBundleArchive
+            )
+            XCTAssertTrue(
+                error.localizedDescription.contains(
+                    "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+                )
+            )
+        }
+    }
+
     func testRejectsEmptyPayloadRecordBundleArchiveBeforeBridgeCall() {
         XCTAssertThrowsError(
             try KagemushaCompactPaymentTokenProver

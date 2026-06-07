@@ -8,7 +8,7 @@
 use hkdf::Hkdf;
 use rand_core::TryCryptoRng;
 use sha3::Sha3_512;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// Salt applied to the HKDF used for the confidential key hierarchy.
 const KEY_SALT: &[u8] = b"iroha:confidential:key-derivation:v1";
@@ -103,9 +103,13 @@ impl ConfidentialKeyset {
     }
 }
 
-fn expand_key(hkdf: &Hkdf<Sha3_512>, label: &'static str, info: &[u8]) -> Result<[u8; 32]> {
-    let mut out = [0u8; 32];
-    hkdf.expand(info, &mut out)
+fn expand_key(
+    hkdf: &Hkdf<Sha3_512>,
+    label: &'static str,
+    info: &[u8],
+) -> Result<Zeroizing<[u8; 32]>> {
+    let mut out = Zeroizing::new([0u8; 32]);
+    hkdf.expand(info, out.as_mut())
         .map_err(|_| ConfidentialKeyError::HkdfExpand { label })?;
     Ok(out)
 }
@@ -114,7 +118,7 @@ fn expand_key(hkdf: &Hkdf<Sha3_512>, label: &'static str, info: &[u8]) -> Result
 ///
 /// # Errors
 /// Returns [`ConfidentialKeyError::HkdfExpand`] if domain-separated key expansion fails.
-pub fn derive_keyset(spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
+pub fn derive_keyset(mut spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
     let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &spend_key);
 
     let nk = expand_key(&hkdf, "nk", INFO_NK)?;
@@ -122,13 +126,15 @@ pub fn derive_keyset(spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
     let ovk = expand_key(&hkdf, "ovk", INFO_OVK)?;
     let fvk = expand_key(&hkdf, "fvk", INFO_FVK)?;
 
-    Ok(ConfidentialKeyset {
+    let keyset = ConfidentialKeyset {
         spend: spend_key,
-        nullifier: nk,
-        incoming_view: ivk,
-        outgoing_view: ovk,
-        full_view: fvk,
-    })
+        nullifier: *nk,
+        incoming_view: *ivk,
+        outgoing_view: *ovk,
+        full_view: *fvk,
+    };
+    spend_key.zeroize();
+    Ok(keyset)
 }
 
 /// Derive the confidential key hierarchy from an arbitrary slice.
@@ -140,9 +146,9 @@ pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> 
     if spend_key.len() != 32 {
         return Err(ConfidentialKeyError::InvalidSpendKeyLength(spend_key.len()));
     }
-    let mut seed = [0u8; 32];
+    let mut seed = Zeroizing::new([0u8; 32]);
     seed.copy_from_slice(spend_key);
-    derive_keyset(seed)
+    derive_keyset(*seed)
 }
 
 /// Generate a fresh random spend key and derive the associated hierarchy.
@@ -151,10 +157,10 @@ pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> 
 /// Returns [`ConfidentialKeyError::RandomBytes`] if the RNG cannot provide a spend key, or
 /// [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
 pub fn generate_keyset<R: TryCryptoRng>(rng: &mut R) -> Result<ConfidentialKeyset> {
-    let mut seed = [0u8; 32];
-    rng.try_fill_bytes(&mut seed)
+    let mut seed = Zeroizing::new([0u8; 32]);
+    rng.try_fill_bytes(seed.as_mut())
         .map_err(|_| ConfidentialKeyError::RandomBytes)?;
-    derive_keyset(seed)
+    derive_keyset(*seed)
 }
 
 #[cfg(test)]
@@ -177,6 +183,25 @@ mod tests {
     #[test]
     fn derive_keyset_from_slice_rejects_wrong_length() {
         assert!(derive_keyset_from_slice(&[0u8; 31]).is_err());
+    }
+
+    #[test]
+    fn derive_keyset_from_slice_matches_array_derivation() {
+        let seed = [0x24u8; 32];
+        let from_slice = derive_keyset_from_slice(&seed).expect("derive from exact slice");
+        let from_array = derive_keyset(seed).expect("derive from array");
+
+        assert_eq!(from_slice.spend_key(), from_array.spend_key());
+        assert_eq!(from_slice.nullifier_key(), from_array.nullifier_key());
+        assert_eq!(
+            from_slice.incoming_view_key(),
+            from_array.incoming_view_key()
+        );
+        assert_eq!(
+            from_slice.outgoing_view_key(),
+            from_array.outgoing_view_key()
+        );
+        assert_eq!(from_slice.full_view_key(), from_array.full_view_key());
     }
 
     #[test]

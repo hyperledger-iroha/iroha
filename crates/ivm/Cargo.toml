@@ -92,11 +92,11 @@ metal = [
 ## users compile us alongside backends that expect the associated `Params` type.
 halo2-params = []
 kotodama_dynamic_bounds = ["kotodama_lang/kotodama_dynamic_bounds"]
-## Allow development fallback behavior for schema decode helpers when a registry
-## implementation is incomplete. Disable this in strict/production builds.
+## Allow development fallback behavior for schema decode helpers when running
+## experiments without registry-backed schema resolution. Disable this in
+## strict/production builds.
 schema_fallback = []
-## Placeholder feature to switch to an incremental Merkle update path for
-## the register file once `iroha_crypto` exposes a canonical builder.
+## Feature gate for the register-file incremental Merkle update path.
 merkle_incremental = []
 ## Accepts Norito derive internal cfg used to pick schema-hash strategy.
 ## This is a noop here; present only to silence unexpected-cfg warnings from

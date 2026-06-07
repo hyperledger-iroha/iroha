@@ -175,8 +175,6 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
 }
 
 const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
-    "register_asset",
-    "create_new_asset",
     "escrow_open_offer",
     "escrow_accept",
     "escrow_mark_payment_sent",
@@ -206,11 +204,7 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "unregister_peer",
     "sc_execute_submit_ballot",
     "sc_execute_unshield",
-    "subscription_bill",
-    "subscription_record_usage",
     "resolve_account_alias",
-    "build_submit_ballot_inline",
-    "build_unshield_inline",
     "axt_begin",
     "axt_touch",
     "verify_ds_proof",
@@ -307,6 +301,44 @@ fn instruction_box_is_hintable(instr: &InstructionBox) -> bool {
     if any.downcast_ref::<ExecuteTrigger>().is_some() {
         return true;
     }
+    {
+        use iroha_data_model::isi::escrow as DMEscrow;
+        if any.downcast_ref::<DMEscrow::OpenAssetEscrow>().is_some()
+            || any.downcast_ref::<DMEscrow::AcceptAssetEscrow>().is_some()
+            || any
+                .downcast_ref::<DMEscrow::MarkEscrowPaymentSent>()
+                .is_some()
+            || any.downcast_ref::<DMEscrow::ReleaseAssetEscrow>().is_some()
+            || any.downcast_ref::<DMEscrow::CancelAssetEscrow>().is_some()
+            || any.downcast_ref::<DMEscrow::OpenEscrowDispute>().is_some()
+            || any
+                .downcast_ref::<DMEscrow::ResolveEscrowDispute>()
+                .is_some()
+            || any
+                .downcast_ref::<DMEscrow::OpenAnonymousAssetEscrow>()
+                .is_some()
+            || any
+                .downcast_ref::<DMEscrow::AcceptAnonymousAssetEscrow>()
+                .is_some()
+            || any
+                .downcast_ref::<DMEscrow::MarkAnonymousEscrowPaymentSent>()
+                .is_some()
+            || any
+                .downcast_ref::<DMEscrow::ReleaseAnonymousAssetEscrow>()
+                .is_some()
+            || any
+                .downcast_ref::<DMEscrow::CancelAnonymousAssetEscrow>()
+                .is_some()
+            || any
+                .downcast_ref::<DMEscrow::OpenAnonymousEscrowDispute>()
+                .is_some()
+            || any
+                .downcast_ref::<DMEscrow::ResolveAnonymousEscrowDispute>()
+                .is_some()
+        {
+            return true;
+        }
+    }
 
     false
 }
@@ -316,6 +348,92 @@ fn query_request_is_hintable(request: &QueryRequest) -> bool {
         QueryRequest::Singular(query) => matches!(query, SingularQueryBox::FindAssetById(_)),
         QueryRequest::Start(_) | QueryRequest::Continue(_) => false,
     }
+}
+
+fn is_literal_name_expr(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Call { name, args }
+            if name == "name" && args.len() == 1 && matches!(args.first(), Some(Expr::String(_)))
+    )
+}
+
+fn anonymous_escrow_request_literal_is_hintable(name: &str, args: &[Expr]) -> bool {
+    use iroha_data_model::isi::escrow as DMEscrow;
+
+    let Some(payload) = args.first().and_then(decode_norito_bytes_literal) else {
+        return false;
+    };
+    match name {
+        "anonymous_escrow_open_offer" => {
+            norito::decode_from_bytes::<DMEscrow::OpenAnonymousAssetEscrow>(&payload).is_ok()
+        }
+        "anonymous_escrow_release" => {
+            norito::decode_from_bytes::<DMEscrow::ReleaseAnonymousAssetEscrow>(&payload).is_ok()
+        }
+        "anonymous_escrow_cancel" => {
+            norito::decode_from_bytes::<DMEscrow::CancelAnonymousAssetEscrow>(&payload).is_ok()
+        }
+        "anonymous_escrow_resolve_dispute" => {
+            norito::decode_from_bytes::<DMEscrow::ResolveAnonymousEscrowDispute>(&payload).is_ok()
+        }
+        _ => false,
+    }
+}
+
+fn escrow_call_is_hintable(name: &str, args: &[Expr]) -> Option<bool> {
+    match name {
+        "escrow_open_offer"
+        | "escrow_accept"
+        | "escrow_mark_payment_sent"
+        | "escrow_release"
+        | "escrow_cancel"
+        | "escrow_open_dispute"
+        | "escrow_resolve_dispute"
+        | "anonymous_escrow_accept"
+        | "anonymous_escrow_mark_payment_sent"
+        | "anonymous_escrow_open_dispute" => Some(args.first().is_some_and(is_literal_name_expr)),
+        "anonymous_escrow_open_offer"
+        | "anonymous_escrow_release"
+        | "anonymous_escrow_cancel"
+        | "anonymous_escrow_resolve_dispute" => {
+            Some(anonymous_escrow_request_literal_is_hintable(name, args))
+        }
+        _ => None,
+    }
+}
+
+fn is_literal_domain_expr(expr: &Expr) -> bool {
+    let Expr::Call { name, args } = expr else {
+        return false;
+    };
+    matches!(name.as_str(), "domain" | "domain_id")
+        && args.len() == 1
+        && matches!(
+            args.first(),
+            Some(Expr::String(raw))
+                if iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
+        )
+}
+
+fn is_account_access_hint_expr(expr: &Expr) -> bool {
+    let Expr::Call { name, args } = expr else {
+        return false;
+    };
+    if name == "authority" && args.is_empty() {
+        return true;
+    }
+    name == "account_id"
+        && args.len() == 1
+        && matches!(
+            args.first(),
+            Some(Expr::String(raw))
+                if iroha_data_model::account::AccountId::parse_encoded(raw).is_ok()
+        )
+}
+
+fn transfer_domain_call_is_hintable(args: &[Expr]) -> bool {
+    args.len() == 3 && is_literal_domain_expr(&args[1]) && is_account_access_hint_expr(&args[2])
 }
 
 fn lint_nonliteral_state_paths(program: &Program, warnings: &mut Vec<LintWarning>) {
@@ -515,6 +633,10 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 !decode_query_request_literal(args)
                     .map(|query| query_request_is_hintable(&query))
                     .unwrap_or(false)
+            } else if name == "transfer_domain" {
+                !transfer_domain_call_is_hintable(args)
+            } else if let Some(hintable) = escrow_call_is_hintable(name, args) {
+                !hintable
             } else {
                 OPAQUE_ACCESS_HINT_CALLS.contains(&name.as_str())
             };
@@ -1655,6 +1777,228 @@ fn main(k: Name) { let _x = Foo[k]; }"#,
     }
 
     #[test]
+    fn lint_asset_registration_helpers_are_precise_access() {
+        let program = parse(
+            r#"
+fn main(asset: AssetDefinitionId, owner: AccountId) {
+  register_asset(asset, "ROSE", 0, 1);
+  create_new_asset(asset, "ROSE", 1, owner, 1);
+}
+"#,
+        )
+        .expect("parse asset registration helpers");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "asset registration helpers should use compiler-derived asset keys"
+        );
+    }
+
+    #[test]
+    fn lint_subscription_helpers_are_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  subscription_bill();
+  subscription_record_usage();
+}
+"#,
+        )
+        .expect("parse subscription helpers");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "subscription helpers should use fixed compiler-derived context keys"
+        );
+    }
+
+    #[test]
+    fn lint_inline_zk_builders_are_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  let _ballot = build_submit_ballot_inline(
+    "election",
+    blob("ciphertext"),
+    blob("0000000000000000000000000000000000000000000000000000000000000000"),
+    "halo2",
+    blob("proof"),
+    blob("vk")
+  );
+  let _unshield = build_unshield_inline(
+    asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    authority(),
+    1,
+    blob("0000000000000000000000000000000000000000000000000000000000000000"),
+    "halo2",
+    blob("proof"),
+    blob("vk")
+  );
+}
+"#,
+        )
+        .expect("parse inline ZK builders");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "inline ZK builders only construct payloads and should not warn about access hints"
+        );
+    }
+
+    #[test]
+    fn lint_transfer_domain_literal_target_is_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  transfer_domain(
+    authority(),
+    domain("wonderland.universal"),
+    account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+  );
+}
+"#,
+        )
+        .expect("parse literal transfer_domain helper");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "literal transfer_domain access should be compiler-derived"
+        );
+    }
+
+    #[test]
+    fn lint_transfer_domain_dynamic_target_still_warns() {
+        let program = parse(
+            r#"
+fn main() {
+  let target = authority();
+  transfer_domain(authority(), domain("wonderland.universal"), target);
+}
+"#,
+        )
+        .expect("parse dynamic transfer_domain helper");
+        let warnings = lint_program(&program);
+        assert!(
+            warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "dynamic transfer_domain access should still warn"
+        );
+    }
+
+    #[test]
+    fn lint_native_escrow_literal_name_is_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  escrow_open_offer(name("aitai_offer"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 10);
+  escrow_accept(name("aitai_offer"));
+  escrow_mark_payment_sent(name("aitai_offer"));
+  escrow_release(name("aitai_offer"));
+  escrow_cancel(name("aitai_offer"));
+  escrow_open_dispute(name("aitai_offer"));
+  escrow_resolve_dispute(name("aitai_offer"), 6, 4);
+}
+"#,
+        )
+        .expect("parse native escrow literal helpers");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "literal native escrow helpers should not warn"
+        );
+    }
+
+    #[test]
+    fn lint_dynamic_escrow_name_still_warns() {
+        let program = parse(
+            r#"
+fn main() {
+  let deal = name("aitai_offer");
+  escrow_accept(deal);
+}
+"#,
+        )
+        .expect("parse dynamic escrow helper");
+        let warnings = lint_program(&program);
+        assert!(
+            warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "dynamic escrow names should still warn"
+        );
+    }
+
+    #[test]
+    fn lint_named_anonymous_escrow_literal_name_is_precise_access() {
+        let program = parse(
+            r#"
+fn main() {
+  anonymous_escrow_accept(name("shielded_offer"));
+  anonymous_escrow_mark_payment_sent(name("shielded_offer"));
+  anonymous_escrow_open_dispute(name("shielded_offer"));
+}
+"#,
+        )
+        .expect("parse named anonymous escrow helpers");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "literal anonymous escrow lifecycle helpers should not warn"
+        );
+    }
+
+    #[test]
+    fn lint_anonymous_escrow_request_literal_is_precise_access() {
+        use iroha_data_model::{
+            asset::AssetDefinitionId,
+            isi::escrow::OpenAnonymousAssetEscrow,
+            proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+        };
+
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition");
+        let escrow_name: iroha_data_model::name::Name =
+            "shielded_offer".parse().expect("escrow name");
+        let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
+        let backend = "halo2/ipa/poly-open".to_string();
+        let proof = ProofAttachment::new_ref(
+            backend.clone(),
+            ProofBox::new(backend.clone(), vec![1, 2, 3]),
+            VerifyingKeyId::new(backend, "escrow_vk"),
+        );
+        let request = OpenAnonymousAssetEscrow::new(
+            escrow_id,
+            asset_def,
+            vec![[0x11; 32]],
+            [0x22; 32],
+            proof,
+            None,
+        );
+        let request_hex = format!(
+            "0x{}",
+            hex::encode(norito::to_bytes(&request).expect("encode anonymous escrow request"))
+        );
+        let src = format!(
+            r#"fn main() {{ anonymous_escrow_open_offer(norito_bytes("{request_hex}")); }}"#
+        );
+        let program = parse(&src).expect("parse anonymous escrow request helper");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "decodable anonymous escrow request should not warn"
+        );
+    }
+
+    #[test]
+    fn lint_anonymous_escrow_malformed_request_still_warns() {
+        let program = parse(r#"fn main() { anonymous_escrow_open_offer(norito_bytes("00")); }"#)
+            .expect("parse malformed anonymous escrow request helper");
+        let warnings = lint_program(&program);
+        assert!(
+            warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "malformed anonymous escrow requests should still warn"
+        );
+    }
+
+    #[test]
     fn lint_opaque_access_hints_with_explicit_access_is_rejected() {
         let err = parse(
             r#"#[access(read="*", write="*")]
@@ -1692,6 +2036,36 @@ fn main() { subscription_bill(); }"#,
         assert!(
             !warnings.iter().any(|w| w.code == "opaque-access-hints"),
             "literal execute_instruction payloads should not warn"
+        );
+    }
+
+    #[test]
+    fn lint_opaque_access_hints_execute_instruction_escrow_literal_is_silent() {
+        use iroha_data_model::{
+            asset::AssetDefinitionId,
+            isi::{InstructionBox, escrow::OpenAssetEscrow},
+        };
+        use iroha_primitives::numeric::Numeric;
+
+        let escrow_name: iroha_data_model::name::Name = "aitai_offer".parse().expect("escrow name");
+        let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition");
+        let isi = InstructionBox::from(OpenAssetEscrow::new(
+            escrow_id,
+            asset_def,
+            Numeric::from(10_u64),
+        ));
+        let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
+        let hex_payload = format!("0x{}", hex::encode(bytes));
+        let src = format!("fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}");
+
+        let program = parse(&src).expect("parse escrow execute_instruction literal");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings.iter().any(|w| w.code == "opaque-access-hints"),
+            "literal escrow execute_instruction payloads should not warn"
         );
     }
 

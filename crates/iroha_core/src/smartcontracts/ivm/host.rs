@@ -68,6 +68,10 @@ use iroha_data_model::{
         asset::prelude::FindAssetById, error::QueryExecutionFail,
     },
     smart_contract::{ContractAddress, ContractAlias, ContractInstance},
+    soracloud::{
+        SORACLOUD_HOST_REQUEST_VERSION_V1, SoracloudHostOperationV1,
+        SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
+    },
     subscription::{
         ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata,
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
@@ -850,6 +854,17 @@ pub trait QueryStateRefOps {
         &self,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Option<crate::smartcontracts::code::BoundContractRecord>;
+    /// Enforce manifest entrypoint permission metadata against the current world snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationFail`] when the authority is missing or lacks the
+    /// named entrypoint permission.
+    fn enforce_contract_entrypoint_permission(
+        &self,
+        authority: &AccountId,
+        context: &crate::executor::ContractCallExecutionContext,
+    ) -> Result<(), ValidationFail>;
     /// Load durable smart-contract state by canonical key.
     fn durable_state_get(&self, key: &Name) -> Option<Vec<u8>>;
     /// List durable smart-contract state keys.
@@ -1109,6 +1124,39 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
             QueryStateRef::Transaction(tx) => {
                 crate::smartcontracts::code::fetch_bound_contract_record(tx, contract_address)
+            }
+        }
+    }
+
+    fn enforce_contract_entrypoint_permission(
+        &self,
+        authority: &AccountId,
+        context: &crate::executor::ContractCallExecutionContext,
+    ) -> Result<(), ValidationFail> {
+        match *self {
+            QueryStateRef::View(view) => crate::executor::enforce_contract_entrypoint_permission(
+                view.world(),
+                authority,
+                context,
+            ),
+            QueryStateRef::QueryView(view) => {
+                crate::executor::enforce_contract_entrypoint_permission(
+                    view.world(),
+                    authority,
+                    context,
+                )
+            }
+            QueryStateRef::Block(block) => crate::executor::enforce_contract_entrypoint_permission(
+                block.world(),
+                authority,
+                context,
+            ),
+            QueryStateRef::Transaction(tx) => {
+                crate::executor::enforce_contract_entrypoint_permission(
+                    tx.world(),
+                    authority,
+                    context,
+                )
             }
         }
     }
@@ -1412,6 +1460,102 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 decode_from_bytes(&owned)
             })
             .map_err(|_| ivm::VMError::DecodeError)
+    }
+
+    fn soracloud_operation_for_syscall(number: u32) -> Option<SoracloudHostOperationV1> {
+        match number {
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE => {
+                Some(SoracloudHostOperationV1::ReadCommittedState)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => {
+                Some(SoracloudHostOperationV1::EmitStateMutation)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => {
+                Some(SoracloudHostOperationV1::EmitMailboxMessage)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL => {
+                Some(SoracloudHostOperationV1::AppendJournal)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => {
+                Some(SoracloudHostOperationV1::PublishCheckpoint)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET => {
+                Some(SoracloudHostOperationV1::ReadSecret)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL => {
+                Some(SoracloudHostOperationV1::ReadCredential)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH => {
+                Some(SoracloudHostOperationV1::EgressFetch)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG => {
+                Some(SoracloudHostOperationV1::ReadConfig)
+            }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
+                Some(SoracloudHostOperationV1::ReadSecretEnvelope)
+            }
+            _ => None,
+        }
+    }
+
+    fn soracloud_payload_matches_operation(
+        payload: &SoracloudHostRequestPayloadV1,
+        operation: SoracloudHostOperationV1,
+    ) -> bool {
+        matches!(
+            (operation, payload),
+            (
+                SoracloudHostOperationV1::ReadCommittedState,
+                SoracloudHostRequestPayloadV1::ReadCommittedState(_)
+            ) | (
+                SoracloudHostOperationV1::EmitStateMutation,
+                SoracloudHostRequestPayloadV1::EmitStateMutation(_)
+            ) | (
+                SoracloudHostOperationV1::EmitMailboxMessage,
+                SoracloudHostRequestPayloadV1::EmitMailboxMessage(_)
+            ) | (
+                SoracloudHostOperationV1::AppendJournal,
+                SoracloudHostRequestPayloadV1::AppendJournal(_)
+            ) | (
+                SoracloudHostOperationV1::PublishCheckpoint,
+                SoracloudHostRequestPayloadV1::PublishCheckpoint(_)
+            ) | (
+                SoracloudHostOperationV1::ReadConfig,
+                SoracloudHostRequestPayloadV1::ReadConfig(_)
+            ) | (
+                SoracloudHostOperationV1::ReadSecretEnvelope,
+                SoracloudHostRequestPayloadV1::ReadSecretEnvelope(_)
+            ) | (
+                SoracloudHostOperationV1::ReadSecret,
+                SoracloudHostRequestPayloadV1::ReadSecret(_)
+            ) | (
+                SoracloudHostOperationV1::ReadCredential,
+                SoracloudHostRequestPayloadV1::ReadCredential(_)
+            ) | (
+                SoracloudHostOperationV1::EgressFetch,
+                SoracloudHostRequestPayloadV1::EgressFetch(_)
+            )
+        )
+    }
+
+    fn reject_soracloud_syscall(vm: &IVM, number: u32) -> Result<u64, ivm::VMError> {
+        let expected = Self::soracloud_operation_for_syscall(number)
+            .ok_or(ivm::VMError::UnknownSyscall(number))?;
+        let tlv = Self::decode_pointer_tlv(vm, vm.register(10), PointerType::SoracloudRequest)?;
+        let request: SoracloudHostRequestEnvelopeV1 =
+            decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
+        if request.schema_version != SORACLOUD_HOST_REQUEST_VERSION_V1 {
+            return Err(ivm::VMError::DecodeError);
+        }
+        if request.operation != expected
+            || !Self::soracloud_payload_matches_operation(&request.payload, expected)
+        {
+            return Err(ivm::VMError::DecodeError);
+        }
+        Err(ivm::VMError::metered_not_implemented(
+            ivm::gas::syscall_byte_gas(ivm::gas::G_SORACLOUD, tlv.payload.len(), 0),
+            number,
+        ))
     }
 
     /// Create a new host for the given authority.
@@ -4495,6 +4639,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             record.contract_alias.clone(),
         )
         .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
+        if call_context.entrypoint_permission().is_some() {
+            let state_ref = self.query_state.get().ok_or_else(|| {
+                ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied)
+            })?;
+            state_ref
+                .enforce_contract_entrypoint_permission(
+                    &caller_context.contract_subject,
+                    &call_context,
+                )
+                .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
+        }
         let callee_context = call_context
             .runtime_context()
             .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
@@ -7846,6 +8001,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
             }
+            ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
+            | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
+            | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
+            | ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
+            | ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL
+            | ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
+            | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
+                Self::reject_soracloud_syscall(vm, number)
+            }
             // SM helper syscalls are gated by crypto configuration and forwarded to DefaultHost.
             ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
@@ -10526,6 +10693,82 @@ mod pointer_abi_tests {
         assert_eq!(host.queued, vec![expected]);
     }
 
+    fn soracloud_read_config_request() -> SoracloudHostRequestEnvelopeV1 {
+        SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::ReadConfig,
+            payload: SoracloudHostRequestPayloadV1::ReadConfig(
+                iroha_data_model::soracloud::SoracloudReadConfigRequestV1 {
+                    config_name: "runtime".to_owned(),
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn soracloud_syscalls_validate_request_then_reject_until_runtime_bound() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let request = soracloud_read_config_request();
+        let request_bytes = norito_blob(&request);
+        let request_ptr = store_tlv(&mut vm, PointerType::SoracloudRequest, &request_bytes);
+        vm.set_register(10, request_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &mut vm)
+            .expect_err("Soracloud runtime host is not bound in CoreHostImpl");
+        assert!(matches!(
+            err.as_unmetered(),
+            ivm::VMError::NotImplemented { syscall }
+                if *syscall == ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
+        ));
+        assert_eq!(
+            err.metered_gas(),
+            Some(ivm::gas::syscall_byte_gas(
+                ivm::gas::G_SORACLOUD,
+                request_bytes.len(),
+                0,
+            ))
+        );
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
+    fn soracloud_syscalls_reject_wrong_pointer_type() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let request = soracloud_read_config_request();
+        let request_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&request));
+        vm.set_register(10, request_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG, &mut vm)
+            .expect_err("wrong pointer type must fail before runtime rejection");
+        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
+    fn soracloud_syscalls_reject_operation_mismatch() {
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        let request_ptr = store_tlv(
+            &mut vm,
+            PointerType::SoracloudRequest,
+            &norito_blob(&soracloud_read_config_request()),
+        );
+        vm.set_register(10, request_ptr);
+
+        let err = host
+            .syscall(ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET, &mut vm)
+            .expect_err("operation mismatch must fail before runtime rejection");
+        assert!(matches!(err, ivm::VMError::DecodeError));
+        assert!(host.queued.is_empty());
+    }
+
     fn assert_create_role_syscall_queues_instruction(authority: AccountId) {
         let mut vm = ivm::IVM::new(1_000);
         let mut host = CoreHost::new(authority.clone());
@@ -11374,6 +11617,50 @@ mod tests {
         contract_address
     }
 
+    fn grant_named_permission_to_account(
+        state: &State,
+        authority: &AccountId,
+        account_id: AccountId,
+        permission_name: &str,
+    ) {
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height must fit in u64 and be non-zero");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        if tx.world.account(&account_id).is_err() {
+            Register::account(Account::new(account_id.clone()))
+                .execute(authority, &mut tx)
+                .expect("register permission holder account");
+        }
+        if !tx
+            .world
+            .account_permissions
+            .get(&account_id)
+            .is_some_and(|permissions| {
+                permissions
+                    .iter()
+                    .any(|permission| permission.name() == permission_name)
+            })
+        {
+            Grant::account_permission(
+                Permission::new(permission_name.to_owned(), Json::new(())),
+                account_id,
+            )
+            .execute(authority, &mut tx)
+            .expect("grant named contract permission");
+        }
+        tx.apply();
+        block
+            .commit()
+            .expect("commit contract permission grant block");
+    }
+
+    fn grant_asset_ops_to_account(state: &State, authority: &AccountId, account_id: AccountId) {
+        grant_named_permission_to_account(state, authority, account_id, "AssetOps");
+    }
+
     fn sanitize_test_contract_artifact_wildcards(code: &mut [u8]) {
         let parsed = ivm::ProgramMetadata::parse(code).expect("parse compiled test contract");
         let section_start = parsed.header_len;
@@ -11508,7 +11795,9 @@ seiyaku AliasPayout {{
 }}
 "#
         );
-        install_contract(state, authority, &source, nonce)
+        let contract = install_contract(state, authority, &source, nonce);
+        grant_asset_ops_to_account(state, authority, authority.clone());
+        contract
     }
 
     fn call_contract_syscall(
@@ -14198,6 +14487,72 @@ seiyaku Callee {
     }
 
     #[test]
+    fn call_contract_syscall_enforces_callee_entrypoint_permission() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  kotoage fn value() -> int permission(AssetOps) {
+    return 42;
+  }
+}
+"#,
+            1,
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            caller_contract.subject_id(),
+            "OtherOps",
+        );
+
+        let (denied, _, _) = call_contract_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "value",
+            Json::new(()),
+        );
+        let err = denied.expect_err("protected nested entrypoint should require AssetOps");
+        assert!(matches!(err.as_unmetered(), ivm::VMError::PermissionDenied));
+
+        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+
+        let (result, vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "value",
+            Json::new(()),
+        );
+        result.expect("protected nested entrypoint should run after grant");
+        assert!(durable_state_overlay.is_empty());
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("returned NoritoBytes tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: i64 = norito::decode_from_bytes(tlv.payload).expect("decode int return");
+        assert_eq!(value, 42);
+    }
+
+    #[test]
     fn call_contract_syscall_sets_nested_authority_to_caller_contract_subject() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -14491,6 +14846,7 @@ seiyaku Callee {
 "#,
             1,
         );
+        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
 
         let view = state.view();
         let caller_context = ContractRuntimeExecutionContext {
@@ -14651,6 +15007,8 @@ seiyaku Vault {
 "#,
             1,
         );
+        grant_asset_ops_to_account(&state, &authority, authority.clone());
+        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let callee_bind_payload = Json::from_str_norito(&format!(
@@ -14799,6 +15157,7 @@ seiyaku AliasPayout {
 "#,
             0,
         );
+        grant_asset_ops_to_account(&state, &authority, authority.clone());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let bind_payload =
@@ -14974,6 +15333,7 @@ seiyaku AliasPayout {
 "#,
             0,
         );
+        grant_asset_ops_to_account(&state, &authority, authority.clone());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let bind_payload =
@@ -15344,6 +15704,7 @@ seiyaku AliasPayout {
 "#,
             0,
         );
+        grant_asset_ops_to_account(&state, &authority, authority.clone());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let bind_payload =
@@ -16909,6 +17270,7 @@ seiyaku AliasPayout {
 "#,
             0,
         );
+        grant_asset_ops_to_account(&state, &authority, authority.clone());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let bind_payload =
@@ -17097,6 +17459,9 @@ seiyaku Vault {
 "#,
             2,
         );
+        grant_asset_ops_to_account(&state, &authority, authority.clone());
+        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+        grant_asset_ops_to_account(&state, &authority, forwarder_contract.subject_id());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let vault_bind_payload = Json::from_str_norito(&format!(

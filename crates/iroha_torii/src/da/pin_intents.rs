@@ -47,7 +47,7 @@ pub struct DaPinIntentQueryRequest {
     pub pagination: Option<Pagination>,
 }
 
-/// Stateless verification response placeholder.
+/// Verification response for indexed DA pin intent location data.
 #[derive(
     Debug,
     Clone,
@@ -159,7 +159,7 @@ fn verify_against_store(store: &DaPinStore, proof: &DaPinIntentWithLocation) -> 
         .unwrap_or(false)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "app_api"))]
 mod tests {
     use iroha_data_model::{
         da::{commitment::DaCommitmentLocation, pin_intent::DaPinIntent, types::StorageTicketId},
@@ -217,6 +217,13 @@ mod tests {
         state
             .set_nexus(nexus_cfg)
             .expect("enable Nexus lane catalog for tests");
+    }
+
+    fn seed_pin_store(app: &mut crate::SharedAppState, store: DaPinStore) {
+        let app = std::sync::Arc::get_mut(app).expect("unique app state");
+        let state = std::sync::Arc::get_mut(&mut app.state).expect("unique core state");
+        drop(state.da_pin_intents());
+        *state.da_pin_intents.write() = store;
     }
 
     #[test]
@@ -314,5 +321,58 @@ mod tests {
         .await
         .expect("handler should succeed");
         assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handler_prove_and_verify_roundtrip_indexed_pin_intent() {
+        let mut app = crate::mk_app_state_for_tests();
+        enable_nexus(&mut app);
+        seed_pin_store(&mut app, store_with_records());
+
+        let JsonBody(proof) = super::handler_prove_pin_intent(
+            State(app.clone()),
+            NoritoJson(DaPinIntentQueryRequest {
+                lane_id: Some(3),
+                epoch: Some(1),
+                sequence: Some(5),
+                ..DaPinIntentQueryRequest::default()
+            }),
+        )
+        .await
+        .expect("pin intent proof lookup should succeed");
+        let proof = proof.expect("indexed pin intent should be present");
+
+        assert_eq!(proof.intent.manifest_hash, ManifestDigest::new([5; 32]));
+        assert_eq!(proof.location.block_height, 7);
+        assert_eq!(proof.location.index_in_bundle, 2);
+
+        let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(proof))
+            .await
+            .expect("pin intent verification should succeed");
+        assert!(response.valid);
+    }
+
+    #[tokio::test]
+    async fn handler_verify_rejects_tampered_indexed_pin_intent() {
+        let mut app = crate::mk_app_state_for_tests();
+        enable_nexus(&mut app);
+        seed_pin_store(&mut app, store_with_records());
+
+        let JsonBody(proof) = super::handler_prove_pin_intent(
+            State(app.clone()),
+            NoritoJson(DaPinIntentQueryRequest {
+                manifest_hash: Some(ManifestDigest::new([5; 32])),
+                ..DaPinIntentQueryRequest::default()
+            }),
+        )
+        .await
+        .expect("pin intent proof lookup should succeed");
+        let mut proof = proof.expect("indexed pin intent should be present");
+        proof.location.index_in_bundle += 1;
+
+        let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(proof))
+            .await
+            .expect("pin intent verification should succeed");
+        assert!(!response.valid);
     }
 }

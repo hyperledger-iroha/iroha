@@ -274,7 +274,7 @@ register_trigger wake {
 Хэрэглээний байгууламжууд
 - `info(string|int)`: OUTPUT-ээр зохион байгуулалттай үйл явдал/мессеж гаргадаг.
 - `hash(blob) -> Blob*`: Norito кодлогдсон хэшийг Blob гэж буцаана.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` ба `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: Inline ISI барилгачид; бүх аргументууд нь эмхэтгэх хугацааны литерал (string literals эсвэл literals-аас заагч бүтээгчид) байх ёстой. `nullifier32` болон `inputs32` нь яг 32 байт (түүхий мөр буюу `0x` hex), `amount` сөрөг биш байх ёстой.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` ба `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: Inline ISI барилгачид; бүх аргументууд нь эмхэтгэх хугацааны литерал (string literals эсвэл literals-аас заагч бүтээгчид) байх ёстой. `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: хост схемийн бүртгэлийг ашиглан JSON-г кодлодог (DefaultRegistry нь Захиалга/Худалдааны дээжээс гадна `QueryRequest` болон `QueryResponse`-ийг дэмждэг).
 - `decode_schema(Name*, Blob|bytes) -> Json*`: хост схемийн бүртгэлийг ашиглан Norito байт кодыг тайлдаг.

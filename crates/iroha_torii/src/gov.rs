@@ -210,7 +210,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ProposeDeployContractDto {
 #[derive(Debug, JsonSerialize)]
 pub struct ProposeDeployContractResponse {
     pub ok: bool,
-    /// Content-addressed proposal id (placeholder hex)
+    /// Deterministic 32-byte BLAKE2b proposal id, encoded as lowercase hex.
     pub proposal_id: String,
     /// Optional transaction skeleton for clients to sign and submit
     pub tx_instructions: Vec<TxInstr>,
@@ -3628,6 +3628,8 @@ mod tests {
         let expected_id =
             super::compute_proposal_id(&sample_contract_address(), &code_bytes, &abi_bytes);
         assert_eq!(body.proposal_id, hex::encode(expected_id));
+        assert_eq!(body.proposal_id.len(), 64);
+        assert!(body.proposal_id.chars().all(|ch| ch.is_ascii_hexdigit()));
 
         // Payload decodes to sanitized ProposeDeployContract
         let tx = &body.tx_instructions[0];

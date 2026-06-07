@@ -14,16 +14,25 @@ host environment.
 
 Options:
   --only-network    Run only the integration tests (skip workspace fast tests).
+  --wsl-safe        Conservative local mode for WSL and memory-constrained VMs:
+                    CARGO_BUILD_JOBS=2, --test-threads=1, serialized networks.
   --fast            Run cargo via scripts/cargo_fast.sh when available.
   --fast-zero-debug When used with --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0.
   --fast-no-incremental
                     When used with --fast, set CARGO_INCREMENTAL=0.
+  --cargo-jobs N    Set CARGO_BUILD_JOBS for build and test compile phases.
+  --test-threads N  Pass --test-threads=N to the fast and integration suites.
+  --network-parallelism N
+                    Set IROHA_TEST_NETWORK_PARALLELISM for integration tests.
+  --serialize-networks
+                    Set IROHA_TEST_SERIALIZE_NETWORKS=1 for one-at-a-time networks.
   --nocapture       Forward --nocapture to the integration tests for verbose logs.
   --target-dir DIR  Set CARGO_TARGET_DIR to avoid build directory lock timeouts.
   -h, --help        Show this message.
 
 Examples:
   scripts/run_full_tests.sh
+  scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-wsl-tests
   scripts/run_full_tests.sh --only-network --nocapture
   scripts/run_full_tests.sh --fast --fast-zero-debug --only-network
 EOF
@@ -35,11 +44,19 @@ target_dir=""
 use_cargo_fast=false
 fast_zero_debug=false
 fast_no_incremental=false
+wsl_safe=false
+cargo_jobs=""
+test_threads=""
+network_parallelism=""
+serialize_networks=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --only-network)
             run_fast=0
+            ;;
+        --wsl-safe)
+            wsl_safe=true
             ;;
         --fast)
             use_cargo_fast=true
@@ -49,6 +66,36 @@ while [[ $# -gt 0 ]]; do
             ;;
         --fast-no-incremental)
             fast_no_incremental=true
+            ;;
+        --cargo-jobs)
+            if [[ $# -lt 2 ]]; then
+                echo "Missing argument for --cargo-jobs" >&2
+                usage >&2
+                exit 1
+            fi
+            cargo_jobs="$2"
+            shift
+            ;;
+        --test-threads)
+            if [[ $# -lt 2 ]]; then
+                echo "Missing argument for --test-threads" >&2
+                usage >&2
+                exit 1
+            fi
+            test_threads="$2"
+            shift
+            ;;
+        --network-parallelism)
+            if [[ $# -lt 2 ]]; then
+                echo "Missing argument for --network-parallelism" >&2
+                usage >&2
+                exit 1
+            fi
+            network_parallelism="$2"
+            shift
+            ;;
+        --serialize-networks)
+            serialize_networks=true
             ;;
         --nocapture)
             integration_args+=("--nocapture")
@@ -79,6 +126,44 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+
+require_positive_int() {
+    local option="$1"
+    local value="$2"
+    if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "${option} must be a positive integer, got '${value}'" >&2
+        exit 2
+    fi
+}
+
+has_test_threads_arg() {
+    local arg
+    for arg in "$@"; do
+        case "${arg}" in
+            --test-threads | --test-threads=*)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+if [[ "${wsl_safe}" == true ]]; then
+    : "${cargo_jobs:=2}"
+    : "${test_threads:=1}"
+    : "${network_parallelism:=4}"
+    serialize_networks=true
+fi
+
+if [[ -n "${cargo_jobs}" ]]; then
+    require_positive_int "--cargo-jobs" "${cargo_jobs}"
+fi
+if [[ -n "${test_threads}" ]]; then
+    require_positive_int "--test-threads" "${test_threads}"
+fi
+if [[ -n "${network_parallelism}" ]]; then
+    require_positive_int "--network-parallelism" "${network_parallelism}"
+fi
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)
 cd "$repo_root"
@@ -154,6 +239,16 @@ export_if_unset() {
     fi
 }
 
+if [[ -n "${cargo_jobs}" ]]; then
+    export CARGO_BUILD_JOBS="${cargo_jobs}"
+fi
+if [[ "${serialize_networks}" == true ]]; then
+    export IROHA_TEST_SERIALIZE_NETWORKS=1
+fi
+if [[ -n "${network_parallelism}" ]]; then
+    export IROHA_TEST_NETWORK_PARALLELISM="${network_parallelism}"
+fi
+
 if [[ -n "${target_dir}" ]]; then
     export CARGO_TARGET_DIR="$(resolve_dir "${target_dir}")"
 fi
@@ -161,6 +256,18 @@ fi
 target_root="$(resolve_dir "${CARGO_TARGET_DIR:-target}")"
 export CARGO_TARGET_DIR="${target_root}"
 echo "==> using CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
+    echo "==> CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+fi
+if [[ -n "${test_threads}" ]]; then
+    echo "==> libtest --test-threads=${test_threads}"
+fi
+if [[ -n "${IROHA_TEST_NETWORK_PARALLELISM:-}" ]]; then
+    echo "==> IROHA_TEST_NETWORK_PARALLELISM=${IROHA_TEST_NETWORK_PARALLELISM}"
+fi
+if [[ -n "${IROHA_TEST_SERIALIZE_NETWORKS:-}" ]]; then
+    echo "==> IROHA_TEST_SERIALIZE_NETWORKS=${IROHA_TEST_SERIALIZE_NETWORKS}"
+fi
 
 echo "==> cargo build --workspace"
 "${cargo_runner[@]}" -- build --workspace
@@ -184,15 +291,25 @@ fi
 echo "==> integration tests configured to reuse built binaries"
 
 if (( run_fast )); then
-    echo "==> cargo test --workspace --exclude integration_tests"
-    "${cargo_runner[@]}" -- test --workspace --exclude integration_tests
+    if [[ -n "${test_threads}" ]]; then
+        echo "==> cargo test --workspace --exclude integration_tests -- --test-threads=${test_threads}"
+        "${cargo_runner[@]}" -- test --workspace --exclude integration_tests -- --test-threads="${test_threads}"
+    else
+        echo "==> cargo test --workspace --exclude integration_tests"
+        "${cargo_runner[@]}" -- test --workspace --exclude integration_tests
+    fi
 else
     echo "==> skipping fast test suite"
 fi
 
-echo "==> cargo test -p integration_tests ${integration_args[*]}"
-if ((${#integration_args[@]} > 0)); then
-    "${cargo_runner[@]}" -- test -p integration_tests -- "${integration_args[@]}"
+integration_test_args=("${integration_args[@]}")
+if [[ -n "${test_threads}" ]] && ! has_test_threads_arg "${integration_test_args[@]}"; then
+    integration_test_args+=("--test-threads=${test_threads}")
+fi
+
+echo "==> cargo test -p integration_tests ${integration_test_args[*]}"
+if ((${#integration_test_args[@]} > 0)); then
+    "${cargo_runner[@]}" -- test -p integration_tests -- "${integration_test_args[@]}"
 else
     "${cargo_runner[@]}" -- test -p integration_tests
 fi

@@ -74,7 +74,7 @@ fn split_sm2_payload(payload: &[u8]) -> Result<(String, &[u8]), ParseError> {
     }
     let len_bytes: [u8; SM2_DISTID_LEN_BYTES] = payload[..SM2_DISTID_LEN_BYTES]
         .try_into()
-        .expect("slice length checked");
+        .map_err(|_| ParseError("SM2 payload missing distid length prefix".into()))?;
     let distid_len = u16::from_be_bytes(len_bytes) as usize;
     let expected = SM2_DISTID_LEN_BYTES
         .checked_add(distid_len)
@@ -133,8 +133,9 @@ fn encode_pem(label: &str, der: &[u8]) -> String {
     pem.push_str("-----BEGIN ");
     pem.push_str(label);
     pem.push_str("-----\n");
-    for chunk in encoded.as_bytes().chunks(PEM_WRAP) {
-        pem.push_str(std::str::from_utf8(chunk).expect("base64 encoding is valid utf-8"));
+    for start in (0..encoded.len()).step_by(PEM_WRAP) {
+        let end = start.saturating_add(PEM_WRAP).min(encoded.len());
+        pem.push_str(&encoded[start..end]);
         pem.push('\n');
     }
     pem.push_str("-----END ");
@@ -321,14 +322,15 @@ impl Sm2PublicKey {
 
     /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
     /// embedding the distinguishing identifier alongside the SEC1 payload.
-    ///
-    /// # Panics
-    /// Panics if the public key cannot be encoded into SEC1 form, which indicates inconsistent key material.
     #[cfg(not(feature = "ffi_import"))]
     #[must_use]
     pub fn to_prefixed_string(&self) -> String {
-        self.try_to_prefixed_string()
-            .expect("SM2 key generated internally must encode to a prefixed multihash")
+        self.try_to_prefixed_string().unwrap_or_else(|_| {
+            format!(
+                "invalid-sm2-public-key:{}",
+                hex::encode(self.to_sec1_bytes(false))
+            )
+        })
     }
 
     /// Verify a message against the provided signature.
@@ -419,8 +421,10 @@ impl Sm2PrivateKey {
     ///
     /// # Errors
     /// Returns [`ParseError`] if `secret` is not a valid SM2 scalar.
-    pub fn new(distid: impl Into<String>, secret: [u8; 32]) -> Result<Self, ParseError> {
-        Self::from_bytes(distid, &secret)
+    pub fn new(distid: impl Into<String>, mut secret: [u8; 32]) -> Result<Self, ParseError> {
+        let key = Self::from_bytes(distid, &secret);
+        secret.zeroize();
+        key
     }
 
     /// Parse an SM2 private key from a byte slice.
@@ -433,12 +437,13 @@ impl Sm2PrivateKey {
         }
         let distid = distid.into();
         validate_distid(&distid)?;
-        let mut buf = [0u8; 32];
+        let mut buf = Zeroizing::new([0u8; 32]);
         buf.copy_from_slice(secret);
-        SecretKey::from_slice(&buf).map_err(|_| ParseError("invalid SM2 private key".into()))?;
+        SecretKey::from_slice(buf.as_ref())
+            .map_err(|_| ParseError("invalid SM2 private key".into()))?;
         Ok(Self {
             distid,
-            secret: Secret::new(Zeroizing::new(buf)),
+            secret: Secret::new(buf),
         })
     }
 
@@ -513,10 +518,12 @@ impl Sm2PrivateKey {
             let mut hasher = Sha512::new();
             hasher.update(seed);
             hasher.update(counter.to_be_bytes());
-            let digest = hasher.finalize();
-            let mut candidate = [0u8; 32];
+            let mut digest = hasher.finalize();
+            let mut candidate = Zeroizing::new([0u8; 32]);
             candidate.copy_from_slice(&digest[..32]);
-            if let Ok(key) = Self::new(distid.clone(), candidate) {
+            let key = Self::from_bytes(distid.clone(), candidate.as_ref());
+            digest.zeroize();
+            if let Ok(key) = key {
                 return Ok(key);
             }
             counter = counter
@@ -612,10 +619,11 @@ impl Sm2PrivateKey {
     }
 
     pub(crate) fn from_secret_key(distid: String, secret: &SecretKey) -> Result<Self, ParseError> {
-        let bytes = secret.to_bytes();
-        let mut buf = [0u8; 32];
+        let mut bytes = secret.to_bytes();
+        let mut buf = Zeroizing::new([0u8; 32]);
         buf.copy_from_slice(bytes.as_ref());
-        Self::new(distid, buf)
+        bytes.zeroize();
+        Self::from_bytes(distid, buf.as_ref())
     }
 }
 
@@ -813,9 +821,12 @@ impl Sm2Signature {
         self.as_bytes()
     }
 
-    /// Export the signature as a DER-encoded `SEQUENCE` of two INTEGERs.
-    #[must_use]
-    pub fn as_der(&self) -> Vec<u8> {
+    /// Fallibly export the signature as a DER-encoded `SEQUENCE` of two INTEGERs.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] if the internally bounded SM2 integer lengths ever
+    /// exceed DER short-form length encoding.
+    pub fn try_as_der(&self) -> Result<Vec<u8>, ParseError> {
         fn encode_integer(component: &[u8; 32]) -> Vec<u8> {
             let mut bytes = component.to_vec();
             while bytes.len() > 1 && bytes[0] == 0 && bytes[1] & 0x80 == 0 {
@@ -832,19 +843,36 @@ impl Sm2Signature {
         let len = 2 + r.len() + 2 + s.len();
         let mut der = Vec::with_capacity(2 + len);
         der.push(0x30);
-        let len_u8 = u8::try_from(len).expect("SM2 DER length fits in u8");
-        der.push(len_u8);
+        push_der_short_len(&mut der, len, "sequence")?;
         der.push(0x02);
-        let r_len = u8::try_from(r.len()).expect("SM2 r length fits in u8");
-        der.push(r_len);
+        push_der_short_len(&mut der, r.len(), "r")?;
         der.extend_from_slice(&r);
         der.push(0x02);
-        let s_len = u8::try_from(s.len()).expect("SM2 s length fits in u8");
-        der.push(s_len);
+        push_der_short_len(&mut der, s.len(), "s")?;
         der.extend_from_slice(&s);
-        der
+        Ok(der)
     }
 
+    /// Export the signature as a DER-encoded `SEQUENCE` of two INTEGERs.
+    ///
+    /// Prefer [`Self::try_as_der`] on production error-propagating paths.
+    #[must_use]
+    pub fn as_der(&self) -> Vec<u8> {
+        self.try_as_der().unwrap_or_default()
+    }
+}
+
+fn push_der_short_len(output: &mut Vec<u8>, len: usize, context: &str) -> Result<(), ParseError> {
+    let len = u8::try_from(len).map_err(|_| {
+        ParseError(format!(
+            "SM2 DER signature {context} length exceeds short form"
+        ))
+    })?;
+    output.push(len);
+    Ok(())
+}
+
+impl Sm2Signature {
     /// Parse a DER-encoded SM2 signature (`SEQUENCE { INTEGER r, INTEGER s }`).
     ///
     /// # Errors
@@ -1724,23 +1752,28 @@ mod sm4_ccm_compat {
         (7..=13).contains(&len)
     }
 
-    fn m_tick(tag_len: usize) -> u8 {
-        debug_assert!(is_valid_tag_len(tag_len));
-        u8::try_from(tag_len)
-            .expect("validated tag length fits in u8")
-            .saturating_sub(2)
-            / 2
+    fn m_tick(tag_len: usize) -> Result<u8, Error> {
+        if !is_valid_tag_len(tag_len) {
+            return Err(Error::Other("invalid SM4-CCM tag length".into()));
+        }
+        let tag_len = u8::try_from(tag_len)
+            .map_err(|_| Error::Other("SM4-CCM tag length exceeds u8".into()))?;
+        Ok(tag_len.saturating_sub(2) / 2)
     }
 
-    fn l_parameter(nonce_len: usize) -> u8 {
-        debug_assert!(is_valid_nonce_len(nonce_len));
-        15u8.saturating_sub(u8::try_from(nonce_len).expect("validated nonce length fits in u8"))
+    fn l_parameter(nonce_len: usize) -> Result<u8, Error> {
+        if !is_valid_nonce_len(nonce_len) {
+            return Err(Error::Other("invalid SM4-CCM nonce length".into()));
+        }
+        let nonce_len = u8::try_from(nonce_len)
+            .map_err(|_| Error::Other("SM4-CCM nonce length exceeds u8".into()))?;
+        Ok(15u8.saturating_sub(nonce_len))
     }
 
-    fn max_payload(nonce_len: usize) -> usize {
-        let l = u128::from(l_parameter(nonce_len));
+    fn max_payload(nonce_len: usize) -> Result<usize, Error> {
+        let l = u128::from(l_parameter(nonce_len)?);
         let max = (1u128 << (8 * l)) - 1;
-        usize::try_from(max).unwrap_or(usize::MAX)
+        Ok(usize::try_from(max).unwrap_or(usize::MAX))
     }
 
     struct CbcMac<'a> {
@@ -1805,10 +1838,11 @@ mod sm4_ccm_compat {
         diff == 0
     }
 
-    fn fill_aad_header(len: usize) -> (usize, [u8; BLOCK_SIZE]) {
+    fn fill_aad_header(len: usize) -> Result<(usize, [u8; BLOCK_SIZE]), Error> {
         let mut header = [0u8; BLOCK_SIZE];
         let used = if len < 0xFF00 {
-            let value = u16::try_from(len).expect("length below 0xFF00 fits in u16");
+            let value = u16::try_from(len)
+                .map_err(|_| Error::Other("SM4-CCM AAD length exceeds u16".into()))?;
             header[..2].copy_from_slice(&value.to_be_bytes());
             2
         } else if let Ok(value) = u32::try_from(len) {
@@ -1819,20 +1853,20 @@ mod sm4_ccm_compat {
         } else {
             header[0] = 0xFF;
             header[1] = 0xFF;
-            let value = u64::try_from(len).expect("length fits in u64");
+            let value = u64::try_from(len)
+                .map_err(|_| Error::Other("SM4-CCM AAD length exceeds u64".into()))?;
             header[2..10].copy_from_slice(&value.to_be_bytes());
             10
         };
-        (used, header)
+        Ok((used, header))
     }
 
     fn gen_ctr_block<const NONCE_LEN: usize>(
         block: &mut [u8; BLOCK_SIZE],
         nonce: &[u8],
         counter: usize,
-    ) {
-        debug_assert!(is_valid_nonce_len(NONCE_LEN));
-        let l = l_parameter(NONCE_LEN);
+    ) -> Result<(), Error> {
+        let l = l_parameter(NONCE_LEN)?;
         block[0] = l - 1;
         let n = nonce.len();
         block[1..=n].copy_from_slice(nonce);
@@ -1840,6 +1874,7 @@ mod sm4_ccm_compat {
         let ctr_bytes = counter.to_be_bytes();
         let start = ctr_bytes.len() - remaining;
         block[1 + n..].copy_from_slice(&ctr_bytes[start..]);
+        Ok(())
     }
 
     fn calc_mac<const TAG_LEN: usize, const NONCE_LEN: usize>(
@@ -1851,27 +1886,29 @@ mod sm4_ccm_compat {
         debug_assert!(is_valid_tag_len(TAG_LEN));
         debug_assert!(is_valid_nonce_len(NONCE_LEN));
 
-        if buffer.len() > max_payload(NONCE_LEN) {
+        if buffer.len() > max_payload(NONCE_LEN)? {
             return Err(Error::Other(
                 "SM4-CCM payload length exceeds supported range".into(),
             ));
         }
 
         let mut b0 = [0u8; BLOCK_SIZE];
-        let l = l_parameter(NONCE_LEN);
-        let flags = 64 * u8::from(!aad.is_empty()) + 8 * m_tick(TAG_LEN) + (l - 1);
+        let l = l_parameter(NONCE_LEN)?;
+        let flags = 64 * u8::from(!aad.is_empty()) + 8 * m_tick(TAG_LEN)? + (l - 1);
         b0[0] = flags;
 
         let n = nonce.len();
         b0[1..=n].copy_from_slice(nonce);
         let cb = BLOCK_SIZE - 1 - n;
         if cb > 4 {
-            let bytes = u64::try_from(buffer.len()).expect("payload length fits in u64");
+            let bytes = u64::try_from(buffer.len())
+                .map_err(|_| Error::Other("SM4-CCM payload length exceeds u64".into()))?;
             let bytes = bytes.to_be_bytes();
             let start = bytes.len() - cb;
             b0[1 + n..].copy_from_slice(&bytes[start..]);
         } else {
-            let bytes = u32::try_from(buffer.len()).expect("payload length fits in u32");
+            let bytes = u32::try_from(buffer.len())
+                .map_err(|_| Error::Other("SM4-CCM payload length exceeds u32".into()))?;
             let bytes = bytes.to_be_bytes();
             let start = bytes.len() - cb;
             b0[1 + n..].copy_from_slice(&bytes[start..]);
@@ -1881,7 +1918,7 @@ mod sm4_ccm_compat {
         mac.block_update(&b0);
 
         if !aad.is_empty() {
-            let (prefix_len, mut header) = fill_aad_header(aad.len());
+            let (prefix_len, mut header) = fill_aad_header(aad.len())?;
             let head_copy = core::cmp::min(aad.len(), BLOCK_SIZE - prefix_len);
             header[prefix_len..prefix_len + head_copy].copy_from_slice(&aad[..head_copy]);
             mac.block_update(&header);
@@ -1916,7 +1953,7 @@ mod sm4_ccm_compat {
         let mut tag_block = calc_mac::<TAG_LEN, NONCE_LEN>(&cipher, nonce, aad, &buffer)?;
 
         let mut ctr = [0u8; BLOCK_SIZE];
-        gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, 0);
+        gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, 0)?;
         encrypt_block_raw(&cipher, &mut ctr);
         xor_full(&mut tag_block, &ctr);
 
@@ -1924,7 +1961,7 @@ mod sm4_ccm_compat {
         {
             let mut chunks = buffer.chunks_exact_mut(BLOCK_SIZE);
             for chunk in &mut chunks {
-                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter);
+                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);
                 xor_partial(chunk, &ctr);
                 counter += 1;
@@ -1932,7 +1969,7 @@ mod sm4_ccm_compat {
 
             let rem = chunks.into_remainder();
             if !rem.is_empty() {
-                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter);
+                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);
                 xor_partial(rem, &ctr[..rem.len()]);
             }
@@ -1969,7 +2006,7 @@ mod sm4_ccm_compat {
         let mut buffer = ciphertext.to_vec();
 
         let mut ctr = [0u8; BLOCK_SIZE];
-        gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, 0);
+        gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, 0)?;
         encrypt_block_raw(&cipher, &mut ctr);
         let s0 = ctr;
 
@@ -1977,7 +2014,7 @@ mod sm4_ccm_compat {
         {
             let mut chunks = buffer.chunks_exact_mut(BLOCK_SIZE);
             for chunk in &mut chunks {
-                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter);
+                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);
                 xor_partial(chunk, &ctr);
                 counter += 1;
@@ -1985,7 +2022,7 @@ mod sm4_ccm_compat {
 
             let rem = chunks.into_remainder();
             if !rem.is_empty() {
-                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter);
+                gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
                 encrypt_block_raw(&cipher, &mut ctr);
                 xor_partial(rem, &ctr[..rem.len()]);
             }
@@ -2945,7 +2982,10 @@ pub mod openssl_sm {
             let mut digest_bytes = [0u8; Sm3Digest::LENGTH];
             digest_bytes.copy_from_slice(&digest);
 
-            let openssl_sig = EcdsaSig::from_der(&signature.as_der())?;
+            let der = signature
+                .try_as_der()
+                .map_err(|ParseError(message)| OpenSslSmError::InvalidPublicKey(message))?;
+            let openssl_sig = EcdsaSig::from_der(&der)?;
             Ok(openssl_sig.verify(&digest_bytes, &ec_key)?)
         }
     }
@@ -3183,6 +3223,26 @@ mod tests {
         let decoded = Sm2PublicKey::from_public_key_pem("custom-distid", &pem)
             .expect("decode SM2 public key");
         assert_eq!(decoded.to_sec1_bytes(false), public.to_sec1_bytes(false));
+    }
+
+    #[test]
+    fn sm2_pem_wrapping_uses_ascii_base64_string_slices() {
+        let der = [0x42_u8; 49];
+        let pem = encode_pem("TEST OBJECT", &der);
+        let lines = pem.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines.first().copied(), Some("-----BEGIN TEST OBJECT-----"));
+        assert_eq!(lines.last().copied(), Some("-----END TEST OBJECT-----"));
+        assert_eq!(
+            lines.get(1).map(|line| line.len()),
+            Some(64),
+            "first base64 PEM line must be wrapped at 64 characters"
+        );
+        assert_eq!(
+            lines.get(2).map(|line| line.len()),
+            Some(4),
+            "remaining base64 PEM line must preserve the tail"
+        );
     }
 
     #[test]
@@ -3474,6 +3534,27 @@ mod tests {
     }
 
     #[test]
+    fn sm2_payload_decode_rejects_short_length_prefix() {
+        let err = match decode_sm2_public_key_payload(&[0x01]) {
+            Ok(_) => panic!("short SM2 public payload prefix must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("missing distid length prefix"),
+            "unexpected error: {err}"
+        );
+
+        let err = match decode_sm2_private_key_payload(&[0x01]) {
+            Ok(_) => panic!("short SM2 private payload prefix must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("missing distid length prefix"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn sm2_distid_length_overflow_is_rejected() {
         let distid = "a".repeat(8192);
         let secret = [0x11u8; 32];
@@ -3512,6 +3593,7 @@ mod tests {
             prefixed.starts_with("sm2:"),
             "prefixed multihash must include sm2 prefix"
         );
+        assert_eq!(public.to_prefixed_string(), prefixed);
 
         let sec1 = public.to_sec1_bytes(false);
         let payload = encode_sm2_public_key_payload(public.distid(), &sec1).expect("SM2 payload");
@@ -3534,6 +3616,20 @@ mod tests {
         let parsed = Sm2Signature::from_der(&hex::decode(ANNEX_SIG_DER_HEX).expect("DER hex"))
             .expect("parse DER");
         assert_eq!(signature, parsed);
+    }
+
+    #[test]
+    fn sm2_signature_try_as_der_matches_compatibility_export() {
+        let signature = Sm2Signature::from_hex(ANNEX_SIG_HEX).expect("Annex signature");
+        let checked = signature
+            .try_as_der()
+            .expect("SM2 DER short-form lengths fit");
+
+        assert_eq!(checked, signature.as_der());
+        assert_eq!(
+            checked.get(1).copied().map(usize::from),
+            Some(checked.len() - 2)
+        );
     }
 
     #[test]

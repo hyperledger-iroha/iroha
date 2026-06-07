@@ -615,6 +615,11 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
         return entries, ["sha256sum.txt must be a regular file"]
     if not manifest_path.is_file():
         return entries, ["missing sha256sum.txt"]
+    try:
+        if manifest_path.stat().st_nlink > 1:
+            return entries, ["sha256sum.txt must not be hardlinked"]
+    except OSError:
+        return entries, ["sha256sum.txt hardlink metadata could not be read"]
 
     lines = manifest_path.read_text(encoding="utf-8").splitlines()
     for line_no, raw in enumerate(lines, start=1):
@@ -644,6 +649,20 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
     return entries, errors
 
 
+def _has_manifest_file_shape_error(errors: list[str]) -> bool:
+    return any(
+        error
+        in {
+            "missing sha256sum.txt",
+            "sha256sum.txt must not be a symlink",
+            "sha256sum.txt must be a regular file",
+            "sha256sum.txt must not be hardlinked",
+            "sha256sum.txt hardlink metadata could not be read",
+        }
+        for error in errors
+    )
+
+
 def verify_sha256_manifest(slot_path: Path) -> list[str]:
     """Check that sha256sum.txt exactly covers the slot artefacts."""
 
@@ -651,6 +670,8 @@ def verify_sha256_manifest(slot_path: Path) -> list[str]:
     if root_errors:
         return root_errors
     entries, errors = parse_sha256_manifest(slot_path)
+    if _has_manifest_file_shape_error(errors):
+        return errors
     actual_files = _slot_files(slot_path)
 
     for relative, expected_digest in sorted(entries.items()):
@@ -1448,10 +1469,10 @@ def _openssl_public_key_der(
     errors: list[str],
     label: str,
 ) -> bytes | None:
+    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):
+        return None
     openssl = _require_openssl(errors)
     if openssl is None:
-        return None
-    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):
         return None
     try:
         completed = subprocess.run(

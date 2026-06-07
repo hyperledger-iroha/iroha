@@ -16917,7 +16917,7 @@ mod offline_note_tests {
 
     #[test]
     fn kagemusha_recursive_spend_payload_size_is_hop_count_independent() {
-        const FIXED_PROOF_PAYLOAD_BUNDLE_LEN: usize = 1_751;
+        const FIXED_PROOF_PAYLOAD_BUNDLE_LEN: usize = 1_784;
         const FIXED_PROOF_PAYLOAD_MATERIAL_GROWTH_CEILING: usize = 2_048;
 
         let chain_id: ChainId = "kagemusha-recursive-spend-chain".parse().expect("chain id");

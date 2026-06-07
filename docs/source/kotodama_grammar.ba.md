@@ -274,7 +274,7 @@ register_trigger wake {
 Утилита информациялары
 - `info(string|int)`: структуралы ваҡиға/хәбәр сығарыу аша OUTPUT.
 - `hash(blob) -> Blob*`: Norito-кодланған хеш ҡайтара.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` һәм `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: ISI төҙөүселәр; бөтә аргументтар компиляция-ваҡыт литералдары булырға тейеш (таныс литералдар йәки литрҙарҙан күрһәткес конструкторҙар). `nullifier32` һәм `inputs32` теүәл 32 байт булырға тейеш (сейергә йәки `0x` hex), һәм `amount` негатив булырға тейеш.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` һәм `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: ISI төҙөүселәр; бөтә аргументтар компиляция-ваҡыт литералдары булырға тейеш (таныс литералдар йәки литрҙарҙан күрһәткес конструкторҙар). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: JSON хост схемаһын ҡулланып кодлай (Ҡыҙыҡлы реестрия `QueryRequest` һәм `QueryResponse` өҫтәүенә заказ/Сауҙа өлгөләренән тыш).
 - `decode_schema(Name*, Blob|bytes) -> Json*`: Norito байттарын хужа схемаһы реестрын ҡулланып декодтар.

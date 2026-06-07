@@ -26427,12 +26427,20 @@ fn zk_policy_put_sccp_route_manifests(
                     .cmp(&right.post_deploy_source_event_transaction_id)
             })
             .then_with(|| {
+                left.post_deploy_source_event_explorer_url
+                    .cmp(&right.post_deploy_source_event_explorer_url)
+            })
+            .then_with(|| {
                 left.post_deploy_route_canary_evidence_hash
                     .cmp(&right.post_deploy_route_canary_evidence_hash)
             })
             .then_with(|| {
                 left.post_deploy_route_canary_transaction_id
                     .cmp(&right.post_deploy_route_canary_transaction_id)
+            })
+            .then_with(|| {
+                left.post_deploy_route_canary_explorer_url
+                    .cmp(&right.post_deploy_route_canary_explorer_url)
             })
             .then_with(|| {
                 left.post_deploy_offline_full_toml_sha256
@@ -26557,6 +26565,11 @@ fn zk_policy_put_sccp_route_manifests(
         );
         zk_policy_put_option_str(
             hasher,
+            "post_deploy_source_event_explorer_url",
+            manifest.post_deploy_source_event_explorer_url.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
             "post_deploy_route_canary_evidence_hash",
             manifest.post_deploy_route_canary_evidence_hash.as_deref(),
         );
@@ -26564,6 +26577,11 @@ fn zk_policy_put_sccp_route_manifests(
             hasher,
             "post_deploy_route_canary_transaction_id",
             manifest.post_deploy_route_canary_transaction_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "post_deploy_route_canary_explorer_url",
+            manifest.post_deploy_route_canary_explorer_url.as_deref(),
         );
         zk_policy_put_option_str(
             hasher,
@@ -52863,6 +52881,8 @@ mod tests {
             tron_verifier_address: "TT4444444444444444444444444444444444".to_owned(),
             verifier_code_hash: format!("0x{}", hex::encode([0x52; 32])),
             verifier_key_hash: format!("0x{}", hex::encode([0x53; 32])),
+            proof_artifact_hash: None,
+            proving_key_hash: None,
             destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
             destination_binding_hash: format!("0x{}", hex::encode([0x54; 32])),
             taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
@@ -52878,8 +52898,10 @@ mod tests {
             post_deploy_full_toml_ready: None,
             post_deploy_source_bridge_config_hash: None,
             post_deploy_source_event_transaction_id: None,
+            post_deploy_source_event_explorer_url: None,
             post_deploy_route_canary_evidence_hash: None,
             post_deploy_route_canary_transaction_id: None,
+            post_deploy_route_canary_explorer_url: None,
             post_deploy_offline_full_toml_sha256: None,
         };
         changed.sccp_route_manifests.push(route_manifest.clone());

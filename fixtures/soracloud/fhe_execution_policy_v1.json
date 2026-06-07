@@ -9,6 +9,7 @@
     "refresh_transcript_mode": "ExactLift",
     "value": null
   },
+  "bootstrap_key_zero_refresh_proof_statement_digest": "hash:5D5E5F606162636465666768696A6B6C6D6E6F707172737475767778797A7B7D#2CC7",
   "max_ciphertext_bytes": 131072,
   "max_plaintext_bytes": 512,
   "max_input_ciphertexts": 4,

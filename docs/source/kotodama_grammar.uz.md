@@ -274,7 +274,7 @@ Xost/syscall o'rnatilgan qurilmalar (SCALL xaritasi; ivm.md da aniq raqamlar)
 Yordamchi dasturlar
 - `info(string|int)`: OUTPUT orqali tuzilgan hodisa/xabarni chiqaradi.
 - `hash(blob) -> Blob*`: Blob sifatida Norito kodlangan xeshni qaytaradi.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` va `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: inline ISI quruvchilari; barcha argumentlar kompilyatsiya vaqti literallari bo'lishi kerak (string literallari yoki literallardan ko'rsatgich konstruktorlari). `nullifier32` va `inputs32` aniq 32 bayt (xom qator yoki `0x` hex) va `amount` manfiy bo'lmasligi kerak.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` va `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: inline ISI quruvchilari; barcha argumentlar kompilyatsiya vaqti literallari bo'lishi kerak (string literallari yoki literallardan ko'rsatgich konstruktorlari). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: xost sxemasi registridan foydalangan holda JSON-ni kodlaydi (DefaultRegistry Buyurtma/savdo namunalariga qo'shimcha ravishda `QueryRequest` va `QueryResponse`-ni qo'llab-quvvatlaydi).
 - `decode_schema(Name*, Blob|bytes) -> Json*`: xost sxemasi registridan foydalanib, Norito baytlarini dekodlaydi.

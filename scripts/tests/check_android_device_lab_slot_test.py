@@ -1270,6 +1270,23 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["slot ancestor directory must not be a symlink"])
         self.assertNotIn("expected '<sha256> <path>'", rendered)
 
+    def test_parse_sha256_manifest_rejects_hardlinked_manifest_before_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            external_manifest = root / "external-sha256sum.txt"
+            write_text(external_manifest, "not-a-manifest-line\n")
+            replace_with_hardlink(self, slot / "sha256sum.txt", external_manifest)
+
+            entries, errors = device_lab.parse_sha256_manifest(slot)
+            rendered = "\n".join(errors)
+
+        self.assertEqual(entries, {})
+        self.assertEqual(errors, ["sha256sum.txt must not be hardlinked"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
+
     def test_verify_sha256_manifest_rejects_secret_slot_path_directly_before_traversal(
         self,
     ) -> None:
@@ -1332,6 +1349,23 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors = device_lab.verify_sha256_manifest(slot)
 
         self.assertEqual(errors, ["missing sha256sum.txt"])
+
+    def test_verify_sha256_manifest_rejects_hardlinked_manifest_before_discovery(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            external_manifest = root / "external-sha256sum.txt"
+            write_text(external_manifest, "not-a-manifest-line\n")
+            replace_with_hardlink(self, slot / "sha256sum.txt", external_manifest)
+
+            errors = device_lab.verify_sha256_manifest(slot)
+            rendered = "\n".join(errors)
+
+        self.assertEqual(errors, ["sha256sum.txt must not be hardlinked"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
+        self.assertNotIn("missing entry", rendered)
 
     def test_verify_sha256_manifest_rejects_symlinked_artifact_directory_before_digest_read(
         self,
@@ -3907,6 +3941,31 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(str(secret_public_key), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_trusted_signer_public_key_rejects_secret_path_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_which = device_lab.shutil.which
+        try:
+            device_lab.shutil.which = lambda _command: None
+            with tempfile.TemporaryDirectory() as temp:
+                secret_public_key = Path(temp) / "token=supersecret-public.pem"
+
+                trusted, errors = device_lab.load_trusted_signer_public_keys(
+                    [secret_public_key]
+                )
+                rendered = "\n".join(errors)
+        finally:
+            device_lab.shutil.which = original_which
+
+        self.assertEqual(trusted, {})
+        self.assertEqual(
+            errors,
+            ["trusted signer public key path must not contain secret-looking material"],
+        )
+        self.assertNotIn("openssl is required", rendered)
+        self.assertNotIn(str(secret_public_key), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
     def test_trusted_signer_public_key_rejects_symlinked_ancestor_without_path_leak(
         self,
     ) -> None:
@@ -4605,6 +4664,62 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("not valid JSON", rendered)
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
+
+    def test_signer_artifact_digests_rejects_secret_slot_path_directly_before_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "token=supersecret-slot")
+            errors: list[str] = []
+
+            digests = evidence_signer._artifact_digests(slot, errors)  # type: ignore[attr-defined]
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digests)
+        self.assertEqual(errors, ["slot path must not contain secret-looking material"])
+        self.assertNotIn("token=supersecret", rendered)
+        self.assertNotIn(str(slot), rendered)
+
+    def test_signer_artifact_digests_rejects_symlinked_slot_ancestor_before_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real_parent = root / "real-parent"
+            create_slot(real_parent / "device_lab", "slot-a")
+            linked_parent = root / "linked-parent"
+            create_dir_symlink(self, linked_parent, real_parent)
+            errors: list[str] = []
+
+            digests = evidence_signer._artifact_digests(  # type: ignore[attr-defined]
+                linked_parent / "device_lab" / "slot-a",
+                errors,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digests)
+        self.assertEqual(errors, ["slot ancestor directory must not be a symlink"])
+        self.assertNotIn("missing", rendered)
+        self.assertNotIn("digest", rendered)
+
+    def test_signer_artifact_digests_rejects_symlinked_artifact_directory_before_hash(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            external_logs = root / "external-logs"
+            write_text(external_logs / "runtime.log", "external log\n")
+            for entry in (slot / "logs").iterdir():
+                entry.unlink()
+            (slot / "logs").rmdir()
+            create_dir_symlink(self, slot / "logs", external_logs)
+            errors: list[str] = []
+
+            digests = evidence_signer._artifact_digests(slot, errors)  # type: ignore[attr-defined]
+
+        self.assertIsNone(digests)
+        self.assertEqual(errors, ["logs/ must not be a symlink"])
 
     def test_signer_helper_rejects_symlinked_slot_json_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -5608,6 +5723,34 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "private key path must not contain secret-looking material",
             rendered,
         )
+
+    def test_sign_ed25519_rejects_secret_private_key_path_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_which = device_lab.shutil.which
+        try:
+            device_lab.shutil.which = lambda _command: None
+            with tempfile.TemporaryDirectory() as temp:
+                secret_private_key = Path(temp) / "private_key=supersecret.pem"
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    secret_private_key,
+                    b"payload",
+                    errors,
+                )
+                rendered = "\n".join(errors)
+        finally:
+            device_lab.shutil.which = original_which
+
+        self.assertIsNone(signature)
+        self.assertEqual(
+            errors,
+            ["private key path must not contain secret-looking material"],
+        )
+        self.assertNotIn("openssl is required", rendered)
+        self.assertNotIn(str(secret_private_key), rendered)
+        self.assertNotIn("private_key=supersecret", rendered)
 
     def test_standard_matrix_accepts_all_kagemusha_device_families(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

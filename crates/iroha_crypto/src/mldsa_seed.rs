@@ -3,7 +3,6 @@
 pub mod mldsa65 {
     use core::{
         array,
-        convert::TryFrom,
         ptr::{addr_of, addr_of_mut},
     };
 
@@ -66,7 +65,7 @@ pub mod mldsa65 {
     }
 
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
-        let seed_material = Zeroizing::new(derive_seed_material(seed)?);
+        let seed_material = derive_seed_material(seed)?;
         keypair_from_seed_material(&seed_material)
     }
 
@@ -164,10 +163,10 @@ pub mod mldsa65 {
             .map_err(|err| Error::KeyGen(err.to_string()))
     }
 
-    fn derive_seed_material(seed: &[u8]) -> Result<[u8; SEEDBYTES], Error> {
+    fn derive_seed_material(seed: &[u8]) -> Result<Zeroizing<[u8; SEEDBYTES]>, Error> {
         let kdf = Hkdf::<Sha512>::new(Some(HKDF_SALT), seed);
-        let mut out = [0u8; SEEDBYTES];
-        kdf.expand(HKDF_INFO, &mut out)
+        let mut out = Zeroizing::new([0u8; SEEDBYTES]);
+        kdf.expand(HKDF_INFO, out.as_mut())
             .map_err(|_| Error::KeyGen(String::from("ML-DSA HKDF seed expansion failed")))?;
         Ok(out)
     }
@@ -200,11 +199,12 @@ pub mod mldsa65 {
         }
 
         let mut s2 = Polyveck::default();
+        let s2_nonce = polyveck_s2_nonce()?;
         unsafe {
             PQCLEAN_MLDSA65_CLEAN_polyveck_uniform_eta(
                 addr_of_mut!(s2),
                 rhoprime.as_ptr(),
-                u16::try_from(L).expect("L fits into u16"),
+                s2_nonce,
             );
         }
 
@@ -269,6 +269,12 @@ pub mod mldsa65 {
             .map_err(|err| Error::KeyGen(err.to_string()))?;
 
         Ok((public_key, private_key))
+    }
+
+    fn polyveck_s2_nonce() -> Result<u16, Error> {
+        u16::try_from(L).map_err(|_| {
+            Error::KeyGen(String::from("ML-DSA S2 nonce offset does not fit into u16"))
+        })
     }
 
     #[allow(unsafe_code)]
@@ -345,6 +351,14 @@ pub mod mldsa65 {
         }
 
         #[test]
+        fn seeded_keygen_s2_nonce_uses_canonical_l_offset() {
+            assert_eq!(
+                polyveck_s2_nonce().expect("derive S2 nonce offset"),
+                u16::try_from(L).expect("test constant fits u16")
+            );
+        }
+
+        #[test]
         fn public_key_from_secret_rejects_tampered_secret_components() {
             let (_, private) =
                 keypair_from_seed(b"iroha:ml-dsa-seed:tamper").expect("seeded keypair");
@@ -415,7 +429,7 @@ pub mod mldsa65 {
             let second =
                 derive_seed_material(b"iroha:ml-dsa-seed:second").expect("derive second seed");
 
-            assert_ne!(first, second);
+            assert_ne!(first.as_ref(), second.as_ref());
         }
     }
 }

@@ -2333,6 +2333,13 @@ def test_all_lanes_evidence_bundle_is_ready():
 
     assert summary["production_ready"] is True
     assert summary["blockers"] == []
+    assert summary["required_domains"] == list(module.SCCP_CORE_REMOTE_DOMAINS)
+    assert summary["supported_launch_domains"] == list(
+        module.SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS
+    )
+    assert summary["unsupported_launch_domains"] == list(
+        module.SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS
+    )
     assert [lane["domain"] for lane in summary["lanes"]] == list(
         module.SCCP_CORE_REMOTE_DOMAINS
     )
@@ -2344,6 +2351,14 @@ def test_all_lanes_evidence_bundle_is_ready():
         for value in lane["source_record_hashes"].values():
             assert value.startswith("0x")
             assert len(value) == 66
+        if lane["domain"] in module.SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS:
+            assert lane["production_ready"] is False
+            assert lane["blockers"] == [
+                module.SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
+            ]
+        else:
+            assert lane["production_ready"] is True
+            assert lane["blockers"] == []
         source_adapter_gate = lane["source_adapter_gate"]
         if lane["chain"] == "sol":
             deployment = deployments_by_domain[lane["domain"]]
@@ -5766,7 +5781,7 @@ def test_all_lanes_rejects_ton_route_canary_governed_hash_role_reuse():
     ) in blockers
 
 
-def test_all_lanes_accepts_verified_substrate_live_toml(tmp_path):
+def test_all_lanes_keeps_verified_substrate_live_toml_diagnostic_only(tmp_path):
     module = load_evidence_module()
     live_module = load_substrate_live_module()
     records = complete_bundle(module)
@@ -5873,7 +5888,10 @@ def test_all_lanes_accepts_verified_substrate_live_toml(tmp_path):
 
     assert summary["production_ready"] is True
     substrate_lane = next(lane for lane in summary["lanes"] if lane["domain"] == domain)
-    assert substrate_lane["blockers"] == []
+    assert substrate_lane["production_ready"] is False
+    assert substrate_lane["blockers"] == [
+        module.SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
+    ]
     assert substrate_lane["destination_binding"]["destination_binding_hash"] == (
         live_summary["destination_binding_hash"]
     )
@@ -5885,7 +5903,7 @@ def test_all_lanes_accepts_verified_substrate_live_toml(tmp_path):
     ] == ("0x" + runtime_code_hash.hex())
 
 
-def test_all_lanes_accepts_direct_substrate_destination_toml_with_audited_metadata(
+def test_all_lanes_keeps_direct_substrate_destination_toml_diagnostic_only(
     tmp_path,
 ):
     module = load_evidence_module()
@@ -5947,7 +5965,10 @@ def test_all_lanes_accepts_direct_substrate_destination_toml_with_audited_metada
 
     assert summary["production_ready"] is True
     substrate_lane = next(lane for lane in summary["lanes"] if lane["domain"] == domain)
-    assert substrate_lane["blockers"] == []
+    assert substrate_lane["production_ready"] is False
+    assert substrate_lane["blockers"] == [
+        module.SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER
+    ]
 
 
 def test_all_lanes_rejects_substrate_destination_without_live_runtime_metadata():

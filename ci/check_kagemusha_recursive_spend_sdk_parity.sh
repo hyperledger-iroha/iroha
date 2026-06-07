@@ -1700,6 +1700,10 @@ def check_recursive_compact_surface(texts, errors):
             "public static func verifyRecursiveCompactPaymentToken",
             "bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable",
             "Kagemusha recursive compact-token archive must not be empty.",
+            "oversizedRecordBundleArchive",
+            "oversizedPallasOpenEnvelopesArchive",
+            "Kagemusha verified fold record bundle archive must not exceed",
+            "Kagemusha Pallas open-envelope archive must not exceed",
             "try requireValidInputArchive(",
             "try requireValidRecursiveCompactTokenArchive(token)",
             "requireValidRecursiveCompactTokenArchive(compactTokenArchive)",
@@ -1736,11 +1740,17 @@ def check_recursive_compact_surface(texts, errors):
         (
             "testVerifyRejectsEmptyCompactTokenArchiveBeforeBridgeCall",
             "testVerifyRejectsMalformedCompactTokenArchiveBeforeBridgeCall",
+            "testVerifyRejectsOversizedCompactTokenArchiveBeforeBridgeCall",
             "testVerifyRejectsEmptyPayloadCompactTokenArchiveBeforeBridgeCall",
             "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testRejectsOversizedInputArchivesBeforeBridgeCall",
             "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
             "testRejectsMalformedNativeOutput",
             "testRejectsEmptyPayloadNativeOutput",
+            ".oversizedRecordBundleArchive",
+            ".oversizedPallasOpenEnvelopesArchive",
+            ".oversizedCompactTokenArchive",
+            "must not exceed",
             "testReturnsValidNativeOutput",
             "validKagemushaNoritoArchive",
             "testVerifyReturnsNativeBoolean",
@@ -2846,12 +2856,14 @@ def check_swift(texts, errors):
         prover,
         (
             "invalidInputArchive",
+            "oversizedInputArchive",
             "emptyInputPayload",
             "invalidNativeOutput",
             "emptyNativeOutputPayload",
             "try archives.forEach(requireValidInputArchive)",
             "try requireValidOutputArchive(archive)",
             "noritoDecodeFrame(archive)",
+            "Kagemusha recursive spend input archive must not exceed",
             "Kagemusha recursive spend input archive must be a valid Norito archive.",
             "Kagemusha recursive spend input archive must contain a non-empty Norito payload.",
             "Kagemusha recursive spend native bridge returned an invalid Norito archive.",
@@ -2865,10 +2877,13 @@ def check_swift(texts, errors):
         test,
         (
             "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testRejectsOversizedInputArchivesBeforeBridgeCall",
             "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
             "testRejectsMalformedNativeOutput",
             "testRejectsEmptyPayloadNativeOutput",
             "testReturnsValidNativeOutput",
+            ".oversizedInputArchive",
+            "descriptionContains: oversizedMessage",
             ".invalidInputArchive",
             ".emptyInputPayload",
             ".invalidNativeOutput",
@@ -2884,6 +2899,7 @@ def check_swift(texts, errors):
         compact_prover,
         (
             "invalidRecordBundleArchive",
+            "oversizedRecordBundleArchive",
             "emptyRecordBundlePayload",
             "oversizedCompactTokenArchive",
             "invalidCompactTokenArchive",
@@ -2891,6 +2907,7 @@ def check_swift(texts, errors):
             "try requireValidRecordBundleArchive(recordBundleArchive)",
             "try requireValidCompactTokenArchive(token)",
             "noritoDecodeFrame(archive)",
+            "Kagemusha verified fold record bundle archive must not exceed",
             "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
             "Kagemusha verified fold record bundle archive must contain a non-empty Norito payload.",
             "Kagemusha compact-token native bridge returned an invalid Norito archive.",
@@ -2904,10 +2921,13 @@ def check_swift(texts, errors):
         compact_test,
         (
             "testRejectsMalformedRecordBundleArchiveBeforeBridgeCall",
+            "testRejectsOversizedRecordBundleArchiveBeforeBridgeCall",
             "testRejectsEmptyPayloadRecordBundleArchiveBeforeBridgeCall",
             "testRejectsMalformedNativeOutput",
             "testRejectsEmptyPayloadNativeOutput",
             "testReturnsValidNativeOutput",
+            ".oversizedRecordBundleArchive",
+            "must not exceed",
             ".invalidRecordBundleArchive",
             ".emptyRecordBundlePayload",
             ".invalidCompactTokenArchive",
@@ -2923,8 +2943,10 @@ def check_swift(texts, errors):
         recursive_aggregation_prover,
         (
             "invalidRecordBundleArchive",
+            "oversizedRecordBundleArchive",
             "emptyRecordBundlePayload",
             "invalidPallasOpenEnvelopesArchive",
+            "oversizedPallasOpenEnvelopesArchive",
             "emptyPallasOpenEnvelopesPayload",
             "oversizedProofBundleArchive",
             "invalidProofBundleArchive",
@@ -2932,6 +2954,8 @@ def check_swift(texts, errors):
             "try requireValidInputArchive(",
             "try requireValidProofBundleArchive(proofBundle)",
             "noritoDecodeFrame(archive)",
+            "Kagemusha verified fold record bundle archive must not exceed",
+            "Kagemusha Pallas open-envelope archive must not exceed",
             "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
             "Kagemusha Pallas open-envelope archive must contain a non-empty Norito payload.",
             "Kagemusha recursive aggregation native bridge returned an invalid Norito archive.",
@@ -2945,10 +2969,14 @@ def check_swift(texts, errors):
         recursive_aggregation_test,
         (
             "testRejectsMalformedInputArchivesBeforeBridgeCall",
+            "testRejectsOversizedInputArchivesBeforeBridgeCall",
             "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
             "testRejectsMalformedNativeOutput",
             "testRejectsEmptyPayloadNativeOutput",
             "testReturnsValidNativeOutput",
+            ".oversizedRecordBundleArchive",
+            ".oversizedPallasOpenEnvelopesArchive",
+            "must not exceed",
             ".invalidRecordBundleArchive",
             ".emptyPallasOpenEnvelopesPayload",
             ".invalidProofBundleArchive",
@@ -3025,6 +3053,26 @@ def check_swift_sdk_script_prints_swiftc_version(errors):
     require(
         "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift" in script,
         "Kagemusha Swift SDK script must parse the Halo2 offline note prover",
+        errors,
+    )
+    require(
+        "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift" in script,
+        "Kagemusha Swift SDK script must parse the compact-token prover",
+        errors,
+    )
+    require(
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift" in script,
+        "Kagemusha Swift SDK script must parse the recursive aggregation prover",
+        errors,
+    )
+    require(
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift" in script,
+        "Kagemusha Swift SDK script must parse the compact-token prover tests",
+        errors,
+    )
+    require(
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift" in script,
+        "Kagemusha Swift SDK script must parse the recursive aggregation prover tests",
         errors,
     )
 
@@ -3117,6 +3165,7 @@ def check_java_kotlin(texts, errors):
                 "requireNativeInput",
                 "KagemushaCompactPaymentTokenProver.isValidNoritoArchive",
                 "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload",
+                "must not exceed",
                 "must be a valid Norito archive",
                 "must contain a non-empty Norito payload",
             ),
@@ -3137,6 +3186,7 @@ def check_java_kotlin(texts, errors):
                 "requireNativeInput",
                 "isValidNoritoArchive(archive)",
                 "hasNonEmptyNoritoPayload(archive)",
+                "must not exceed",
                 "must be a valid Norito archive",
                 "must contain a non-empty Norito payload",
             ),
@@ -3174,12 +3224,59 @@ def check_java_kotlin(texts, errors):
                 'ownedNativeInput(pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive")',
                 "KagemushaCompactPaymentTokenProver.isValidNoritoArchive(archive)",
                 "KagemushaCompactPaymentTokenProver.hasNonEmptyNoritoPayload(archive)",
+                "must not exceed",
                 "must be a valid Norito archive",
                 "must contain a non-empty Norito payload",
             ),
             f"{label} input Norito guard",
             errors,
         )
+
+    require_contains(
+        texts,
+        java_compact,
+        ('archiveName + " must not exceed " + NATIVE_ARCHIVE_MAX_BYTES + " bytes"',),
+        "Android Java compact-token archive max input guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_compact,
+        ('"$archiveName must not exceed $NATIVE_ARCHIVE_MAX_BYTES bytes"',),
+        "Kotlin compact-token archive max input guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        java,
+        ('archiveName + " must not exceed " + NATIVE_ARCHIVE_MAX_BYTES + " bytes"',),
+        "Android Java recursive spend archive max input guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin,
+        ('"$archiveName must not exceed $NATIVE_ARCHIVE_MAX_BYTES bytes"',),
+        "Kotlin recursive spend archive max input guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_recursive_compact,
+        (
+            '+ " must not exceed "',
+            "KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES",
+        ),
+        "Android Java recursive compact archive max input guard",
+        errors,
+    )
+    require_contains(
+        texts,
+        kotlin_recursive_compact,
+        ('"$archiveName must not exceed ${KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES} bytes"',),
+        "Kotlin recursive compact archive max input guard",
+        errors,
+    )
 
     require_contains(
         texts,
@@ -3401,6 +3498,7 @@ def check_java_kotlin(texts, errors):
             (
                 "kagemushaRecordBackedNativeProverValidatesInput",
                 "recordBundleArchive must not be empty",
+                "recordBundleArchive must not exceed",
                 "recordBundleArchive must be a valid Norito archive",
                 "recordBundleArchive must contain a non-empty Norito payload",
                 "kagemushaCompactNativeInputCopiesBeforeDispatch",
@@ -3408,11 +3506,23 @@ def check_java_kotlin(texts, errors):
                 "archive[6] =",
                 "kagemushaRecursiveAggregationNativeProverValidatesInput",
                 "pallasOpenEnvelopesArchive must not be empty",
+                "pallasOpenEnvelopesArchive must not exceed",
                 "pallasOpenEnvelopesArchive must be a valid Norito archive",
                 "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
                 "kagemushaNoritoFrame(0x4b)",
             ),
             label,
+            errors,
+        )
+        text = texts[relative]
+        require(
+            text.count("recordBundleArchive must not exceed") >= 2,
+            f"{label} must cover compact-token and recursive-aggregation record oversized inputs",
+            errors,
+        )
+        require(
+            "pallasOpenEnvelopesArchive must not exceed" in text,
+            f"{label} must cover recursive-aggregation Pallas oversized inputs",
             errors,
         )
     require_contains(
@@ -3438,12 +3548,31 @@ def check_java_kotlin(texts, errors):
             relative,
             (
                 "rejectsMalformedAndEmptyPayloadArchivesBeforeNativeDispatch",
+                "requestArchive must not exceed",
+                "bundleArchive must not exceed",
+                "previousWitnessArchive must not exceed",
                 "requestArchive must be a valid Norito archive",
                 "bundleArchive must be a valid Norito archive",
                 "previousWitnessArchive must contain a non-empty Norito payload",
                 "kagemushaNoritoFrameWithPayload",
             ),
             label,
+            errors,
+        )
+        text = texts[relative]
+        require(
+            text.count("requestArchive must not exceed") >= 3,
+            f"{label} must cover single, witness-from-init, and witness-append oversized request inputs",
+            errors,
+        )
+        require(
+            "bundleArchive must not exceed" in text,
+            f"{label} must cover oversized bundle inputs",
+            errors,
+        )
+        require(
+            "previousWitnessArchive must not exceed" in text,
+            f"{label} must cover oversized previous-witness inputs",
             errors,
         )
     require_contains(
@@ -3487,6 +3616,9 @@ def check_java_kotlin(texts, errors):
                 "proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
                 "recordBundleArchive must not be empty",
                 "pallasOpenEnvelopesArchive must not be empty",
+                "recordBundleArchive must not exceed",
+                "pallasOpenEnvelopesArchive must not exceed",
+                "compactTokenArchive must not exceed",
                 "recordBundleArchive must be a valid Norito archive",
                 "pallasOpenEnvelopesArchive must be a valid Norito archive",
                 "recordBundleArchive must contain a non-empty Norito payload",
@@ -3494,6 +3626,12 @@ def check_java_kotlin(texts, errors):
                 "kagemushaNoritoFrameWithPayload",
             ),
             label,
+            errors,
+        )
+        text = texts[relative]
+        require(
+            "compactTokenArchive must not exceed" in text,
+            f"{label} must cover oversized compact-token verifier inputs",
             errors,
         )
 
@@ -5716,6 +5854,54 @@ if mode == "--negative-control-sdk-archive-input-copy":
             "Python native output Norito guard tests",
         ),
         (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
+            "Kagemusha recursive spend input archive must not exceed",
+            "Kagemusha recursive spend input archive may exceed",
+            "Swift recursive spend input/output Norito guard",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
+            "Kagemusha verified fold record bundle archive must not exceed",
+            "Kagemusha verified fold record bundle archive may exceed",
+            "Swift compact-token input/output Norito guard",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
+            "Kagemusha Pallas open-envelope archive must not exceed",
+            "Kagemusha Pallas open-envelope archive may exceed",
+            "Swift recursive aggregation input/output Norito guard",
+        ),
+        (
+            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+            "Kagemusha Pallas open-envelope archive must not exceed",
+            "Kagemusha Pallas open-envelope archive may exceed",
+            "Swift recursive compact wrapper",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
+            "testRejectsOversizedInputArchivesBeforeBridgeCall",
+            "testAllowsOversizedInputArchivesBeforeBridgeCall",
+            "Swift recursive spend input/output Norito guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
+            "testRejectsOversizedRecordBundleArchiveBeforeBridgeCall",
+            "testAllowsOversizedRecordBundleArchiveBeforeBridgeCall",
+            "Swift compact-token input/output Norito guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
+            "testRejectsOversizedInputArchivesBeforeBridgeCall",
+            "testAllowsOversizedInputArchivesBeforeBridgeCall",
+            "Swift recursive aggregation input/output Norito guard tests",
+        ),
+        (
+            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+            "testVerifyRejectsOversizedCompactTokenArchiveBeforeBridgeCall",
+            "testVerifyAllowsOversizedCompactTokenArchiveBeforeBridgeCall",
+            "Swift recursive compact verifier tests",
+        ),
+        (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
             "return Arrays.copyOf(archive, archive.length)",
             "return archive",
@@ -5728,10 +5914,28 @@ if mode == "--negative-control-sdk-archive-input-copy":
             "Android Java compact-token archive input copy",
         ),
         (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
+            'archiveName + " must not exceed " + NATIVE_ARCHIVE_MAX_BYTES + " bytes"',
+            'archiveName + " must be a valid Norito archive"',
+            "Android Java compact-token archive max input guard",
+        ),
+        (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
             "final byte[] compactToken = ownedNativeInput(compactTokenArchive, \"compactTokenArchive\")",
             "final byte[] compactToken = compactTokenArchive",
             "Android Java recursive compact archive input copy",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
+            '+ " must not exceed "',
+            '+ " must be a valid Norito archive"',
+            "Android Java recursive compact archive max input guard",
+        ),
+        (
+            "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+            'archiveName + " must not exceed " + NATIVE_ARCHIVE_MAX_BYTES + " bytes"',
+            'archiveName + " must be a valid Norito archive"',
+            "Android Java recursive spend archive max input guard",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -5740,10 +5944,22 @@ if mode == "--negative-control-sdk-archive-input-copy":
             "Kotlin recursive spend archive input copy",
         ),
         (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+            '"$archiveName must not exceed $NATIVE_ARCHIVE_MAX_BYTES bytes"',
+            '"$archiveName must be a valid Norito archive"',
+            "Kotlin recursive spend archive max input guard",
+        ),
+        (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
             "val archive = requireNativeInput(archiveInput, archiveName)",
             "val archive = archiveInput!!",
             "Kotlin compact-token archive input copy",
+        ),
+        (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
+            '"$archiveName must not exceed $NATIVE_ARCHIVE_MAX_BYTES bytes"',
+            '"$archiveName must be a valid Norito archive"',
+            "Kotlin compact-token archive max input guard",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -5764,16 +5980,46 @@ if mode == "--negative-control-sdk-archive-input-copy":
             "Kotlin recursive compact archive input copy",
         ),
         (
+            "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
+            '"$archiveName must not exceed ${KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES} bytes"',
+            '"$archiveName must be a valid Norito archive"',
+            "Kotlin recursive compact archive max input guard",
+        ),
+        (
             "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
             "ownedArchive != archive",
             "ownedArchive == archive",
             "Android Java recursive spend archive input copy tests",
         ),
         (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
+            "compactTokenArchive must not exceed",
+            "compactTokenArchive may exceed",
+            "Android Java recursive compact prover input Norito guard tests",
+        ),
+        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
             "copiesNativeInputArchivesBeforeDispatch",
             "passesNativeInputArchivesThroughBeforeDispatch",
             "Kotlin recursive spend archive input copy tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
+            "compactTokenArchive must not exceed",
+            "compactTokenArchive may exceed",
+            "Kotlin recursive compact prover input Norito guard tests",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
+            "recordBundleArchive must not exceed",
+            "recordBundleArchive may exceed",
+            "Android Java compact-token input Norito guard tests",
+        ),
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
+            "recordBundleArchive must not exceed",
+            "recordBundleArchive may exceed",
+            "Kotlin compact-token input Norito guard tests",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",

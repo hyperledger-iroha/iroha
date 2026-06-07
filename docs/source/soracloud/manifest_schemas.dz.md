@@ -166,6 +166,8 @@ these SCR བཀྲམ་སྤེལ་གྱི་མངོན་གསལ་�
 - FHE ལག་ལེན་འཐབ་སྲིད་བྱུས།
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - ཚད་བཟུང་-གཞི་སྒྲིག་བཱའིན་ཌིང་འདི་ `(param_set, version)` གིས་མཐུན་སྒྲིག་འབད་དགོ།
   - `max_multiplication_depth` ཚད་བཟུང་གཞི་སྒྲིག་གཏིང་ཚད་ལས་བརྒལ་མི་ཆོག།
   - སྲིད་བྱུས་འཛུལ་ཞུགས་ཀྱིས་ `Proposed` ཡང་ན་ `Withdrawn` ཚད་བཟུང་གཞི་སྒྲིག་མི་ཚེ་འཁོར་རིམ་བཀག་ཆ་འབདཝ་ཨིན།

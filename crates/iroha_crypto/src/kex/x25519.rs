@@ -5,7 +5,7 @@ use rand::rngs::OsRng;
 use rand_core::TryRngCore;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use super::KeyExchangeScheme;
 use crate::{Error, KeyGenOption, SessionKey, error::ParseError, rng::rng_from_seed};
@@ -37,7 +37,7 @@ impl KeyExchangeScheme for X25519Sha256 {
 
     fn try_keypair(
         &self,
-        mut option: KeyGenOption<Self::PrivateKey>,
+        option: KeyGenOption<Self::PrivateKey>,
     ) -> Result<(Self::PublicKey, Self::PrivateKey), Error> {
         match option {
             #[cfg(feature = "rand")]
@@ -46,12 +46,11 @@ impl KeyExchangeScheme for X25519Sha256 {
                 let pk = PublicKey::from(&sk);
                 Ok((pk, sk))
             }
-            KeyGenOption::UseSeed(ref mut s) => {
-                let mut rng = rng_from_seed(s.clone());
-                s.zeroize();
-                let mut bytes = [0u8; 32];
-                rand_core::RngCore::fill_bytes(&mut rng, &mut bytes);
-                let sk = StaticSecret::from(bytes);
+            KeyGenOption::UseSeed(s) => {
+                let mut rng = rng_from_seed(s);
+                let mut bytes = Zeroizing::new([0u8; 32]);
+                rand_core::RngCore::fill_bytes(&mut rng, bytes.as_mut());
+                let sk = StaticSecret::from(*bytes);
                 let pk = PublicKey::from(&sk);
                 Ok((pk, sk))
             }
@@ -78,10 +77,10 @@ impl KeyExchangeScheme for X25519Sha256 {
         // Derive a 32-byte session key via HKDF-SHA256 with fixed salt/info to
         // avoid direct use of the raw ECDH output.
         let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret.as_bytes());
-        let mut okm = [0u8; 32];
-        hkdf.expand(HKDF_INFO, &mut okm)
+        let mut okm = Zeroizing::new(vec![0u8; 32]);
+        hkdf.expand(HKDF_INFO, okm.as_mut_slice())
             .map_err(|_| Error::Other("x25519 hkdf expansion failed".into()))?;
-        Ok(SessionKey::new(okm.to_vec()))
+        Ok(SessionKey::from_zeroizing_vec(okm))
     }
 
     fn encode_public_key(pk: &Self::PublicKey) -> Vec<u8> {
@@ -200,6 +199,20 @@ mod tests {
         let low_order = PublicKey::from([0u8; 32]);
         let err = scheme.compute_shared_secret(&sk, &low_order);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn seeded_keypair_is_deterministic() {
+        let scheme = X25519Sha256::new();
+        let (public_one, private_one) = scheme
+            .try_keypair(KeyGenOption::UseSeed(vec![0x42; 32]))
+            .expect("first seeded keypair");
+        let (public_two, private_two) = scheme
+            .try_keypair(KeyGenOption::UseSeed(vec![0x42; 32]))
+            .expect("second seeded keypair");
+
+        assert_eq!(public_one, public_two);
+        assert_eq!(private_one.to_bytes(), private_two.to_bytes());
     }
 
     #[test]

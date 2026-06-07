@@ -335,13 +335,13 @@ fn minimal_config_snapshot() {
                         },
                     },
                     client_capabilities: WithOrigin {
-                        value_hex: "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+                        value_hex: "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
                         origin: Default {
                             id: ParameterId(network.soranet_handshake.client_capabilities),
                         },
                     },
                     relay_capabilities: WithOrigin {
-                        value_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
+                        value_hex: "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
                         origin: Default {
                             id: ParameterId(network.soranet_handshake.relay_capabilities),
                         },

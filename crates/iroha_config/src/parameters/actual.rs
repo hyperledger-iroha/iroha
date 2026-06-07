@@ -8219,14 +8219,18 @@ pub struct SccpRouteManifest {
     pub taira_xor_token_address: String,
     /// TRON TairaXOR bridge contract address.
     pub taira_xor_bridge_address: String,
-    /// TRON SCCP source bridge contract address.
+    /// SCCP source bridge contract address. The field name is legacy-compatible.
     pub sccp_tron_source_bridge_address: String,
-    /// TRON destination verifier contract address.
+    /// Destination verifier contract address. The field name is legacy-compatible.
     pub tron_verifier_address: String,
     /// Hex-encoded verifier code digest.
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
     pub verifier_key_hash: String,
+    /// Optional hex-encoded browser/local prover artifact digest.
+    pub proof_artifact_hash: Option<String>,
+    /// Optional hex-encoded proving key digest.
+    pub proving_key_hash: Option<String>,
     /// Canonical destination binding key.
     pub destination_binding_key: String,
     /// Hex-encoded canonical destination binding hash.
@@ -8255,10 +8259,14 @@ pub struct SccpRouteManifest {
     pub post_deploy_source_bridge_config_hash: Option<String>,
     /// Hex-encoded source event transaction id.
     pub post_deploy_source_event_transaction_id: Option<String>,
+    /// Canonical BSC testnet explorer URL for the source event transaction.
+    pub post_deploy_source_event_explorer_url: Option<String>,
     /// Hex-encoded route canary evidence hash.
     pub post_deploy_route_canary_evidence_hash: Option<String>,
     /// Hex-encoded route canary transaction id.
     pub post_deploy_route_canary_transaction_id: Option<String>,
+    /// Canonical BSC testnet explorer URL for the route canary transaction.
+    pub post_deploy_route_canary_explorer_url: Option<String>,
     /// Hex-encoded offline full TOML SHA-256 digest.
     pub post_deploy_offline_full_toml_sha256: Option<String>,
 }

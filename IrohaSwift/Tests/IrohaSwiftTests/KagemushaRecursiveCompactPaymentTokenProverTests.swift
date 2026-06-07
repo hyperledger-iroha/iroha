@@ -69,6 +69,50 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         }
     }
 
+    func testRejectsOversizedInputArchivesBeforeBridgeCall() {
+        let validArchive = validKagemushaNoritoArchive()
+        let oversizedArchive = Data(
+            repeating: 0x7f,
+            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+        )
+        let oversizedMessage =
+            "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: oversizedArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive compact body must not run for oversized record bundles")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .oversizedRecordBundleArchive
+            )
+            XCTAssertTrue(error.localizedDescription.contains(oversizedMessage))
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: oversizedArchive,
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native recursive compact body must not run for oversized Pallas openings")
+                    return nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .oversizedPallasOpenEnvelopesArchive
+            )
+            XCTAssertTrue(error.localizedDescription.contains(oversizedMessage))
+        }
+    }
+
     func testRejectsEmptyPayloadInputArchivesBeforeBridgeCall() {
         let validArchive = validKagemushaNoritoArchive()
         let emptyPayloadArchive = emptyPayloadKagemushaNoritoArchive()
@@ -245,6 +289,33 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
             XCTAssertEqual(
                 error as? KagemushaRecursiveCompactPaymentTokenProverError,
                 .invalidCompactTokenArchive
+            )
+        }
+    }
+
+    func testVerifyRejectsOversizedCompactTokenArchiveBeforeBridgeCall() {
+        let oversizedArchive = Data(
+            repeating: 0x7f,
+            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveCompactPaymentToken(
+                    compactTokenArchive: oversizedArchive,
+                    bridgeAvailable: true
+                ) {
+                    XCTFail("native compact-token verifier body must not run for oversized compact tokens")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .oversizedCompactTokenArchive
+            )
+            XCTAssertTrue(
+                error.localizedDescription.contains(
+                    "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+                )
             )
         }
     }

@@ -33,6 +33,15 @@ impl EcdsaSecp256k1Sha256 {
         EcdsaSecp256k1Impl::sign(message, sk)
     }
 
+    /// Fallibly sign a message using the provided secp256k1 private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Signing`] if the backend rejects the SHA-256 prehash.
+    pub fn try_sign(message: &[u8], sk: &PrivateKey) -> Result<Vec<u8>, Error> {
+        EcdsaSecp256k1Impl::try_sign(message, sk)
+    }
+
     /// Sign a 32-byte prehash using a recoverable secp256k1 signature.
     ///
     /// Returns a 65-byte `r || s || v` payload where `v` is `27` or `28`, matching
@@ -211,7 +220,6 @@ mod ecdsa_secp256k1 {
     use rand_core::TryRngCore;
     use sha2::Digest as _;
     use sha3::Keccak256;
-    #[cfg(feature = "rand")]
     use zeroize::Zeroizing;
 
     use super::{PrivateKey, PublicKey};
@@ -259,13 +267,17 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
+            Self::try_sign(message, sk).unwrap_or_default()
+        }
+
+        pub fn try_sign(message: &[u8], sk: &PrivateKey) -> Result<Vec<u8>, Error> {
             let signing_key = SigningKey::from(sk);
             let digest = sha2::Sha256::digest(message);
             let signature: Signature = signing_key
                 .sign_prehash(&digest)
-                .expect("sha256 digest length is 32 bytes");
+                .map_err(|err| Error::Signing(format!("{err:?}")))?;
             let signature = signature.normalize_s().unwrap_or(signature);
-            signature.to_bytes().to_vec()
+            Ok(signature.to_bytes().to_vec())
         }
 
         pub fn sign_prehash_recoverable(
@@ -278,8 +290,12 @@ mod ecdsa_secp256k1 {
                 .map_err(|err| Error::Signing(format!("{err:?}")))?;
             if let Some(normalized) = signature.normalize_s() {
                 signature = normalized;
-                recovery_id = RecoveryId::from_byte(recovery_id.to_byte() ^ 1)
-                    .expect("flipping secp256k1 recovery parity keeps id valid");
+                recovery_id =
+                    RecoveryId::from_byte(recovery_id.to_byte() ^ 1).ok_or_else(|| {
+                        Error::Signing(
+                            "invalid secp256k1 recovery id after low-S normalization".into(),
+                        )
+                    })?;
             }
             let mut out = [0u8; 65];
             let signature_bytes = signature.to_bytes();
@@ -343,7 +359,8 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
-            PrivateKey::from_slice(payload).map_err(|err| ParseError(err.to_string()))
+            let bytes = Zeroizing::new(payload.to_vec());
+            PrivateKey::from_slice(bytes.as_ref()).map_err(|err| ParseError(err.to_string()))
         }
     }
 }
@@ -389,6 +406,17 @@ mod test {
         EcdsaSecp256k1Sha256::parse_public_key(&payload).unwrap()
     }
 
+    #[test]
+    fn parse_private_key_accepts_valid_scalar_and_signs() {
+        let payload = hex::decode(PRIVATE_KEY).unwrap();
+        let secret = EcdsaSecp256k1Sha256::parse_private_key(&payload).unwrap();
+        let (public, private) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
+        let message = b"secp256k1 parsed private key";
+        let signature = EcdsaSecp256k1Sha256::sign(message, &private);
+
+        EcdsaSecp256k1Sha256::verify(message, &signature, &public).expect("signature verifies");
+    }
+
     #[cfg(feature = "crypto-parity-tests")]
     fn public_key_uncompressed(pk: &PublicKey) -> Vec<u8> {
         const PUBLIC_UNCOMPRESSED_KEY_SIZE: usize = 65;
@@ -412,6 +440,19 @@ mod test {
 
         let err = EcdsaSecp256k1Sha256::parse_public_key(non_canonical).unwrap_err();
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn try_sign_matches_compatibility_sign_and_verifies() {
+        let secret = private_key();
+        let (public, private) = EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(secret));
+        let message = b"secp256k1 checked message signing";
+
+        let checked =
+            EcdsaSecp256k1Sha256::try_sign(message, &private).expect("checked secp256k1 signing");
+
+        assert_eq!(checked, EcdsaSecp256k1Sha256::sign(message, &private));
+        EcdsaSecp256k1Sha256::verify(message, &checked, &public).expect("signature verifies");
     }
 
     #[cfg(feature = "crypto-parity-tests")]

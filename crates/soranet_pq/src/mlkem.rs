@@ -591,10 +591,8 @@ pub struct MlKemSharedSecret {
 }
 
 impl MlKemSharedSecret {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: Zeroizing::new(bytes),
-        }
+    fn new(bytes: Zeroizing<Vec<u8>>) -> Self {
+        Self { bytes }
     }
 
     /// Access the shared secret bytes.
@@ -866,9 +864,9 @@ fn encapsulate_mlkem_from_coins(
     coins: &[u8; 32],
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
     suite.validate_public_key(public_key)?;
-    let mut shared = vec![0u8; suite.shared_secret_len()];
+    let mut shared = Zeroizing::new(vec![0u8; suite.shared_secret_len()]);
     let mut ciphertext = vec![0u8; suite.ciphertext_len()];
-    mlkem_ffi::encapsulate_derand(suite, &mut ciphertext, &mut shared, public_key, coins)?;
+    mlkem_ffi::encapsulate_derand(suite, &mut ciphertext, shared.as_mut(), public_key, coins)?;
     Ok((
         MlKemSharedSecret::new(shared),
         MlKemCiphertext::new(ciphertext),
@@ -887,8 +885,8 @@ pub fn decapsulate_mlkem(
 ) -> Result<MlKemSharedSecret, MlKemError> {
     suite.validate_secret_key(secret_key)?;
     suite.validate_ciphertext(ciphertext)?;
-    let mut shared = vec![0u8; suite.shared_secret_len()];
-    mlkem_ffi::decapsulate(suite, &mut shared, ciphertext, secret_key)?;
+    let mut shared = Zeroizing::new(vec![0u8; suite.shared_secret_len()]);
+    mlkem_ffi::decapsulate(suite, shared.as_mut(), ciphertext, secret_key)?;
     Ok(MlKemSharedSecret::new(shared))
 }
 
@@ -1215,6 +1213,14 @@ mod tests {
             }
             other => panic!("unexpected backend status error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn shared_secret_constructor_preserves_guarded_payload() {
+        let expected = vec![0xA7; MlKemSuite::MlKem768.shared_secret_len()];
+        let secret = MlKemSharedSecret::new(Zeroizing::new(expected.clone()));
+
+        assert_eq!(secret.as_bytes(), expected.as_slice());
     }
 
     fn roundtrip(suite: MlKemSuite) {

@@ -118,7 +118,7 @@ pub use sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
 use w3f_bls::SerializableToBytes;
 // Zeroize trait is only required under configurations that use it.
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 #[cfg(not(feature = "ffi_import"))]
 pub use self::signature::secp256k1::EcdsaSecp256k1Sha256;
@@ -238,7 +238,11 @@ impl KeyPair {
                 let private =
                     sm::Sm2PrivateKey::try_random(sm::Sm2PublicKey::default_distid(), &mut rng)
                         .map_err(|err| Error::KeyGen(err.to_string()))?;
-                let public_key = PublicKey::new(PublicKeyFull::Sm2(private.public_key()));
+                let public_key = PublicKey::new(PublicKeyFull::Sm2(
+                    private
+                        .try_public_key()
+                        .map_err(|err| Error::KeyGen(err.to_string()))?,
+                ));
                 let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private))));
                 KeyPair::new(public_key, private_key)
             }
@@ -272,7 +276,8 @@ impl KeyPair {
                 Ok(secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(seed)).into())
             }
             Algorithm::MlDsa => {
-                let (public, private) = mldsa_seed::mldsa65::keypair_from_seed(&seed)?;
+                let seed = Zeroizing::new(seed);
+                let (public, private) = mldsa_seed::mldsa65::keypair_from_seed(seed.as_slice())?;
                 KeyPair::new(public, private)
             }
             #[cfg(feature = "gost")]
@@ -281,7 +286,9 @@ impl KeyPair {
             | Algorithm::Gost3410_2012_256ParamSetC
             | Algorithm::Gost3410_2012_512ParamSetA
             | Algorithm::Gost3410_2012_512ParamSetB => {
-                let (public, secret) = signature::gost::generate_seeded_keypair(algorithm, &seed)?;
+                let seed = Zeroizing::new(seed);
+                let (public, secret) =
+                    signature::gost::generate_seeded_keypair(algorithm, seed.as_slice())?;
                 let public_key = PublicKey::new(PublicKeyFull::Gost {
                     algorithm,
                     key: public,
@@ -302,10 +309,15 @@ impl KeyPair {
                 .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
+                let seed = Zeroizing::new(seed);
                 let private_inner =
-                    sm::Sm2PrivateKey::from_seed(Sm2PublicKey::default_distid(), &seed)
+                    sm::Sm2PrivateKey::from_seed(Sm2PublicKey::default_distid(), seed.as_slice())
                         .map_err(|err| Error::KeyGen(err.to_string()))?;
-                let public_key = PublicKey::new(PublicKeyFull::Sm2(private_inner.public_key()));
+                let public_key = PublicKey::new(PublicKeyFull::Sm2(
+                    private_inner
+                        .try_public_key()
+                        .map_err(|err| Error::KeyGen(err.to_string()))?,
+                ));
                 let private_key =
                     PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private_inner))));
                 KeyPair::new(public_key, private_key)
@@ -1623,6 +1635,11 @@ impl PublicKeyCompact {
         let algorithm = self.try_algorithm()?;
         PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
     }
+
+    fn try_from_full(public_key: &PublicKeyFull) -> Result<Self, ParseError> {
+        let payload = public_key.try_payload()?;
+        Ok(Self::new(public_key.algorithm(), payload.as_ref()))
+    }
 }
 
 impl From<PublicKeyFull> for PublicKeyCompact {
@@ -1634,10 +1651,11 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKeyCompact {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        let compact = PublicKeyCompact::from(
-            self.validated_full()
-                .map_err(|err| norito::core::Error::Message(err.to_string()))?,
-        );
+        let full = self
+            .validated_full()
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        let compact = PublicKeyCompact::try_from_full(&full)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
             &compact.algorithm_and_payload,
             writer,
@@ -1645,14 +1663,16 @@ impl norito::core::NoritoSerialize for PublicKeyCompact {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
             &compact.algorithm_and_payload,
         )
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
             &compact.algorithm_and_payload,
         )
@@ -1807,7 +1827,10 @@ impl PublicKey {
                     .map_err(|err| Error::KeyGen(err.to_string()))?,
             ),
             #[cfg(feature = "sm")]
-            PrivateKeyInner::Sm2(key) => PublicKeyFull::Sm2(key.public_key()),
+            PrivateKeyInner::Sm2(key) => PublicKeyFull::Sm2(
+                key.try_public_key()
+                    .map_err(|err| Error::KeyGen(err.to_string()))?,
+            ),
         };
 
         Ok(Self::new(inner))
@@ -1850,9 +1873,9 @@ impl PublicKey {
     /// - If the given payload is not hex encoded
     /// - If the given payload is not a valid private key
     pub fn from_hex(algorithm: Algorithm, payload: impl AsRef<str>) -> Result<Self, ParseError> {
-        let payload = hex_decode(payload.as_ref())?;
+        let payload = Zeroizing::new(hex_decode(payload.as_ref())?);
 
-        Self::from_bytes(algorithm, &payload)
+        Self::from_bytes(algorithm, payload.as_slice())
     }
 
     /// Fallibly get the digital signature algorithm of the public key.
@@ -1925,7 +1948,7 @@ impl PublicKey {
     /// Format as an algorithm-prefixed multihash string (e.g., "ed25519:...").
     pub fn to_prefixed_string(&self) -> String {
         self.try_to_prefixed_string()
-            .expect("public key must encode to an algorithm-prefixed multihash string")
+            .unwrap_or_else(|_| self.malformed_compact_marker())
     }
 }
 
@@ -2060,17 +2083,20 @@ impl norito::core::NoritoSerialize for PublicKey {
         let full = self
             .validated_full()
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let compact = PublicKeyCompact::from(full);
+        let compact = PublicKeyCompact::try_from_full(&full)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         norito::core::NoritoSerialize::serialize(&compact, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         norito::core::NoritoSerialize::encoded_len_hint(&compact)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        let full = self.validated_full().ok()?;
+        let compact = PublicKeyCompact::try_from_full(&full).ok()?;
         norito::core::NoritoSerialize::encoded_len_exact(&compact)
     }
 }
@@ -2148,9 +2174,11 @@ impl MlDsaSecretKey {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         use pqcrypto_traits::sign::SecretKey as _;
-        let inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
+        let mut inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
-        Ok(Self::new(&inner))
+        let secret = Self::new(&inner);
+        zeroize_mldsa_secret_key(&mut inner);
+        Ok(secret)
     }
 
     fn as_secret(&self) -> &pqcrypto_mldsa::mldsa65::SecretKey {
@@ -2194,18 +2222,22 @@ impl Eq for MlDsaSecretKey {}
 impl ZeroizeOnDrop for MlDsaSecretKey {}
 
 #[allow(unsafe_code)]
+fn zeroize_mldsa_secret_key(secret: &mut pqcrypto_mldsa::mldsa65::SecretKey) {
+    use core::{mem, ptr};
+
+    let byte_ptr = ptr::addr_of_mut!(*secret).cast::<u8>();
+    unsafe {
+        ptr::write_bytes(
+            byte_ptr,
+            0,
+            mem::size_of::<pqcrypto_mldsa::mldsa65::SecretKey>(),
+        );
+    }
+}
+
 impl Drop for MlDsaSecretKeyInner {
     fn drop(&mut self) {
-        use core::{mem, ptr};
-
-        let byte_ptr = ptr::addr_of_mut!(self.secret).cast::<u8>();
-        unsafe {
-            ptr::write_bytes(
-                byte_ptr,
-                0,
-                mem::size_of::<pqcrypto_mldsa::mldsa65::SecretKey>(),
-            );
-        }
+        zeroize_mldsa_secret_key(&mut self.secret);
     }
 }
 
@@ -2277,6 +2309,14 @@ impl PartialEq for PrivateKey {
 
 impl Eq for PrivateKey {}
 
+fn zeroizing_secret_bytes_to_vec<T>(bytes: T) -> Vec<u8>
+where
+    T: AsRef<[u8]> + Zeroize,
+{
+    let bytes = Zeroizing::new(bytes);
+    bytes.as_ref().to_vec()
+}
+
 impl PrivateKey {
     /// Creates a new public key from raw bytes received from elsewhere
     ///
@@ -2328,9 +2368,9 @@ impl PrivateKey {
     /// - If the given payload is not hex encoded
     /// - If the given payload is not a valid private key
     pub fn from_hex(algorithm: Algorithm, payload: impl AsRef<str>) -> Result<Self, ParseError> {
-        let payload = hex_decode(payload.as_ref())?;
+        let payload = Zeroizing::new(hex_decode(payload.as_ref())?);
 
-        Self::from_bytes(algorithm, &payload)
+        Self::from_bytes(algorithm, payload.as_slice())
     }
 
     /// Get the digital signature algorithm of the private key
@@ -2351,29 +2391,38 @@ impl PrivateKey {
         }
     }
 
-    /// Key payload
-    fn payload(&self) -> Vec<u8> {
+    /// Fallibly extract the private-key payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if an algorithm-specific private-key envelope
+    /// cannot be encoded.
+    // SM2 payload encoding is fallible under `feature = "sm"`; keep one
+    // feature-independent signature for callers that canonicalize private keys.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn try_payload(&self) -> Result<Vec<u8>, ParseError> {
         use crate::secrecy::ExposeSecret;
-        match self.0.expose_secret() {
-            PrivateKeyInner::Ed25519(key) => key.to_bytes().to_vec(),
-            PrivateKeyInner::Secp256k1(key) => key.to_bytes().to_vec(),
+        let payload = match self.0.expose_secret() {
+            PrivateKeyInner::Ed25519(key) => zeroizing_secret_bytes_to_vec(key.to_bytes()),
+            PrivateKeyInner::Secp256k1(key) => zeroizing_secret_bytes_to_vec(key.to_bytes()),
             PrivateKeyInner::MlDsa(key) => key.to_vec(),
             #[cfg(feature = "gost")]
             PrivateKeyInner::Gost { secret, .. } => secret.as_bytes().to_vec(),
             #[cfg(feature = "sm")]
             PrivateKeyInner::Sm2(key) => {
-                sm::encode_sm2_private_key_payload(key.distid(), &key.secret_bytes())
-                    .expect("SM2 private key payload must be encodable")
+                let secret = Zeroizing::new(key.secret_bytes());
+                sm::encode_sm2_private_key_payload(key.distid(), secret.as_slice())?
             }
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-            PrivateKeyInner::BlsNormal(key) => key.to_bytes().clone(),
+            PrivateKeyInner::BlsNormal(key) => key.to_zeroizing_bytes().to_vec(),
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-            PrivateKeyInner::BlsSmall(key) => key.to_bytes().clone(),
+            PrivateKeyInner::BlsSmall(key) => key.to_zeroizing_bytes().to_vec(),
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PrivateKeyInner::BlsNormal(key) => key.to_bytes().to_vec(),
+            PrivateKeyInner::BlsNormal(key) => key.to_zeroizing_bytes().to_vec(),
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PrivateKeyInner::BlsSmall(key) => key.to_bytes().to_vec(),
-        }
+            PrivateKeyInner::BlsSmall(key) => key.to_zeroizing_bytes().to_vec(),
+        };
+        Ok(payload)
     }
 
     /// Extracts the raw bytes from the private key, copying the payload.
@@ -2381,7 +2430,18 @@ impl PrivateKey {
     /// `into_bytes()` without copying is not provided because underlying crypto
     /// libraries do not provide move functionality.
     pub fn to_bytes(&self) -> (Algorithm, Vec<u8>) {
-        (self.algorithm(), self.payload())
+        self.try_to_bytes()
+            .unwrap_or_else(|_| (self.algorithm(), Vec::new()))
+    }
+
+    /// Fallibly extract the signature algorithm and raw private-key payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if an algorithm-specific private-key envelope
+    /// cannot be encoded.
+    pub fn try_to_bytes(&self) -> Result<(Algorithm, Vec<u8>), ParseError> {
+        Ok((self.algorithm(), self.try_payload()?))
     }
 }
 
@@ -2447,7 +2507,8 @@ impl FromStr for PrivateKey {
 
     fn from_str(key: &str) -> Result<Self, Self::Err> {
         let (algorithm, payload) = multihash::decode_private_key_str(key)?;
-        PrivateKey::from_bytes(algorithm, &payload)
+        let payload = Zeroizing::new(payload);
+        PrivateKey::from_bytes(algorithm, payload.as_slice())
     }
 }
 
@@ -2541,6 +2602,10 @@ impl FromStr for ExposedPrivateKey {
 }
 
 impl ExposedPrivateKey {
+    fn malformed_private_key_marker(&self) -> String {
+        format!("invalid-private-key:{}", self.0.algorithm().as_static_str())
+    }
+
     /// Format as a canonical bare private-key multihash hex string.
     ///
     /// # Errors
@@ -2548,16 +2613,20 @@ impl ExposedPrivateKey {
     /// Returns [`ParseError`] if the private-key payload cannot be encoded as a
     /// canonical multihash string.
     pub fn try_to_multihash_string(&self) -> Result<String, ParseError> {
-        let (algorithm, payload) = self.0.to_bytes();
-        let bytes = multihash::encode_private_key(algorithm, &payload)
-            .map_err(|err| ParseError(err.to_string()))?;
+        let (algorithm, payload) = self.0.try_to_bytes()?;
+        let payload = Zeroizing::new(payload);
+        let bytes = Zeroizing::new(
+            multihash::encode_private_key(algorithm, payload.as_slice())
+                .map_err(|err| ParseError(err.to_string()))?,
+        );
 
-        multihash::multihash_to_hex_string(&bytes)
+        multihash::private_multihash_to_hex_string(bytes.as_slice())
+            .map_err(|err| ParseError(err.to_string()))
     }
 
     fn normalize(&self) -> String {
         self.try_to_multihash_string()
-            .expect("private key must encode to a canonical multihash string")
+            .unwrap_or_else(|_| self.malformed_private_key_marker())
     }
 
     #[cfg(not(feature = "ffi_import"))]
@@ -2568,8 +2637,9 @@ impl ExposedPrivateKey {
     /// Returns [`ParseError`] if the private-key payload cannot be encoded as a
     /// canonical multihash string.
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
-        let (algorithm, payload) = self.0.to_bytes();
-        multihash::encode_private_key_prefixed(algorithm, &payload)
+        let (algorithm, payload) = self.0.try_to_bytes()?;
+        let payload = Zeroizing::new(payload);
+        multihash::encode_private_key_prefixed(algorithm, payload.as_slice())
             .map_err(|err| ParseError(err.to_string()))
     }
 
@@ -2577,7 +2647,7 @@ impl ExposedPrivateKey {
     /// Format as an algorithm-prefixed multihash string (e.g., "ml-dsa:...").
     pub fn to_prefixed_string(&self) -> String {
         self.try_to_prefixed_string()
-            .expect("private key must encode to an algorithm-prefixed multihash string")
+            .unwrap_or_else(|_| self.malformed_private_key_marker())
     }
 }
 
@@ -2713,6 +2783,10 @@ impl SessionKey {
     /// Create a new [`SessionKey`] from raw key material.
     pub fn new(payload: Vec<u8>) -> Self {
         Self(ZeroizingConstVec::new(payload))
+    }
+
+    pub(crate) fn from_zeroizing_vec(mut payload: Zeroizing<Vec<u8>>) -> Self {
+        Self::new(core::mem::take(&mut *payload))
     }
 
     /// Expose the raw bytes of the session key
@@ -2866,6 +2940,7 @@ mod ffi {
 #[cfg(test)]
 mod tests {
     use norito::codec::{Decode, Encode};
+    use zeroize::Zeroizing;
 
     use super::*;
 
@@ -2901,6 +2976,78 @@ mod tests {
             .chain(sm_algorithms.iter())
             .copied()
             .collect()
+    }
+
+    #[test]
+    fn session_key_from_zeroizing_vec_preserves_payload_and_zeroizes_on_drop() {
+        __debug_clear_last_zeroized_session_key();
+
+        let expected = vec![0x7B; 32];
+        {
+            let session_key = SessionKey::from_zeroizing_vec(Zeroizing::new(expected.clone()));
+            assert_eq!(session_key.payload(), expected.as_slice());
+        }
+
+        let recorded = __debug_last_zeroized_session_key();
+        assert_eq!(recorded.len(), expected.len());
+        assert!(recorded.iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn private_key_try_to_bytes_roundtrips_classic_payloads() {
+        let cases: &[(Algorithm, &[u8])] = &[
+            (Algorithm::Ed25519, b"iroha:ed25519-private-export"),
+            (Algorithm::Secp256k1, b"iroha:secp256k1-private-export"),
+        ];
+
+        for (algorithm, seed) in cases {
+            let key_pair =
+                KeyPair::try_from_seed(seed.to_vec(), *algorithm).expect("seeded classic keypair");
+            let (exported_algorithm, payload) = key_pair
+                .private_key()
+                .try_to_bytes()
+                .expect("private key payload exports");
+            assert_eq!(exported_algorithm, *algorithm);
+
+            let parsed = PrivateKey::from_bytes(exported_algorithm, &payload)
+                .expect("exported private key payload parses");
+            assert_eq!(parsed.to_bytes(), (exported_algorithm, payload));
+
+            let message = b"top-level private-key export roundtrip";
+            let signature = Signature::new(&parsed, message);
+            signature
+                .verify(key_pair.public_key(), message)
+                .expect("reparsed private key signs for original public key");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "bls")]
+    fn private_key_try_to_bytes_roundtrips_bls_payloads() {
+        let cases: &[(Algorithm, &[u8])] = &[
+            (Algorithm::BlsNormal, b"iroha:bls-normal-private-export"),
+            (Algorithm::BlsSmall, b"iroha:bls-small-private-export"),
+        ];
+
+        for (algorithm, seed) in cases {
+            let key_pair =
+                KeyPair::try_from_seed(seed.to_vec(), *algorithm).expect("seeded BLS keypair");
+            let (exported_algorithm, payload) = key_pair
+                .private_key()
+                .try_to_bytes()
+                .expect("private key payload exports");
+            assert_eq!(exported_algorithm, *algorithm);
+
+            let parsed = PrivateKey::from_bytes(exported_algorithm, &payload)
+                .expect("exported BLS private key payload parses");
+            assert_eq!(parsed.to_bytes(), (exported_algorithm, payload));
+
+            let message = b"top-level BLS private-key export roundtrip";
+            let signature = Signature::try_new(&parsed, message).expect("BLS signature");
+            signature
+                .verify(key_pair.public_key(), message)
+                .expect("reparsed BLS private key signs for original public key");
+        }
     }
 
     #[test]
@@ -2948,6 +3095,61 @@ mod tests {
 
         signature
             .verify(key_pair.public_key(), message)
+            .expect("signature verifies");
+    }
+
+    #[cfg(feature = "sm")]
+    #[test]
+    fn try_from_seed_sm2_uses_checked_public_derivation() {
+        let key_pair = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Sm2)
+            .expect("checked SM2 seeded keypair");
+        let derived_public = PublicKey::from_private_key(key_pair.private_key())
+            .expect("checked SM2 public derivation");
+
+        assert_eq!(derived_public, key_pair.public_key().clone());
+    }
+
+    #[test]
+    fn try_from_seed_ml_dsa_is_deterministic_and_signs() {
+        let seed = b"iroha:top-level-ml-dsa-seed";
+        let first = KeyPair::try_from_seed(seed.to_vec(), Algorithm::MlDsa)
+            .expect("checked ML-DSA seeded keypair");
+        let second = KeyPair::try_from_seed(seed.to_vec(), Algorithm::MlDsa)
+            .expect("checked ML-DSA seeded keypair");
+
+        assert_eq!(first.public_key(), second.public_key());
+        assert_eq!(
+            first.private_key().to_bytes(),
+            second.private_key().to_bytes()
+        );
+
+        let message = b"top-level checked ML-DSA seeded keypair";
+        let signature = Signature::new(first.private_key(), message);
+        signature
+            .verify(first.public_key(), message)
+            .expect("signature verifies");
+    }
+
+    #[cfg(feature = "gost")]
+    #[test]
+    fn try_from_seed_gost_is_deterministic_and_signs() {
+        let seed = b"iroha:top-level-gost-seed";
+        let first = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Gost3410_2012_256ParamSetB)
+            .expect("checked GOST seeded keypair");
+        let second = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Gost3410_2012_256ParamSetB)
+            .expect("checked GOST seeded keypair");
+
+        assert_eq!(first.public_key(), second.public_key());
+        assert_eq!(
+            first.private_key().to_bytes(),
+            second.private_key().to_bytes()
+        );
+
+        let message = b"top-level checked GOST seeded keypair";
+        let signature =
+            Signature::try_new(first.private_key(), message).expect("checked GOST signature");
+        signature
+            .verify(first.public_key(), message)
             .expect("signature verifies");
     }
 
@@ -3210,6 +3412,24 @@ mod tests {
 
         drop(cloned);
         assert_eq!(key.strong_count(), 1, "dropping clone decrements count");
+    }
+
+    #[test]
+    fn ml_dsa_private_key_from_bytes_signs_after_local_scrub() {
+        use crate::mldsa_seed::mldsa65 as seeded;
+
+        let (public, private) = seeded::keypair_from_seed(b"iroha:ml-dsa:from-bytes-scrub")
+            .expect("seeded ML-DSA keypair");
+        let private_bytes = Zeroizing::new(private.to_bytes().1);
+        let parsed = PrivateKey::from_bytes(Algorithm::MlDsa, private_bytes.as_slice())
+            .expect("parse ML-DSA private key");
+
+        let message = b"iroha:ml-dsa:parsed-private-key-signs";
+        let signature = Signature::new(&parsed, message);
+
+        signature
+            .verify(&public, message)
+            .expect("parsed ML-DSA private key signs");
     }
 
     #[test]
@@ -3571,6 +3791,55 @@ mod tests {
         assert_eq!(parsed, pk);
     }
 
+    #[cfg(feature = "sm")]
+    #[test]
+    fn sm2_private_key_checked_payload_and_prefixed_roundtrip() {
+        let (_, private_key) = KeyPair::try_from_seed(vec![0x54; 32], Algorithm::Sm2)
+            .expect("checked SM2 seeded keypair")
+            .into_parts();
+        let (algorithm, payload) = private_key
+            .try_to_bytes()
+            .expect("checked SM2 private payload extraction");
+        let exposed = ExposedPrivateKey(private_key.clone());
+
+        assert_eq!(algorithm, Algorithm::Sm2);
+        assert_eq!(private_key.to_bytes(), (algorithm, payload.clone()));
+        assert_eq!(
+            PrivateKey::from_bytes(algorithm, &payload).expect("decode checked SM2 payload"),
+            private_key
+        );
+
+        let canonical = exposed
+            .try_to_multihash_string()
+            .expect("checked SM2 private multihash formatting");
+        let prefixed = exposed
+            .try_to_prefixed_string()
+            .expect("checked SM2 private prefixed formatting");
+        assert_eq!(prefixed, format!("sm2:{canonical}"));
+
+        let parsed_prefixed: ExposedPrivateKey = prefixed.parse().expect("parse prefixed key");
+        assert_eq!(parsed_prefixed, exposed);
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn exposed_private_key_compat_formatters_match_checked_outputs() {
+        let (_, private_key) = KeyPair::try_from_seed(vec![0x55; 32], Algorithm::Ed25519)
+            .expect("checked Ed25519 seeded keypair")
+            .into_parts();
+        let exposed = ExposedPrivateKey(private_key);
+        let canonical = exposed
+            .try_to_multihash_string()
+            .expect("checked private multihash formatting");
+        let prefixed = exposed
+            .try_to_prefixed_string()
+            .expect("checked private prefixed formatting");
+
+        assert_eq!(exposed.to_string(), canonical);
+        assert_eq!(exposed.to_prefixed_string(), prefixed);
+        assert!(format!("{exposed:?}").contains(&canonical));
+    }
+
     #[test]
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_roundtrip_via_canonical_decode() {
@@ -3661,6 +3930,22 @@ mod tests {
             algorithm_and_payload: ConstVec::new(Vec::new()),
         };
         assert!(PublicKeyFull::try_from(&missing_tag).is_err());
+    }
+
+    #[test]
+    fn public_key_compact_try_from_full_preserves_checked_payload() {
+        let public_key = KeyPair::try_from_seed(vec![0x56; 32], Algorithm::Ed25519)
+            .expect("checked Ed25519 seeded keypair")
+            .public_key()
+            .clone();
+        let (algorithm, payload) = public_key
+            .try_to_bytes()
+            .expect("generated public key must be well-formed");
+        let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
+        let compact = PublicKeyCompact::try_from_full(&full).expect("checked compact conversion");
+
+        assert_eq!(compact.try_algorithm().expect("algorithm tag"), algorithm);
+        assert_eq!(compact.try_payload().expect("payload"), payload);
     }
 
     #[test]
@@ -3854,6 +4139,10 @@ mod tests {
         let payload_display = malformed_payload.to_string();
         assert_eq!(payload_display, "invalid-public-key:00");
         assert!(format!("{malformed_payload:?}").contains("invalid-public-key:00"));
+        assert_eq!(
+            malformed_payload.to_prefixed_string(),
+            "invalid-public-key:00"
+        );
 
         let json = norito::json::to_json(&missing_tag).expect("serialize malformed key marker");
         assert_eq!(json, r#""invalid-public-key:""#);

@@ -8,6 +8,7 @@ use std::{
 };
 
 use derive_more::Display;
+use zeroize::Zeroizing;
 
 use crate::{Algorithm, ParseError, hex_decode, varint};
 
@@ -84,11 +85,12 @@ pub fn encode_private_key_prefixed(
     algorithm: Algorithm,
     payload: &[u8],
 ) -> Result<String, MultihashConvertError> {
-    let mh = encode_private_key(algorithm, payload)?;
+    let mh = Zeroizing::new(encode_private_key(algorithm, payload)?);
     Ok(format!(
         "{}:{}",
         algorithm.as_static_str(),
-        multihash_to_hex_string(&mh).map_err(|err| MultihashConvertError::new(err.to_string()))?
+        private_multihash_to_hex_string(mh.as_slice())
+            .map_err(|err| MultihashConvertError::new(err.to_string()))?
     ))
 }
 
@@ -126,8 +128,8 @@ pub fn decode_private_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseErro
         let algorithm = alg_str
             .parse::<Algorithm>()
             .map_err(|_| ParseError(format!("Unknown algorithm prefix: {alg_str}")))?;
-        let bytes = decode_multihash_hex_bytes(rest)?;
-        let (alg_from_mh, payload) = decode_private_key(&bytes)?;
+        let bytes = decode_private_multihash_hex_bytes(rest)?;
+        let (alg_from_mh, payload) = decode_private_key(bytes.as_slice())?;
         if alg_from_mh != algorithm {
             return Err(ParseError(
                 "Algorithm prefix does not match multihash".to_string(),
@@ -135,9 +137,15 @@ pub fn decode_private_key_str(s: &str) -> Result<(Algorithm, Vec<u8>), ParseErro
         }
         Ok((algorithm, payload))
     } else {
-        let bytes = decode_multihash_hex_bytes(s)?;
-        decode_private_key(&bytes)
+        let bytes = decode_private_multihash_hex_bytes(s)?;
+        decode_private_key(bytes.as_slice())
     }
+}
+
+pub fn private_multihash_to_hex_string(bytes: &[u8]) -> Result<String, ParseError> {
+    let (digest_function, payload) = decode_multihash(bytes)?;
+    let payload = Zeroizing::new(payload);
+    Ok(format_multihash_hex(digest_function, payload.as_slice()))
 }
 
 #[cfg(not(feature = "ffi_import"))]
@@ -146,6 +154,18 @@ fn decode_multihash_hex_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     let (digest_function, payload) = decode_multihash(&bytes)?;
     let canonical = format_multihash_hex(digest_function, &payload);
     if s != canonical {
+        return Err(ParseError("Non-canonical multihash hex".to_string()));
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(feature = "ffi_import"))]
+fn decode_private_multihash_hex_bytes(s: &str) -> Result<Zeroizing<Vec<u8>>, ParseError> {
+    let bytes = Zeroizing::new(hex_decode(s)?);
+    let (digest_function, payload) = decode_multihash(bytes.as_slice())?;
+    let payload = Zeroizing::new(payload);
+    let canonical = Zeroizing::new(format_multihash_hex(digest_function, payload.as_slice()));
+    if s != canonical.as_str() {
         return Err(ParseError("Non-canonical multihash hex".to_string()));
     }
     Ok(bytes)
@@ -464,6 +484,24 @@ mod tests {
         let canonical = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F";
         let lower = canonical.to_lowercase();
         assert!(decode_private_key_str(&lower).is_err());
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn private_key_prefixed_string_roundtrip() {
+        let algorithm = Algorithm::Ed25519;
+        let payload =
+            hex_decode("8F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F").unwrap();
+        let encoded = encode_private_key_prefixed(algorithm, &payload).expect("encode private key");
+
+        assert_eq!(
+            encoded,
+            "ed25519:8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+        );
+        assert_eq!(
+            decode_private_key_str(&encoded).unwrap(),
+            (algorithm, payload)
+        );
     }
 
     #[test]

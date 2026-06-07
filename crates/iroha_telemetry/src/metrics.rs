@@ -7848,6 +7848,8 @@ pub struct Metrics {
     pub torii_http_response_bytes_total: IntCounterVec,
     /// Torii API version negotiation grouped by outcome and requested version.
     pub torii_api_version_negotiated_total: IntCounterVec,
+    /// Torii API-token-gated endpoint hits grouped by endpoint and bounded token state.
+    pub torii_api_token_hits_total: IntCounterVec,
     /// Content gateway requests grouped by outcome label.
     pub torii_content_requests_total: IntCounterVec,
     /// Content gateway response latency in seconds grouped by outcome.
@@ -13514,6 +13516,14 @@ impl Default for Metrics {
             &["result", "version"],
         )
         .expect("Infallible");
+        let torii_api_token_hits_total = IntCounterVec::new(
+            Opts::new(
+                "torii_api_token_hits_total",
+                "Torii API-token-gated endpoint hits grouped by endpoint and bounded token state",
+            ),
+            &["endpoint", "token_state"],
+        )
+        .expect("Infallible");
         let torii_content_requests_total = IntCounterVec::new(
             Opts::new(
                 "torii_content_requests_total",
@@ -13666,6 +13676,7 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_http_request_duration_seconds);
         register_guarded(&registry, &torii_http_response_bytes_total);
         register_guarded(&registry, &torii_api_version_negotiated_total);
+        register_guarded(&registry, &torii_api_token_hits_total);
         register_guarded(&registry, &torii_content_requests_total);
         register_guarded(&registry, &torii_content_request_duration_seconds);
         register_guarded(&registry, &torii_content_response_bytes_total);
@@ -15244,6 +15255,7 @@ impl Default for Metrics {
             torii_http_request_duration_seconds,
             torii_http_response_bytes_total,
             torii_api_version_negotiated_total,
+            torii_api_token_hits_total,
             torii_content_requests_total,
             torii_content_request_duration_seconds,
             torii_content_response_bytes_total,
@@ -15853,6 +15865,13 @@ impl Metrics {
     pub fn inc_torii_norito_rpc_gate(&self, stage: &str, outcome: &str) {
         self.torii_norito_rpc_gate_total
             .with_label_values(&[stage, outcome])
+            .inc();
+    }
+
+    /// Record an API-token-gated Torii endpoint hit without exposing token material.
+    pub fn inc_torii_api_token_hit(&self, endpoint: &str, token_state: &str) {
+        self.torii_api_token_hits_total
+            .with_label_values(&[endpoint, token_state])
             .inc();
     }
 
@@ -17730,6 +17749,34 @@ mod test {
                 .with_label_values(&["canary", "canary_denied"])
                 .get(),
             1
+        );
+    }
+
+    #[test]
+    fn records_api_token_hits_without_exporting_token_material() {
+        let metrics = Metrics::default();
+        let token = "super-secret-token";
+
+        metrics.inc_torii_api_token_hit("v1/sccp/capabilities", "present");
+
+        assert_eq!(
+            metrics
+                .torii_api_token_hits_total
+                .with_label_values(&["v1/sccp/capabilities", "present"])
+                .get(),
+            1,
+            "API-token hit counter increments"
+        );
+        let exported = metrics.try_to_string().expect("metrics should serialize");
+        assert!(
+            exported.contains(
+                "torii_api_token_hits_total{endpoint=\"v1/sccp/capabilities\",token_state=\"present\"} 1"
+            ),
+            "bounded API-token hit labels missing from metrics output: {exported}"
+        );
+        assert!(
+            !exported.contains(token),
+            "metrics output must not expose raw API token material"
         );
     }
 

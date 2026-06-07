@@ -1209,11 +1209,13 @@ impl ContractRuntimeExecutionContext {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ContractCallExecutionContext {
+/// Parsed contract dispatch metadata used to configure IVM execution.
+pub struct ContractCallExecutionContext {
     contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
     contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: Option<String>,
     entrypoint_pc: Option<u64>,
+    entrypoint_permission: Option<String>,
     args: Json,
 }
 
@@ -1230,6 +1232,10 @@ impl ContractCallExecutionContext {
 
     pub(crate) fn entrypoint_pc(&self) -> Option<u64> {
         self.entrypoint_pc
+    }
+
+    pub(crate) fn entrypoint_permission(&self) -> Option<&str> {
+        self.entrypoint_permission.as_deref()
     }
 
     pub(crate) fn args(&self) -> &Json {
@@ -1307,7 +1313,7 @@ pub(crate) fn parse_contract_call_execution_context(
         return Ok(None);
     }
 
-    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
+    let (entrypoint_pc, entrypoint_permission) = if let Some(selector) = entrypoint.as_deref() {
         let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
             ValidationFail::NotPermitted(format!(
                 "invalid contract artifact for contract call dispatch: {err}"
@@ -1335,9 +1341,12 @@ pub(crate) fn parse_contract_call_execution_context(
                 "contract entrypoint `{selector}` is not public"
             )));
         }
-        Some(prefix_len + descriptor.entry_pc)
+        (
+            Some(prefix_len + descriptor.entry_pc),
+            descriptor.permission.clone(),
+        )
     } else {
-        None
+        (None, None)
     };
 
     Ok(Some(ContractCallExecutionContext {
@@ -1345,6 +1354,7 @@ pub(crate) fn parse_contract_call_execution_context(
         contract_alias,
         entrypoint,
         entrypoint_pc,
+        entrypoint_permission,
         args: payload.unwrap_or_default(),
     }))
 }
@@ -1393,6 +1403,7 @@ pub(crate) fn parse_contract_invocation_execution_context(
         contract_alias,
         entrypoint: Some(selector.to_owned()),
         entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
+        entrypoint_permission: descriptor.permission.clone(),
         args: invocation.payload.clone().unwrap_or_default(),
     })
 }
@@ -3031,6 +3042,11 @@ impl Executor {
                     record.code_bytes.as_ref(),
                     record.contract_alias.clone(),
                 )?;
+                enforce_contract_entrypoint_permission(
+                    &state_transaction.world,
+                    authority,
+                    &contract_call_context,
+                )?;
                 if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
                     runtime.vm.set_register(1, runtime.vm.memory.code_len());
                     runtime
@@ -3263,19 +3279,24 @@ impl Executor {
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                 let contract_call_context =
                     parse_contract_call_execution_context(&md, bytes.as_ref())?;
-                if let Some(context) = contract_call_context.as_ref()
-                    && let Some(entrypoint_pc) = context.entrypoint_pc
-                {
-                    runtime.vm.set_register(1, runtime.vm.memory.code_len());
-                    runtime
-                        .vm
-                        .set_program_counter(entrypoint_pc)
-                        .map_err(|err| {
-                            let selector = context.entrypoint.as_deref().unwrap_or("main");
-                            ValidationFail::NotPermitted(format!(
-                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
-                            ))
-                        })?;
+                if let Some(context) = contract_call_context.as_ref() {
+                    enforce_contract_entrypoint_permission(
+                        &state_transaction.world,
+                        authority,
+                        context,
+                    )?;
+                    if let Some(entrypoint_pc) = context.entrypoint_pc {
+                        runtime.vm.set_register(1, runtime.vm.memory.code_len());
+                        runtime
+                            .vm
+                            .set_program_counter(entrypoint_pc)
+                            .map_err(|err| {
+                                let selector = context.entrypoint.as_deref().unwrap_or("main");
+                                ValidationFail::NotPermitted(format!(
+                                    "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                                ))
+                            })?;
+                    }
                 }
                 let contract_runtime_context = contract_call_context
                     .as_ref()
@@ -5334,6 +5355,61 @@ fn authority_has_permission(
     }
 
     Ok(false)
+}
+
+fn authority_has_named_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    permission_name: &str,
+) -> Result<bool, ValidationFail> {
+    let permission_name = permission_name.trim();
+    if permission_name.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint permission must not be empty".to_owned(),
+        ));
+    }
+
+    let permissions = world
+        .account_permissions_iter(authority)
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
+    if permissions
+        .into_iter()
+        .any(|permission| permission.name() == permission_name)
+    {
+        return Ok(true);
+    }
+
+    for role_id in world.account_roles_iter(authority) {
+        if let Some(role) = world.roles().get(role_id)
+            && role
+                .permissions()
+                .any(|permission| permission.name() == permission_name)
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+pub(crate) fn enforce_contract_entrypoint_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    context: &ContractCallExecutionContext,
+) -> Result<(), ValidationFail> {
+    let Some(permission_name) = context.entrypoint_permission() else {
+        return Ok(());
+    };
+
+    if authority_has_named_permission(world, authority, permission_name)? {
+        return Ok(());
+    }
+
+    let entrypoint = context.entrypoint.as_deref().unwrap_or("main");
+    Err(ValidationFail::NotPermitted(format!(
+        "contract entrypoint `{entrypoint}` requires permission `{}`",
+        permission_name.trim()
+    )))
 }
 
 fn can_modify_account_metadata(
@@ -9978,6 +10054,154 @@ mod tests {
     fn generate_ok_program() -> Vec<u8> {
         let verdict = Ok(());
         generate_verdict_program(&verdict)
+    }
+
+    fn contract_program_with_entrypoint(
+        entrypoint: &str,
+        permission: Option<&str>,
+    ) -> (Vec<u8>, u64) {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+        use ivm::{EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, ProgramMetadata};
+
+        let descriptor = EmbeddedEntrypointDescriptor {
+            name: entrypoint.to_owned(),
+            kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
+            permission: permission.map(str::to_owned),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        };
+        let interface = EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "executor-test".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![descriptor],
+            states: Vec::new(),
+        };
+        let interface_section = interface.encode_section();
+        let expected_entrypoint_pc =
+            u64::try_from(interface_section.len()).expect("section length fits u64");
+        let metadata = ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        };
+        let mut program = metadata.encode();
+        program.extend_from_slice(&interface_section);
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        (program, expected_entrypoint_pc)
+    }
+
+    fn contract_permission_context(permission: &str) -> ContractCallExecutionContext {
+        ContractCallExecutionContext {
+            contract_address: None,
+            contract_alias: None,
+            entrypoint: Some("admin".to_owned()),
+            entrypoint_pc: Some(0),
+            entrypoint_permission: Some(permission.to_owned()),
+            args: Json::new(()),
+        }
+    }
+
+    #[test]
+    fn contract_dispatch_context_carries_entrypoint_permission() {
+        let (program, expected_entrypoint_pc) =
+            contract_program_with_entrypoint("admin", Some("ContractAdmin"));
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("admin".to_owned()),
+        );
+
+        let metadata_context = parse_contract_call_execution_context(&metadata, &program)
+            .expect("parse metadata dispatch")
+            .expect("metadata dispatch context");
+        assert_eq!(metadata_context.entrypoint.as_deref(), Some("admin"));
+        assert_eq!(
+            metadata_context.entrypoint_pc(),
+            Some(expected_entrypoint_pc)
+        );
+        assert_eq!(
+            metadata_context.entrypoint_permission(),
+            Some("ContractAdmin")
+        );
+
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let invocation = ContractInvocation {
+            contract_address,
+            entrypoint: "admin".to_owned(),
+            payload: None,
+        };
+        let invocation_context =
+            parse_contract_invocation_execution_context(&invocation, &program, None)
+                .expect("parse contract invocation");
+        assert_eq!(
+            invocation_context.entrypoint_pc(),
+            Some(expected_entrypoint_pc)
+        );
+        assert_eq!(
+            invocation_context.entrypoint_permission(),
+            Some("ContractAdmin")
+        );
+    }
+
+    #[test]
+    fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
+        let authority = ALICE_ID.clone();
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let direct_context = contract_permission_context("ContractAdmin");
+        let err = enforce_contract_entrypoint_permission(&tx.world, &authority, &direct_context)
+            .expect_err("missing permission should reject contract entrypoint");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("requires permission `ContractAdmin`")
+        ));
+
+        Grant::account_permission(
+            Permission::new("ContractAdmin".to_owned(), Json::new(())),
+            authority.clone(),
+        )
+        .execute(&authority, &mut tx)
+        .expect("grant direct contract permission");
+        enforce_contract_entrypoint_permission(&tx.world, &authority, &direct_context)
+            .expect("direct permission should allow contract entrypoint");
+
+        let role_context = contract_permission_context("RoleContractAdmin");
+        let role_id: RoleId = "contract_admin_role".parse().expect("role id");
+        let role: iroha_data_model::role::NewRole = Role::new(role_id.clone(), authority.clone())
+            .add_permission(Permission::new(
+                "RoleContractAdmin".to_owned(),
+                Json::new(()),
+            ));
+        Register::role(role)
+            .execute(&authority, &mut tx)
+            .expect("register contract role");
+        enforce_contract_entrypoint_permission(&tx.world, &authority, &role_context)
+            .expect("role permission should allow contract entrypoint");
     }
 
     fn generate_denied_program(message: &str) -> Vec<u8> {

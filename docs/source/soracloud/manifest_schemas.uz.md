@@ -166,6 +166,8 @@ Tasdiqlash qo'llab-quvvatlanmaydigan versiyalarni rad etadi
 - FHE ijro siyosati:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - parametrlar to'plamini ulash `(param_set, version)` ga mos kelishi kerak.
   - `max_multiplication_depth` parametr o'rnatilgan chuqurlikdan oshmasligi kerak.
   - siyosatni qabul qilish `Proposed` yoki `Withdrawn` parametrlari to'plamining hayot aylanishini rad etadi.

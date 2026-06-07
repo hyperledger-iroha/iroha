@@ -300,6 +300,9 @@ TEXT_REQUIREMENTS = {
         'def _validate_manifest_slot_path(slot_path: Path) -> list[str]:\n    if SECRET_RE.search(str(slot_path)):\n        return ["slot path must not contain secret-looking material"]\n    if slot_path.is_symlink():\n        return ["slot directory must not be a symlink"]\n    return validate_no_symlink_ancestors(slot_path, "slot ancestor directory")\n',
         'root_errors = _validate_manifest_slot_path(slot_path)\n    if root_errors:\n        return entries, root_errors\n',
         'root_errors = _validate_manifest_slot_path(slot_path)\n    if root_errors:\n        return root_errors\n',
+        'if manifest_path.stat().st_nlink > 1:\n            return entries, ["sha256sum.txt must not be hardlinked"]\n',
+        "def _has_manifest_file_shape_error(errors: list[str]) -> bool:",
+        "if _has_manifest_file_shape_error(errors):",
         'def _slot_files(slot_path: Path) -> set[str]:\n    if slot_path.is_symlink() or not slot_path.is_dir():\n        return set()\n',
         'if SECRET_RE.search(str(slot_path)):\n        return set()\n',
         'if validate_no_symlink_ancestors(slot_path, "slot ancestor directory"):\n        return set()\n',
@@ -323,6 +326,7 @@ TEXT_REQUIREMENTS = {
         "covered_device_families",
         "missing_device_families",
         "trusted_signer_public_key_sha256",
+        'if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    openssl = _require_openssl(errors)\n',
         "sha256sum.txt digest mismatch",
         '"abi7_recursive_compact_jni_probe"',
         "slot.json minimum_os",
@@ -412,6 +416,7 @@ TEXT_REQUIREMENTS = {
         "private_key_path.is_symlink()",
         "path must not contain secret-looking material",
         "slot path must not contain secret-looking material",
+        'def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> bytes | None:\n    secret_error = _secret_key_path_error(private_key_path, "private key")\n',
         "private key must not be a symlink",
         "private key ancestor directory",
         "private key must not be hardlinked",
@@ -440,6 +445,7 @@ TEXT_REQUIREMENTS = {
         "validate_no_symlink_ancestors",
         "slot ancestor directory",
         "validate_required_kagemusha_slot_artifact_shapes",
+        'preflight_errors = _preflight_slot_metadata_reads(slot_path)\n    if preflight_errors:\n        errors.extend(preflight_errors)\n        return None\n',
         "_validate_slot_for_manifest_rewrite",
         'def _validate_slot_for_manifest_rewrite(slot_path: Path) -> list[str]:\n    """Validate a slot immediately before rewriting its SHA-256 manifest."""\n\n    if device_lab.SECRET_RE.search(str(slot_path)):\n        return ["slot path must not contain secret-looking material"]\n',
         "errors = _validate_slot_for_manifest_rewrite(slot_path)",
@@ -662,10 +668,12 @@ TEXT_REQUIREMENTS = {
         "test_parse_sha256_manifest_rejects_secret_slot_path_directly_before_parse",
         "test_parse_sha256_manifest_rejects_symlinked_slot_root_directly_before_parse",
         "test_parse_sha256_manifest_rejects_symlinked_slot_ancestor_before_parse",
+        "test_parse_sha256_manifest_rejects_hardlinked_manifest_before_read",
         "test_verify_sha256_manifest_rejects_secret_slot_path_directly_before_traversal",
         "test_verify_sha256_manifest_rejects_symlinked_slot_root_directly_before_parse",
         "test_verify_sha256_manifest_rejects_symlinked_slot_ancestor_before_discovery",
         "test_verify_sha256_manifest_missing_slot_returns_missing_manifest_without_traceback",
+        "test_verify_sha256_manifest_rejects_hardlinked_manifest_before_discovery",
         "test_verify_sha256_manifest_rejects_symlinked_artifact_directory_before_digest_read",
         "test_attestation_result_rejects_secret_slot_path_directly_before_parse",
         "test_d2d_transcript_rejects_secret_slot_path_directly_before_parse",
@@ -779,6 +787,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_helper_rejects_mismatched_private_and_public_keys",
         "test_trusted_signer_public_key_rejects_symlink_without_path_leak",
         "test_trusted_signer_public_key_rejects_secret_looking_path_without_leak",
+        "test_trusted_signer_public_key_rejects_secret_path_before_openssl_lookup",
         "test_trusted_signer_public_key_rejects_symlinked_ancestor_without_path_leak",
         "test_trusted_signer_public_key_rejects_hardlink_without_path_leak",
         "test_signer_helper_rejects_symlinked_private_key_before_write",
@@ -810,6 +819,9 @@ TEXT_REQUIREMENTS = {
         "test_rewrite_sha256_manifest_rejects_secret_looking_artifact_when_called_directly",
         "test_rewrite_sha256_manifest_rejects_secret_slot_path_directly_without_write",
         "test_signer_metadata_loader_rejects_secret_slot_path_directly_without_parse",
+        "test_signer_artifact_digests_rejects_secret_slot_path_directly_before_hash",
+        "test_signer_artifact_digests_rejects_symlinked_slot_ancestor_before_hash",
+        "test_signer_artifact_digests_rejects_symlinked_artifact_directory_before_hash",
         "test_signer_helper_rejects_symlinked_slot_json_before_write",
         "test_signer_helper_rejects_hardlinked_slot_json_before_write",
         "test_signer_metadata_loader_preflights_symlinked_artifacts",
@@ -837,6 +849,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_helper_rejects_empty_required_slot_artifact_before_write",
         "test_signer_helper_rejects_failed_status_ndjson_before_write",
         "test_signer_helper_does_not_leak_secret_looking_private_key_path",
+        "test_sign_ed25519_rejects_secret_private_key_path_before_openssl_lookup",
     ),
     "scripts/tests/kagemusha_production_readiness_test.py": (
         "test_complete_signed_android_matrix_passes_rollup",
@@ -1138,6 +1151,8 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-verify-direct-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-root-symlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-ancestor-symlink",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths",
@@ -1168,11 +1183,14 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-metadata-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-artifact-digests-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-files",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-ancestors",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-ancestors",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-path-before-openssl",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-path-before-openssl",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-cli-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-cli-secret-paths",
@@ -1750,6 +1768,28 @@ if mode == "--negative-control-android-device-lab-manifest-slot-ancestor-symlink
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-manifest-hardlink":
+    run_negative_control(
+        "Android device-lab manifest hardlink gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    try:\n        if manifest_path.stat().st_nlink > 1:\n            return entries, ["sha256sum.txt must not be hardlinked"]\n    except OSError:\n        return entries, ["sha256sum.txt hardlink metadata could not be read"]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-manifest-file-shape-terminal":
+    run_negative_control(
+        "Android device-lab manifest file-shape terminal gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if _has_manifest_file_shape_error(errors):\n        return errors\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-direct-helper-slot-secret-paths":
     run_negative_control(
         "Android device-lab direct helper slot secret-path gate",
@@ -2080,6 +2120,17 @@ if mode == "--negative-control-android-device-lab-signing-helper-metadata-prefli
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-signing-helper-artifact-digests-preflight":
+    run_negative_control(
+        "Android device-lab signed evidence helper artifact digest preflight gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            '    preflight_errors = _preflight_slot_metadata_reads(slot_path)\n    if preflight_errors:\n        errors.extend(preflight_errors)\n        return None\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-signing-helper-direct-slot-secret-paths":
     run_negative_control(
         "Android device-lab signed evidence helper direct metadata slot secret-path gate",
@@ -2131,6 +2182,28 @@ if mode == "--negative-control-android-device-lab-private-key-ancestors":
             "scripts/sign_android_device_lab_evidence.py",
             "private key ancestor directory",
             "private key ancestor path",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-public-key-path-before-openssl":
+    run_negative_control(
+        "Android device-lab public key path-before-OpenSSL gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n    openssl = _require_openssl(errors)\n',
+            '    openssl = _require_openssl(errors)\n    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return None\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-private-key-path-before-openssl":
+    run_negative_control(
+        "Android device-lab private key path-before-OpenSSL gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            'def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> bytes | None:\n    secret_error = _secret_key_path_error(private_key_path, "private key")\n',
+            'def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> bytes | None:\n    openssl = device_lab._require_openssl(errors)\n    if openssl is None:\n        return None\n    secret_error = _secret_key_path_error(private_key_path, "private key")\n',
         ),
     )
     raise SystemExit(0)

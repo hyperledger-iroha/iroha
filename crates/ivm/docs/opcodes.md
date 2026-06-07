@@ -195,9 +195,9 @@ helpers are available:
 
 | Hex | Constant | Description |
 |----:|----------|-------------|
-| 0xF4 | `SYSCALL_PROVE_EXECUTION` | Reserved (execution proving integration; currently not implemented by default hosts) |
+| 0xF4 | `SYSCALL_PROVE_EXECUTION` | Return the deterministic execution-proof summary emitted by `DefaultHost` |
 | 0xF5 | `SYSCALL_GROW_HEAP` | Increase heap size by `x10` bytes |
-| 0xF6 | `SYSCALL_VERIFY_PROOF` | Reserved (execution-proof verification integration; currently not implemented by default hosts) |
+| 0xF6 | `SYSCALL_VERIFY_PROOF` | Verify registry-bound proof envelopes in `CoreHost`; `DefaultHost` returns `NotImplemented` |
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |
 | 0x010000 | `SYSCALL_QUERY_EXECUTE_NORITO` | Execute a Norito-encoded read-only query request |
 | 0x010020..0x010025 | `SYSCALL_SYSVAR_*` | Read deterministic chain/block/authority/contract context |

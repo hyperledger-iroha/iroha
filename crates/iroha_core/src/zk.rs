@@ -147,7 +147,7 @@ const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Upper bound for parsed public instance columns. This covers current IVM
 /// proofs, Offline recursive proofs, the 30-column Kagemusha folded token
-/// statement, and the 55-column Kagemusha recursive aggregation proof
+/// statement, and the 59-column Kagemusha recursive aggregation proof
 /// statement while keeping malformed envelopes bounded.
 const MAX_INST_COLS: usize = 64;
 
@@ -2840,7 +2840,7 @@ fn ensure_kagemusha_recursive_semantic_vk_box_for_circuit(
         };
         if hash_vk(vk_box) != hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(format!(
-                "Kagemusha recursive semantic verifier key must match the canonical `{expected_circuit_id}` key"
+                "Kagemusha recursive semantic verifier key must match the canonical semantic circuit key `{expected_circuit_id}`"
             ));
         }
     }
@@ -34292,6 +34292,7 @@ mod kagemusha_folded_real_prover_tests {
             .expect("recursive public-input hash");
         let public_hash_limbs = hash_to_u64_limbs_le(&public_hash);
         let evidence_limbs = bytes_to_u64_limbs_le(&public_inputs.evidence_digest);
+        let folded_hash_limbs = bytes_to_u64_limbs_le(&public_inputs.folded_public_inputs_hash);
         let aggregation_limbs = bytes_to_u64_limbs_le(&public_inputs.aggregation_transcript_digest);
         let params_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_params_fingerprint);
         let schedule_limbs =
@@ -34311,12 +34312,13 @@ mod kagemusha_folded_real_prover_tests {
 
         assert_eq!(&values.public_values[0..4], public_hash_limbs.as_slice());
         assert_eq!(&values.public_values[4..8], evidence_limbs.as_slice());
-        assert_eq!(&values.public_values[8..12], aggregation_limbs.as_slice());
-        assert_eq!(&values.public_values[12..16], params_limbs.as_slice());
-        assert_eq!(&values.public_values[16..20], schedule_limbs.as_slice());
-        assert_eq!(&values.public_values[20..24], manifest_limbs.as_slice());
-        assert_eq!(&values.public_values[24..28], table_base_limbs.as_slice());
-        assert_eq!(&values.public_values[28..32], batch_limbs.as_slice());
+        assert_eq!(&values.public_values[8..12], folded_hash_limbs.as_slice());
+        assert_eq!(&values.public_values[12..16], aggregation_limbs.as_slice());
+        assert_eq!(&values.public_values[16..20], params_limbs.as_slice());
+        assert_eq!(&values.public_values[20..24], schedule_limbs.as_slice());
+        assert_eq!(&values.public_values[24..28], manifest_limbs.as_slice());
+        assert_eq!(&values.public_values[28..32], table_base_limbs.as_slice());
+        assert_eq!(&values.public_values[32..36], batch_limbs.as_slice());
         assert_eq!(
             &values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX
                 ..KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX],
@@ -39402,7 +39404,13 @@ mod kagemusha_folded_real_prover_tests {
         let err = preverify_kagemusha_recursive_spend_bundle(&instance_count_tamper, &vk_box)
             .expect_err("recursive spend missing public instance column must reject");
         assert!(
-            err.contains("55 public instance columns") && err.contains("found 54"),
+            err.contains(&format!(
+                "{} public instance columns",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+            )) && err.contains(&format!(
+                "found {}",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS - 1
+            )),
             "{err}"
         );
 
@@ -39991,7 +39999,13 @@ mod kagemusha_folded_real_prover_tests {
         let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&missing_column, &vk_box)
             .expect_err("recursive aggregation missing public instance column must reject");
         assert!(
-            err.contains("55 public instance columns") && err.contains("found 54"),
+            err.contains(&format!(
+                "{} public instance columns",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+            )) && err.contains(&format!(
+                "found {}",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS - 1
+            )),
             "{err}"
         );
 
@@ -40009,7 +40023,13 @@ mod kagemusha_folded_real_prover_tests {
         let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&extra_column, &vk_box)
             .expect_err("recursive aggregation extra public instance column must reject");
         assert!(
-            err.contains("55 public instance columns") && err.contains("found 56"),
+            err.contains(&format!(
+                "{} public instance columns",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+            )) && err.contains(&format!(
+                "found {}",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS + 1
+            )),
             "{err}"
         );
     }

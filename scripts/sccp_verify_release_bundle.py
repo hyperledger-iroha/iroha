@@ -129,10 +129,59 @@ ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE = {
     "eth": "`eth_chainId == 0x1` (1)",
     "bsc": "`eth_chainId == 0x38` (56)",
 }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID = {
+    "eth": "1",
+    "bsc": "56",
+}.get(ACTIVE_LAUNCH_CHAIN)
 ACTIVE_LAUNCH_EVM_CHAIN_ID_MARKER = {
     "eth": "eth_chainId == 0x1",
     "bsc": "eth_chainId == 0x38",
 }.get(ACTIVE_LAUNCH_CHAIN, "eth_chainId")
+SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            """pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5] = [
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+];""",
+            "pub const SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1: &str =",
+            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
+        ),
+    ),
+    (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            """SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS = (
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+)""",
+            """SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(
+    domain
+    for domain in SCCP_CORE_REMOTE_DOMAINS
+    if domain not in SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS
+)""",
+            "SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (",
+            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "ACTIVE_LAUNCH_DOMAIN = 1",
+            'ACTIVE_LAUNCH_CHAIN = "eth"',
+            'ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"',
+            'ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"',
+            '"eth": "1",\n    "bsc": "56",',
+        ),
+    ),
+)
 ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
@@ -142,6 +191,21 @@ ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_SORA_KUSAMA,
     SCCP_DOMAIN_SORA_POLKADOT,
     SCCP_DOMAIN_SORA2,
+)
+ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = (
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+)
+ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS = tuple(
+    domain
+    for domain in ALL_LANES_REQUIRED_DOMAINS
+    if domain not in ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
+)
+ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER = (
+    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
 )
 ALL_LANES_CHAIN_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "eth",
@@ -3000,6 +3064,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native_prover_self_test_artifact",
             "sdk_results missing sdk",
             "def _native_evm_prover_hash_role_blockers(",
+            "def _native_evm_prover_path_role_blockers(",
+            "path must not reuse",
             "must not be empty",
             "must be at least",
             "must not duplicate",
@@ -3016,6 +3082,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "object_pairs_hook=_reject_duplicate_json_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key",
             "def _native_evm_prover_payload_sources(",
+            "path must not reuse",
             "cross_sdk_fixture_parity_artifact",
         ),
     ),
@@ -3157,6 +3224,154 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_keys",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys",
             "native proof artifact imports proof.wasm",
+        ),
+    ),
+)
+SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "duplicate SCCP corridor phase evidence for",
+            "already set by",
+            "cannot set from",
+            "source_labels",
+        ),
+    ),
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "duplicate SCCP corridor phase evidence for",
+            "already set by",
+            "cannot set from",
+            "source_labels",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_rejects_duplicate_phase_evidence_assignment",
+            "test_release_readiness_report_rejects_phase_evidence_dir_override",
+            "already set by --phase-evidence-dir",
+            "cannot set from --phase-evidence rust-sccp=",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_rejects_duplicate_phase_evidence_assignment_before_copy",
+            "test_release_bundle_rejects_phase_evidence_dir_override_before_copy",
+            "already set by --phase-evidence-dir",
+            "cannot set from --phase-evidence rust-sccp=",
+        ),
+    ),
+)
+SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _reject_path_control_characters(",
+            "contains control character",
+            '_reject_path_control_characters(path, "release bundle source path")',
+            "def _reject_symlink_sources(",
+            "release bundle source path must not be a symlink",
+            "release bundle source path ancestor must not be a symlink",
+            "stat.S_ISLNK",
+            "_reject_symlink_sources(protected_paths)",
+            "_reject_symlink_sources([source for _, source in native_payload_sources])",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_rejects_symlinked_evidence_input_before_copy",
+            "test_release_bundle_rejects_symlinked_evidence_ancestor_before_copy",
+            "test_release_bundle_rejects_control_character_evidence_input_before_copy",
+            "test_release_bundle_rejects_symlinked_phase_evidence_before_copy",
+            "test_release_bundle_rejects_symlinked_phase_evidence_ancestor_before_copy",
+            "test_release_bundle_rejects_control_character_phase_evidence_before_copy",
+            "test_release_bundle_rejects_symlinked_native_evm_prover_manifest_before_copy",
+            "test_release_bundle_rejects_symlinked_native_evm_manifest_ancestor_before_copy",
+            "test_release_bundle_rejects_control_character_native_evm_manifest_before_copy",
+            "test_release_bundle_rejects_symlinked_native_evm_prover_payload_before_copy",
+            "test_release_bundle_rejects_symlinked_native_evm_payload_ancestor_before_copy",
+            "test_release_bundle_rejects_control_character_native_evm_payload_before_copy",
+            "release bundle source path contains control character",
+            "release bundle source path must not be a symlink",
+            "release bundle source path ancestor must not be a symlink",
+        ),
+    ),
+)
+SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS = (
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _reject_symlinked_existing_output_path(",
+            '_reject_path_control_characters(output_dir, "release bundle output directory")',
+            "release bundle output directory must not be a symlink",
+            "release bundle output directory ancestor must not be a symlink",
+            "_reject_symlinked_existing_output_path(output_dir)",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_rejects_symlinked_output_directory_before_force",
+            "test_release_bundle_rejects_symlinked_output_ancestor_before_create",
+            "test_release_bundle_rejects_control_character_output_directory_before_create",
+            "release bundle output directory contains control character",
+            "release bundle output directory must not be a symlink",
+            "release bundle output directory ancestor must not be a symlink",
+        ),
+    ),
+)
+SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "MARKDOWN_UNSAFE_PATH_CHARACTERS",
+            "def _path_markdown_unsafe_character(",
+            "release artifact path contains Markdown-unsafe character",
+            "release bundle copied filename contains Markdown-unsafe character",
+            "path contains Markdown-unsafe character",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "MARKDOWN_UNSAFE_PATH_CHARACTERS",
+            "def _path_markdown_unsafe_character(",
+            "release artifact path contains Markdown-unsafe character",
+            "path contains Markdown-unsafe character",
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "MARKDOWN_UNSAFE_PATH_CHARACTERS",
+            "def _path_markdown_unsafe_character(",
+            "manifest artifact path contains Markdown-unsafe character",
+            "readiness report inputs path contains Markdown-unsafe character",
+            "artifact path contains Markdown-unsafe character",
+            "bundle contains entry path with Markdown-unsafe character",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_rejects_markdown_unsafe_evidence_input_before_copy",
+            "test_release_bundle_rejects_markdown_unsafe_phase_evidence_before_copy",
+            "test_release_bundle_rejects_markdown_unsafe_native_evm_payload_before_copy",
+            "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
+            "test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths",
+            "test_release_bundle_verifier_rejects_markdown_unsafe_report_paths",
+            "test_release_bundle_verifier_rejects_markdown_unsafe_filesystem_entries",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_rejects_markdown_unsafe_artifact_paths",
+            "test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths",
         ),
     ),
 )
@@ -3367,7 +3582,6 @@ USER_PROVER_REQUIRED_LANE_BACKENDS = {
     "tron": "tron-groth16-bn254-v1",
     "sol": "sccp-solana-recursive-mainnet-v1",
     "ton": "ton-contract-v1",
-    "substrate": "substrate-runtime-v1",
 }
 USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE = {
     "eth,bsc": (
@@ -3380,7 +3594,6 @@ USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE = {
     ),
     "sol": "Solana verifier-program instruction envelope",
     "ton": "TON internal message body BOC",
-    "substrate": "Substrate runtime call envelope",
 }
 USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
     "eth,bsc": {
@@ -3907,6 +4120,8 @@ CORRIDOR_KEYS = {
 ALL_LANES_SUMMARY_KEYS = {
     "production_ready",
     "required_domains",
+    "supported_launch_domains",
+    "unsupported_launch_domains",
     "lanes",
     "blockers",
     "release_checklist",
@@ -4120,6 +4335,16 @@ def _path_control_character(path: str) -> str | None:
     return None
 
 
+MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset("|`<>")
+
+
+def _path_markdown_unsafe_character(path: str) -> str | None:
+    for character in path:
+        if character in MARKDOWN_UNSAFE_PATH_CHARACTERS:
+            return repr(character)
+    return None
+
+
 def _canonical_json_text(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -4147,6 +4372,12 @@ def _artifact(path: Path) -> dict[str, Any]:
         raise ValueError(
             "release artifact path contains control character "
             f"{control_character}: {artifact_path!r}"
+        )
+    markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
+    if markdown_unsafe_character is not None:
+        raise ValueError(
+            "release artifact path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {artifact_path!r}"
         )
     payload = path.read_bytes()
     return {
@@ -4188,6 +4419,12 @@ def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list
             "manifest artifact path contains control character "
             f"{control_character}: {artifact_path!r}"
         ]
+    markdown_unsafe_character = _path_markdown_unsafe_character(artifact_path)
+    if markdown_unsafe_character is not None:
+        return None, [
+            "manifest artifact path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {artifact_path!r}"
+        ]
     if "\\" in artifact_path:
         return None, [f"manifest artifact path is not canonical: {artifact_path}"]
     path = PurePosixPath(artifact_path)
@@ -4207,6 +4444,12 @@ def _canonical_report_input_path_errors(value: Any) -> list[str]:
             "readiness report inputs path contains control character "
             f"{control_character}: {value!r}"
         ]
+    markdown_unsafe_character = _path_markdown_unsafe_character(value)
+    if markdown_unsafe_character is not None:
+        return [
+            "readiness report inputs path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {value!r}"
+        ]
     if "\\" in value:
         return [f"readiness report inputs path is not canonical: {value}"]
     path = PurePosixPath(value)
@@ -4223,6 +4466,12 @@ def _canonical_report_artifact_path_errors(label: str, value: str) -> list[str]:
         return [
             f"{label} artifact path contains control character "
             f"{control_character}: {value!r}"
+        ]
+    markdown_unsafe_character = _path_markdown_unsafe_character(value)
+    if markdown_unsafe_character is not None:
+        return [
+            f"{label} artifact path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {value!r}"
         ]
     if "\\" in value:
         return [f"{label} artifact path is not canonical: {value}"]
@@ -4344,6 +4593,13 @@ def _bundle_entry_paths(bundle_dir: Path, errors: list[str]) -> tuple[set[str], 
             errors.append(
                 "bundle contains entry path with control character "
                 f"{control_character}: {relative!r}"
+            )
+            continue
+        markdown_unsafe_character = _path_markdown_unsafe_character(relative)
+        if markdown_unsafe_character is not None:
+            errors.append(
+                "bundle contains entry path with Markdown-unsafe character "
+                f"{markdown_unsafe_character}: {relative!r}"
             )
             continue
         relative_path = PurePosixPath(relative)
@@ -4829,6 +5085,19 @@ def _ethereum_noncanonical_chain_id_inventory_errors(
     )
 
 
+def _sccp_launch_scope_constant_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for launch-scope constants shared by SCCP tooling."""
+
+    if inventory is None:
+        inventory = SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP launch-scope constants",
+    )
+
+
 def _ethereum_beacon_rest_finalized_header_shape_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -5110,6 +5379,58 @@ def _native_sccp_no_wasm_readiness_inventory_errors(
     )
 
 
+def _sccp_phase_evidence_source_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for fail-closed corridor phase evidence inputs."""
+
+    if inventory is None:
+        inventory = SCCP_PHASE_EVIDENCE_SOURCE_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP phase evidence duplicate-input",
+    )
+
+
+def _sccp_release_bundle_source_copy_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for fail-closed bundle source copying."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release bundle source-copy",
+    )
+
+
+def _sccp_release_bundle_output_path_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for fail-closed bundle output paths."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release bundle output-path",
+    )
+
+
+def _sccp_release_artifact_path_text_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for Markdown-safe release artifact paths."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release artifact path text",
+    )
+
+
 def _bsc_inbound_adversarial_sdk_test_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -5293,21 +5614,27 @@ def _active_launch_evm_live_metadata_blockers(
     evm_live_metadata = lane.get("evm_live_metadata")
     if not isinstance(evm_live_metadata, dict):
         evm_live_metadata = {}
-    expected_chain_ids = {
-        "eth": {"1", "0x1"},
-        "bsc": {"56", "0x38"},
-    }.get(ACTIVE_LAUNCH_CHAIN, set())
-    expected_chain_id_label = {
-        "eth": "1 (0x1)",
-        "bsc": "56 (0x38)",
-    }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+    expected_chain_id = ACTIVE_LAUNCH_EVM_DECIMAL_CHAIN_ID
+    expected_chain_id_label = (
+        f"canonical decimal chain id {expected_chain_id}"
+        if expected_chain_id is not None
+        else "the configured mainnet chain id"
+    )
 
     blockers: list[str] = []
-    if evm_live_metadata.get("source_rpc_chain_id") not in expected_chain_ids:
+    source_chain_id = evm_live_metadata.get("source_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(source_chain_id, positive=True)
+        and source_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live eth_chainId must be {expected_chain_id_label}"
         )
-    if evm_live_metadata.get("destination_rpc_chain_id") not in expected_chain_ids:
+    destination_chain_id = evm_live_metadata.get("destination_rpc_chain_id")
+    if not (
+        _is_canonical_decimal_text(destination_chain_id, positive=True)
+        and destination_chain_id == expected_chain_id
+    ):
         blockers.append(
             f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId must be {expected_chain_id_label}"
         )
@@ -5355,6 +5682,12 @@ def _native_evm_manifest_relative_path(
     if control_character is not None:
         return None, [
             f"{prefix} path contains control character {control_character}: {value!r}"
+        ]
+    markdown_unsafe_character = _path_markdown_unsafe_character(value)
+    if markdown_unsafe_character is not None:
+        return None, [
+            f"{prefix} path contains Markdown-unsafe character "
+            f"{markdown_unsafe_character}: {value!r}"
         ]
     if "\\" in value:
         return None, [f"{prefix} path must use POSIX separators"]
@@ -5878,6 +6211,99 @@ def _native_evm_prover_hash_role_blockers(payload: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def _native_evm_prover_payload_path_role_blockers(
+    payload: dict[str, Any],
+) -> list[str]:
+    roles = [
+        ("proof_artifact", payload.get("proof_artifact")),
+        ("proving_key", payload.get("proving_key")),
+        ("verifier_key", payload.get("verifier_key")),
+        (
+            "cross_sdk_fixture_parity_artifact",
+            payload.get("cross_sdk_fixture_parity_artifact"),
+        ),
+        (
+            "native_prover_self_test_artifact",
+            payload.get("native_prover_self_test_artifact"),
+        ),
+    ]
+    sdk_artifacts = payload.get("native_sdk_artifacts")
+    if isinstance(sdk_artifacts, list):
+        for index, artifact in enumerate(sdk_artifacts):
+            if isinstance(artifact, dict):
+                roles.append(
+                    (
+                        f"native_sdk_artifacts[{index}].implementation_artifact",
+                        artifact.get("implementation_artifact"),
+                    )
+                )
+
+    blockers: list[str] = []
+    seen: dict[str, str] = {}
+    for role, value in roles:
+        relative_path, path_errors = _native_evm_manifest_relative_path(value, role)
+        if path_errors or relative_path is None:
+            continue
+        path = relative_path.as_posix()
+        previous_role = seen.get(path)
+        if previous_role is not None:
+            blockers.append(
+                f"native EVM Groth16 prover bundle {role} path must not reuse "
+                f"{previous_role}: {path}"
+            )
+            continue
+        seen[path] = role
+    return blockers
+
+
+def _native_evm_prover_summary_path_role_errors(
+    label: str,
+    status: dict[str, Any],
+) -> list[str]:
+    roles = [
+        ("artifact", status.get("artifact")),
+        ("proof_artifact", status.get("proof_artifact")),
+        ("proving_key", status.get("proving_key")),
+        ("verifier_key", status.get("verifier_key")),
+        (
+            "cross_sdk_fixture_parity_artifact",
+            status.get("cross_sdk_fixture_parity_artifact"),
+        ),
+        (
+            "native_prover_self_test_artifact",
+            status.get("native_prover_self_test_artifact"),
+        ),
+    ]
+    sdk_artifacts = status.get("sdk_artifacts")
+    if isinstance(sdk_artifacts, list):
+        for index, row in enumerate(sdk_artifacts):
+            if isinstance(row, dict):
+                roles.append(
+                    (
+                        f"sdk_artifacts[{index}].implementation_artifact",
+                        row.get("implementation_artifact"),
+                    )
+                )
+
+    errors: list[str] = []
+    seen: dict[str, str] = {}
+    for role, artifact in roles:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path, path_errors = _canonical_artifact_path(artifact)
+        if path_errors or artifact_path is None:
+            continue
+        previous_role = seen.get(artifact_path)
+        if previous_role is not None:
+            errors.append(
+                f"{label} {role} path must not reuse {previous_role}: "
+                f"{artifact_path}"
+            )
+            continue
+        seen[artifact_path] = role
+    return errors
+
+
 def _native_evm_prover_bundle_status_from_payload(
     artifact: dict[str, Any] | None,
     manifest_path: Path | None,
@@ -5923,6 +6349,7 @@ def _native_evm_prover_bundle_status_from_payload(
                 f"native EVM Groth16 prover bundle {key} must be a canonical non-zero 32-byte hex value"
             )
     blockers.extend(_native_evm_prover_hash_role_blockers(payload))
+    blockers.extend(_native_evm_prover_payload_path_role_blockers(payload))
 
     lane = _active_launch_lane(evidence) or {}
     destination_binding = lane.get("destination_binding")
@@ -6321,6 +6748,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                     )
         for sdk in sorted(set(NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS) - seen_sdks):
             errors.append(f"{label} sdk_artifacts missing sdk: {sdk}")
+    errors.extend(_native_evm_prover_summary_path_role_errors(label, status))
     if status.get("validation_status") != "passed":
         errors.append(f"{label} validation_status must be passed")
     errors.extend(_string_list_field_errors(label, status, "validation_blockers", allow_empty=True))
@@ -8100,6 +8528,8 @@ def _string_list_field_errors(
         not allow_empty and not value
     ) or any(not isinstance(item, str) or not item for item in value):
         return [f"{label} {field} must be a list of non-empty strings"]
+    if len(value) != len(set(value)):
+        return [f"{label} {field} must not contain duplicate strings"]
     return []
 
 
@@ -9361,6 +9791,20 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         blockers = lane.get("blockers")
         if domain == ACTIVE_LAUNCH_DOMAIN and isinstance(blockers, list) and blockers:
             errors.append(f"{lane_label} blockers must be empty")
+        if domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS:
+            if lane.get("production_ready") is not False:
+                errors.append(
+                    f"{lane_label} production_ready must be false for unsupported "
+                    "diagnostic launch domains"
+                )
+            if (
+                isinstance(blockers, list)
+                and ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER not in blockers
+            ):
+                errors.append(
+                    f"{lane_label} blockers must include the unsupported "
+                    "launch-scope blocker"
+                )
         records = lane.get("records")
         if isinstance(records, dict):
             records_label = f"{lane_label} records"
@@ -9377,8 +9821,27 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         errors.extend(_true_field_errors(records_label, records, field))
                     else:
                         errors.extend(_boolean_field_errors(records_label, records, field))
-        if domain != ACTIVE_LAUNCH_DOMAIN and lane.get("production_ready") is False:
+        records_complete = isinstance(records, dict) and all(
+            records.get(field) is True for field in ALL_LANES_RECORD_KEYS
+        )
+        if (
+            domain != ACTIVE_LAUNCH_DOMAIN
+            and lane.get("production_ready") is False
+            and not (
+                domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS and records_complete
+            )
+        ):
             continue
+        if (
+            domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
+            and records_complete
+            and isinstance(blockers, list)
+            and blockers != [ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER]
+        ):
+            errors.append(
+                f"{lane_label} blockers must contain only the unsupported "
+                "launch-scope blocker when diagnostic evidence is complete"
+            )
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
             source_hashes_label = f"{lane_label} source_record_hashes"
@@ -9762,6 +10225,22 @@ def _all_lanes_summary_schema_errors(
             allow_empty=False,
         )
     )
+    errors.extend(
+        _integer_list_field_errors(
+            label,
+            summary,
+            "supported_launch_domains",
+            allow_empty=False,
+        )
+    )
+    errors.extend(
+        _integer_list_field_errors(
+            label,
+            summary,
+            "unsupported_launch_domains",
+            allow_empty=True,
+        )
+    )
     errors.extend(_list_field_errors(label, summary, "lanes"))
     errors.extend(_string_list_field_errors(label, summary, "blockers", allow_empty=True))
     blockers = summary.get("blockers")
@@ -9772,10 +10251,16 @@ def _all_lanes_summary_schema_errors(
     errors.extend(_all_lanes_lane_schema_errors(label, summary.get("lanes")))
     errors.extend(_all_lanes_route_canary_cross_lane_errors(label, summary.get("lanes")))
     required_domains = summary.get("required_domains")
+    supported_launch_domains = summary.get("supported_launch_domains")
+    unsupported_launch_domains = summary.get("unsupported_launch_domains")
     lanes = summary.get("lanes")
     if (
         isinstance(required_domains, list)
         and all(type(domain) is int for domain in required_domains)
+        and isinstance(supported_launch_domains, list)
+        and all(type(domain) is int for domain in supported_launch_domains)
+        and isinstance(unsupported_launch_domains, list)
+        and all(type(domain) is int for domain in unsupported_launch_domains)
         and isinstance(lanes, list)
         and all(
             isinstance(lane, dict) and type(lane.get("domain")) is int
@@ -9788,19 +10273,50 @@ def _all_lanes_summary_schema_errors(
         if len(set(lane_domains)) != len(lane_domains):
             errors.append(f"{label} lanes contain duplicate domains")
         expected_domains = list(ALL_LANES_REQUIRED_DOMAINS)
+        expected_supported_launch_domains = list(ALL_LANES_SUPPORTED_LAUNCH_DOMAINS)
+        expected_unsupported_launch_domains = list(ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS)
         if required_domains != expected_domains:
             errors.append(
                 f"{label} required_domains must be the production remote domains"
+            )
+        if supported_launch_domains != expected_supported_launch_domains:
+            errors.append(
+                f"{label} supported_launch_domains must be the supported launch remote domains"
+            )
+        if unsupported_launch_domains != expected_unsupported_launch_domains:
+            errors.append(
+                f"{label} unsupported_launch_domains must be the diagnostic unsupported remote domains"
+            )
+        if len(set(supported_launch_domains)) != len(supported_launch_domains):
+            errors.append(f"{label} supported_launch_domains contains duplicate domains")
+        if len(set(unsupported_launch_domains)) != len(unsupported_launch_domains):
+            errors.append(f"{label} unsupported_launch_domains contains duplicate domains")
+        if set(supported_launch_domains).intersection(unsupported_launch_domains):
+            errors.append(
+                f"{label} supported_launch_domains and unsupported_launch_domains must be disjoint"
+            )
+        if sorted(supported_launch_domains + unsupported_launch_domains) != sorted(
+            required_domains
+        ):
+            errors.append(
+                f"{label} supported_launch_domains plus unsupported_launch_domains must match required_domains"
             )
         if lane_domains != expected_domains:
             errors.append(f"{label} lane domains must be the production remote domains")
         if required_domains != lane_domains:
             errors.append(f"{label} required_domains must match lane domains")
-    if "release_checklist" in summary and not isinstance(
-        summary.get("release_checklist"),
-        dict,
-    ):
-        errors.append(f"{label} release_checklist is not an object")
+    if "release_checklist" in summary:
+        release_checklist = summary.get("release_checklist")
+        if not isinstance(release_checklist, dict):
+            errors.append(f"{label} release_checklist is not an object")
+        else:
+            errors.extend(
+                _release_checklist_schema_errors(
+                    label,
+                    release_checklist,
+                    require_ready=False,
+                )
+            )
     return errors
 
 
@@ -9823,6 +10339,7 @@ def _release_checklist_schema_errors(
     if not isinstance(items, list):
         errors.append(f"{label} release_checklist items is not a list")
         return errors
+    seen_item_ids: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
             errors.append(f"{label} release_checklist item is not an object")
@@ -9838,6 +10355,14 @@ def _release_checklist_schema_errors(
         for key in sorted(RELEASE_CHECKLIST_ITEM_KEYS - set(item)):
             errors.append(f"{item_label} missing field: {key}")
         errors.extend(_non_empty_string_field_errors(item_label, item, "id"))
+        if isinstance(item_id, str) and item_id:
+            if item_id in seen_item_ids:
+                errors.append(
+                    f"{label} release_checklist contains duplicate item id: "
+                    f"{item_id}"
+                )
+            else:
+                seen_item_ids.add(item_id)
         errors.extend(_non_empty_string_field_errors(item_label, item, "title"))
         if require_ready:
             errors.extend(_true_field_errors(item_label, item, "ready"))
@@ -10262,13 +10787,6 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.append("all-lanes summary release_checklist is not an object")
         else:
             summary_release_checklist = raw_summary_checklist
-            errors.extend(
-                _release_checklist_schema_errors(
-                    "all-lanes summary",
-                    summary_release_checklist,
-                    require_ready=False,
-                )
-            )
     if report:
         referenced_paths = _referenced_report_artifact_paths(report)
         for unexpected in sorted(set(manifest_artifacts) - referenced_paths):
@@ -10373,6 +10891,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_sdk_receipt_metadata_guard_inventory_errors())
     errors.extend(_ethereum_native_receipt_finality_guard_inventory_errors())
     errors.extend(_ethereum_noncanonical_chain_id_inventory_errors())
+    errors.extend(_sccp_launch_scope_constant_inventory_errors())
     errors.extend(_ethereum_beacon_rest_finalized_header_shape_inventory_errors())
     errors.extend(_ethereum_beacon_rest_execution_payload_binding_inventory_errors())
     errors.extend(_ethereum_sync_committee_roster_inventory_errors())
@@ -10391,6 +10910,10 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_contract_smoke_eth_mainnet_network_id_inventory_errors())
     errors.extend(_contract_smoke_evm_production_surface_inventory_errors())
     errors.extend(_native_sccp_no_wasm_readiness_inventory_errors())
+    errors.extend(_sccp_phase_evidence_source_inventory_errors())
+    errors.extend(_sccp_release_bundle_source_copy_inventory_errors())
+    errors.extend(_sccp_release_bundle_output_path_inventory_errors())
+    errors.extend(_sccp_release_artifact_path_text_inventory_errors())
     errors.extend(_ethereum_data_collection_no_proxy_inventory_errors())
     errors.extend(_bsc_inbound_adversarial_sdk_test_inventory_errors())
     if summary and _active_launch_blockers(summary):

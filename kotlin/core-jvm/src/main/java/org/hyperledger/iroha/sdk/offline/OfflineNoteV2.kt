@@ -29,6 +29,7 @@ object OfflineNoteV2 {
     const val RECURSIVE_VERIFIER_NAME: String = "offline-note-v2-recursive-v1"
     const val RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: String =
         "{\"schema\":\"offline_note_recursive\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}"
+    const val KEY_CERTIFICATE_VERSION: Int = 1
 
     private const val MULTISIG_POLICY_VERSION_V1 = 1
     private const val MAX_NUMERIC_SCALE = 28
@@ -175,7 +176,7 @@ object OfflineNoteV2 {
     }
 
     class KeyCertificateV2 @JvmOverloads constructor(
-        val version: Int = 2,
+        val version: Int = KEY_CERTIFICATE_VERSION,
         val platform: String,
         val keyId: String,
         val deviceId: String,
@@ -1050,7 +1051,9 @@ object OfflineNoteV2 {
     }
 
     private fun requireCertificateCore(version: Int, accountId: String, publicKey: ByteArray, oneUse: Boolean) {
-        require(version == 2) { "Offline Note V2 key certificate version must be 2" }
+        require(version == KEY_CERTIFICATE_VERSION) {
+            "Offline Note V2 key certificate version must be $KEY_CERTIFICATE_VERSION"
+        }
         require(oneUse) { "Offline Note V2 key certificate must be one-use" }
         require(publicKey.size == 32) { "Offline Note V2 note public key must be 32 bytes" }
         encodeAccountIdPayload(accountId)

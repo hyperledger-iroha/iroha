@@ -3,6 +3,7 @@ import CryptoKit
 
 public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError {
     case emptyRequestArchive
+    case oversizedInputArchive
     case invalidInputArchive
     case emptyInputPayload
     case bridgeUnavailable
@@ -16,6 +17,8 @@ public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError
         switch self {
         case .emptyRequestArchive:
             return "Kagemusha recursive spend request archive must not be empty."
+        case .oversizedInputArchive:
+            return "Kagemusha recursive spend input archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .invalidInputArchive:
             return "Kagemusha recursive spend input archive must be a valid Norito archive."
         case .emptyInputPayload:
@@ -637,6 +640,7 @@ public enum KagemushaRecursiveSpendProver {
     private static func requireValidInputArchive(_ archive: Data) throws {
         try requireValidNoritoArchive(
             archive,
+            oversizedError: .oversizedInputArchive,
             invalidError: .invalidInputArchive,
             emptyPayloadError: .emptyInputPayload
         )
@@ -645,6 +649,7 @@ public enum KagemushaRecursiveSpendProver {
     private static func requireValidOutputArchive(_ archive: Data) throws {
         try requireValidNoritoArchive(
             archive,
+            oversizedError: .oversizedNativeOutput,
             invalidError: .invalidNativeOutput,
             emptyPayloadError: .emptyNativeOutputPayload
         )
@@ -652,11 +657,14 @@ public enum KagemushaRecursiveSpendProver {
 
     private static func requireValidNoritoArchive(
         _ archive: Data,
+        oversizedError: KagemushaRecursiveSpendProverError,
         invalidError: KagemushaRecursiveSpendProverError,
         emptyPayloadError: KagemushaRecursiveSpendProverError
     ) throws {
-        guard archive.count <= nativeArchiveMaxBytes,
-              let frame = noritoDecodeFrame(archive),
+        guard archive.count <= nativeArchiveMaxBytes else {
+            throw oversizedError
+        }
+        guard let frame = noritoDecodeFrame(archive),
               frame.paddingLength <= maxNoritoHeaderPaddingBytes
         else {
             throw invalidError

@@ -24,7 +24,8 @@ use crate::{
         SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheInputAdmissionProofV1,
+        SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
+        SoracloudFheInputAdmissionProofV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -374,6 +375,9 @@ pub struct RunSoracloudFheJob {
     pub evaluation_keys: BfvEvaluationKeyBundle,
     /// Public deterministic refresh transcript inventory for evaluation keys.
     pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    /// Optional verifier-backed proof for public bootstrap-key zero-refresh material.
+    #[norito(default)]
+    pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     /// Governance transaction hash attached to the job.
     pub governance_tx_hash: Hash,
     /// Provenance attestation over the job payload.
@@ -1568,6 +1572,7 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
     evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
 });

@@ -260,7 +260,7 @@ register_trigger wake {
 الدوال المدمجة المساندة
 - `info(string|int)`: يُصدر حدثًا/رسالة مُهيكلة عبر OUTPUT.
 - `hash(blob) -> Blob*`: يعيد هاشًا مُشفّرًا بـ Norito على شكل Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` و `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: بُناة ISI داخلية؛ يجب أن تكون كل الوسائط ليترالات وقت الترجمة (ليترالات نصية أو بُناة مؤشرات من ليترالات). يجب أن يكون `nullifier32` و`inputs32` بطول 32 بايت تمامًا (سلسلة خام أو hex `0x`)، ويجب أن يكون `amount` غير سالب.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` و `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: بُناة ISI داخلية؛ يجب أن تكون كل الوسائط ليترالات وقت الترجمة (ليترالات نصية أو بُناة مؤشرات من ليترالات). يجب أن يكون `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `pointer_to_norito(ptr) -> NoritoBytes*`: يلف TLV pointer‑ABI الموجود إلى NoritoBytes للتخزين أو النقل.
 - `isqrt(int) -> int`: الجذر التربيعي الصحيح (`floor(sqrt(x))`) مُنفذ كأمر IVM.

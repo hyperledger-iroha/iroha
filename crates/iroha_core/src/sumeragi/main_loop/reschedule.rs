@@ -1601,7 +1601,7 @@ impl Actor {
         if slot.height != height
             || slot.view != view
             || slot.block_hash != block_hash
-            || !slot.body_present
+            || !slot.body_present()
             || slot.quorum_progress.commit_qc_observed
             || !self.frontier_slot_has_vote_backed_owner_state_in_slot(slot)
         {

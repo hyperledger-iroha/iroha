@@ -2,6 +2,123 @@
 
 Last updated: 2026-06-07
 
+## 2026-06-07 Kagemusha Swift oversized archive diagnostics
+
+- Swift compact-token, recursive aggregation, recursive compact, and recursive
+  spend wrappers now classify over-cap caller archives before Norito parsing,
+  native availability checks, or native dispatch, returning explicit
+  `must not exceed` diagnostics for record, Pallas, compact-token, request,
+  bundle, and previous-witness inputs.
+- Added focused XCTest coverage for every Swift caller-input slot, including
+  recursive compact verifier input, and expanded the Swift parse gate to cover
+  compact-token and recursive-aggregation wrappers/tests.
+- Pinned the new Swift source/test/script markers in the SDK parity guard.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-archive-input-copy`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_swift_sdk.sh`
+  - `swift test --package-path IrohaSwift --filter "KagemushaCompactPaymentTokenProverTests/testRejectsOversizedRecordBundleArchiveBeforeBridgeCall|KagemushaRecursiveAggregationProofBundleProverTests/testRejectsOversizedInputArchivesBeforeBridgeCall|KagemushaRecursiveCompactPaymentTokenProverTests/testRejectsOversizedInputArchivesBeforeBridgeCall|KagemushaRecursiveCompactPaymentTokenProverTests/testVerifyRejectsOversizedCompactTokenArchiveBeforeBridgeCall|KagemushaRecursiveSpendProverTests/testRejectsOversizedInputArchivesBeforeBridgeCall"`
+
+## 2026-06-07 Kagemusha signer artifact-digest direct preflight
+
+- Hardened direct `_artifact_digests(...)` calls in the Android signing helper
+  so the slot metadata preflight runs before any required signed-evidence
+  artifact is hashed.
+- Added adversarial direct-helper regressions for secret-looking slot paths,
+  symlinked slot ancestors, and symlinked artifact directories, proving the
+  preflight error wins before digest construction.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-signing-helper-artifact-digests-preflight`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_artifact_digests_rejects_secret_slot_path_directly_before_hash`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_artifact_digests_rejects_symlinked_slot_ancestor_before_hash`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_artifact_digests_rejects_symlinked_artifact_directory_before_hash`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-artifact-digests-preflight`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`190` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`105` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '[ \\t]+$' scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only --diff-filter=U`
+  - `git status --short -- Cargo.lock`
+
+## 2026-06-07 Kagemusha Android hardlinked manifest rejection
+
+- Hardened direct `parse_sha256_manifest(...)` so hardlinked
+  `sha256sum.txt` manifests are rejected before manifest bytes are read.
+- Hardened direct `verify_sha256_manifest(...)` so manifest-file shape errors
+  remain terminal and do not fall through into slot-file discovery.
+- Added adversarial parser and verifier regressions with a hardlinked manifest
+  containing malformed content, proving the hardlink error wins before parsing
+  or manifest-coverage diagnostics.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-manifest-hardlink` plus
+  `--negative-control-android-device-lab-manifest-file-shape-terminal`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k parse_sha256_manifest_rejects_hardlinked_manifest_before_read`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k verify_sha256_manifest_rejects_hardlinked_manifest_before_discovery`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`187` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`105` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '[ \\t]+$' scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only --diff-filter=U`
+  - `git status --short -- Cargo.lock`
+
+## 2026-06-07 Kagemusha Android slot-file discovery path preflight
+
+- Hardened direct `_slot_files(...)` calls so secret-looking slot paths and
+  symlinked slot ancestors return no discovered artifacts before traversal.
+- Added adversarial direct-helper regressions proving secret-bearing slot roots
+  and symlinked slot ancestors produce an empty discovery set without leaking or
+  walking local artifact paths.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-slot-files-direct-secret-paths` plus
+  `--negative-control-android-device-lab-slot-files-direct-ancestor-symlink`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_files_secret_slot_path_returns_empty_without_traversal`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_files_rejects_symlinked_slot_ancestor_directly_without_traversal`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-ancestor-symlink`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`185` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`105` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '[ \\t]+$' scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only --diff-filter=U`
+  - `git status --short -- Cargo.lock`
+
 ## 2026-06-07 Kagemusha Android manifest slot-path preflight
 
 - Added a shared manifest slot-path preflight so direct
@@ -344,6 +461,10 @@ Last updated: 2026-06-07
   before live rail/notary delivery, trust-source ingestion, canary planning,
   receipt verification, evidence archiving, or readiness rollup, and normalized
   non-port URL parser failures to label-only diagnostics.
+- Hardened local path, raw CLI, summary-path, artifact-path, and URL-path
+  validators with a narrow identifier-style path detector that catches
+  composite secret names such as `token-*-secret` and strong key markers without
+  preempting legitimate bearer-token file shape checks.
 - Added adversarial trust-bundle, evidence-archive, and readiness-rollup
   mutations proving rail, policy, SHA-256, and OID markers are rejected with no
   secret echo.
@@ -352,6 +473,10 @@ Last updated: 2026-06-07
 - Added trust-source, live rail/notary, canary, receipt, evidence, and readiness
   URL host/parser regressions proving secret-looking host labels and malformed
   parser inputs are rejected without echoing the rejected URL text.
+- Added path and URL-path regressions across trust, rail, notary, canary,
+  receipt, evidence, readiness, and XSD tooling proving identifier-style secret
+  path segments are rejected without echo while ordinary token-file paths still
+  reach their intended filesystem validators.
 - Remaining production blockers are still external: live rail/notary delivery
   evidence, official trust/revocation bundles, and redistributable official ISO
   schemas/profile coverage for the remaining gaps.
@@ -364,6 +489,8 @@ Last updated: 2026-06-07
   - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
     (`557` tests passed)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_rejected_source_url_does_not_echo_secret_query pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_rejected_torii_url_does_not_echo_secret_path pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_bearer_token_file_adds_authorization_without_persisting_token pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_regular_bearer_token_files_are_rejected_before_network_delivery pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_looking_message_paths_are_rejected_before_receipt_output pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_rejected_endpoint_does_not_echo_secret_path pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_bearer_token_file_adds_authorization_without_persisting_token pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_non_regular_bearer_token_files_are_rejected_before_network_delivery pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_endpoint_urls_reject_secret_path_without_echo pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_endpoint_urls_reject_secret_path_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_source_urls_reject_secret_path_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_source_urls_reject_secret_path_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_rejected_compact_trust_source_url_does_not_echo_secret_query pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_output_cli_paths_reject_encoded_secret_material_without_echo`
+    (`21` tests passed)
   - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --require-fixture-for-schema --validate-xml-schema --summary-out target/iso-gates/iroha_iso_xsd_fixture_strict.json`
   - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --validate-xml-schema --summary-out target/iso-gates/iroha_iso_xsd_profile_summary.json`
   - `python3 scripts/iso_trust_bundle_verify.py --bundle fixtures/iso20022/trust_bundles/swift_cbpr_plus.preprod.example.json --bundle fixtures/iso20022/trust_bundles/fedwire_funds.preprod.example.json --bundle fixtures/iso20022/trust_bundles/sepa_sct_inst.preprod.example.json --bundle fixtures/iso20022/trust_bundles/securities_csd.preprod.example.json --allow-synthetic-der --summary-out target/iso-gates/iroha_iso_trust_templates_summary.json`
@@ -651,6 +778,13 @@ Last updated: 2026-06-07
   entry points reject empty or oversized archive lengths before raw slice
   construction. Added oversized-length regressions for single-archive,
   multi-archive, and lineage-witness input positions.
+- Hardened Java Android and Kotlin/JVM Kagemusha compact-token, recursive
+  aggregation, recursive compact, and recursive spend input validators so
+  over-cap caller archives return explicit `must not exceed` diagnostics before
+  Norito parsing or native dispatch. Added Android/Kotlin tests for compact,
+  aggregation, recursive compact, and recursive spend single-, pair-, and
+  triple-archive input positions, and pinned the source/test markers in the SDK
+  parity guard plus archive-input negative control.
 - Added the lineage-witness invalid-input bridge test to the Kagemusha payload
   workflow and native-bridge workflow negative control. The native bridge job
   also now pins lightweight unanchored compact-token, record-backed
@@ -688,6 +822,8 @@ Last updated: 2026-06-07
     (`1` selected test passed)
   - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-archive-input-copy`
+  - `KAGEMUSHA_RECURSIVE_SPEND_JVM_JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home bash ci/check_kagemusha_recursive_spend_jvm_sdk.sh`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-test-workflow`
   - `node --test test/kagemushaFfiContractParity.test.js`
     (`22` tests passed)
@@ -4308,6 +4444,3183 @@ Last updated: 2026-06-07
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `cargo check -p iroha_js_host`
 
+## 2026-06-06 Torii feature-minimal connect corridor restoration
+
+- Closed the no-`app_api` Torii compile leak by gating app-only route helpers,
+  heavy test modules, ZK IVM proof handlers, proof-record reads, hosted HTTP
+  proxy fallbacks, and the `attachment_sanitizer`/`torii_hot_paths` Cargo
+  targets behind their owning features.
+- Kept the core ZK convenience surface available without `app_api`: roots,
+  verify, submit-proof, and vote-tally DTOs and handlers are exported in the
+  feature-minimal build, while app-specific IVM proof routes stay `app_api`-
+  owned.
+- The feature-minimal pipeline transaction-status handler is now local-only
+  instead of compiling app-only fanout/proxy code. `/v1/proofs/{id}` remains an
+  app-api route; proof-retention status and the core ZK routes remain available
+  in the minimal corridor.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_torii --no-default-features --features connect`
+  - `cargo test -p iroha_torii --no-default-features --features connect --lib -- --nocapture`
+    (`606` tests passed)
+  - `cargo clippy -p iroha_torii --no-default-features --features connect --all-targets -- -D warnings`
+  - `cargo test -p iroha_torii --tests --features app_api -- --nocapture`
+    (completed successfully; library phase reported `2309` passed, `2`
+    ignored, and all standalone test binaries passed)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
+
+## 2026-06-06 Torii SCCP launch-scope gate alignment
+
+- Aligned Torii's configured SCCP all-lanes launch diagnostic with the shared
+  `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1` scope. The gate now checks only
+  ETH, BSC, Solana, TON, and TRON for current launch readiness instead of
+  requiring diagnostic-only Substrate/Polkadot-family rows to become
+  production-ready.
+- Split the Torii SCCP test fixture so supported launch lanes must pass with
+  complete configured material, while SORA2/Substrate configured material still
+  proves the explicit unsupported launch-scope blocker and finalized-runtime
+  evidence validation.
+- Folded the SCCP gate fix through the broader Torii `app_api` integration
+  corridor. The governance council current fixture now seeds the configured
+  stake asset before deriving fallback eligibility, the MCP governance dispatch
+  test respects `gov_vrf`-gated council mutation tools, ZK roots fixtures use
+  valid non-empty confidential encrypted payloads, and ZK attachment smoke
+  tests assert the current Norito `ErrorEnvelope` error contract.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii configured_ --lib --features app_api -- --nocapture`
+    (`28` tests passed)
+  - `cargo test -p iroha_torii --lib --features app_api -- --nocapture`
+    (`2309` tests passed, `2` ignored)
+  - `cargo test -p iroha_torii --test gov_read_endpoints --features app_api -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_torii --test mcp_endpoints --features app_api mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii --test zk_roots_handler_integration --features app_api -- --nocapture`
+    (`7` tests passed)
+  - `cargo test -p iroha_torii --test zk_subrouter_smoke --features app_api -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_torii --tests --features app_api -- --nocapture`
+    (completed successfully; library phase reported `2309` passed, `2`
+    ignored, and all standalone test binaries passed)
+
+## 2026-06-06 Torii placeholder wording sweep
+
+- Removed stale placeholder/stub wording from the governance deploy-proposal
+  response docs and ZK1 structural validator comment. Deploy proposal responses
+  now document `proposal_id` as the deterministic 32-byte BLAKE2b hex id and
+  the existing handler test asserts the 64-character hex shape.
+- Re-ran the Torii code-only placeholder/TODO scan. Remaining matches are
+  intentional test placeholder literals, fail-closed placeholder-material guards,
+  the OpenAPI fallback skeleton, manifest-derived contract source rendering, and
+  telemetry peer compatibility handling for remote `501` responses.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii propose_deploy_builds_instruction_skeleton --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Torii SoraFS proof-stream PDP rejection cleanup
+
+- Replaced the SoraFS proof-stream `proof_kind=pdp` `501 Not Implemented`
+  responses with `400 Bad Request` unsupported-proof-kind responses. The live
+  `/v1/sorafs/proof/stream` contract now explicitly accepts PoR and PoTR only;
+  PDP remains reserved for future SF-13 provider protocol work.
+- Updated the proof-stream DTO comments, OpenAPI path description, and SoraFS
+  proof-streaming documentation to make the current PoR/PoTR-only surface
+  explicit, then regenerated the portal OpenAPI bundle.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii proof_stream_rejects_pdp_as_bad_request --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - static OpenAPI absence check for disabled default paths
+  - `git diff --check`
+  - lockfile diff check
+
+## 2026-06-06 Torii routed proxy unsupported-response cleanup
+
+- Replaced the routed-query `query_unsupported` helper's `501 Not Implemented`
+  status with `409 Conflict`. These paths cover already-implemented Nexus
+  fanout logic receiving incompatible routed query shapes or coordinator-scope
+  mismatches, so they now surface as stable conflict responses rather than
+  placeholder implementation failures.
+- Replaced no-`app_api` inbound Torii proxy `Read`, `ReadFanout`, and
+  `HostedHttp` fallbacks with `503 route_unavailable` responses while
+  preserving the existing reject code and diagnostic text.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii unsupported_routed_query_response_is_conflict_not_not_implemented --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii non_account_target_as_conflict --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+- Blocked validation:
+  - `cargo test -p iroha_torii app_api_required_torii_proxy_response_is_route_unavailable --lib --no-default-features --features connect -- --nocapture` is blocked by pre-existing no-`app_api` Torii compile failures across app-gated imports/tests.
+
+## 2026-06-06 Torii alias target conflict cleanup
+
+- Replaced the remaining account-alias resolver `501 Not Implemented` branches
+  for stored non-account `AliasTarget` records with a documented `409 Conflict`
+  response. `/v1/aliases/resolve` and `/v1/aliases/resolve_index` remain
+  account-alias endpoints, but incompatible alias-service records now fail as
+  stable client-visible conflicts instead of advertising an unfinished handler.
+- Updated the generated OpenAPI response maps for alias resolution and
+  resolve-index conflict cases, then regenerated the portal OpenAPI bundle.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii non_account_target_as_conflict --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - static OpenAPI absence check for disabled default paths
+  - `git diff --check`
+  - lockfile diff check
+
+## 2026-06-06 Torii disabled feature route-surface cleanup
+
+- Removed default-build placeholder `501 Not Implemented` routing for
+  `/status`, `/metrics`, `/v1/debug/axt/cache`, `/v1/debug/witness`,
+  `/v1/schema`, `/debug/pprof/profile`, and `/v1/zk/verify-batch`. These routes
+  are now mounted only when their owning features (`telemetry`, `schema`,
+  `profiling`, and `zk-verify-batch`) are compiled, so the default production
+  route surface returns `404` instead of advertising unavailable handlers.
+- Gated the generated OpenAPI telemetry, schema, and profiling paths behind
+  their feature flags and regenerated the portal OpenAPI bundle. The default
+  static specs no longer list `/status`, `/metrics`, `/v1/debug/axt/cache`,
+  `/v1/schema`, or `/debug/pprof/profile`; `/v1/zk/verify-batch` remains absent
+  unless the batch verifier feature is compiled.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test router_feature_matrix --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Offline V2 fixture and SDK certificate-version alignment
+
+- Refreshed `fixtures/offline/interop_contract_v2.json` from the
+  `offline_v2_vectors` generator so the published Offline V2 redeem vector uses
+  the chain-admissible `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` directly instead
+  of a stale key-certificate version.
+- Removed Torii's test-only fixture normalization path. The redeem route now
+  consumes the committed fixture as-is for the positive case, while a separate
+  stale-version regression mutates the certificate version and recomputes the
+  recursive public-input hash before proving Torii rejects it.
+- Aligned the Swift, Kotlin/JVM, and Java Android Offline Note V2 SDK
+  certificate-version constants with the Rust chain constant so wallet-side
+  constructors accept the refreshed shared fixture.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors`
+  - `cargo run -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --check`
+  - `cargo test -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- --nocapture`
+  - `cargo test -p iroha_torii offline_v2_issuer --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `cargo clippy -p iroha_data_model --features test-fixtures,transparent_api --bin offline_v2_vectors -- -D warnings`
+- Blocked local SDK validation:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteV2Test --console=plain` failed because no Java runtime is installed.
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --tests org.hyperledger.iroha.android.offline.OfflineNoteV2Test --console=plain` failed because no Java runtime is installed.
+  - `swift test --filter OfflineNoteV2Tests` failed because `dist/NoritoBridge.xcframework` is not materialized.
+
+## 2026-06-06 Torii governance VRF surface gating
+
+- Removed the default `/v1/gov/council/derive-vrf` fallback handler that only
+  returned `not implemented`. Default Torii builds no longer mount or advertise
+  council persist, replace, or derive-vrf mutation helpers unless the
+  `gov_vrf` feature is compiled.
+- Aligned the OpenAPI generator and MCP tool registry with the same feature
+  boundary. Default generated specs omit the VRF council mutation paths, while
+  `gov_vrf` test builds still assert the HTTP/tool surface is present.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii tool_registry_skips_ws_and_sse_routes --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api,gov_vrf -- --nocapture`
+  - `cargo test -p iroha_torii tool_registry_skips_ws_and_sse_routes --lib --features app_api,gov_vrf -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces --features app_api,gov_vrf -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api,gov_vrf -- -D warnings`
+
+## 2026-06-06 Torii Offline V2 redeem route wiring
+
+- Wired the Offline V2 issuer runtime into Torii app state and mounted the
+  versioned Offline V2 HTTP surface under `/v1/offline/v2/*`, including the
+  V2 readiness document, key refill, note issue, note redeem, and audit routes.
+- Implemented the Offline V2 note redemption handler. It accepts either
+  canonical Norito `OfflineNoteRedeem` payloads or structured JSON redemption
+  objects, binds the redemption to the authenticated account and asset, rejects
+  stale key-certificate versions, enforces nullifier/amount bounds, recomputes
+  the recursive public-input hash, and submits `RedeemOfflineNoteV2` through the
+  normal transaction path.
+- Removed stale legacy Offline policy/revocation HTTP route registrations and
+  the v1 redeem/audit stubs that only returned issuer-unavailable errors. The
+  readiness smokes now prove `/v1/offline/revocations*`,
+  `/v1/offline/notes/redeem`, and `/v1/offline/audit` stay absent while the
+  generated portal OpenAPI bundle advertises the versioned Offline V2 routes.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_readiness_smoke --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii redeem_route_ --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii offline_issuer --lib --features app_api -- --nocapture`
+  - `cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --manifest docs/portal/static/openapi/manifest.json --unsigned-manifest`
+  - `node scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (from `docs/portal`)
+  - `node scripts/verify-openapi-versions.mjs` (from `docs/portal`)
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Torii ZK prover report tag-filter hardening
+
+- Torii ZK prover report list/count/bulk-delete filters now reject malformed
+  `has_tag` values up front. The accepted shape matches indexed ZK1 TLV tags:
+  exactly four printable ASCII characters such as `PROF`.
+- Documented the report count and bulk-delete endpoints plus the fail-closed
+  `has_tag` contract in the ZK app API notes.
+- Repaired the Torii prover-report success fixture to use the public
+  `halo2/ipa:tiny-add-public` envelope and matching registry schema hash, so
+  the integration test exercises a verifier-valid report instead of a stale
+  private-circuit fixture shape.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii validate_zk1_tag_filter_rejects_malformed_tags --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_invalid_tag_filter_is_rejected --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_list_get_delete --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration prover_reports_ok_and_failed_filters_together_return_all_reports --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii --test zk_prover_integration --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+
+## 2026-06-06 Torii API-token telemetry counter
+
+- Replaced Torii's API-token-gated endpoint telemetry no-op with a bounded
+  Prometheus counter for Sumeragi/SCCP/bridge API hits. The counter records the
+  endpoint and token state (`present`/`empty`) and never exports raw API-token
+  material.
+- Tightened the SCCP route-manifest alias resolver to satisfy the strict
+  feature-enabled Torii clippy corridor without changing the existing validation
+  behaviour.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_telemetry records_api_token_hits_without_exporting_token_material -- --nocapture`
+  - `cargo test -p iroha_core torii_pre_auth_metrics_track_usage --lib --features telemetry -- --nocapture`
+  - `cargo test -p iroha_config matching_proof_artifact_hash_aliases_are_allowed --lib -- --nocapture`
+  - `cargo test -p iroha_torii telemetry::tests::api_hits_increment_without_exporting_token_material --lib --features app_api,telemetry -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api,telemetry -- -D warnings`
+## 2026-06-06 Connect bridge SM2 private-output zeroization
+
+- Hardened `connect_norito_sm2_keypair_from_seed` so the 32-byte SM2 private
+  scalar returned to the C caller is copied from a `Zeroizing<[u8; 32]>`
+  staging buffer instead of an unguarded `secret_bytes()` temporary.
+- Added a focused FFI regression that derives an SM2 keypair from a seed, parses
+  the returned private scalar, derives the public key, and verifies it matches
+  the returned public output.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge sm2_keypair_from_seed_private_output_derives_public_key --lib -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-06 Connect bridge seed keypair private-output zeroization
+
+- Hardened `connect_norito_keypair_from_seed` so the serialized private-key
+  payload returned to C callers is staged in a `Zeroizing<Vec<u8>>` until it is
+  copied into the caller-owned output buffer.
+- Mirrored the same treatment in the JNI keypair-from-seed helper by returning
+  the Rust-side private payload as `Zeroizing<Vec<u8>>` while Java byte-array
+  ownership is constructed.
+- Added focused C-ABI and JNI-helper regressions that derive the public key back
+  from the returned private payload and verify it matches the returned public
+  key.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge keypair_from_seed_private_output_derives_public_key --lib -- --nocapture`
+    (`2` tests passed)
+  - `git diff --check -- crates/connect_norito_bridge/src/lib.rs status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/connect_norito_bridge/src/lib.rs status.md`
+
+## 2026-06-06 Connect bridge X25519 private-output zeroization
+
+- Hardened `connect_norito_connect_generate_keypair` so the generated X25519
+  private-key bytes copied to the C caller are first bound to a
+  `Zeroizing<[u8; 32]>` buffer instead of being copied from an unguarded
+  `to_bytes()` temporary.
+- Added a focused C-ABI regression that generates a Connect keypair, verifies
+  nonzero public/private outputs, derives the public key from the exported
+  private key, and checks it matches the generated public key.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs`
+  - `git diff --check -- crates/connect_norito_bridge/src/lib.rs status.md`
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
+  - Attempted `CARGO_TARGET_DIR=/tmp/iroha-codex-connect-bridge-x25519-zeroize CARGO_INCREMENTAL=0 cargo test -p connect_norito_bridge connect_generate_keypair_private_output_derives_public_key --lib -- --nocapture`; this was blocked by `rustc-LLVM ERROR: IO failure on output stream: No space left on device` while compiling `iroha_core`.
+  - Removed the failed `/tmp/iroha-codex-connect-bridge-x25519-zeroize` target
+    directory afterwards.
+  - Retried with the existing workspace target:
+    `CARGO_INCREMENTAL=0 cargo test -j 1 -p connect_norito_bridge connect_generate_keypair_private_output_derives_public_key --lib -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-06 Sumeragi frontier terminal outcome exclusivity proof
+
+- Added `TerminalFrontierOutcomesAreExclusive` to the focused frontier recovery
+  model so committed, dropped, and rotated terminal outcomes are mutually
+  exclusive, clear quorum-reschedule timers, and keep non-`None` drop labels
+  exactly aligned with dropped states.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "TerminalFrontierOutcomesAreExclusive|frontier terminal outcome exclusivity" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`18` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, computation length `7`, 1 min 29 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, depth `11`)
+
+## 2026-06-06 Ed25519 non-32 seed digest zeroization
+
+- Hardened Ed25519 seeded key generation for non-32-byte seed material by
+  explicitly zeroizing the SHA-256 digest temporary after copying it into the
+  guarded 32-byte seed buffer.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/ed25519.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-ed25519-seed-digest-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib seeded_keypair_hashes_non_32_seed -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-ed25519-seed-digest-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 BLS private-key export temporary zeroization
+
+- Hardened top-level BLS private-key payload export for both the default w3f
+  backend and the `bls-backend-blstrs` backend so stored secret bytes are copied
+  through `Zeroizing` export buffers before producing the caller-owned payload.
+- Added a BLS normal/small private-key export roundtrip regression that exports,
+  reparses, signs, and verifies with the original public key.
+- Added the missing Norito JSON enum tag to `BfvBootstrapKeyMode`, which
+  unblocked json-enabled `iroha_crypto` clippy after the in-flight bootstrap-key
+  mode addition.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/signature/bls/implementation.rs crates/iroha_crypto/src/signature/bls/implementation_blstrs.rs`
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-bls-export-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib --features bls private_key_try_to_bytes_roundtrips_bls_payloads -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-bls-export-zeroize-blstrs CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib --features bls-backend-blstrs private_key_try_to_bytes_roundtrips_bls_payloads -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-bls-export-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --features bls --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-bls-export-zeroize-blstrs CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --features bls-backend-blstrs --no-deps -- -D warnings`
+
+## 2026-06-06 BFV bootstrap key mode boundary
+
+- Added `BfvBootstrapKeyMode` and made generated bootstrap refresh keys
+  advertise `RefreshOnlyV1` explicitly.
+- Validation now rejects the reserved `FullBootstrapV1` mode with a
+  circuit-material error before the encrypted-zero refresh bridge can run or
+  produce a refresh proof statement digest. This keeps the current Soracloud
+  `Bootstrap` path from being misclassified as full BFV bootstrapping while
+  the full circuit/key-material implementation remains open.
+- Bundle validation and digesting now apply the same mode gate, so
+  transcript-bound bootstrap proof statements cannot be produced from reserved
+  full-bootstrap material.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-mode CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_full_mode_requires_circuit_material --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-mode CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_rejects_full_bootstrap_mode --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-mode-refresh CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_refresh_uses_round_specific_public_material --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-mode CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_rejects_adversarial_bootstrap_key_ids --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-mode-refresh CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_rejects_adversarial_bootstrap_round_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-mode-dm CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-mode CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/soracloud/manifest_schemas.md docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-06 SCCP Torii configured launch-scope readiness
+
+- Scoped Torii configured all-lanes SCCP launch readiness to
+  `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, matching the release evidence
+  inventory and public discovery surface.
+- Added a direct unsupported-lane guard for configured launch checks, so
+  SORA2/SORA Kusama/SORA Polkadot return the explicit
+  Substrate/Polkadot unsupported blocker instead of a generic future-lane
+  policy message.
+- Updated the configured launch fixtures and regressions for the active
+  Ethereum mainnet launch policy, including supported-domain all-lanes route
+  canary checks and an adversarial regression proving malformed Substrate
+  diagnostic records cannot block supported all-lanes readiness.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii configured_all_lanes_launch --lib -- --nocapture`
+    (`13` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii configured_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii destination_binding_query_respects_ethereum_lane_launch_policy --lib -- --nocapture`
+    (`1` test passed after freeing earlier temporary Torii target dirs that had
+    filled `/tmp`)
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/openapi.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_ --lib -- --nocapture`
+    (`78` tests passed)
+  - `git diff --check -- crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/openapi.rs docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-06 Sumeragi frontier future-promotion fresh-slot proof
+
+- Added `FuturePromotionInstallsFreshSecondSlot` to the focused frontier
+  recovery model so a freshly promoted future frontier slot must become the
+  active, vote-backed, non-dropped second slot, consume and clear the staged
+  future evidence, and satisfy the active-progress reset invariant.
+- Wired the invariant through the frontier fast/deep/wide Apalache configs and
+  the TLC fast/small configs, then documented the proof in the frontier
+  recovery invariant list and roadmap.
+- Validation:
+  - `rg -n "FuturePromotionInstallsFreshSecondSlot" docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg`
+    (`17` invariants in each sampled config)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_deep.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_wide.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_small.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, depth `11`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`NoError`, `EXITCODE: OK`, 1 min 27 sec)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    first hit an environment `No space left on device` after `2,037,826`
+    generated states and `1,131,384` distinct states; after cleaning generated
+    TLC/Apalache output and confirming free space, the retry passed with
+    `2,265,283` states generated, `1,165,588` distinct states, depth `11`.
+
+## 2026-06-06 Soracloud FHE inactive bootstrap digest rejection
+
+- Tightened `FheExecutionPolicyV1` admission so
+  `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+  `max_bootstrap_count > 0` and rejected when `max_bootstrap_count == 0`.
+  This removes inactive bootstrap-proof statement material before Core runtime
+  admission and keeps non-bootstrap policies from carrying stale verifier-bound
+  proof digests.
+- Added a negative policy regression for the stale-digest case while preserving
+  the valid zero-budget/`None` policy path.
+- Updated the Soracloud manifest schema documentation with the required/omitted
+  digest rule for FHE execution policies.
+- Mirrored the same code-level digest presence invariant across all localized
+  Soracloud manifest schema pages to avoid translation drift around the
+  `max_bootstrap_count` gate.
+- Tightened the Core bootstrap-proof verifier helper so a bootstrap operation
+  fails closed if the policy-bound statement digest is absent, even when
+  upstream policy validation would normally reject that state earlier.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_data_model fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_data_model --lib -- --nocapture`
+    (`1444` tests passed; `2` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo clippy -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+  - `rg --files-without-match "bootstrap_key_zero_refresh_proof_statement_digest" docs/source/soracloud/manifest_schemas*.md`
+    (no missing schema pages)
+  - `git diff --check -- docs/source/soracloud/manifest_schemas*.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" docs/source/soracloud/manifest_schemas*.md status.md`
+    (no matches)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_core soracloud_fhe_bootstrap_key_proof_requires_policy_statement_digest_for_bootstrap_jobs --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_core soracloud_fhe_bootstrap_key_proof --lib -- --nocapture`
+    (`6` tests passed)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo clippy -p iroha_core --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Classic private-key export temporary zeroization
+
+- Hardened top-level Ed25519 and secp256k1 private-key payload export so the
+  algorithm-specific secret byte arrays returned by backend `to_bytes()` calls
+  are wrapped in `Zeroizing` before being copied into the API's returned
+  `Vec<u8>`.
+- Added a deterministic top-level roundtrip test that exports Ed25519 and
+  secp256k1 private-key payloads, reparses them, and verifies signatures with
+  the original public keys.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-private-export-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib private_key_try_to_bytes_roundtrips_classic_payloads -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-private-export-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud bootstrap verifier registry admission
+
+- Added a canonical Soracloud bootstrap-key proof gas-schedule id constant and
+  reused it in the Core verifier fixture.
+- `RegisterVerifyingKey` and `UpdateVerifyingKey` now reject records that claim
+  the canonical Soracloud bootstrap verifier unless the registry id, namespace,
+  STARK/Goldilocks profile, circuit version, public-input schema hash, gas
+  schedule, and active inline key material match the governed v1 profile.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-vk-rollout CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core register_vk_accepts_canonical_soracloud_bootstrap_record --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-vk-rollout CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core register_vk_rejects_active_soracloud_bootstrap_without_inline_key --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-vk-rollout CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core register_vk_rejects_soracloud_bootstrap_metadata_drift --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-vk-rollout CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core update_vk_rejects_soracloud_bootstrap_metadata_drift --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-vk-clippy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Ed25519 private-key parser seed zeroization
+
+- Hardened the Ed25519 32-byte private-key parser path so seed payloads are
+  copied into a `Zeroizing<[u8; 32]>` buffer before constructing the
+  `ed25519-dalek` signing key, matching the existing guarded handling for
+  random seeds, derived seeds, and 64-byte keypair payloads.
+- Removed the now-unused generic fixed-size parser helper to keep the signing
+  module warning-clean.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/ed25519.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-ed25519-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib parse_private_key_accepts_seed_or_keypair_bytes -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-ed25519-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib parse_private_key_rejects_mismatched_keypair_bytes -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-ed25519-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 data-model Norito golden validation cleanup
+
+- Restored the full `iroha_data_model --lib` validation gate by separating the
+  `BackendTag` discriminant golden into bare Norito enum bytes plus a framed
+  Norito roundtrip check. This keeps the enum-order invariant explicit without
+  treating framed `norito::to_bytes` output as a four-byte bare payload.
+- Updated the recursive Kagemusha fixed-proof payload-size golden to the current
+  canonical framed archive length while preserving the material-growth ceiling
+  and the hop-count independence assertions across the 64-hop compact-token
+  limit.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_data_model backend_tag_norito_discriminants_preserve_legacy_order_and_pending_range --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_data_model kagemusha_recursive_spend_payload_size_is_hop_count_independent --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo test -p iroha_data_model --lib -- --nocapture`
+    (`1444` tests passed; `2` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-goldens cargo clippy -p iroha_data_model --lib --tests --no-deps -- -D warnings`
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/zk.rs crates/iroha_data_model/src/offline/mod.rs`
+  - `git diff --check -- crates/iroha_data_model/src/zk.rs crates/iroha_data_model/src/offline/mod.rs status.md`
+
+## 2026-06-06 Sumeragi commit-artifact current-view proof
+
+- Added `CommitArtifactsChangeCommitsCurrentViewStep` and
+  `CommitArtifactsChangeAlwaysCommitsCurrentView` to prove that any durable
+  commit-view or commit-certificate witness change commits the current active
+  view, keeps `view' = view`, installs `commitView'` as that same view,
+  preserves view-quorum evidence, and excludes NewView handoff state from the
+  commit.
+- Wired the property through fast/deep/TLC-fast configs and documented the
+  commit-artifact current-view witness exactness mode in README/roadmap.
+- Validation:
+  - `rg -n "CommitArtifactsChangeCommitsCurrentViewStep|CommitArtifactsChangeAlwaysCommitsCurrentView|commit-artifact current-view witness exactness" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`205`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `git diff --check -- docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`; after replacing a forward reference with already-defined
+    finality-latch predicates)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`, 30 min 20 sec)
+
+## 2026-06-06 Hybrid X25519 shared-secret zeroization
+
+- Enabled x25519-dalek's `zeroize` feature for both `iroha_crypto` and
+  `irohad` so X25519 `StaticSecret` and `SharedSecret` values wipe their
+  internal scalar/shared material on drop instead of relying only on guarded
+  caller-side buffers.
+- Added a focused hybrid test that proves an X25519 `SharedSecret` implements
+  explicit zeroization and clears to zero when wiped.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/hybrid.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-x25519-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib x25519_shared_secret_zeroizes_explicitly -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-x25519-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib generated_keys_roundtrip -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iroha-crypto-x25519-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-x25519-zeroize CARGO_INCREMENTAL=0 cargo test -p irohad --bin irohad soracloud_runtime::tests::stub_runtime_config_rejects_production_mode -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-x25519-zeroize CARGO_INCREMENTAL=0 cargo clippy -p irohad --bin irohad --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud FHE bootstrap-proof operation scope
+
+- Tightened Soracloud FHE bootstrap-key proof admission so
+  `RunSoracloudFheJob` rejects `bootstrap_key_zero_refresh_proof` on
+  non-bootstrap jobs before decoding the proof envelope, looking up verifier
+  records, or charging proof verification work.
+- Added direct adversarial coverage with a malformed proof payload that is
+  rejected solely because the job is out of bootstrap scope, plus a runtime
+  regression proving an ordinary ciphertext job fails closed when a signed
+  out-of-scope bootstrap proof is supplied and still succeeds when the proof is
+  absent.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-scope cargo test -p iroha_core soracloud_fhe_bootstrap_key_proof --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-scope cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-scope cargo test -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+    (`72` tests passed; `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-scope cargo clippy -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-scope cargo test -p iroha_data_model --lib -- --nocapture`
+    compiled the `FheExecutionPolicyV1` literals, then failed in unrelated
+    existing golden tests:
+    `zk::tests::backend_tag_norito_discriminants_preserve_legacy_order_and_pending_range`
+    and
+    `offline::offline_note_tests::kagemusha_recursive_spend_payload_size_is_hop_count_independent`
+    (`1442` passed, `2` failed, `2` ignored)
+
+## 2026-06-06 SoraNet PQ ML-KEM shared-secret buffer zeroization
+
+- Hardened ML-KEM encapsulation and decapsulation so backend shared-secret
+  output buffers are allocated as `Zeroizing<Vec<u8>>` and transferred into
+  `MlKemSharedSecret` without an intermediate plain heap vector.
+- Preserved public `MlKemSharedSecret::as_bytes()` behavior and deterministic
+  seeded encapsulation output.
+- Validation:
+  - `rustfmt --edition 2024 crates/soranet_pq/src/mlkem.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-mlkem-shared-zeroize CARGO_INCREMENTAL=0 cargo test -p soranet_pq --lib shared_secret_constructor_preserves_guarded_payload -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-mlkem-shared-zeroize CARGO_INCREMENTAL=0 cargo test -p soranet_pq --lib roundtrip_768 -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-mlkem-shared-zeroize CARGO_INCREMENTAL=0 cargo test -p soranet_pq --lib seeded_encapsulation_is_deterministic -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-mlkem-shared-zeroize CARGO_INCREMENTAL=0 cargo clippy -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SoraNet PQ hedged RNG seed temporary zeroization
+
+- Hardened `soranet_pq` hedged RNG construction so both the live OS entropy
+  buffer and the derived ChaCha20 seed are held in `Zeroizing<[u8; 32]>`
+  rather than plain arrays with manual cleanup.
+- Preserved deterministic replay and public constructor behavior.
+- Validation:
+  - `rustfmt --edition 2024 crates/soranet_pq/src/rng.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng-zeroize CARGO_INCREMENTAL=0 cargo test -p soranet_pq --lib deterministic_with_fixed_inputs -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng-zeroize CARGO_INCREMENTAL=0 cargo test -p soranet_pq --lib public_constructor_reports_status -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng-zeroize CARGO_INCREMENTAL=0 cargo test -p soranet_pq --lib os_seed_and_rng_constructors_produce_streams -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng-zeroize CARGO_INCREMENTAL=0 cargo clippy -p soranet_pq --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi committed-phase current-view proof
+
+- Added `CommittedPhaseEntryCommitsCurrentViewStep` and
+  `CommittedPhaseEntryAlwaysCommitsCurrentView` to prove that first entry into
+  `Committed` commits the current active view, keeps `view' = view`, installs
+  `commitView'` as that same view, preserves view-quorum evidence, and excludes
+  NewView handoff state from the commit.
+- Wired the property through fast/deep/TLC-fast configs and documented the
+  committed-phase current-view commit witness exactness mode in README/roadmap.
+- Validation:
+  - `rg -n "CommittedPhaseEntryCommitsCurrentViewStep|CommittedPhaseEntryAlwaysCommitsCurrentView|committed-phase current-view commit witness exactness" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`204`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `git diff --check -- docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`, `32 min 45 sec`)
+
+## 2026-06-06 GOST deterministic nonce HMAC state zeroization
+
+- Hardened the GOST deterministic nonce HMAC helper so HMAC outputs are
+  returned as `Zeroizing<Vec<u8>>` and assigned directly into the nonce
+  generator's guarded `k`/`v` state, avoiding plain heap vectors for
+  secret-derived nonce state between helper return and caller wrapping.
+- Preserved the existing Streebog-HMAC byte stream and deterministic signature
+  behavior.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/gost.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-hmac-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib hmac_streebog_streaming_matches_legacy_inner_segments -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-hmac-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib deterministic_nonce_streaming_matches_legacy_contiguous_seed -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-hmac-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib signature_deterministic_without_extra_entropy -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-hmac-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features gost --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SessionKey derivation temporary zeroization
+
+- Added a crate-internal `SessionKey::from_zeroizing_vec` constructor that
+  transfers a guarded session-key buffer into the existing zeroizing
+  `SessionKey` storage without leaving an unmanaged heap vector behind.
+- Routed X25519 HKDF output, streaming snapshot-key derivation, and SoraNet
+  NK2/NK3 session-key schedules through the guarded constructor; SoraNet also
+  now scrubs the temporary dual-mix and confirmation buffers used during key
+  schedule derivation while preserving returned confirmation bytes.
+- Added focused regressions for the guarded constructor and streaming snapshot
+  session-key derivation.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/kex/x25519.rs crates/iroha_crypto/src/streaming.rs crates/iroha_crypto/src/soranet/handshake.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sessionkey-guard CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib session_key_from_zeroizing_vec_preserves_payload_and_zeroizes_on_drop -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sessionkey-guard CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib hkdf_derivation_is_domain_separated -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sessionkey-guard CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib snapshot_session_key_is_deterministic_and_domain_separated -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sessionkey-guard CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib suite_key_schedule_uses_distinct_domains -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sessionkey-guard CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud bootstrap proof transcript binding
+
+- Added transcript-bound BFV bootstrap-key zero-refresh proof statement
+  digests. The policy-facing statement now validates the full refresh
+  transcript inventory and binds the parameter set, public key,
+  evaluation-key digest, refresh-transcript digest, bootstrap transcript
+  seed/key id/round capacity, and every public bootstrap refresh ciphertext.
+- Updated Soracloud's canonical bootstrap proof public-input schema layout to
+  `bootstrap_key_transcript_zero_refresh_proof_statement_digest`, so active
+  verifier records and proof envelopes pin the stronger statement contract.
+- Added regressions proving the transcript-bound digest differs from the raw
+  bootstrap-key-only digest, rejects wrong bootstrap transcript seeds, changes
+  under shape-valid evaluation-key bundle drift, and still passes Core
+  verifier/preverified-cache admission.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-transcript-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_transcript_proof_statement_digest_binds_governance_inventory --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-transcript-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-transcript-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_policy_binds_refresh_transcript_mode --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-transcript-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_bootstrap_key_proof --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-transcript-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_bootstrap_key_proof --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-transcript-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_bootstrap_key_proof_accepts_preverified_active_verifier --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-transcript-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+
+## 2026-06-06 SM2 private payload export temporary zeroization
+
+- Hardened top-level SM2 private-key payload export so the local
+  `secret_bytes()` array is wrapped in `Zeroizing` while encoding the returned
+  private payload.
+- Preserved the existing SM2 private payload layout and prefixed private-key
+  roundtrip behavior.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-export-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features sm --lib sm2_private_key_checked_payload_and_prefixed_roundtrip -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-export-zeroize-seed CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features sm --lib try_from_seed_sm2_uses_checked_public_derivation -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-export-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud FHE bootstrap proof preflight ordering
+
+- Moved `RunSoracloudFheJob` bootstrap-key proof verification ahead of
+  persisted FHE input loading, after policy/evaluation-key/transcript checks.
+  Bootstrap jobs without a verifier-backed proof now fail with the
+  bootstrap-proof error before malformed, oversized, or wrong-bound-mode state
+  entries can mask the missing proof.
+- Updated runtime regressions so missing bootstrap proof is asserted before
+  persisted input decode, while non-bootstrap FHE jobs still reject
+  bounded-noise rows under exact-policy execution and oversized persisted
+  ciphertext envelopes.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `cargo test -p iroha_core run_soracloud_fhe_job_rejects --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core soracloud_fhe_bootstrap_key_proof_is_required_for_bootstrap_jobs --lib -- --nocapture`
+    (`1` test passed; delayed by unrelated Cargo artifact-lock contention)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-ordering cargo clippy -p iroha_core --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt -p iroha_core -- --check`
+  - `git diff --check`
+
+## 2026-06-06 GOST deterministic scalar buffer zeroization
+
+- Hardened the deterministic GOST scalar sampler so candidate scalar bytes are
+  held in a `Zeroizing<Vec<u8>>`, matching the existing OS-backed scalar
+  sampler behavior and preserving the rejection-sampling logic.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/gost.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-buffer-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib seeded_keypair_reproducible -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-buffer-zeroize-512 CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib sign_verify_roundtrip_512 -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-scalar-buffer-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features gost --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 GOST seeded RNG borrowed seed path
+
+- Routed GOST seeded keypair generation through `rng_from_seed_slice`, avoiding
+  the extra raw `Vec<u8>` copy previously created from the borrowed seed before
+  deterministic RNG derivation.
+- Kept test-only constant-seed RNG calls on `rng_from_seed(Vec<u8>)`, since
+  they are not secret-bearing production seed material and still validate the
+  owned-seed compatibility path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/rng.rs crates/iroha_crypto/src/signature/gost.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng-seed-slice CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib seeded_keypair_reproducible -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng-seed-slice-top CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib try_from_seed_gost_is_deterministic_and_signs -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-rng-seed-slice CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features gost --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP Torii public launch-scope discovery
+
+- Constrained Torii public SCCP capability and proof-manifest snapshots to
+  `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, so public discovery advertises
+  Ethereum, BSC, Solana, TON, and TRON without SORA2, SORA Kusama, SORA
+  Polkadot, or generic Substrate/Polkadot lanes.
+- Stopped advertising optional runtime SCALE capability fields while
+  Substrate/Polkadot-family lanes remain outside launch scope; the diagnostic
+  handler stays available, but public discovery reports those fields as absent.
+- Filtered configured wallet route manifests through the same launch-scope
+  predicate, preventing an unready-proof or mistakenly production-ready
+  Substrate-family route config from appearing in `/v1/sccp/manifests`.
+- Added regressions that assert unsupported Substrate-family domains are absent
+  from public capabilities, public proof manifests, and configured route
+  manifests.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-runtime-capabilities CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_capabilities_snapshot_lists_remote_domains_and_codecs --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-public-discovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_proof_manifest_snapshot_matches_counterparty_backends --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-public-discovery CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii configured_substrate_route_manifests_remain_private_diagnostics --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-torii-launch-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_ --lib -- --nocapture`
+    (`78` tests passed)
+
+## 2026-06-06 BLS deterministic RNG borrowed seed path
+
+- Added `rng_from_seed_slice` so callers with already-managed seed buffers can
+  derive the same deterministic ChaCha RNG without allocating an extra raw
+  `Vec<u8>` seed copy.
+- Kept `rng_from_seed(Vec<u8>)` as a zeroizing owned-seed wrapper around the
+  borrowed helper, preserving existing caller behavior.
+- Routed the default w3f-backed BLS signing split RNG, random key-split RNG,
+  and seeded keygen split RNG through the borrowed helper for `Zeroizing`
+  seed/OKM buffers.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/rng.rs crates/iroha_crypto/src/signature/bls/implementation.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rng-seed-slice CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib rng_from_seed_slice_matches_owned_seed -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng-seed-slice CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls --lib managed_secret_clone_preserves_bytes -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng-seed-slice-compat CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls --lib seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-rng-seed-slice CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi finality-source current-view proof
+
+- Added `FinalitySourceActionCommitsCurrentViewStep` and
+  `FinalitySourceActionAlwaysCommitsCurrentView` to prove that exact
+  finality-source actions which flip the committed latch commit the current
+  active view, keep `view' = view`, install `commitView'` as that same view,
+  preserve view-quorum evidence, and keep NewView handoff state out of the
+  commit.
+- Wired the property through fast/deep/TLC-fast configs and documented the
+  finality-source current-view commit witness exactness mode in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionCommitsCurrentViewStep|FinalitySourceActionAlwaysCommitsCurrentView|finality-source current-view commit witness exactness" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`203`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `git diff --check -- docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`, `29 min 24 sec`)
+
+## 2026-06-06 ML-DSA private-key parse local scrub
+
+- Hardened `MlDsaSecretKey::from_bytes` so the temporary
+  `pqcrypto_mldsa::mldsa65::SecretKey` created during private-key parsing is
+  wiped immediately after copying into the managed `Arc` storage.
+- Reused the same ML-DSA secret wiping helper for the existing managed-secret
+  drop path, preserving stored-key behavior while removing duplicated wipe
+  logic.
+- Added a direct ML-DSA parse/sign/verify regression for the scrubbed parse
+  path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-local-secret-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib ml_dsa_private_key_from_bytes_signs_after_local_scrub -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-local-secret-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib ml_dsa_secret_key_clone_shares_inner_arc -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-local-secret-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 top-level private-key exposure transient zeroization
+
+- Hardened top-level private-key hex/string parsing and exposed private-key
+  formatting so decoded private payloads, encoded private multihash frames, and
+  local extracted private payload copies are wrapped in `Zeroizing` until the
+  final parsed key or caller-visible string is produced.
+- Routed bare exposed private-key multihash formatting through the private
+  multihash formatter so canonical-check payload copies are also scrubbed.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/multihash.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-private-key-exposure-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib fromstr_accepts_algo_prefixed_private_key -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-private-key-exposure-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib exposed_private_key_compat_formatters_match_checked_outputs -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-private-key-exposure-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib multihash::tests -- --nocapture`
+    (`10` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-private-key-exposure-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib invalid_private_key -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-private-key-exposure-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 private-key multihash transient zeroization
+
+- Hardened private-key multihash string encode/decode helpers so decoded
+  secret-bearing multihash frames and canonical-check payload copies use
+  `Zeroizing` while preserving the returned private-key payload/string outputs.
+- Added a prefixed private-key multihash roundtrip regression for the hardened
+  path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/multihash.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multihash-private-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib multihash::tests -- --nocapture`
+    (`10` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-multihash-private-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 ML-DSA seeded material zeroizing return
+
+- Tightened the ML-DSA seeded keygen helper so HKDF-derived seed material is
+  created and returned as `Zeroizing<[u8; 32]>` directly instead of as a raw
+  array that the caller wraps after return.
+- Kept seeded ML-DSA key generation and public-key recovery behavior unchanged.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/mldsa_seed.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-seed-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib mldsa_seed::mldsa65::tests -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-seed-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 RAM-LFE secret-derived buffer zeroization
+
+- Hardened RAM-LFE secret-derived temporaries so HKDF opaque/receipt material
+  uses `Zeroizing` buffers, and BFV programmed/affine ChaCha seed arrays are
+  explicitly scrubbed immediately after RNG construction.
+- Preserved the existing transcript and RNG seed layouts verified by the
+  RAM-LFE regression suite.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/ram_lfe.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib ram_lfe::tests -- --nocapture`
+    (`30` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud FHE bootstrap-proof provenance binding
+
+- Added regressions proving `bootstrap_key_zero_refresh_proof` is part of the
+  canonical FHE job run payload at each boundary: data model provenance bytes,
+  Core signature verification, and Torii request-signature encoding.
+- The Core regression signs each side of the proof option boundary and verifies
+  the opposite payload, proving proof stripping and proof injection both fail
+  provenance signature verification.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_torii`
+  - `cargo test -p iroha_data_model fhe_job_run_provenance_payload_binds_bootstrap_key_proof_option --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core fhe_job_provenance_binds_bootstrap_key_proof_option --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii fhe_job_run_signature_payload_binds_bootstrap_key_proof_option --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo clippy -p iroha_data_model -p iroha_core -p iroha_torii --lib --tests --no-deps -- -D warnings`
+  - `cargo fmt -p iroha_data_model -p iroha_core -p iroha_torii -- --check`
+  - `git diff --check`
+- Additional check:
+  - `cargo test -p iroha_data_model --lib` no longer fails to compile on the
+    FHE execution-policy initializer path; it ran the lib suite and reported
+    `1442` passed, `2` failed, `2` ignored. The remaining failures were
+    `zk::tests::backend_tag_norito_discriminants_preserve_legacy_order_and_pending_range`
+    and
+    `offline::offline_note_tests::kagemusha_recursive_spend_payload_size_is_hop_count_independent`,
+    which are outside this Soracloud FHE payload-binding change.
+
+## 2026-06-06 iroha_crypto secp256k1 private-key parse zeroization
+
+- Hardened the secp256k1 private-key parser so incoming scalar bytes are copied
+  into a `Zeroizing<Vec<u8>>` local before `k256` decoding, ensuring the parser's
+  owned transient copy is scrubbed on both success and failure.
+- Added direct parse/sign/verify coverage for a parsed secp256k1 private key.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/secp256k1.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-parse-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib signature::secp256k1::test -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-parse-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto BLS VRF proof secret-byte zeroization
+
+- Hardened BLS VRF proof generation so the temporary secret-key byte export used
+  for scalar derivation is held in `Zeroizing` for both Normal and Small VRF
+  variants, preserving the existing proof/output algorithm and public API.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/vrf.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-secret-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls --lib vrf::tests -- --nocapture`
+    (`15` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-secret-zeroize-blstrs CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls-backend-blstrs --lib vrf::tests -- --nocapture`
+    (`14` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-secret-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features bls --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-vrf-secret-zeroize-blstrs CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features bls-backend-blstrs --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi finality-source certificate-stack proof
+
+- Added `FinalitySourceActionInstallsFinalityCertificateStackStep` and
+  `FinalitySourceActionAlwaysInstallsFinalityCertificateStack` to prove that
+  exact finality-source actions which flip the committed latch leave the
+  post-state with the complete finality-certificate stack present and aligned
+  with committed phase, commit-certificate, commit-view, and live commit/RBC
+  evidence predicates.
+- Wired the property through fast/deep/TLC-fast configs and documented the
+  finality-source finality-certificate stack installation mode in
+  README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionInstallsFinalityCertificateStackStep|FinalitySourceActionAlwaysInstallsFinalityCertificateStack|finality-source finality-certificate stack installation" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`202`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`, `28 min 54 sec`)
+
+## 2026-06-06 SoraFS proof-token digest-key zeroization
+
+- Hardened `ProofTokenDigestKey` so the shared blinded-digest key is stored in
+  `Zeroizing<[u8; 32]>` instead of a `Copy` raw array, and updated the SoraFS
+  CAR proof-token verifier to borrow its optional digest key during validation.
+- Added clone coverage proving blinded-digest derivation remains stable for the
+  non-`Copy` key wrapper.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sorafs/proof_token.rs crates/sorafs_car/src/policy.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-proof-token-key-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib sorafs::proof_token::tests -- --nocapture`
+    (`15` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-proof-token-key-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-proof-token-key-zeroize CARGO_INCREMENTAL=0 cargo check -p sorafs_car --features manifest`
+
+## 2026-06-06 iroha_crypto GOST nonce-state zeroization
+
+- Hardened the streaming GOST deterministic nonce generator so private scalar
+  octets, message octets, HMAC `k`/`v` state, candidate stream buffers, HMAC key
+  blocks, pads, and inner hashes use `Zeroizing` locals without changing the
+  nonce derivation algorithm.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/gost.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-nonce-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib deterministic_nonce_streaming_matches_legacy_contiguous_seed -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-nonce-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib signature::gost::tests -- --nocapture`
+    (`18` tests passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-nonce-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features gost --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto Ed25519 seed temporary zeroization
+
+- Hardened Ed25519 seeded key generation and 64-byte private-key parsing so
+  derived seed buffers use `Zeroizing<[u8; 32]>` while preserving the existing
+  `SigningKey` behavior and public API.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/ed25519.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-seed-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib signature::ed25519::test -- --nocapture`
+    (`40` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ed25519-seed-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto blstrs BLS secret-key zeroization
+
+- Hardened the `bls-backend-blstrs` private scalar wrapper so stored BLS secret
+  bytes live in `Zeroizing<[u8; 32]>`, and kept generated/parsed scalar
+  temporaries zeroizing while preserving the existing byte-oriented API.
+- Added a blstrs-backend clone/sign/verify regression for the zeroizing private
+  key wrapper.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/bls/implementation_blstrs.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls-backend-blstrs --lib secret_key_clone_preserves_bytes_and_signing -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls-backend-blstrs --lib signature::bls::implementation::tests -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-blstrs-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features bls-backend-blstrs --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto GOST top-level seeded keypair validation
+
+- Added a top-level `KeyPair::try_from_seed` regression for
+  `Gost3410_2012_256ParamSetB`, proving the zeroizing borrowed-seed path remains
+  deterministic and can sign/verify through the public API.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-seed-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --lib try_from_seed_gost_is_deterministic_and_signs -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-gost-seed-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features gost --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP release artifact Markdown path hardening
+
+- Hardened the SCCP readiness report, release bundle builder, and strict bundle
+  verifier so public artifact paths reject Markdown-unsafe characters (`|`,
+  backticks, `<`, and `>`) in copied source filenames, native EVM prover
+  manifest-relative payload paths, manifest/report artifact metadata, and
+  extracted bundle entries.
+- Added adversarial coverage for unsafe evidence filenames, corridor phase log
+  filenames, native prover payload paths, generated artifact paths, tampered
+  manifest/report paths, and post-generation bundle entries.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'markdown_unsafe or required_helper_inventory_matches_report or writes_hash_bound_public_artifacts'`
+    (`9` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'markdown_unsafe'`
+    (`2` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`247` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`93` tests passed)
+
+## 2026-06-06 SoraNet fixture verification after SessionKey wrapper
+
+- Re-ran the SoraNet fixture verifier that had previously been blocked by the
+  relay telemetry treating `SessionKey` as raw `Vec<u8>` material.
+- The `soranet-relay` crate compiled in the verifier dependency path, and both
+  checked-in SoraNet fixture roots verified successfully against freshly
+  generated temporary output.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-fixtures-verify CARGO_INCREMENTAL=0 cargo run -p xtask --bin xtask -- soranet-fixtures --verify`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-fixtures-verify CARGO_INCREMENTAL=0 cargo run -p soranet-handshake-harness -- fixtures --verify --out tests/interop/soranet/capabilities`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-fixtures-verify CARGO_INCREMENTAL=0 cargo run -p soranet-handshake-harness -- fixtures --verify --out fixtures/soranet_handshake/capabilities`
+
+## 2026-06-06 IVM Soracloud host syscall fail-closed coverage
+
+- Added explicit `CoreHostImpl` arms for the ABI-listed Soracloud host syscalls.
+  The runtime host now validates the `SoracloudRequest` pointer type, schema
+  version, operation, and payload variant, then returns metered
+  `NotImplemented` with no queued ISI during ordinary contract execution.
+  Dedicated Soracloud handler execution continues to use `irohad`'s
+  `SoracloudIvmHost` for response-producing runtime dispatch.
+- Updated IVM syscall/alignment docs and the roadmap so the Soracloud
+  request/response ABI is distinct from the current fail-closed host behavior.
+- Removed stale placeholder/stub wording from IVM Halo2 circuit model comments,
+  DefaultHost state-read comments, the minimal upgrade-hook example, and
+  dev-only feature descriptions. The remaining marker scan hits are intentional
+  parser diagnostics, i18n placeholders, compiler code stubs, and fail-closed
+  access-metadata messages.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core soracloud_syscalls --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p ivm --test host_syscall_coverage -- --nocapture`
+    (`2` tests passed)
+  - `comm -23 <(rg -o --no-filename "SYSCALL_[A-Z0-9_]+" crates/ivm_abi/src/syscalls.rs | sort -u) <(rg -o --no-filename "SYSCALL_[A-Z0-9_]+" crates/iroha_core/src/smartcontracts/ivm/host.rs | sort -u)`
+    now leaves only the test-host syscalls and `SYSCALL_TRANSFER_V1` alias.
+
+## 2026-06-06 Sumeragi finality-source finality-latch change proof
+
+- Added `FinalitySourceActionMatchesFinalityLatchChangeStep` and
+  `FinalitySourceActionAlwaysMatchesFinalityLatchChange` to prove that every
+  exact finality-source action which flips the committed latch installs the
+  finality-latch complete stack, couples latch and commit artifacts, enters the
+  committed phase, and matches the live commit-gate crossing before the
+  committed-entry bridge is applied.
+- Wired the property through fast/deep/TLC-fast configs and documented the new
+  finality-source finality-latch change matching mode in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesFinalityLatchChangeStep|FinalitySourceActionAlwaysMatchesFinalityLatchChange|finality-source finality-latch change matching" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`201`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 iroha_crypto SM2 scalar buffer zeroization
+
+- Hardened SM2 private-key construction so by-value scalar inputs, parsed
+  scalar buffers, seeded-derivation candidates, and `SecretKey::to_bytes()`
+  exports are scrubbed after validation/copying into the zeroizing private-key
+  wrapper.
+- Kept public SM2 APIs and deterministic seeded derivation output unchanged.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features sm --lib sm2 -- --nocapture`
+    (`32` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud FHE bootstrap-proof adversarial hardening
+
+- Added portable data-model adversarial coverage for
+  `SoracloudFheBootstrapKeyProofV1`: forged verifier commitments, forged
+  envelope hashes, malformed `OpenVerifyEnvelope` bytes, backend/circuit/schema
+  drift, STARK wrapper version/public-input drift, oversized outer/wrapper/native
+  proof payloads, and attachment backend metadata drift now fail closed.
+- Added Core runtime coverage proving bootstrap-key proof admission rejects
+  metadata-drifted governed verifier records before proof verification:
+  withdrawn status, wrong namespace/backend/curve/schema/circuit/version, missing
+  gas schedule, inactive circuit mapping, max proof bytes, missing key bytes,
+  `vk_len` mismatch, and verifier commitment mismatch.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p iroha_core -- --check`
+  - `cargo test -p iroha_data_model bootstrap_key_proof --lib -- --nocapture`
+    (`9` tests passed)
+  - `cargo test -p iroha_core soracloud_fhe_bootstrap_key_proof --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo clippy -p iroha_data_model -p iroha_core --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP OpenAPI Substrate/Polkadot no-support note
+
+- Updated the Torii SCCP capability and manifest OpenAPI descriptions to list
+  the current launch networks as Ethereum, BSC, Solana, TON, and Tron.
+- Added the explicit note that Substrate/Polkadot-family networks, including
+  SORA2, SORA Kusama, and SORA Polkadot, are not supported for now and any
+  helper metadata remains diagnostic/backlog-only.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/openapi.rs`
+  - `jq empty docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json`
+  - Checked `crates/iroha_torii/src/openapi.rs` and `docs/portal/static/openapi`
+    for the previous support-implying SORA2/SORA Kusama/SORA Polkadot OpenAPI
+    phrasing; no matches remain.
+
+## 2026-06-06 soranet-relay SessionKey telemetry compatibility
+
+- Updated the relay handshake telemetry path to query the zeroizing
+  `SessionKey` wrapper through `payload().len()` instead of treating the
+  session key as a raw `Vec<u8>`.
+- This fixes the `soranet-relay` compile break reported during SoraNet fixture
+  validation while preserving the runtime session-key zeroization boundary.
+- Validation:
+  - `rustfmt --edition 2024 tools/soranet-relay/src/runtime.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-relay-session-key CARGO_INCREMENTAL=0 cargo check -p soranet-relay`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-relay-session-key CARGO_INCREMENTAL=0 cargo clippy -p soranet-relay --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto confidential keyset local zeroization
+
+- Hardened confidential key hierarchy derivation so HKDF-expanded `nk`, `ivk`,
+  `ovk`, and `fvk` temporaries are held in `Zeroizing<[u8; 32]>` until copied
+  into the returned `ConfidentialKeyset`.
+- Scrubbed the local copied spend-key array after constructing the zeroizing
+  keyset, and changed slice/RNG entry points to use zeroizing seed buffers
+  instead of manual array zeroization.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/confidential.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-keyset-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib confidential -- --nocapture`
+    (`6` tests passed; `1` ignored vector-dump test)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-confidential-keyset-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SoraFS/SoraNet first-release KDF identifiers
+
+- Kept SoraFS hybrid payload envelopes on the first-release V1 schema
+  (`version = 1`) while replacing the pre-release bare suite string with
+  `x25519-mlkem768-chacha20poly1305-transcript-v1` and transcript-bound
+  HKDF/rekey domain labels; old bare suite labels now fail closed.
+- Moved SoraNet NK2/NK3 first-release suite IDs to `0x04`/`0x05`, changed the
+  labels to `nk2.hybrid.v1`/`nk3.pq_forward_secure.v1`, versioned the
+  handshake/session/KEM/signature derivation labels, and regenerated the
+  checked-in `snnet-interop-nk{2,3}-v1.json` fixture contents in place.
+- Updated the SoraFS and SoraNet documentation, including translated source
+  copies, so the published examples advertise only the first-release suite
+  labels and wire IDs and state that the pre-release identifiers are rejected.
+- Added adversarial coverage for old-only SoraNet suite lists, rejection of old
+  suite IDs even when mixed with valid first-release IDs, mutated NK2/NK3
+  client-frame suite bytes, harness CLI rejection of pre-release-only suite
+  vectors, non-V1 SoraFS envelope versions, near-miss SoraFS suite labels,
+  tampered AEAD inputs, and malformed envelope KEM fields.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo test -p iroha_crypto hybrid::tests:: --lib -- --nocapture`
+    (`13` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo test -p sorafs_manifest hybrid_envelope --lib -- --nocapture`
+    (`8` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo test -p iroha_crypto soranet::handshake::tests:: --lib -- --nocapture`
+    (`78` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo test -p soranet-handshake-harness -- --nocapture`
+    (`13` tests passed across package unit/integration tests)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo run -p soranet-handshake-harness -- fixtures --verify --out tests/interop/soranet/capabilities`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo run -p soranet-handshake-harness -- fixtures --verify --out fixtures/soranet_handshake/capabilities`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo test -p iroha_config snapshot_serialized_form --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo test -p iroha_config minimal_config_snapshot --test fixtures -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo run -p xtask --bin xtask -- soranet-fixtures --verify`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kdf-versioning CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto -p sorafs_manifest -p soranet-handshake-harness --lib --bins --tests --no-deps -- -D warnings`
+  - `git diff --check`
+
+## 2026-06-06 iroha_crypto top-level seeded keypair input zeroization
+
+- Hardened `KeyPair::try_from_seed` so borrowed-seed algorithms wrap the
+  consumed caller seed vector in `Zeroizing<Vec<u8>>` before deriving ML-DSA,
+  GOST, or SM2 key material; algorithms that move the seed into lower-level
+  Ed25519, Secp256k1, or BLS constructors continue to rely on those
+  algorithm-specific zeroization paths.
+- Added a top-level ML-DSA seeded keypair regression proving deterministic
+  public/private payloads and sign/verify behavior through the zeroizing
+  borrowed-seed path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keypair-seed-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib try_from_seed_ml_dsa_is_deterministic_and_signs -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-keypair-seed-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP release bundle control-character preflight
+
+- Hardened `scripts/sccp_release_bundle.py` so bundle source paths and output
+  directories containing ASCII control characters are rejected during input
+  validation before any output directory is created.
+- Added adversarial coverage for control-character evidence inputs, phase
+  evidence, native EVM prover manifests, native prover payload paths, and
+  output directories, and pinned the preflight markers in the strict release
+  verifier inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'control_character_evidence_input_before_copy or control_character_phase_evidence_before_copy or control_character_native_evm_manifest_before_copy or control_character_native_evm_payload_before_copy or control_character_output_directory_before_create or required_helper_inventory_matches_report or writes_hash_bound_public_artifacts'`
+    (`7` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`240` tests passed)
+
+## 2026-06-06 iroha_crypto generic BLS managed-secret zeroization
+
+- Hardened the generic w3f-backed BLS `ManagedSecretKey` so stored secret-key
+  bytes are held in `Zeroizing<Vec<u8>>`; clone, unchecked test construction,
+  explicit zeroization, parsing, and byte-export APIs preserve existing public
+  behavior while zeroizing the retired backing storage on drop.
+- Moved seeded BLS key-generation HKDF OKM into a `Zeroizing<Vec<u8>>`
+  temporary before deriving the split secret and deterministic split RNG.
+- Added regression coverage proving managed-secret clones preserve exported
+  bytes and derived public keys for both normal and small BLS configurations.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/bls/implementation.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-managed-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls --lib signature::bls::implementation::tests -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bls-managed-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features bls --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP release bundle output-path symlink hardening
+
+- Hardened `scripts/sccp_release_bundle.py` so bundle output directories and
+  existing non-root output-path ancestors must not be symlinks before creation
+  or forced replacement.
+- Added adversarial bundle-builder coverage for symlinked output directories
+  under `--force` and output directories routed through symlinked ancestors,
+  and pinned the output-path guard in the strict release verifier inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'symlinked_output_directory_before_force or symlinked_output_ancestor_before_create or symlinked_evidence_ancestor_before_copy or symlinked_phase_evidence_ancestor_before_copy or symlinked_native_evm_manifest_ancestor_before_copy or symlinked_native_evm_payload_ancestor_before_copy or required_helper_inventory_matches_report'`
+    (`7` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`235` tests passed)
+
+## 2026-06-06 Kotodama tuple entrypoint test helpers
+
+- Enabled Kotodama `invoke_entrypoint_as(...)` tests to call tuple-returning
+  entrypoints by lowering them to a multi-register test-host intrinsic and
+  copying each returned scalar or TLV pointer back into the caller.
+- Updated IVM/Kotodama docs that still described implemented contract bodies,
+  dynamic contract calls, DefaultHost ZK batch verification, and execution-proof
+  helpers as future, placeholder, or conceptual work.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang invoke_entrypoint_as --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p kotodama_lang --lib -- --nocapture`
+    (`464` tests passed)
+  - `cargo test -p ivm --bin koto_test execute_suite_supports_native_contract_flow_helpers -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p ivm --bin koto_test execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-06 soranet_pq hedged seed draw zeroization
+
+- Hardened `HedgedRngSeed::from_rng` so caller-supplied seed entropy is drawn
+  into a `Zeroizing<[u8; 32]>` temporary before being moved into the seed
+  wrapper, covering both OS-backed and injected RNG seed boundaries.
+- Added deterministic injected-RNG coverage for `HedgedRngSeed::from_rng`
+  while preserving the existing fail-closed RNG error tests used by ML-KEM and
+  ML-DSA paths.
+- Validation:
+  - `rustfmt --edition 2024 crates/soranet_pq/src/rng.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-seed-zeroize CARGO_INCREMENTAL=0 cargo test -p soranet_pq rng -- --nocapture`
+    (`17` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-seed-zeroize CARGO_INCREMENTAL=0 cargo clippy -p soranet_pq --all-targets --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto X25519 KEX HKDF output zeroization
+
+- Hardened X25519 key-exchange session-key derivation so the 32-byte HKDF OKM
+  is held in a `Zeroizing` array before being moved into the crate's
+  zeroizing `SessionKey` wrapper.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/kex/x25519.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-kex-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib x25519 -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-x25519-kex-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi finality-source committed-phase entry proof
+
+- Added `FinalitySourceActionMatchesCommittedPhaseEntryStep` and
+  `FinalitySourceActionAlwaysMatchesCommittedPhaseEntry` to prove that every
+  exact finality-source action which flips the committed latch enters the
+  committed phase through the finality-latch transition, installs the
+  committed-phase complete stack, and matches the committed entry to the
+  certified finality stack.
+- Wired the property through fast/deep/TLC-fast configs and documented the new
+  finality-source committed-phase entry matching mode in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesCommittedPhaseEntryStep|FinalitySourceActionAlwaysMatchesCommittedPhaseEntry|finality-source committed-phase entry matching" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`200`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 iroha_crypto streaming shared-secret zeroization
+
+- Hardened streaming key-update derivation so X25519 and ML-KEM shared secrets
+  are carried as `Zeroizing<[u8; 32]>` until STS root derivation, including
+  Kyber encapsulation/decapsulation and deterministic X25519 ephemeral
+  overrides.
+- Added a Kyber streaming key-update roundtrip to cover the ML-KEM shared-secret
+  path alongside the existing X25519 key-update tests.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/streaming.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-shared-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib key_update_tests -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-streaming-shared-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP release bundle symlink source-copy preflight
+
+- Hardened `scripts/sccp_release_bundle.py` so copied release-bundle sources
+  and their source-path ancestors must not be symlinks. Evidence TOML inputs,
+  corridor phase logs, native EVM prover manifests, and native prover payload
+  files are rejected during input validation before the output directory is
+  created, including `--allow-not-ready` diagnostic bundles.
+- Added adversarial bundle-builder coverage for symlinked evidence inputs,
+  phase evidence, native prover manifests, native prover payloads, and each
+  corresponding symlinked ancestor path, and pinned the source-copy guard in
+  the strict release verifier inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'symlinked_evidence_input_before_copy or symlinked_evidence_ancestor_before_copy or symlinked_phase_evidence_before_copy or symlinked_phase_evidence_ancestor_before_copy or symlinked_native_evm_prover_manifest_before_copy or symlinked_native_evm_manifest_ancestor_before_copy or symlinked_native_evm_prover_payload_before_copy or symlinked_native_evm_payload_ancestor_before_copy or required_helper_inventory_matches_report'`
+    (`9` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`233` tests passed)
+
+## 2026-06-06 iroha_crypto SoraNet handshake session-key zeroization
+
+- Changed runtime SoraNet handshake results so `SessionSecrets` carries the
+  crate's zeroizing `SessionKey` wrapper instead of exposing raw `Vec<u8>`
+  session key material after HKDF expansion.
+- Updated the P2P handshake handoff to use the returned `SessionKey` directly;
+  deterministic interop fixture artifacts continue to materialize `Vec<u8>`
+  session-key bytes only for published test-vector JSON.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/soranet/handshake.rs crates/iroha_p2p/src/peer.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-key CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib runtime_handshake -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-key CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib simulate_handshake -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-key CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib suite_key_schedule -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-key CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib nk3_key_schedule_requires_forward_secret -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-key CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-key-p2p CARGO_INCREMENTAL=0 cargo check -p iroha_p2p --lib`
+
+## 2026-06-06 SCCP phase evidence duplicate-input hardening
+
+- Hardened `scripts/sccp_release_readiness_report.py` and
+  `scripts/sccp_release_bundle.py` so downloaded `--phase-evidence-dir` logs
+  and explicit `--phase-evidence` arguments cannot assign the same production
+  corridor phase twice.
+- The release bundle builder rejects those duplicate or overriding phase
+  evidence sources before creating the output directory, including
+  `--allow-not-ready` diagnostic bundles, and the strict verifier now pins the
+  guard plus adversarial tests in its source inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'duplicate_phase_evidence or phase_evidence_dir_override or phase_evidence_dir'`
+    (`3` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_phase_evidence or phase_evidence_dir_override or requires_hashed_phase_evidence or required_helper_inventory_matches_report'`
+    (`4` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`91` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`225` tests passed)
+
+## 2026-06-06 iroha_crypto SoraNet handshake transient scalar zeroization
+
+- Hardened SoraNet handshake runtime and deterministic simulation paths so
+  Noise X25519 scalar buffers, ML-KEM seed buffers, derived ephemeral seeds,
+  and static-secret byte exports used for handshake signatures are held in
+  `Zeroizing` containers while being handed to crypto primitives.
+- This slice originally kept the public `SessionSecrets` shape unchanged; the
+  follow-up zeroizing `SessionKey` handoff is recorded above.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/soranet/handshake.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib runtime_handshake -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-zeroize CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib simulate_handshake -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-handshake-zeroize CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto hybrid KEM derived-secret zeroization
+
+- Hardened the SoraFS hybrid X25519+ML-KEM helper so HKDF-derived
+  ChaCha20-Poly1305 and rekey bytes remain in `Zeroizing` arrays from
+  derivation through `DerivedSecret` storage, and removed an extra plain
+  X25519 secret-byte copy during hybrid key generation.
+- Added clone coverage for `DerivedSecret` to keep the private zeroizing
+  constructor path behaviorally pinned.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/hybrid.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-hybrid CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib hybrid -- --nocapture`
+    (`14` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-hybrid CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 IVM DefaultHost ZK batch verification
+
+- Implemented standalone `ZK_VERIFY_BATCH` handling in `DefaultHost` for
+  Norito-encoded `Vec<OpenVerifyEnvelope>` payloads. The syscall now enforces
+  the configured backend, curve, max-k, per-envelope size, proof-size, and
+  batch-size gates, returns a Norito `Vec<u8>` status vector, reports the first
+  non-zero error in `r11`, and sets `r12` to the first failed item index or
+  `u64::MAX` when all items verify.
+- Updated Kotodama wrapper documentation/tests and syscall docs so
+  `DefaultHost` is no longer described as a disabled batch-verification
+  placeholder; `CoreHost` remains the registry-bound verifier for runtime node
+  execution.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test zk_verify_batch_syscall -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p ivm --test zk_verify_batch_gating -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p ivm zk_verify_label_mapping_covers_envelope_syscalls --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p ivm --test kotodama_wrappers -- --nocapture`
+    (`2` tests passed; proof-heavy checks skipped unless
+    `IROHA_RUN_ZK_WRAPPERS=1` is set)
+
+## 2026-06-06 soranet_pq hedged RNG transient zeroization
+
+- Hardened SoraNet PQ hedged RNG construction so the live OS entropy buffer is
+  zeroized immediately after it is mixed into the transcript, and the
+  BLAKE3-derived `ChaCha20Rng` seed array is zeroized immediately after RNG
+  state construction.
+- Validation:
+  - `rustfmt --edition 2024 crates/soranet_pq/src/rng.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng CARGO_INCREMENTAL=0 cargo test -p soranet_pq rng -- --nocapture`
+    (`16` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-pq-rng CARGO_INCREMENTAL=0 cargo clippy -p soranet_pq --all-targets --no-deps -- -D warnings`
+
+## 2026-06-06 iroha_crypto blstrs BLS keygen temporary zeroization
+
+- Hardened the `bls-backend-blstrs` BLS key-generation path so temporary
+  w3f-derived secret-key byte vectors are wrapped in `Zeroizing` before being
+  copied into the managed `SecretKey`, covering both OS-random and seeded
+  keygen branches.
+- Added deterministic seeded-keypair coverage for both Normal and Small BLS
+  orientations under the blstrs backend.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/bls/implementation_blstrs.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-blstrs CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features 'bls bls-backend-blstrs' --lib seeded_keypairs_are_deterministic -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-blstrs CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features 'bls bls-backend-blstrs' --lib 'signature::bls::implementation::tests::' -- --nocapture`
+    (`8` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-blstrs CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features 'bls bls-backend-blstrs' --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP release bundle native payload path preflight
+
+- Hardened `scripts/sccp_release_bundle.py` so native EVM prover payload path
+  discovery rejects duplicated role paths during input validation, before the
+  output directory is created.
+- This closes the `--allow-not-ready` path where the bundle builder could
+  otherwise copy one reused native prover payload path and skip strict
+  production verification because the report was intentionally not ready.
+- Pinned the strict release verifier's source inventory to require the bundle
+  builder path-role blocker.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_native_evm_prover_json_keys or duplicate_native_evm_prover_payload_paths_before_copy or duplicate_native_evm_prover_payload_paths or no_wasm or required_helper_inventory_matches_report'`
+    (`7` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`223` tests passed)
+
+## 2026-06-06 Kotodama opaque helper access hints
+
+- Added compiler-derived access descriptors for static smart-contract
+  lifecycle helpers with decodable Norito request payloads:
+  `register_smart_contract_code`, `register_smart_contract_bytes`,
+  `activate_contract_instance`, and `remove_smart_contract_bytes`.
+- Manifest, bytecode, contract-instance, and instance-by-code-hash keys are
+  emitted without global wildcard fallbacks when requests are static; dynamic
+  lifecycle payloads and deactivation remain conservative because their full
+  dependency set is only known at runtime.
+- Added exact access keys for literal `use_nullifier(...)` calls and decodable
+  `transfer_v1_batch_apply(...)` payloads. Transfer batches now reuse the same
+  per-account asset keys as equivalent individual transfer instructions.
+- Updated the Kotodama gap analysis, grammar notes, IVM README, and roadmap to
+  reflect the narrowed opaque-helper backlog and remove stale placeholder
+  wording.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_static_smart_contract_lifecycle_helpers --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang smart_contract_lifecycle --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p kotodama_lang access_hint_diagnostics --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p kotodama_lang production_rejects_incomplete_access_hints --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_literal_nullifier_helper --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang privacy_output_builtins --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p kotodama_lang fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_exact_access --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_execute_instruction_literal --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang native_asset_operation_builtins_emit_syscalls_and_exact_access --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang --lib -- --nocapture`
+    (`463` tests passed)
+
+## 2026-06-06 Sumeragi committed-phase commit-view witness-change proof
+
+- Added `CommittedPhaseEntryMatchesCommitViewWitnessChangeStep` and
+  `CommittedPhaseEntryAlwaysMatchesCommitViewWitnessChange` to prove that any
+  first entry into `Committed` which changes the nonzero commit-view witness
+  also carries the certified commit-view witness-change stack.
+- The proof links committed-phase entry to commit-view witness-change matching
+  and commit-certificate witness installation while leaving the existing global
+  commit-view exact-source committed-delivery property as the full
+  exact-source chain.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "CommittedPhaseEntryMatchesCommitViewWitnessChangeStep|CommittedPhaseEntryAlwaysMatchesCommitViewWitnessChange|committed-phase commit-view witness-change matching" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`199`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 iroha_crypto transient seed-copy zeroization
+
+- Hardened confidential key derivation helpers so transient 32-byte spend-key
+  buffers created from slices or RNG output are zeroized immediately after
+  deriving the returned `ConfidentialKeyset`, including derivation error paths.
+- Hardened `rng_from_seed` so the SHA-256-derived `ChaChaRng` seed array is
+  zeroized immediately after the deterministic RNG state is constructed.
+- Hardened X25519 seeded key generation to move seed material into the
+  zeroizing RNG helper instead of cloning it, and to hold derived private-key
+  bytes in a `Zeroizing` buffer before constructing `StaticSecret`.
+- Added exact-length slice coverage to keep slice-based derivation equivalent
+  to array-based derivation while preserving existing wrong-length and RNG
+  failure checks, deterministic-output coverage for seeded RNG creation, and
+  deterministic seeded X25519 keypair coverage.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/confidential.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-confidential CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib confidential -- --nocapture`
+    (`6` tests passed, `1` ignored manual-vector test)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-confidential CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib rng_from_seed -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-confidential CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib x25519 -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-confidential CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP readiness native EVM prover path role separation
+
+- Mirrored native EVM prover artifact path-role separation in the standalone
+  SCCP release-readiness generator, so direct JSON/Markdown readiness reports
+  cannot mark a native prover bundle passed when a proof artifact, key,
+  fixture, self-test, or SDK implementation path reuses another role's file.
+- Pinned the strict release-bundle source inventory to require the standalone
+  readiness path-role blocker, preventing future drift between direct
+  readiness reports and bundled release verification.
+- Added adversarial readiness-report coverage that reuses the proof artifact
+  as the proving key and reuses the verifier-key file as an SDK implementation
+  artifact, asserting both explicit blockers and a blocked release checklist.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_evm_prover and (artifact_paths or role_hash or release_readiness_json_tracks_corridor_phase_results)'`
+    (`2` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_evm_prover'`
+    (`15` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover or no_wasm or required_helper_inventory_matches_report'`
+    (`20` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`89` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`222` tests passed)
+
+## 2026-06-06 SCCP native EVM prover artifact path role separation
+
+- Tightened strict release-bundle verification so native EVM prover artifacts
+  cannot reuse another role's file path in either the attached native prover
+  manifest or the published readiness-report summary.
+- Added adversarial coverage for duplicated raw native-prover payload paths and
+  duplicated readiness-report native-prover artifact paths, with exact blocker
+  assertions instead of relying on indirect manifest-order or hash mismatch
+  failures.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover and (duplicate_native_evm_prover_payload_paths or duplicate_native_evm_prover_report_paths or reused_native_evm_prover_role_hash or tampered_native_evm_prover_bundle)'`
+    (`4` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover'`
+    (`16` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`222` tests passed)
+
+## 2026-06-06 iroha_crypto SM performance gate fail-closed inputs
+
+- Hardened `sm_perf_check` so primary and comparison tolerances must be finite
+  and non-negative, baseline benchmark maps must exactly cover the active SM
+  benchmark target set, stale benchmark/tolerance rows are rejected, baseline
+  metadata must use the supported object shape with string fields, and baseline
+  or Criterion median values must be finite and positive before summary,
+  capture, or regression comparison.
+- The same validation now applies to per-benchmark tolerance overrides used by
+  the direct reporting helpers, so helper-level callers cannot bypass the
+  parser checks with invalid override maps.
+- Added focused coverage for checked-in baseline target coverage, metadata
+  parsing with full target coverage, malformed metadata, missing/unknown
+  benchmarks, non-positive benchmark values, unknown/invalid tolerance rows,
+  invalid CLI-style tolerances, non-positive Criterion medians, and invalid
+  helper override tolerances.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/bin/sm_perf_check.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-sm-perf CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features sm --bin sm_perf_check -- --nocapture`
+    (`19` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-sm-perf CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --bin sm_perf_check --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-sm-perf CARGO_INCREMENTAL=0 cargo run -p iroha_crypto --features sm --bin sm_perf_check -- --tolerance NaN`
+    failed closed with the expected finite non-negative tolerance error.
+
+## 2026-06-06 Kotodama cross-contract trigger callback activation
+
+- Namespaced Kotodama trigger callbacks now survive semantic analysis and
+  manifest generation without requiring a local entrypoint of the same name.
+  Local trigger-event payload access remains local-only.
+- IVM artifact validation now permits namespaced trigger callbacks to name a
+  remote entrypoint while still requiring local callbacks to target a declared
+  local entrypoint.
+- Core manifest-trigger activation resolves namespaced callbacks to an already
+  active contract address or alias, records target dispatch metadata, validates
+  the target public entrypoint before registering the trigger, and fails
+  activation for unresolved aliases or inactive targets.
+- Updated Kotodama grammar/gap docs and the roadmap to describe activation-time
+  cross-contract callback resolution.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test contract_artifact -- --nocapture`
+    (`13` tests passed)
+  - `cargo test -p kotodama_lang namespaced_trigger_callback --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p kotodama_lang manifest_trigger_decl_preserves_namespaced_callback --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture`
+    (`5` tests passed; emitted one unrelated warning in
+    `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`)
+
+## 2026-06-06 Kotodama aggregate state helper parameters
+
+- Internal helper `state` parameters now accept durable scalar, map, struct,
+  and tuple state handles instead of rejecting aggregate handles.
+- Kotodama lowering expands aggregate state parameters into hidden root plus
+  deterministic flattened child handle arguments, so helpers can read struct
+  fields and map aggregate value fields through the same durable host paths as
+  direct state access.
+- Public entrypoints still reject `state` parameters, and callers must pass a
+  durable state binding or durable state member expression rather than an
+  in-memory aggregate value.
+- Added compiler and IVM runtime regressions for struct state helpers and
+  `Map<Name, struct>` value-field helpers, including helper-to-helper
+  forwarding of aggregate state handles.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p ivm --test kotodama_state_scalar kotodama_state_struct_helper_param_reads_flattened_fields -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p ivm --test kotodama_state_name_map_runtime durable_name_map_struct_value_roundtrip_through_state_parameter -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang state_struct_helper_param --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p kotodama_lang state_param --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p kotodama_lang lower_state_map_struct_value_helper_param_expands_value_handles --lib -- --nocapture`
+    (`1` test passed; emitted unrelated `iroha_crypto` warnings from the dirty workspace)
+
+## 2026-06-06 SCCP Substrate/Polkadot no-support note
+
+- Updated the bridge-proof documentation to state directly that SCCP will not
+  support Substrate/Polkadot-family production networks for now.
+- Marked the SORA2 relay model and Substrate/Polkadot SDK/runtime helper
+  material as backlog/diagnostic-only, while keeping the supported launch SDK
+  surfaces limited to EVM-family ETH/BSC, TRON, Solana, and TON.
+- Validation:
+  - `git diff --check -- docs/source/bridge_proofs.md`
+  - `rg -n "runtime wrappers|must not be documented|outside production launch support|unsupported launch-scope diagnostics|backlog/design note" docs/source/bridge_proofs.md`
+
+## 2026-06-06 iroha_crypto GOST performance gate fail-closed inputs
+
+- Hardened `gost_perf_check` so benchmark tolerance must be finite and
+  non-negative, checked-in baselines must cover exactly the active GOST
+  benchmark target set, unknown/stale algorithm rows are rejected, and baseline
+  or Criterion median values must be finite and positive before comparison.
+- Added focused coverage for checked-in baseline target coverage, missing
+  required algorithms, unknown algorithms, non-positive baseline values,
+  invalid tolerances, and non-positive Criterion medians.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/bin/gost_perf_check.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-gost-perf CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features gost --bin gost_perf_check -- --nocapture`
+    (`6` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-gost-perf CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features gost --bin gost_perf_check --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-gost-perf CARGO_INCREMENTAL=0 cargo run -p iroha_crypto --features gost --bin gost_perf_check -- --tolerance NaN`
+    failed closed before benchmark-artifact reads with the expected finite
+    non-negative tolerance error.
+
+## 2026-06-06 iroha_crypto BLS variant detector fail-closed validation
+
+- Hardened the `bls-variant-detect` helper so deterministic BLS key generation
+  and signing errors propagate instead of panicking, generated signatures must
+  pass library verification, and both Normal and Small detectors must resolve
+  to the expected CONCAT flavor before the binary exits successfully.
+- Added focused coverage for the generated CONCAT detector path, unsupported
+  AUG/ambiguous/no-match flavor rejection, and library verification failure
+  rejection.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/bin/bls_variant_detect.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bls-variant CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features 'bls bls-backend-blstrs' --bin bls-variant-detect -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bls-variant CARGO_INCREMENTAL=0 cargo run -p iroha_crypto --features 'bls bls-backend-blstrs' --bin bls-variant-detect`
+    (Normal and Small both detected as `CONCAT`; library verification `OK`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bls-variant CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features 'bls bls-backend-blstrs' --bin bls-variant-detect --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP manifest artifact duplicate-path coverage
+
+- Added adversarial release-bundle coverage for duplicate manifest artifact
+  paths, proving the strict verifier rejects a manifest that lists the same
+  hash-bound bundle path twice instead of letting the path-keyed artifact
+  lookup hide the ambiguity.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_manifest_artifact_paths or manifest_root_self_listing or manifest_path_escape or unmanifested_artifact or missing_required_artifact or manifest_artifact_order or writes_hash_bound_public_artifacts'`
+    (`6` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`220` tests passed)
+  - `git diff --check -- pytests/scripts/sccp_release_bundle_test.py status.md`
+
+## 2026-06-06 Soracloud bootstrap-key proof attachment admission
+
+- Added `SoracloudFheBootstrapKeyProofV1` and optional
+  `RunSoracloudFheJob::bootstrap_key_zero_refresh_proof` material, with Torii
+  request plumbing and provenance signatures binding the exact proof envelope.
+- Data-model validation now requires the canonical bootstrap-key
+  `OpenVerifyEnvelope` circuit id, STARK/FRI backend, public-input schema,
+  statement-hash public input, verifier-key commitment, and matching envelope
+  hash before runtime admission.
+- Core now requires this proof whenever a Soracloud FHE job requests bootstrap
+  execution, checks the policy-bound bootstrap-key statement digest, validates
+  an active `soracloud` STARK verifier record, and verifies through the
+  preverified proof cache or configured backend.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs crates/kotodama_lang/src/compiler.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-attachment CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_bootstrap_key_proof --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-attachment CARGO_INCREMENTAL=0 cargo check -j 1 -p kotodama_lang --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-attachment CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_bootstrap_key_proof --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-attachment CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_bootstrap_key_proof_accepts_preverified_active_verifier --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-attachment CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical_tuple --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-attachment CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model -p iroha_core -p iroha_torii --lib --no-deps -- -D warnings`
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs crates/kotodama_lang/src/compiler.rs docs/source/engineering_backlog.md docs/source/soracloud/manifest_schemas.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs crates/kotodama_lang/src/compiler.rs docs/source/engineering_backlog.md docs/source/soracloud/manifest_schemas.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-06 iroha_crypto BLS check fail-closed validation
+
+- Hardened the `bls_check` helper binary so malformed BLS key strings and
+  public/private key mismatches return an error instead of panicking or printing
+  a mismatch while exiting successfully.
+- Added focused coverage for the checked-in BLS pairs, malformed public-key
+  parsing, and mismatched pair rejection.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/bin/bls_check.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bls-check CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --features bls --bin bls_check -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bls-check CARGO_INCREMENTAL=0 cargo run -p iroha_crypto --features bls --bin bls_check`
+    (`peer0..peer3` validated)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-bls-check CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features bls --bin bls_check --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP duplicate blocker-list hardening
+
+- Tightened canonical string-list validation in the strict release-bundle
+  verifier so public blocker and validation-blocker lists cannot repeat the
+  same non-empty string.
+- Added adversarial bundle coverage that duplicates blocker strings across the
+  manifest root, readiness report root, corridor, readiness checklist,
+  embedded all-lanes evidence, embedded all-lanes checklist, standalone
+  all-lanes summary, standalone all-lanes checklist, and lane blocker rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_public_blocker_strings or all_lanes_list_scalar_type_drift or duplicate_submission_surface_helpers or requires_submission_surface_sdk_core_phases or release_checklist_duplicate_item_ids'`
+    (`5` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`219` tests passed)
+  - `git diff --check -- scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-06 SCCP release-checklist duplicate-id hardening
+
+- Tightened the strict release-bundle verifier so release checklist gate ids
+  must be unique.
+- The verifier now applies full release-checklist row schema validation to the
+  embedded all-lanes evidence checklist as well as the top-level readiness
+  report checklist and standalone all-lanes summary checklist.
+- Added adversarial bundle coverage that duplicates the same gate id in all
+  three public checklist locations and verifies each one is rejected.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_checklist'`
+    (`5` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`218` tests passed)
+  - `git diff --check -- scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-06 SCCP submission-surface launch-scope hardening
+
+- Removed the generic `substrate` row from active
+  `user_prover_submission_surfaces` so public readiness reports only advertise
+  supported launch lanes: `eth,bsc`, `tron`, `sol`, and `ton`.
+- Tightened the strict release-bundle verifier so a reintroduced
+  `substrate` production submission row is rejected as an unsupported/unknown
+  lane while the existing Substrate helper inventories remain
+  diagnostic/backlog material.
+- Updated bridge-proof documentation and the roadmap to state that Substrate
+  runtime-call submission helpers are not part of the current production
+  submission surface.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_readiness_json_tracks_corridor_phase_results'`
+    (`1` test passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'unsupported_substrate_submission_surface or required_helper_inventory_matches_report or unknown_lanes or required_helper_inventory_is_independent or writes_hash_bound_public_artifacts'`
+    (`4` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface'`
+    (`14` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'submission_surface or user_prover or release_readiness_json_tracks_corridor_phase_results'`
+    (`3` tests passed)
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-06 Soracloud bootstrap-key proof statement policy binding
+
+- Added `FheExecutionPolicyV1::bootstrap_key_zero_refresh_proof_statement_digest`
+  and require it whenever a Soracloud FHE policy allows bootstrap execution.
+- Derived exact-lift and bounded-noise bootstrap-key proof statement digests
+  from the governed BFV evaluation keys plus refresh transcript, including
+  public-key shape preflight and bootstrap key id/round-capacity drift checks.
+- Core now rejects bootstrap-capable FHE jobs whose refresh transcript has no
+  bootstrap material or whose derived bootstrap-key proof statement digest does
+  not match the governance-bound policy digest, while retaining the existing
+  refresh-transcript inventory digest/provenance checks.
+- Updated Soracloud FHE JSON fixtures and focused regressions for exact and
+  bounded policy binding. Follow-up work now focuses on production circuit/key
+  rollout and the full BFV bootstrapping path.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/executor.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_bootstrap_key_proof_statement_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_policy_binds_refresh_transcript_mode --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core run_soracloud_fhe_job_records_bounded_noise_ --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-bootstrap-proof-policy CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model -p iroha_core --lib --no-deps -- -D warnings`
+  - `cargo fmt -p iroha_data_model -p iroha_core -- --check` is currently
+    blocked by unrelated dirty formatting in
+    `crates/iroha_core/src/smartcontracts/isi/world.rs`.
+
+## 2026-06-06 SCCP launch-scope constant inventory hardening
+
+- Added a strict release-bundle inventory gate that scans the Rust SCCP
+  constants, all-lanes evidence generator, and readiness reporter for the
+  current supported launch domain set, unsupported Substrate/Polkadot blocker,
+  and active Ethereum launch policy.
+- Added negative coverage with sparse stand-in source files that omit or drift
+  those launch-scope markers, proving the verifier reports missing supported
+  domain, unsupported blocker, unsupported-domain derivation, and active launch
+  policy constants.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'launch_scope_constant_inventory or writes_hash_bound_public_artifacts'`
+    (`2` tests passed)
+
+## 2026-06-06 WSL-safe plain cargo test defaults
+
+- Added repo-local Cargo config with `build.jobs = 2` so plain `cargo test`
+  does not default to logical-CPU build fan-out on WSL and memory-constrained
+  VMs.
+- Changed the shared integration-test and `iroha_test_network` network permit
+  defaults to one concurrent DA/RBC localnet, while keeping
+  `IROHA_TEST_NETWORK_PARALLELISM` and `IROHA_TEST_SERIALIZE_NETWORKS`
+  overrides for high-memory hosts and explicit serialization.
+- Updated README guidance to describe the conservative default and opt-in
+  throughput overrides.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network network_parallelism --lib -- --nocapture`
+  - `cargo test -p iroha_test_network serialization_overrides_parallelism_limit --lib -- --nocapture`
+  - `cargo test -p integration_tests serial_guard --lib -- --nocapture`
+  - `cargo test -p integration_tests network_parallelism_env_override_applies --lib -- --nocapture`
+  - `cargo test -p integration_tests serialization_overrides_parallelism_limit --lib -- --nocapture`
+
+## 2026-06-06 WSL-safe full-test runner
+
+- Added `scripts/run_full_tests.sh --wsl-safe`, which defaults to
+  `CARGO_BUILD_JOBS=2`, `--test-threads=1`,
+  `IROHA_TEST_NETWORK_PARALLELISM=4`, and serialized integration-test network
+  startup for WSL and memory-constrained VMs.
+- Added explicit `--cargo-jobs`, `--test-threads`,
+  `--network-parallelism`, and `--serialize-networks` flags so local test
+  runs can be tuned without memorizing environment variables.
+- Documented the WSL-safe command in the root README and integration-test
+  README as a constrained-host fallback, with Windows-side WSL memory/swap and
+  host disk headroom called out as the primary fix.
+- Validation:
+  - `bash -n scripts/run_full_tests.sh`
+  - `scripts/run_full_tests.sh --help`
+  - `scripts/run_full_tests.sh --cargo-jobs 0`
+    (failed fast with the expected positive-integer validation error)
+
+## 2026-06-06 Torii DA pin-intent indexed-location verification
+
+- Replaced the remaining DA pin-intent "placeholder" wording in Torii handler
+  docs, OpenAPI, and MCP tool descriptions with the current indexed-location
+  lookup and verification contract.
+- Added handler-level DA pin-intent coverage that seeds Torii's live pin-intent
+  index, proves by lane/epoch/sequence, verifies the returned location payload
+  against the node state, and rejects a tampered indexed location.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii da::pin_intents::tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_da_pin_intents_endpoints_accept_body -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
+## 2026-06-06 Torii SoraFS CAR range middle-window coverage
+
+- Added Torii SoraFS CAR range coverage for a non-full, multi-chunk payload
+  window served from the middle of a stored manifest. The regression requests
+  exactly two aligned chunks, verifies the returned CAR against the original
+  manifest and expected byte range, and checks the emitted `Content-Range` and
+  `X-Sora-Chunk-Range` metadata.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii car_range_streams_verified_middle_chunk_window --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii car_range --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii storage_fetch_requires_capability_when_enforced --lib --features app_api -- --nocapture`
+  - `cargo clippy -p iroha_torii --all-targets --features app_api -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
+## 2026-06-06 Torii DA commitment Merkle proof route coverage
+
+- Replaced stale DA commitment "placeholder" wording in Torii OpenAPI and MCP
+  surfaces with the current Merkle proof/verification contract.
+- Added handler-level DA commitment proof coverage that seeds a committed block
+  with a DA bundle, hydrates Torii's indexed store through Kura/block hashes,
+  proves by manifest hash, verifies the returned Merkle proof against the block
+  header commitment hash and lane policy, and rejects a tampered Merkle root.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii da::commitments::tests --lib -- --nocapture`
+  - `cargo test -p iroha_torii openapi --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_da_commitments_endpoints_accept_body -- --nocapture`
+  - `cargo test -p iroha_torii --lib -- --nocapture` (`2277` passed, `2`
+    ignored)
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
+## 2026-06-06 Torii caller-scoped read signature hardening
+
+- Removed Torii's header-only caller identity fallback for app-facing
+  account-scoped reads: bare `X-Iroha-Account` headers now fail closed, while
+  canonical signed request headers still establish caller visibility.
+- Updated routed-read coverage so unsigned reads remain limited to public
+  dataspaces and signed callers retain access to their bound private
+  dataspaces; shortened the in-crate signed-header test nonce helper to stay
+  within the canonical request nonce bound for long account-id paths.
+- Repaired stale Torii production fixtures across SCCP launch-policy routing,
+  Nexus commit-QC signatures, SoraFS paid-manifest capability checks,
+  ISO20022 require-verified profile validation, ZK IVM verifying-key fixtures,
+  and ZK prover public-input reports so the crate-local library suite matches
+  current production admission rules.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --no-run`
+  - `cargo test -p iroha_torii torii_visibility_account_from_headers --lib -- --nocapture`
+  - `cargo test -p iroha_torii torii_partition_routes_by_visibility --lib -- --nocapture`
+  - `cargo test -p iroha_torii --lib -- --nocapture` (`2275` passed, `2`
+    ignored)
+  - `cargo clippy -p iroha_torii --all-targets -- -D warnings`
+  - `git diff --check`
+  - lockfile diff check returned no changed lockfiles
+
+## 2026-06-06 SCCP unsupported diagnostic lane schema hardening
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so complete
+  Substrate/Polkadot diagnostic lanes are still fully schema-checked even
+  though they must remain `production_ready = false`.
+- Unsupported diagnostic lanes must include the explicit unsupported
+  launch-scope blocker, and complete diagnostic rows may not hide extra
+  operator blockers beside it.
+- Added adversarial release-bundle coverage that tampers a complete SORA Kusama
+  diagnostic lane with a non-canonical source hash, an unexpected audit hash,
+  and a replaced blocker list; the verifier now rejects both the embedded
+  readiness evidence and copied all-lanes summary.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'checks_complete_substrate_diagnostic_schema or keeps_substrate_route_canaries_diagnostic_only or accepts_active_launch_lane_without_future_lanes or active_evm_metadata_rejects_noncanonical_chain_id or launch_scope_domain_drift'`
+    (`5` tests passed)
+
+## 2026-06-06 Sumeragi finality-source commit-view witness-change proof
+
+- Added `FinalitySourceActionMatchesCommitViewWitnessChangeStep` and
+  `FinalitySourceActionAlwaysMatchesCommitViewWitnessChange` to prove that any
+  honest commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality and changes the nonzero commit-view witness completes the certified
+  commit-view witness-change proof chain.
+- The proof routes the source-action commit-view witness change through the
+  existing exact-source committed-delivery lemma, which includes certified
+  finality-stack matching and commit-certificate witness installation.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesCommitViewWitnessChangeStep|FinalitySourceActionAlwaysMatchesCommitViewWitnessChange|finality-source commit-view witness-change matching" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`198`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx30720m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 SCCP active-launch EVM metadata canonicalization
+
+- Tightened `scripts/sccp_release_readiness_report.py` and
+  `scripts/sccp_verify_release_bundle.py` so active launch EVM live metadata
+  accepts only canonical decimal chain ids in readiness summaries.
+- Added adversarial coverage proving `0x1` and `01` are rejected for the active
+  Ethereum launch source and destination live chain-id fields, while canonical
+  `1` still passes.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'canonical_decimal_chain_id or active_launch_evm_live_metadata_drift'`
+    (`2` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'active_evm_metadata_rejects_noncanonical_chain_id or all_lanes_schema or launch_scope_domain_drift'`
+    (`2` tests passed)
+
+## 2026-06-06 SCCP Substrate/Polkadot launch-scope note
+
+- Added an explicit user-facing note to `docs/source/bridge_proofs.md`, the
+  roadmap, and the Torii OpenAPI SCCP discovery descriptions that SCCP does not
+  support Substrate/Polkadot-family networks for now, including Kusama,
+  Polkadot, SORA Kusama, SORA Polkadot, and SORA2.
+- Existing Substrate/SORA2 runtime, SCALE, relay, and evidence material remains
+  diagnostic/backlog-only until the launch scope is explicitly re-opened.
+
+## 2026-06-06 SCCP launch-scope summary schema hardening
+
+- All-lanes SCCP evidence summaries now publish explicit
+  `supported_launch_domains` and `unsupported_launch_domains` fields alongside
+  the full diagnostic `required_domains` list.
+- The release-bundle verifier now checks that the supported launch set is
+  exactly ETH/BSC/Solana/TON/TRON, the unsupported diagnostic set is exactly
+  SORA Kusama/SORA Polkadot/SORA2, the sets are disjoint, and together they
+  cover the published diagnostic domains.
+- Added negative release-bundle coverage that tampers the launch-scope arrays in
+  both the readiness report and copied all-lanes summary, then verifies the
+  bundle is rejected.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'bundle_is_ready or release_checklist_reports_ready_bundle'`
+    (`2` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'launch_scope_domain_drift or writes_hash_bound_public_artifacts or accepts_active_launch_lane_without_future_lanes'`
+    (`3` tests passed)
+
+## 2026-06-06 SCCP source-template production gate hardening
+
+- Replaced stale SCCP source-material marker wording with the explicit
+  production contract: built-in source verifier material is template-only, and
+  production source readiness opens only through caller-supplied governed
+  material plus a matching source-adapter deployment descriptor.
+- Added an adversarial regression that fabricates matching-looking deployment
+  descriptors around every built-in SCCP remote-lane template and proves they
+  still fail source-material readiness, deployment matching, and production
+  source-adapter readiness.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-template-gates cargo test -p iroha_sccp builtin_source_verifier_templates_cannot_be_wrapped_as_production_deployments --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-template-gates cargo test -p iroha_sccp source_adapter_engine_readiness --lib -- --nocapture`
+    (`3` tests passed)
+  - Stale-marker scan over active SCCP files returned no matches.
+
+## 2026-06-06 Kotodama entrypoint permission runtime enforcement
+
+- Core contract dispatch now carries embedded entrypoint `permission(...)`
+  metadata through both metadata-dispatched IVM execution and direct
+  `ContractCall` parsing.
+- Before running the VM, `iroha_core` rejects callers that do not hold the
+  required permission name directly or through an assigned role.
+- Nested `CALL_CONTRACT` dispatch now applies the same manifest permission
+  check to the caller contract subject before launching the callee child VM.
+- Updated the Kotodama gap analysis and roadmap so permission metadata is no
+  longer tracked as a runtime-enforcement gap; cross-contract callback wiring
+  remains outstanding.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core call_contract_syscall_enforces_callee_entrypoint_permission --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core contract_call_transaction --lib -- --nocapture`
+    (`19` tests passed)
+  - `cargo test -p iroha_core call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core contract_dispatch_context_carries_entrypoint_permission --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core contract_entrypoint_permission_accepts_direct_and_role_grants --lib -- --nocapture`
+    (`1` test passed)
+  - `git diff --check -- crates/iroha_core/src/executor.rs crates/iroha_core/src/smartcontracts/ivm/host.rs crates/ivm/docs/kotodama_gap_analysis.md crates/ivm/docs/syscalls.md roadmap.md status.md`
+
+## 2026-06-06 iroha_crypto test clippy gate
+
+- Cleared the `iroha_crypto --lib --tests` clippy gate by keeping BFV
+  regression tests exempt from the line-count heuristic at the test-module
+  boundary, moving the `soranet_handshake_check` test module after runtime
+  items, and replacing clone-heavy single-item test slices with borrowed
+  `slice::from_ref` inputs.
+- Kept the BFV test behavior unchanged while moving duplicated local assertion
+  helpers to module scope and using `Copy` semantics for `BfvParameters` test
+  updates.
+- Hardened the `soranet_handshake_check` interop fixture loader so malformed
+  JSON shape or hex fields return `HarnessError::Validation` with fixture-field
+  context instead of panicking during measurement setup.
+- Added `soranet_handshake_check` CLI validation for zero sample counts and
+  non-finite/negative regression tolerances before measurement begins.
+- Made `soranet_handshake_check` baseline parsing fail closed on non-object
+  roots, malformed entries, and non-positive or non-finite timing metrics so
+  regression baselines cannot silently disable or poison comparisons.
+- `soranet_handshake_check` now requires exact baseline coverage for all active
+  SoraNet handshake suites and rejects stale unknown baseline entries instead
+  of skipping missing regression checks.
+- The same performance gate now rejects debug-profile execution before
+  measurement so release-style baselines are not compared against debug
+  timings.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_crypto/src/bin/soranet_handshake_check.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --all-targets --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --lib -- --nocapture`
+    (`630` tests passed; `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo test -p iroha_crypto --bin soranet_handshake_check -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo run -p iroha_crypto --bin soranet_handshake_check -- --samples 1 --baseline crates/iroha_crypto/benches/soranet_handshake_baseline.json`
+    failed closed before measurement with the expected release-profile
+    requirement.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo test -p iroha_crypto fixed_ed25519_keypair_uses_checked_seed_derivation --bin soranet_handshake_check -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_encryption_rejects_insufficient_residual_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo test -p iroha_crypto registered_bfv_parameters_reject_structural_but_unregistered_sets --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-crypto-tests-clippy CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_plain_operations_track_noise_bounds --lib -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-06 SoraNet SHAKE material framing
+
+- Routed SoraNet deterministic SHAKE expansion through the
+  `soranet.expand-material.v1` domain and fixed-width framing for the label,
+  part count, and every absorbed component.
+- This removes boundary ambiguity from deterministic KEM material, simulated
+  ML-DSA witness material, dual-mix material, and deterministic Noise-seed
+  derivation while preserving explicit transcript-hash field framing.
+- Regenerated the SoraNet fixture bundles under both `tests/interop/soranet`
+  and `fixtures/soranet_handshake`; NK2/NK3 interop vectors and the downgrade
+  capability fixture's embedded signature witnesses now bind the framed SHAKE
+  outputs.
+- Added a direct regression proving `expand_material` distinguishes both
+  component-boundary and label-boundary changes.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/soranet/handshake.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo test -p iroha_crypto expand_material_length_prefixes_label_and_parts --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo run -p soranet-handshake-harness -- fixtures --out tests/interop/soranet/capabilities`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo run -p soranet-handshake-harness -- fixtures --out fixtures/soranet_handshake/capabilities`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo test -p iroha_crypto generated_interop_values_match_canonical_rust_fixtures --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo test -p iroha_crypto session_key --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo test -p iroha_crypto simulate_handshake --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo test -p soranet-handshake-harness canonical_fixtures_match_generator_output --test fixtures_verify -- --nocapture`
+    (`1` test passed; verified both checked-in fixture bundles)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-expand-material CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 SoraNet session-key HKDF input boundaries
+
+- Routed the SoraNet handshake session-key HKDF extractor through a
+  domain-separated, length-prefixed IKM component helper.
+- The NK2 and NK3 session schedules still use the transcript hash as salt and
+  suite-specific expand labels, while component segmentation is now bound into
+  the extracted key material.
+- Refreshed the SoraNet NK2/NK3 interop vectors in both
+  `tests/interop/soranet/interop/{rust,go,cpp}` and
+  `fixtures/soranet_handshake/interop/{rust,go,cpp}` so session-key and
+  session-confirmation outputs match the new HKDF boundaries.
+- Replaced the legacy contiguous-IKM equivalence regression with a boundary
+  regression proving `["ab", "c"]` and `["a", "bc"]` derive different HKDF
+  outputs under the same transcript hash, and added a canonical Rust interop
+  fixture regression so generated vectors cannot drift from checked-in JSON.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/soranet/handshake.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-hkdf-prefix CARGO_INCREMENTAL=0 cargo test -p iroha_crypto session_key_hkdf_length_prefixes_ikm_parts --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-hkdf-prefix CARGO_INCREMENTAL=0 cargo test -p iroha_crypto generated_interop_values_match_canonical_rust_fixtures --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-hkdf-prefix CARGO_INCREMENTAL=0 cargo test -p iroha_crypto session_key --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-hkdf-prefix CARGO_INCREMENTAL=0 cargo test -p iroha_crypto simulate_handshake --lib -- --nocapture`
+    (`4` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-fixtures CARGO_INCREMENTAL=0 cargo test -p soranet-handshake-harness canonical_fixtures_match_generator_output --test fixtures_verify -- --nocapture`
+    (`1` test passed; verified both checked-in fixture bundles)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-hkdf-prefix CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-session-hkdf-prefix CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --tests --no-deps -- -D warnings`
+    was blocked before the test-clippy cleanup recorded above; rerun evidence
+    now passes under `/tmp/iroha-codex-crypto-tests-clippy`.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-fixtures CARGO_INCREMENTAL=0 cargo run -p xtask --bin xtask -- soranet-fixtures --verify`
+    could not complete in this dirty workspace because unrelated
+    `crates/iroha_core/src/executor.rs` changes fail `missing_docs` on
+    `ContractCallExecutionContext`.
+
+## 2026-06-06 Hybrid KEM transcript-bound derivation
+
+- Bound SoraFS hybrid KEM derived material to length-prefixed public transcript
+  components: recipient X25519 public key, recipient ML-KEM public key,
+  ephemeral X25519 public key, and ML-KEM ciphertext.
+- Kept encapsulation and decapsulation deterministic and symmetric while adding
+  checked transcript capacity accounting before HKDF input construction.
+- Added a direct regression proving fixed shared secrets derive the same output
+  for the same transcript and different outputs when any public transcript
+  component changes.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/hybrid.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-transcript-binding CARGO_INCREMENTAL=0 cargo test -p iroha_crypto derive_material_binds_public_transcript_components --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-transcript-binding CARGO_INCREMENTAL=0 cargo test -p iroha_crypto hybrid --lib -- --nocapture`
+    (`13` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-hybrid-transcript-binding CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Public-key compact checked serialization
+
+- Added checked full-to-compact public-key conversion and routed public-key
+  Norito serialization plus encoded-length estimation through it.
+- The Result-returning serialization path now propagates payload envelope
+  encoding errors instead of depending on the infallible full-to-compact wrapper.
+- Added a deterministic Ed25519 regression proving checked full-to-compact
+  conversion preserves the validated algorithm tag and payload bytes.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-public-key-compact-checked CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_key_compact_try_from_full_preserves_checked_payload --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-public-key-compact-checked CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP launch scope and release inventory hardening
+
+- Marked Substrate/Polkadot-family SCCP lanes as out of current supported
+  launch scope. Rust lane readiness, manifest readiness, all-lanes evidence,
+  release summaries, `roadmap.md`, and diagnostics now keep SORA Kusama,
+  SORA Polkadot, and SORA2 evidence as backlog/diagnostic-only until support is
+  explicitly re-opened.
+- Preserved launch readiness for the supported ETH/BSC/Solana/TON/TRON scope by
+  excluding the unsupported Substrate/Polkadot blocker from top-level
+  all-lanes blockers while keeping those individual lanes non-production-ready.
+- Normalized Ethereum mainnet JS outbound provider validation, native EVM bundle
+  parser markers, and C# beacon finality branch evidence so the strict
+  release-bundle inventory can verify the public JS source/dist and .NET beacon
+  REST evidence hooks.
+- Cleared the remaining explicit SCCP TODO/FIXME scan; the lane-readiness code
+  now documents the governed material contract instead of pointing at a stale
+  future registry TODO.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-scope cargo test -p iroha_sccp substrate_family_lane_remains_unsupported_with_complete_evidence --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-scope cargo test -p iroha_sccp ethereum_launch_policy_opens_only_eth_lane_independently_of_all_lanes --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-scope cargo test -p iroha_sccp reference_evm_attestation_manifest_cannot_be_promoted_to_production --lib -- --nocapture`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'bundle_is_ready or verified_substrate_live_toml_diagnostic_only or direct_substrate_destination_toml_diagnostic_only'`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'passes_with_only_active_launch_lane'`
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py`
+  - Full SCCP Python script suite:
+    `python3 -m pytest -q pytests/scripts/sccp_substrate_destination_evidence_test.py ... pytests/scripts/sccp_tron_live_evidence_test.py`
+    (`1007` tests passed)
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --test --test-name-pattern "EthereumMainnetSccp outbound" test/sccpEthereumMainnet.test.js`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'writes_hash_bound_public_artifacts'`
+  - `cd javascript/iroha_js && npm run lint`
+  - SCCP stale-marker scan across crates, scripts, docs, SDKs, and release
+    helpers returned no matches.
+  - `git diff --check -- javascript/iroha_js/src/sccp.js javascript/iroha_js/dist/sccp.js csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md crates/iroha_sccp/src/lib.rs`
+  - Could not run the focused C# test locally because `dotnet` is not
+    installed in this environment.
+
+## 2026-06-06 Exposed private-key formatter fallback
+
+- Routed `ExposedPrivateKey` display/normalization and
+  `to_prefixed_string()` through checked private-key formatting with a
+  deterministic `invalid-private-key:<algorithm>` marker fallback instead of
+  `expect()`.
+- Kept the fallback marker free of private-key payload bytes while preserving
+  checked formatting for valid key material.
+- Added a deterministic Ed25519 regression proving the compatibility display,
+  prefixed formatter, and debug formatting match checked private-key formatting
+  for valid exposed keys.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-exposed-private-formatters CARGO_INCREMENTAL=0 cargo test -p iroha_crypto exposed_private_key_compat_formatters_match_checked_outputs --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-exposed-private-formatters CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi finality-source commit-certificate witness-change proof
+
+- Added `FinalitySourceActionMatchesCommitCertificateWitnessChangeStep` and
+  `FinalitySourceActionAlwaysMatchesCommitCertificateWitnessChange` to prove
+  that any honest commit vote, Byzantine commit vote, or RBC delivery action
+  that flips finality aligns committed-phase entry with the commit-certificate
+  witness change.
+- The proof routes that witness change through the certified finality stack,
+  requires commit-view witness installation, and completes the exact-source
+  committed-delivery chain for the source-action transition.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesCommitCertificateWitnessChangeStep|FinalitySourceActionAlwaysMatchesCommitCertificateWitnessChange|finality-source commit-certificate witness-change matching" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`197`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 SM2 concrete public-key prefixed formatter fallback
+
+- Routed `Sm2PublicKey::to_prefixed_string()` through the checked formatter with
+  a deterministic invalid-SM2-public-key marker fallback instead of an
+  `expect()`.
+- Extended the SM2 prefixed-string regression so the concrete compatibility
+  wrapper is checked against the generic public-key helper for valid SM2 keys.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-public-prefixed-fallback CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_public_key_prefixed_string_matches_public_key_helper --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-public-prefixed-fallback CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Public-key prefixed formatter fallback
+
+- Routed `PublicKey::to_prefixed_string()` through the existing malformed
+  compact-key marker instead of unwrapping the fallible formatter.
+- Extended the malformed compact-key regression so display, debug, JSON marker
+  serialization, and prefixed formatting all remain panic-free for invalid
+  internal compact state.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-public-key-prefixed-fallback CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_key_infallible_formatters_handle_malformed_compact_state_without_panic --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-public-key-prefixed-fallback CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 SM2 checked private-key payload formatting
+
+- Added `PrivateKey::try_payload()` and `PrivateKey::try_to_bytes()` so SM2
+  private-key payload envelope encoding can return `ParseError` instead of
+  relying on the compatibility byte-export wrapper.
+- Routed `ExposedPrivateKey::try_to_multihash_string()` and
+  `try_to_prefixed_string()` through checked private-key byte extraction.
+- Added a deterministic SM2 regression proving checked private payload
+  extraction roundtrips through raw bytes, bare multihash, and prefixed
+  multihash formatting.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-private-checked-payload CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_private_key_checked_payload_and_prefixed_roundtrip --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-private-checked-payload CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2 --features sm --lib -- --nocapture`
+    (`32` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-private-checked-payload CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 SCCP Substrate/Polkadot support scope note
+
+- Updated the SCCP roadmap checkpoint to state that Substrate/Polkadot-family
+  SCCP lanes are not in the current supported launch scope.
+- Existing Substrate, Kusama, Polkadot, and SORA2 evidence helpers remain
+  diagnostic/backlog-only until support is explicitly re-opened.
+- Enforced that scope in Rust lane production readiness, launch-policy
+  evaluation, manifest promotion checks, and all-lanes evidence summaries:
+  complete Substrate-family source, destination, route, and canary evidence is
+  still parsed for diagnostics but cannot mark the lane production-ready.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-scope cargo test -p iroha_sccp substrate_family_lane_remains_unsupported_with_complete_evidence --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-scope cargo test -p iroha_sccp ethereum_launch_policy_opens_only_eth_lane_independently_of_all_lanes --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-scope cargo test -p iroha_sccp reference_evm_attestation_manifest_cannot_be_promoted_to_production --lib -- --nocapture`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'bundle_is_ready or verified_substrate_live_toml_diagnostic_only or direct_substrate_destination_toml_diagnostic_only'`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'passes_with_only_active_launch_lane'`
+- Follow-up release-bundle inventory marker fixes and full SCCP script-suite
+  validation are recorded in the SCCP launch-scope entry above.
+
+## 2026-06-06 BFV bootstrap-key proof statement digest
+
+- Added canonical exact-lift and bounded-noise BFV bootstrap-key zero-refresh
+  proof statement digests in `iroha_crypto`, binding parameters, public key,
+  bootstrap key id, refresh-round capacity, and every public refresh ciphertext
+  under mode-separated domains.
+- The new digest helpers preflight bootstrap-key public metadata before
+  malformed public keys or refresh ciphertext shapes, giving the future
+  proof-carrying bootstrap-key admission path a stable public statement hash.
+- Kept `iroha_crypto` clippy green by mirroring the existing SM2
+  feature-dependent `try_payload` lint guard on private-key payload export and
+  removing the now-unused private fallback payload helper.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-proof-statement CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_zero_refresh_proof_statement_digest --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-proof-statement CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_proof_statement_digest_preflights_public_metadata --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bootstrap-proof-statement CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 SM2 checked public derivation
+
+- Routed SM2 public-key derivation in `KeyPair::try_random_with_algorithm`,
+  `KeyPair::try_from_seed`, and `PublicKey::from_private_key` through
+  `Sm2PrivateKey::try_public_key()` instead of the compatibility panic wrapper.
+- Added a deterministic seeded regression proving `PublicKey::from_private_key`
+  returns the same SM2 key material as the checked key-pair constructor.
+- Fixed a BFV bootstrap-proof metadata regression borrow/move issue that blocked
+  `iroha_crypto` lib test compilation.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/lib.rs crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-checked-public-derivation CARGO_INCREMENTAL=0 cargo test -p iroha_crypto try_from_seed_sm2_uses_checked_public_derivation --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-checked-public-derivation CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2 --features sm --lib -- --nocapture`
+    (`31` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-checked-public-derivation CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 SM4-CCM checked length conversions
+
+- Routed SM4-CCM tag, nonce, AAD length, payload length, and counter-block
+  parameter narrowing through `Error::Other` instead of panic-only integer
+  conversions after validation.
+- Kept the CCM ciphertext and tag layout unchanged while propagating checked
+  helper errors through the existing encrypt/decrypt `Result` paths.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm4-ccm-checked-lengths CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm-ccm --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm4-ccm-checked-lengths-sm CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm4_ccm --features sm --lib -- --nocapture`
+    (`3` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm4-ccm-checked-lengths-sm CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi finality-source live commit-gate proof
+
+- Added `FinalitySourceActionMatchesLiveCommitGateCrossingStep` and
+  `FinalitySourceActionAlwaysMatchesLiveCommitGateCrossing` to prove that any
+  honest commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality matches the live commit-gate crossing from `~CanCommit(...)` to
+  `CanCommit(...)`.
+- The proof ties those exact finality-source actions to both the finality-latch
+  and committed-phase live-gate crossing classifiers, then requires the
+  post-state `LiveCommitGateMatchesFinality` and
+  `LiveCommitGateRbcEvidenceMatches` predicates.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesLiveCommitGateCrossingStep|FinalitySourceActionAlwaysMatchesLiveCommitGateCrossing|finality-source live commit-gate crossing" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`196`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 secp256k1 checked message signing
+
+- Added `EcdsaSecp256k1Sha256::try_sign()` so secp256k1 message signing can
+  propagate backend prehash-signing errors through `Error::Signing`.
+- Kept `sign()` as the compatibility wrapper while routing
+  `Signature::try_new` through the checked secp256k1 helper.
+- Routed recoverable prehash signing's low-S recovery-id parity flip through
+  `Error::Signing` instead of a panic-only assumption.
+- Added direct and generic-signature regressions proving checked signing
+  matches the compatibility bytes and still verifies.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/secp256k1.rs crates/iroha_crypto/src/signature/mod.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-try-sign CARGO_INCREMENTAL=0 cargo test -p iroha_crypto try_sign_matches_compatibility_sign_and_verifies --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-try-sign CARGO_INCREMENTAL=0 cargo test -p iroha_crypto create_signature_secp256k1_checked_path --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-try-sign CARGO_INCREMENTAL=0 cargo test -p iroha_crypto recoverable_prehash --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-try-sign CARGO_INCREMENTAL=0 cargo test -p iroha_crypto secp256k1 --lib -- --nocapture`
+    (`12` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-secp256k1-try-sign CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Kotodama escrow access hints
+
+- Added compiler-derived access descriptors for native escrow helpers using
+  stable `EscrowId::from_kotodama_name` keys, including shared escrow-id keys
+  and native asset escrow record keys.
+- Added anonymous escrow descriptors for literal name-based lifecycle helpers
+  and decodable Norito request-backed open/release/cancel/resolve payloads.
+- Extended literal `execute_instruction(norito_bytes(...))` access decoding to
+  cover the data-model native and anonymous escrow ISIs.
+- Aligned the `opaque-access-hints` lint with the compiler so literal native
+  escrow calls, literal anonymous lifecycle calls, decodable anonymous request
+  payloads, and escrow `InstructionBox` payloads no longer warn, while dynamic
+  names and malformed anonymous requests still do.
+- Removed stale opaque-access linting for `register_asset` and
+  `create_new_asset`; the compiler already emits precise literal keys or
+  dynamic asset-definition conflict keys for those helpers.
+- Removed stale opaque-access linting for `subscription_bill` and
+  `subscription_record_usage`; those helpers have fixed compiler-derived
+  subscription trigger-context keys.
+- Removed stale opaque-access linting for `build_submit_ballot_inline` and
+  `build_unshield_inline`; those helpers construct canonical payloads and do
+  not claim ledger access.
+- Made `transfer_domain` linting match compiler access derivation: literal
+  domain plus static/authority destination accounts are silent, while dynamic
+  destinations still warn.
+- Marked stale Kotodama gap-analysis items done: compiler extraction already
+  lives in `crates/kotodama_lang`, and Norito pointer-wrapper constructors plus
+  method-call sugar already accept string bindings, matching pointer types, and
+  Blob/bytes payloads without manual casts.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang escrow --lib -- --nocapture`
+    (`13` tests passed)
+  - `cargo test -p kotodama_lang manifest_access_set_hints_include_execute_instruction --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p kotodama_lang access_set_hints --lib -- --nocapture`
+    (`37` tests passed)
+  - `cargo test -p kotodama_lang lint_opaque_access_hints --lib -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p kotodama_lang lint_asset_registration_helpers_are_precise_access --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang lint_subscription_helpers_are_precise_access --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang lint_inline_zk_builders_are_precise_access --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p kotodama_lang transfer_domain --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p ivm pointer_constructor --test kotodama -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p ivm method_sugar --test kotodama -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p ivm constructor_accepts_norito --test kotodama -- --nocapture`
+    (`2` tests passed)
+
+## 2026-06-06 SM2 DER checked export
+
+- Added `Sm2Signature::try_as_der()` so SM2 DER signature export can propagate
+  short-form length errors instead of relying on panic-only `u8` conversions.
+- Kept `as_der()` as a compatibility wrapper while routing the OpenSSL SM2
+  verification bridge through the checked exporter.
+- Added a regression proving checked DER export matches the compatibility bytes
+  and keeps the sequence length self-consistent.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-der-checked-export CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_signature_try_as_der_matches_compatibility_export --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-der-checked-export CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_signature_der --features sm --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-der-checked-export CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Soracloud FHE input-admission proof metadata preflight
+
+- Reordered `SoracloudFheInputAdmissionProofV1::validate` so cheap proof
+  attachment metadata rejects before BFV bound capacity: backend consistency,
+  canonical verifier id, verifier-key commitment metadata, and envelope-hash
+  presence now fail before oversized exact or bounded-noise residual bounds.
+- Kept decoded `OpenVerifyEnvelope` validation after the BFV bound-capacity
+  preflight, so structurally sound but over-capacity submissions are still
+  rejected before expensive envelope decoding or verifier lookup.
+- Added a regression proving malformed proof backend, verifier-key backend,
+  verifier id, missing verifier-key commitment, and missing envelope hash are
+  reported before over-capacity FHE bounds.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-admission-metadata-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_input_admission_proof_validate_preflights_attachment_metadata_before_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-admission-metadata-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_input_admission_proof_validate_rejects_open_verify_envelope_drift --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-admission-metadata-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_input_admission_proof_validate_rejects_over_capacity_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-admission-metadata-preflight CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 SM4 signature self-test constructor
+
+- Replaced the SM signature shim's `Sm4::new_from_slice(...).expect(...)`
+  self-test construction with the infallible fixed-key constructor used by the
+  main SM4 helpers.
+- Added a regression pinning zero-key/zero-block SM4 encryption to the standard
+  `9f1f7bff6f5511384d9430531e538fd3` output.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/signature/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signature-sm4-self-test CARGO_INCREMENTAL=0 cargo test -p iroha_crypto self_test_block_matches_sm4_zero_key_zero_block_vector --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-signature-sm4-self-test CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Kotodama ZK verify effect gating
+
+- Classified Kotodama ZK verify helpers (`zk_verify_*` and
+  `zk_vote_verify_*`) as host-side effects because they set verification latch
+  state before later ZK ISI execution.
+- Public entrypoints that call those helpers now require `permission(...)`, and
+  `view` functions reject direct or transitive calls into them.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang zk_verify --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p kotodama_lang permission --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p kotodama_lang view_entrypoints_reject_transitive --lib -- --nocapture`
+    (`3` tests passed)
+
+## 2026-06-06 SM2 PEM wrapping panic removal
+
+- Changed SM2 PEM export to wrap the already encoded base64 `String` directly,
+  removing the panic-only UTF-8 reconversion for each 64-character line.
+- Added a regression pinning the 64-character PEM wrap and tail preservation.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-pem-wrap CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_pem_wrapping_uses_ascii_base64_string_slices --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-pem-wrap CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_public_key_pem_roundtrip --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-pem-wrap CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 SM2 payload prefix parse hardening
+
+- Routed SM2 embedded-distid payload length-prefix extraction through
+  `ParseError` instead of a panic-only fixed-slice assertion after the short
+  payload preflight.
+- Added a regression proving both public-key and private-key SM2 payload
+  decoders reject short prefixes through the parse-error path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/sm.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-payload-prefix CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_payload_decode_rejects_short_length_prefix --features sm --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-payload-prefix CARGO_INCREMENTAL=0 cargo test -p iroha_crypto sm2_payload --features sm --lib -- --nocapture`
+    (`2` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sm2-payload-prefix CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --features sm --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Sumeragi finality-source commit-artifact proof
+
+- Added `FinalitySourceActionMatchesCommitArtifactsChangeStep` and
+  `FinalitySourceActionAlwaysMatchesCommitArtifactsChange` to prove that any
+  honest commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality forces committed-phase entry and commit-artifact changes to agree.
+- The proof also routes those source-action-installed commit artifacts through
+  `CommitArtifactsChangeMatchesCertifiedFinalityStackStep` and
+  `CommitArtifactsChangeCompletesCommittedDeliveryFromExactSourceStep`, keeping
+  commit artifacts tied to the certified finality stack and exact-source
+  committed-delivery chain.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionMatchesCommitArtifactsChangeStep|FinalitySourceActionAlwaysMatchesCommitArtifactsChange|finality-source commit-artifact change matching" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`195`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 compact Merkle proof depth cap
+
+- Replaced compact Merkle proof `u32::BITS` conversion assertions with a shared
+  fixed direction-bitset depth cap used by conversion, generic verification,
+  and SHA-256 verification.
+- Added a regression pinning the compact proof max depth to the `u32` direction
+  bitset width.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/merkle.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-merkle-compact-depth CARGO_INCREMENTAL=0 cargo test -p iroha_crypto compact_proof_max_depth_matches_direction_bit_width --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-merkle-compact-depth CARGO_INCREMENTAL=0 cargo test -p iroha_crypto compact_proof --lib -- --nocapture`
+    (`9` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-merkle-compact-depth CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 Kotodama inline unshield private outputs
+
+- Extended `build_unshield_inline(...)` so the legacy 7-argument literal builder
+  remains valid while an 8-argument form can include `outputs32` private change
+  commitments.
+- The builder now decodes concatenated 32-byte input and output chunks into the
+  canonical Norito `Unshield` `InstructionBox`, keeping literal-folded manifest
+  access derivation aligned with emitted payloads.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang inline --lib -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p kotodama_lang inline_zk_vendor --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p ivm --test kotodama compile_kotodama_samples_supported -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-06 ML-DSA seeded-keygen S2 nonce conversion
+
+- Routed the ML-DSA-65 seeded key-generation S2 nonce offset through a checked
+  `Error::KeyGen` helper instead of a const-conversion `expect`.
+- Added a regression pinning the current canonical S2 nonce offset used by the
+  seeded ML-DSA keygen path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/mldsa_seed.rs crates/iroha_crypto/src/ram_lfe.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-seed-nonce CARGO_INCREMENTAL=0 cargo test -p iroha_crypto seeded_keygen_s2_nonce_uses_canonical_l_offset --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-seed-nonce CARGO_INCREMENTAL=0 cargo test -p iroha_crypto mldsa_seed --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-mldsa-seed-nonce CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 RAM-LFE hidden-program plaintext immediate admission
+
+- Hardened BFV programmed hidden-program admission so `LoadConst`, `AddPlain`,
+  `SubPlain`, and `MulPlain` immediates must be canonical `F_257` values before
+  program digests or public parameters are admitted.
+- Added regressions proving direct hidden-program validation and programmed
+  public-parameter construction reject modulo aliases before runtime execution.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/ram_lfe.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-immediate-canonical CARGO_INCREMENTAL=0 cargo test -p iroha_crypto hidden_program_validation_rejects_noncanonical_plaintext_immediates --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-immediate-canonical CARGO_INCREMENTAL=0 cargo test -p iroha_crypto try_bfv_programmed_public_parameters_rejects_noncanonical_plaintext_immediate --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-immediate-canonical CARGO_INCREMENTAL=0 cargo test -p iroha_crypto ram_lfe --lib -- --nocapture`
+    (`33` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-ram-lfe-immediate-canonical CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-06 IVM mock WSV unshield change-output accounting
+
+- Wired `Unshield::outputs` through the mock WSV host path so private change
+  commitments are appended to the shielded ledger, root history advances, and
+  `CommitmentAdded` events are emitted before the public `Unshielded` event.
+- Tightened mock unshield mutation ordering so public balance arithmetic,
+  policy/proof checks, and duplicate/pre-spent nullifier checks all complete
+  before nullifiers, roots, balances, or events mutate.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p ivm unshield_appends_private_change_outputs --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p ivm --test wsv_verify_latch_unshield wsv_unshield_routes_private_change_outputs -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p ivm --test wsv_verify_latch_unshield -- --nocapture`
+    (`4` tests passed)
+
+## 2026-06-06 Sumeragi finality-source source-classification proof
+
+- Added `FinalitySourceActionSourceIsCommitOrDeliveryStep` and
+  `FinalitySourceActionSourceAlwaysIsCommitOrDelivery` to prove that any honest
+  commit vote, Byzantine commit vote, or RBC delivery action that flips finality
+  is classified as a commit/RBC-delivery source.
+- The property is intentionally scoped to
+  `FinalityLatchSourceIsCommitOrDeliveryStep`, tying exact finality-source
+  actions to commit-vote phase entry, GST preservation, and exclusion of
+  timeout, NewView, RBC setup/progress, proposal/prepare, Byzantine fault, and
+  GST bookkeeping steps.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionSourceIsCommitOrDeliveryStep|FinalitySourceActionSourceAlwaysIsCommitOrDelivery|finality-source commit-or-delivery source classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`194`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError`, `EXITCODE: OK`)
+
+## 2026-06-06 Kotodama literal trigger access-hint diagnostics
+
+- Added a dedicated Kotodama compiler diagnostic for literal
+  `create_trigger(json(...))` specs that cannot be decoded into trigger access
+  keys, while keeping the generic ISI wildcard counter and production
+  fail-closed behavior intact.
+- Entrypoint manifests now record the trigger-specific access-hint skip reason
+  so production rejection messages distinguish malformed literal trigger specs
+  from fully opaque ISI helper calls.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang literal_trigger_spec_decode --lib -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p kotodama_lang access_hint_diagnostics --lib -- --nocapture`
+    (`2` tests passed)
+
+## 2026-06-06 BFV bounded RNS chain-first regression fixture
+
+- Updated the bounded RNS chain-first regression fixture to use valid public
+  outer-rotation metadata, keeping the test focused on malformed caller RNS
+  chains before key/ciphertext shape checks after the prior public rotation
+  metadata preflight hardening.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto rns_exact_public_entrypoints_preflight_chain_before_late_operation_errors --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_rns_add_sub_preflight_chain_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 BFV bootstrap bound public metadata preflight
+
+- Hardened key-authorized exact and bounded-noise bootstrap bound propagation
+  so public bootstrap key-id/max-round metadata and requested round counts are
+  rejected before caller-supplied input-bound capacity failures.
+- Preserved full bootstrap refresh-key shape validation after the cheap public
+  metadata and input-bound preflights, so malformed refresh ciphertext
+  diagnostics still fire after public admission failures are cleared.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto exact_residual_bound_helpers_track_add_and_bootstrap_capacity --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Sumeragi finality-source exact source-effect proof
+
+- Added `FinalitySourceActionSourceEffectsAreExactStep` and
+  `FinalitySourceActionSourceEffectsAlwaysExact` to prove that any honest
+  commit vote, Byzantine commit vote, or RBC delivery action that flips
+  finality has the exact source-effect deltas.
+- The property is intentionally scoped to
+  `FinalityLatchSourceEffectsAreExactStep`, tying exact finality-source actions
+  to mutually exclusive source classification plus source-specific vote, stake,
+  commit-certificate, commit-view, RBC delivery, and preserved evidence deltas.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionSourceEffectsAreExactStep|FinalitySourceActionSourceEffectsAlwaysExact|finality-source exact source-effect classification" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`193`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `bash scripts/formal/install_apalache.sh 0.52.2`
+    (restored the missing pinned local toolchain)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
+
+## 2026-06-06 BFV bounded affine public circuit preflight
+
+- Hardened direct bounded-noise affine execution so invalid public affine
+  circuit metadata is rejected before caller-supplied RNS chain shape or
+  rounded-capacity corridor failures. Registered bounded affine execution keeps
+  the existing registered-profile preflight before circuit inspection.
+- Extended bounded-noise capacity and affine execution regressions to combine
+  invalid public circuit metadata with malformed ciphertexts, malformed caller
+  RNS chains, and too-narrow rounded BFV profiles.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto affine_execution_preflights_public_circuit_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-affine-preflight CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+
+## 2026-06-06 Soracloud FHE input-admission circuit-drift regression
+
+- Tightened the data-model FHE input-admission OpenVerify drift regression so
+  the wrong-circuit fixture uses a same-length v2 circuit id and asserts the
+  canonical-v1 diagnostic, rather than allowing the generic circuit-id length
+  bound to satisfy the test.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-input-payload-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_data_model fhe_input_admission_proof_validate_rejects_open_verify_envelope_drift --lib -- --nocapture`
+
+## 2026-06-06 Sumeragi finality-source quorum-gate proof
+
+- Added `FinalitySourceActionQuorumGatesHoldStep` and
+  `FinalitySourceActionQuorumGatesAlwaysHold` to prove that any honest commit
+  vote, Byzantine commit vote, or RBC delivery action that flips finality is
+  backed directly by the finalizing quorum gates.
+- The property is intentionally scoped to
+  `FinalityLatchSourceQuorumGatesHoldStep`, tying exact finality-source actions
+  to their `CanCommit(...)` gate, prepare quorum, honest-support threshold,
+  stake quorum, active-view evidence, and RBC delivery evidence.
+- Wired through fast/deep/TLC-fast configs and documented in README/roadmap.
+- Validation:
+  - `rg -n "FinalitySourceActionQuorumGatesHoldStep|FinalitySourceActionQuorumGatesAlwaysHold|finality-source quorum-gate satisfaction" docs/formal/sumeragi/Sumeragi.tla docs/formal/sumeragi/Sumeragi_fast.cfg docs/formal/sumeragi/Sumeragi_deep.cfg docs/formal/sumeragi/Sumeragi_tlc_fast.cfg docs/formal/sumeragi/README.md roadmap.md status.md`
+  - `rg -c "^PROPERTY " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`192`)
+  - `rg -c "^INVARIANT " docs/formal/sumeragi/Sumeragi_fast.cfg`
+    (`67`)
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` tests passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes,
+    `1` scheduled/manual mode, `10293` documented modes,
+    `499` TLC fast modes, `9788` TLC mutation modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7,799` states generated, `2,338` distinct states, depth `24`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx24576m" APALACHE_ALLOW_DOCKER=0 APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`EXITCODE: OK`)
 ## 2026-06-06 C# Kagemusha record-backed prover parity
 
 - Added C# archive types and public wrappers for record-backed Kagemusha compact
@@ -5807,14 +9120,56 @@ Last updated: 2026-06-07
 - Hardened exact and bounded seeded keygen/encryption so public seed and
   plaintext metadata are rejected before exact residual-capacity or rounded
   capacity failures.
+- Hardened bounded Galois key generation so public automorphism and seed
+  metadata are rejected before too-narrow rounded-capacity failures.
+- Hardened bounded Galois switch and packed `RotateLeft` execution wrappers so
+  public Galois-key metadata, rotation schedules, and key-set metadata are
+  rejected before too-narrow rounded-capacity failures.
+- Hardened bounded outer `RotateLeft` execution wrappers so public rotation
+  metadata is rejected before too-narrow rounded-capacity failures.
+- Hardened bounded plaintext scalar and polynomial execution wrappers so public
+  scalar/plaintext metadata is rejected before too-narrow rounded-capacity
+  failures.
+- Hardened bounded scalar and plaintext-polynomial bound propagation so invalid
+  public scalar/plaintext metadata is rejected before too-narrow rounded-capacity
+  failures while oversized input bounds still win on valid profiles.
+- Hardened bounded ciphertext multiplication bound propagation so invalid public
+  relinearization-key metadata is rejected before too-narrow rounded-capacity
+  failures while oversized input bounds still win on valid profiles.
+- Hardened bounded Galois key-switch and packed `RotateLeft` bound propagation
+  so invalid public Galois metadata, rotation schedules, and packed key-set
+  metadata are rejected before too-narrow rounded-capacity failures while
+  oversized input bounds still win on valid profiles.
+- Hardened bounded affine, outer `RotateLeft`, and bootstrap refresh bound
+  propagation so invalid public circuit, rotation, round-count, and
+  bootstrap-key-id metadata are rejected before too-narrow rounded-capacity
+  failures while preserving existing valid-profile precedence: oversized input
+  bounds stay first for affine, outer-slot, and direct bootstrap bounds, and
+  key-authorized bootstrap bounds keep key-id/round metadata ahead of full key
+  shape.
 - Added crypto regressions that combine malformed secret keys with invalid
   automorphism/seed metadata, malformed public keys, and malformed public
   evaluation keys across exact and bounded paths, too-narrow bounded profiles,
   oversized bounded noise bounds, oversized exact residual bounds, and
   too-narrow exact seeded-refresh residual profiles, with exact refresh
   transcript, exact/bootstrap bounded execution, seeded keygen/encryption,
-  bounded refresh-key generation, and registered wrapper coverage for bootstrap
-  round metadata.
+  bounded refresh-key generation, bounded Galois keygen/switching, bounded
+  packed/outer `RotateLeft` execution, bounded plaintext scalar/polynomial
+  execution, bounded scalar/plaintext/relinearization/Galois/packed/affine,
+  outer-rotate, and bootstrap bound propagation, and registered wrapper coverage
+  for bootstrap round metadata.
+- Extended the target-limb BFV-RNS basis-extension regression so
+  basis-extended key-switch digit validation rejects digit-count drift,
+  polynomial-degree drift inside a limb, and missing RNS limbs before those
+  digits can feed key-switch products.
+- Hardened BFV-RNS basis-extension helper preflights so exact basis extension
+  rejects target-product coverage failures before malformed source-polynomial
+  shapes, and key-switch component/digit helpers reject source or target
+  decomposition-base coverage failures before malformed component or digit
+  shapes.
+- Extended bounded RNS and basis-extension multiply regressions so too-narrow
+  rounded BFV profiles are proven to win before malformed caller RNS chains,
+  operands, or relinearization-key inventory.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_keygen_preflights_public_metadata_before_secret_key_shape --lib -- --nocapture`
@@ -5855,6 +9210,72 @@ Last updated: 2026-06-07
     (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto refresh_key_generators_preflight_metadata_and_public_key_before_masks --lib -- --nocapture`
     (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto galois_keygen_preflights_public_metadata_before_secret_key_shape --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-exec-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-exec-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_galois_key_switch_matches_plaintext_automorphism --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-exec-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_preflights_galois_key_set_metadata_before_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-outer-rotate-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-outer-rotate-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_outer_rotate_left_refreshes_slots_and_tracks_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-plain-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-plain-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_plain_operations_track_noise_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-plain-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto public_term_execution_preflights_plaintext_metadata_before_ciphertext_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-public-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-public-input-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_plain_operations_track_noise_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-galois-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-galois-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_packed_rotate_left_tracks_galois_schedule --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-galois-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto packed_rotate_left_preflights_galois_key_set_metadata_before_shapes --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-relin-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-relin-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_multiplication_relinearizes_after_scale_rounding --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-control-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-control-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_affine_circuit_tracks_weighted_public_rows --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-control-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_outer_rotate_left_refreshes_slots_and_tracks_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-control-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bootstrap_refresh_preserves_plaintext_and_tracks_bounds --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-control-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-control-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto preflights --lib -- --nocapture`
+    (`12` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-basis-extension-digit-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_key_switch_digit_polynomials_survive_basis_extension --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-basis-extension-digit-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_key_switch_basis_extension_rejects_digit_aliasing_source_chain --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-basis-preflight-order CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_target_limb_basis_extension_accepts_narrower_target_product --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-basis-preflight-order CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_key_switch_basis_extension_rejects_digit_aliasing_source_chain --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-basis-preflight-order CARGO_INCREMENTAL=0 cargo test -p iroha_crypto rns_key_switch_digit_polynomials_survive_basis_extension --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-basis-preflight-order CARGO_INCREMENTAL=0 cargo test -p iroha_crypto basis_extension --lib -- --nocapture`
+    (`5` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-basis-preflight-order CARGO_INCREMENTAL=0 cargo test -p iroha_crypto key_switch --lib -- --nocapture`
+    (`14` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-basis-preflight-order CARGO_INCREMENTAL=0 cargo test -p iroha_crypto multiplication --lib -- --nocapture`
+    (`7` tests passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-rns-multiply-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_rejects_too_narrow_profiles --lib -- --nocapture`
+    (`1` test passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-rns-multiply-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bounded_noise_bfv_multiplication_relinearizes_after_scale_rounding --lib -- --nocapture`
+    (`1` test passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-transcript-capacity CARGO_INCREMENTAL=0 cargo test -p iroha_crypto transcript --lib -- --nocapture`
     (`17` tests passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-galois-keygen-preflight CARGO_INCREMENTAL=0 cargo test -p iroha_crypto bootstrap_round_helpers_preflight_round_request_before_key_or_ciphertext_shape --lib -- --nocapture`
@@ -5872,6 +9293,28 @@ Last updated: 2026-06-07
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-keygen-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
     (passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-seeded-input-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-galois-exec-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-outer-rotate-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-plain-input-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-public-input-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-galois-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-relin-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-bound-control-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-basis-extension-digit-preflight CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-rns-basis-preflight-order CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-bounded-rns-multiply-capacity CARGO_INCREMENTAL=0 cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
     (passed)
   - `rustfmt --edition 2024 --check crates/iroha_crypto/src/fhe_bfv.rs`
   - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs docs/source/engineering_backlog.md roadmap.md status.md`

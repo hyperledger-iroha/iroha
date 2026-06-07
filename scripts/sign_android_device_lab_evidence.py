@@ -202,9 +202,6 @@ def _signer_public_key_sha256(public_key_path: Path, errors: list[str]) -> str |
 
 
 def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> bytes | None:
-    openssl = device_lab._require_openssl(errors)
-    if openssl is None:
-        return None
     secret_error = _secret_key_path_error(private_key_path, "private key")
     if secret_error is not None:
         errors.append(secret_error)
@@ -232,6 +229,9 @@ def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> 
         return None
     if link_count > 1:
         errors.append("private key must not be hardlinked")
+        return None
+    openssl = device_lab._require_openssl(errors)
+    if openssl is None:
         return None
     with tempfile.TemporaryDirectory(prefix="iroha-kagemusha-evidence-sign-") as temp:
         temp_path = Path(temp)
@@ -330,9 +330,10 @@ def _normalise_output_path(
 def _artifact_digests(slot_path: Path, errors: list[str]) -> dict[str, str] | None:
     digests: dict[str, str] = {}
     initial_error_count = len(errors)
-    device_lab.validate_no_slot_symlink_artifacts(slot_path, errors)
-    device_lab.validate_slot_regular_file_artifacts(slot_path, errors)
-    device_lab.validate_no_slot_hardlink_artifacts(slot_path, errors)
+    preflight_errors = _preflight_slot_metadata_reads(slot_path)
+    if preflight_errors:
+        errors.extend(preflight_errors)
+        return None
     device_lab.validate_required_kagemusha_slot_artifact_shapes(slot_path, errors)
     if len(errors) != initial_error_count:
         return None

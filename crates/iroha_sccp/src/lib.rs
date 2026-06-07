@@ -362,6 +362,19 @@ pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 8] = [
     SCCP_DOMAIN_SORA2,
 ];
 
+/// Remote SCCP domains in the current supported production launch scope.
+pub const SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1: [u32; 5] = [
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+];
+
+/// Standard blocker for Substrate/Polkadot-family SCCP lanes while they are out of scope.
+pub const SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1: &str =
+    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope";
+
 pub const SCCP_MSG_PREFIX_BURN_V1: &[u8] = b"sccp:burn:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_ADD_V1: &[u8] = b"sccp:token:add:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_PAUSE_V1: &[u8] = b"sccp:token:pause:v1";
@@ -4580,6 +4593,11 @@ pub fn is_supported_domain(domain_id: u32) -> bool {
     )
 }
 
+/// Return whether a remote SCCP domain is in the current supported production launch scope.
+pub fn sccp_domain_in_supported_launch_scope_v1(domain_id: u32) -> bool {
+    SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1.contains(&domain_id)
+}
+
 pub fn is_supported_codec(codec_id: u8) -> bool {
     matches!(
         codec_id,
@@ -7832,9 +7850,9 @@ fn sccp_source_trust_anchor_blocker_for_domain(domain: u32) -> Option<&'static s
 }
 
 fn sccp_source_adapter_external_engines_ready_for_domain(_domain: u32) -> bool {
-    // TODO: replace this fail-closed sentinel with per-domain checks once the
-    // ETH/BSC/Solana/TON/TRON/Substrate chain-rule verifier deployments and
-    // governed trust anchors are committed for each source lane.
+    // Built-in source material is a template for operators and tests. Production
+    // source readiness is opened only by caller-supplied governed material plus
+    // a matching source-adapter deployment descriptor.
     false
 }
 
@@ -8071,10 +8089,12 @@ fn sccp_lane_production_readiness_from_components(
 ) -> Option<SccpLaneProductionReadinessV1> {
     let chain = sccp_chain_key_for_domain(domain)?;
     let verifier_backend = sccp_verifier_backend_for_domain(domain)?;
-    // TODO: replace these hard-coded blockers with the on-chain SCCP lane
-    // registry once deployment governance commits verifier identities, anchors,
-    // source-verifier engines, and route allowlists for every advertised
-    // counterparty.
+    // Lane readiness is derived only from governed material supplied by config
+    // or admission: source verifier material, source-adapter deployment,
+    // destination rollout, route allowlist, and route-canary evidence. The
+    // blocker strings below intentionally mirror those components so operator
+    // surfaces can identify the missing governed record without consulting a
+    // separate registry.
     let source_adapter_ready = source_adapter_engine.production_ready;
     let destination_rollout_ready = sccp_destination_rollout_is_production_ready(domain, &rollout)
         && sccp_destination_rollout_matches_source_adapter_engine(
@@ -8124,11 +8144,16 @@ fn sccp_lane_production_readiness_from_components(
         sccp_production_policy_v1().proof_submitter_policy,
         SccpProofSubmitterPolicyV1::Permissionless
     );
-    let production_ready = source_adapter_ready
+    let launch_scope_supported = sccp_domain_in_supported_launch_scope_v1(domain);
+    let production_ready = launch_scope_supported
+        && source_adapter_ready
         && destination_rollout_ready
         && routes_allowlisted
         && permissionless_submission;
     let mut blockers = Vec::new();
+    if !launch_scope_supported {
+        blockers.push(SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1.to_owned());
+    }
     if !source_adapter_ready {
         blockers.push(sccp_source_proof_blocker_for_domain(domain)?.to_owned());
         blockers.extend(source_adapter_engine.blockers.clone());
@@ -8232,10 +8257,12 @@ pub fn sccp_lane_production_readiness_with_deployment_materials_for_domain(
 }
 
 pub fn sccp_all_lanes_launch_ready_v1() -> bool {
-    SCCP_CORE_REMOTE_DOMAINS.into_iter().all(|domain| {
-        sccp_lane_production_readiness_for_domain(domain)
-            .is_some_and(|readiness| readiness.production_ready)
-    })
+    SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1
+        .into_iter()
+        .all(|domain| {
+            sccp_lane_production_readiness_for_domain(domain)
+                .is_some_and(|readiness| readiness.production_ready)
+        })
 }
 
 fn sccp_lane_disabled_reason_for_plan(plan: SccpDestinationVerifierPlanV1) -> &'static str {
@@ -8326,7 +8353,7 @@ fn sccp_lane_production_ready_under_launch_policy_v1(
     lane_ready: bool,
     all_lanes_ready: bool,
 ) -> bool {
-    if !lane_ready {
+    if !lane_ready || !sccp_domain_in_supported_launch_scope_v1(domain) {
         return false;
     }
     match policy.launch_mode {
@@ -8346,13 +8373,18 @@ pub fn sccp_lane_production_ready_for_domain(domain: u32) -> bool {
 }
 
 pub fn sccp_lane_disabled_reason_for_domain(domain: u32) -> Option<&'static str> {
+    if !sccp_domain_in_supported_launch_scope_v1(domain) {
+        return Some(SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1);
+    }
     sccp_destination_rollout_for_domain(domain)
         .map(|rollout| sccp_lane_disabled_reason_for_plan(rollout.verifier_plan))
         .filter(|_| !sccp_lane_production_ready_for_domain(domain))
 }
 
 pub fn sccp_manifest_is_production_ready(manifest: &SccpProofManifestV1) -> bool {
-    manifest.production_ready && sccp_manifest_matches_domain_production_backend(manifest)
+    manifest.production_ready
+        && sccp_domain_in_supported_launch_scope_v1(manifest.counterparty_domain)
+        && sccp_manifest_matches_domain_production_backend(manifest)
 }
 
 fn sccp_manifest_matches_domain_production_backend(manifest: &SccpProofManifestV1) -> bool {
@@ -11131,9 +11163,10 @@ fn sccp_source_verifier_component_hash(
     finality_model: SccpProofFinalityModelV1,
     component_id: &str,
 ) -> H256 {
-    // TODO: Replace these deterministic material placeholders with on-chain
-    // source light-client anchors and immutable verifier code hashes when the
-    // external-chain verifier engines are wired into SCCP production admission.
+    // These deterministic hashes are template material only. Production
+    // admission rejects them via the placeholder-component checks and requires
+    // governed deployment evidence through the explicit material/deployment
+    // readiness path.
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, source_domain);
@@ -55940,6 +55973,15 @@ mod tests {
             true,
             true,
         ));
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &all_lanes_policy,
+                SCCP_DOMAIN_SORA2,
+                true,
+                true,
+            ),
+            "AllLanesAtOnce must not open Substrate/Polkadot-family lanes while they are out of scope"
+        );
 
         let bsc_policy = SccpProductionPolicyV1 {
             launch_mode: SccpLaunchModeV1::BscMainnetLane,
@@ -59100,6 +59142,112 @@ mod tests {
     }
 
     #[test]
+    fn builtin_source_verifier_templates_cannot_be_wrapped_as_production_deployments() {
+        for domain in SCCP_CORE_REMOTE_DOMAINS {
+            let material =
+                sccp_source_verifier_material_for_domain(domain).expect("template material");
+            assert!(
+                material.placeholder_material,
+                "domain {domain} built-in material must stay explicitly marked as a template"
+            );
+            assert!(
+                sccp_source_verifier_material_uses_builtin_placeholder_components(&material),
+                "domain {domain} built-in material must be detectable as placeholder components"
+            );
+            assert!(
+                !sccp_source_verifier_material_is_production_ready(&material),
+                "domain {domain} built-in material must not be production-ready"
+            );
+            assert!(
+                sccp_source_adapter_engine_deployment_from_material_v1(&material, [0x5A; 32])
+                    .is_none(),
+                "domain {domain} deployment builders must reject built-in template material"
+            );
+
+            let forged_deployment = SccpSourceAdapterEngineDeploymentV1 {
+                version: 1,
+                source_domain: domain,
+                target_domain: SCCP_DOMAIN_SORA,
+                source_chain: material.source_chain.clone(),
+                source_proof_plan: material.source_proof_plan,
+                finality_model: material.finality_model,
+                adapter_proof_family: SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
+                adapter_circuit_id: material.adapter_circuit_id.clone(),
+                adapter_verifier_vk_hash: sccp_source_adapter_verifier_commitment_for_lane_v1(
+                    domain,
+                    SCCP_DOMAIN_SORA,
+                )
+                .expect("adapter verifier commitment"),
+                source_trust_anchor_id: material.source_trust_anchor_id.clone(),
+                source_trust_anchor_hash: material.source_trust_anchor_hash,
+                consensus_verifier_id: material.consensus_verifier_id.clone(),
+                consensus_verifier_hash: material.consensus_verifier_hash,
+                message_inclusion_verifier_id: material.message_inclusion_verifier_id.clone(),
+                message_inclusion_verifier_hash: material.message_inclusion_verifier_hash,
+                finality_policy_id: material.finality_policy_id.clone(),
+                finality_policy_hash: material.finality_policy_hash,
+                source_state_verifier_id: material.source_state_verifier_id.clone(),
+                source_state_verifier_hash: material.source_state_verifier_hash,
+                solana_tower_replay_verifier_hash: [0xA1; 32],
+                solana_full_accountsdb_lattice_verifier_hash: [0xA2; 32],
+                solana_bank_fork_choice_verifier_hash: [0xA3; 32],
+                ton_masterchain_config_verifier_hash: [0xB1; 32],
+                ton_validator_set_transition_verifier_hash: [0xB2; 32],
+                ton_shard_accounts_dictionary_verifier_hash: [0xB3; 32],
+                source_bridge_emitter_id: material.source_bridge_emitter_id.clone(),
+                source_bridge_emitter_address: material.source_bridge_emitter_address.clone(),
+                source_bridge_emitter_code_hash: material.source_bridge_emitter_code_hash,
+                source_bridge_network_id: material.source_bridge_network_id,
+                source_bridge_owner_address: material.source_bridge_owner_address.clone(),
+                source_bridge_config_hash: material.source_bridge_config_hash,
+                deployment_receipt_hash: [0x5A; 32],
+            };
+            assert!(
+                h256_is_nonzero(&sccp_source_adapter_engine_deployment_hash(
+                    &forged_deployment,
+                )),
+                "domain {domain} forged descriptor should be hashable so rejection is not a zero-hash shortcut"
+            );
+            assert!(
+                !sccp_source_adapter_engine_deployment_matches_material(
+                    &material,
+                    &forged_deployment,
+                ),
+                "domain {domain} matching-looking deployments must not promote template material"
+            );
+
+            let readiness =
+                sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
+                    domain,
+                    &material,
+                    &forged_deployment,
+                )
+                .expect("template deployment readiness");
+            assert!(!readiness.source_verifier_material_ready);
+            assert!(!readiness.external_consensus_verifier_ready);
+            assert!(!readiness.external_message_inclusion_verifier_ready);
+            assert!(!readiness.source_trust_anchor_ready);
+            assert!(!readiness.production_ready);
+            assert!(
+                readiness
+                    .blockers
+                    .iter()
+                    .any(|blocker| blocker.contains("source verifier material")),
+                "domain {domain} expected source-material blocker for forged template deployment: {:?}",
+                readiness.blockers
+            );
+            assert!(
+                !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    domain,
+                    &material,
+                    &forged_deployment,
+                ),
+                "domain {domain} template material plus a forged deployment must stay fail-closed"
+            );
+        }
+    }
+
+    #[test]
     fn source_adapter_engine_readiness_with_deployed_material_still_requires_external_engines() {
         let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
             SCCP_DOMAIN_ETH,
@@ -61466,6 +61614,72 @@ mod tests {
             ),
             "Substrate production admission must reject proofs missing runtime storage OpenVerify bytes"
         );
+    }
+
+    #[test]
+    fn substrate_family_lane_remains_unsupported_with_complete_evidence() {
+        let material =
+            sccp_substrate_family_runtime_source_verifier_material_with_hashes_and_runtime_storage_v1(
+                SCCP_DOMAIN_SORA2,
+                sample_substrate_authority_set_hash(),
+                [0x42; 32],
+                [0x43; 32],
+                [0x45; 32],
+                [0x44; 32],
+            )
+            .expect("Substrate deployed source material");
+        let deployment =
+            sccp_source_adapter_engine_deployment_from_material_v1(&material, [0x46; 32])
+                .expect("Substrate source adapter deployment");
+        let destination_rollout =
+            sccp_substrate_runtime_destination_rollout_with_finalized_runtime_v1(
+                SCCP_DOMAIN_SORA2,
+                SCCP_SUBSTRATE_RUNTIME_DESTINATION_VERIFIER_ID_V1.to_owned(),
+                [0x5e; 32],
+                1234,
+                7,
+                vec![0x55; 64],
+            )
+            .expect("Substrate destination rollout");
+        let route_allowlist = sccp_profiled_route_allowlist_for_lane_evidence_v1(
+            SCCP_DOMAIN_SORA2,
+            &material,
+            &deployment,
+            &destination_rollout,
+        )
+        .expect("Substrate route allowlist");
+        let destination_binding_hash = required_hex_string_is_nonzero::<32>(
+            destination_rollout.destination_binding_hash.as_deref(),
+        )
+        .expect("destination binding hash");
+        let route_allowlist = sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
+            route_allowlist,
+            &destination_rollout,
+            destination_binding_hash,
+            sccp_source_verifier_material_hash(&material),
+            sccp_source_adapter_engine_deployment_hash(&deployment),
+        )
+        .expect("Substrate route canary evidence");
+
+        let readiness = sccp_lane_production_readiness_with_deployment_materials_for_domain(
+            SCCP_DOMAIN_SORA2,
+            &material,
+            &deployment,
+            &destination_rollout,
+            &route_allowlist,
+        )
+        .expect("Substrate lane readiness");
+
+        assert!(readiness.source_adapter_ready);
+        assert!(readiness.immutable_verifier_ready);
+        assert!(readiness.anchors_ready);
+        assert!(readiness.routes_allowlisted);
+        assert!(!readiness.production_ready);
+        assert_eq!(
+            readiness.blockers,
+            vec![SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1.to_owned()]
+        );
+        assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_SORA2));
     }
 
     #[test]
@@ -65538,6 +65752,15 @@ mod tests {
 
         production.verifier_backend = reference.verifier_backend;
         assert!(!sccp_manifest_is_production_ready(&production));
+
+        let mut substrate =
+            sccp_proof_manifest_for_domain(SCCP_DOMAIN_SORA2).expect("Substrate manifest");
+        substrate.production_ready = true;
+        substrate.disabled_reason = None;
+        assert!(
+            !sccp_manifest_is_production_ready(&substrate),
+            "Substrate/Polkadot-family manifests must not be manually promoted while out of scope"
+        );
     }
 
     #[test]

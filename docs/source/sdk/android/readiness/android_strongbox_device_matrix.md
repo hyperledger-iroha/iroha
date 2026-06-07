@@ -62,7 +62,9 @@ Production release criteria:
 	  classifying slot artifacts.
 	  Direct SHA-256 manifest parser and verifier helper calls reject
 	  secret-looking slot paths, symlinked slot roots, and symlinked slot
-	  ancestors before parsing `sha256sum.txt` or traversing slot artifacts.
+	  ancestors before parsing `sha256sum.txt` or traversing slot artifacts, and
+	  reject hardlinked `sha256sum.txt` manifests before reading manifest bytes
+	  or discovering slot files.
 	  Direct slot-file discovery returns no artifacts for secret-looking slot
 	  paths, symlinked slot ancestors, missing roots, non-directory roots, or
 	  symlinked slot roots before traversal, and skips symlinked artifact
@@ -134,7 +136,10 @@ Production release criteria:
 	  secret-bearing lab bundle.
 	  Direct signer metadata-loader and manifest-rewrite helper calls also reject
 	  secret-looking slot paths before metadata parsing, artifact traversal,
-	  hashing, or manifest replacement can occur.
+	  hashing, or manifest replacement can occur. The lower-level signer
+	  artifact-digest builder also reruns the slot preflight before hashing
+	  required signed-evidence artifacts, so direct calls cannot hash through
+	  secret-bearing or aliased slot paths.
 	  Low-level signer output writers reject secret-looking signed-evidence and
 	  manifest paths before creating output parents or writing files.
 	  Direct SHA-256 manifest rewrites run the same slot/artifact shape preflight

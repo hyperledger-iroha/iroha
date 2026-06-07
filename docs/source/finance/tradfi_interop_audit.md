@@ -517,7 +517,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   also reject secret-looking key/value material in literal, percent-encoded, or
   double-encoded path segments before live rail/notary delivery, canary
   planning, receipt verification, trust/evidence ingestion, or readiness
-  rollup. Secret-looking field-name markers
+  rollup, and the local path/raw CLI/summary-path/artifact-path validators use a
+  narrow identifier-style path scanner for composite names such as
+  `token-*-secret` and strong key markers. Secret-looking field-name markers
   also cover hyphenated `private-key` and underscore-form `x_iroha_signature`
   spellings across ISO validators, and receipt JSON secret-field scans recurse
   through nested objects and arrays before receipt semantics are evaluated.

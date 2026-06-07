@@ -259,7 +259,7 @@ Builtins de host/syscall (mapean a SCALL; números exactos en ivm.md)
 Builtins de utilidades
 - `info(string|int)`: emite un evento/mensaje estructurado vía OUTPUT.
 - `hash(blob) -> Blob*`: devuelve un hash codificado en Norito como Blob.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` y `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: constructores ISI en línea; todos los argumentos deben ser literales en tiempo de compilación (literales de cadena o constructores de puntero desde literales). `nullifier32` e `inputs32` deben tener exactamente 32 bytes (cadena cruda o hex `0x`), y `amount` debe ser no negativo.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` y `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: constructores ISI en línea; todos los argumentos deben ser literales en tiempo de compilación (literales de cadena o constructores de puntero desde literales). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `pointer_to_norito(ptr) -> NoritoBytes*`: envuelve un TLV pointer-ABI existente como NoritoBytes para almacenamiento o transporte.
 - `isqrt(int) -> int`: raíz cuadrada entera (`floor(sqrt(x))`) implementada como opcode de IVM.

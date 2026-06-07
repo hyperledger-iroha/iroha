@@ -1064,7 +1064,7 @@ mod tests {
     fn hash_json(hash: &[u8; 32]) -> String {
         let body = hash
             .iter()
-            .map(|byte| byte.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
         format!("[{body}]")

@@ -1,7 +1,6 @@
+//! Tests Torii's `SoraFS` discovery cache using the mesh harness from provider advert suites.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
-
-//! Tests Torii's `SoraFS` discovery cache using the mesh harness from provider advert suites.
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},

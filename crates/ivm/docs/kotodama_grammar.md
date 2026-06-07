@@ -1,6 +1,9 @@
 # Kotodama Language: Syntax and Grammar
 
-This document specifies the current Kotodama language syntax as implemented in the repository and outlines planned extensions. The goal is clarity and safety: readable contracts, explicit control flow, and predictable, deterministic execution.
+This document specifies the current Kotodama language syntax as implemented in
+the repository and records explicit deterministic boundaries. The goal is
+clarity and safety: readable contracts, explicit control flow, and predictable,
+deterministic execution.
 
 Bytecode Target
 ---------------
@@ -8,8 +11,8 @@ Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`) for execution 
 
 Status tags used below:
 - [Implemented]: parsed and used in lowering/codegen today
-- [Parsed]: tokens/constructs recognized by the lexer/parser but not yet fully compiled
-- [Planned]: part of the language design but not implemented yet
+- [Parsed]: tokens/constructs recognized by the lexer/parser and documented separately outside the implemented matrix
+- [Planned]: design-track items documented separately from the implemented matrix
 
 ## Current Feature Matrix
 
@@ -18,11 +21,11 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Construct                                   | Status | Notes |
 |---------------------------------------------|:------:|-------|
 | Free function `fn`                          |  ✅    | fully compiled |
-| Contract container `seiyaku`/`誓約`         |  ✅    | parsed; `meta {}` block sets header fields |
+| Contract container `seiyaku`/`誓約`         |  ✅    | lowered; `meta {}` block sets header fields |
 | Initializer `hajimari`/`始まり`             |  ✅    | compiled as function; runtime may call on deploy |
 | Public function `kotoage fn`/`言挙げ fn`     |  ✅    | compiled as function; “public” enforced by runtime |
-| Upgrade hook `kaizen`/`改善` + `permission` |  🟨    | parsed; governance/dispatch enforced by runtime |
-| `kotoba {…}` translations                    |  🟩    | parsed; emitted in manifest |
+| Upgrade hook `kaizen`/`改善` + `permission` |  ✅    | compiled as entrypoint; governance/dispatch enforced by runtime |
+| `kotoba {…}` translations                    |  ✅    | validated and emitted in manifest |
 | Compiler-owned access metadata              |  ✅    | manifest/entrypoint hints are generated; manual `#[access(...)]` attributes are rejected |
 | Trigger declarations `register_trigger {…}`  |  ✅    | time/execute/data/pipeline trigger DSL with metadata and explicit authority; manifest triggers auto-register on activation |
 | `state Type name;`                           |  ✅    | host-backed durable overlays (Norito TLV persistence + checkpoint/restore rollback) |
@@ -73,11 +76,10 @@ Notes:
 ```
 Program   = { Item } ;
 Item      = FreeFunction               // [Implemented]
-          | Contract                   // [Parsed]
-          | PublicFunctionShortcut ;   // [Parsed]
+          | Contract                   // [Implemented]
+          | PublicFunctionShortcut ;   // [Implemented]
 
-FreeFunction = "fn" Ident "(" [ NameList ] ")" Block ;          // params are names only
-NameList     = Ident { "," Ident } ;
+FreeFunction = "fn" FunctionSignature Block ;
 
 AccessAttr = "#[" "access" "(" AccessList ")" "]" ;
 AccessList = AccessEntry { "," AccessEntry } ;
@@ -86,14 +88,14 @@ AccessEntry = ("read" | "write") "=" (String | "[" StringList "]") ;
 PublicFunctionShortcut = [AccessAttr] "kotoage" "fn" FunctionSignature Block ; // outside any contract
 
 Contract   = "seiyaku" Ident "{" { ContractItem } "}" ;
-ContractItem = StructDef                                            // [Parsed]
-             | StateDecl                                            // [Parsed]
+ContractItem = StructDef                                            // [Implemented]
+             | StateDecl                                            // [Implemented]
              | MetaBlock                                            // [Implemented]
              | TriggerDecl                                          // [Implemented]
-             | KotobaBlock                                          // [Parsed]
-             | [AccessAttr] ( "fn" | "kotoage" "fn" ) FunctionSignature [ Permission ] Block // [Parsed]
-             | "hajimari" "(" ")" Block                            // [Parsed]
-             | "kaizen"   "(" [ ParamList ] ")" [ Permission ] Block ; // [Parsed]
+             | KotobaBlock                                          // [Implemented]
+             | [AccessAttr] ( "fn" | "kotoage" "fn" ) FunctionSignature [ Permission ] Block // [Implemented]
+             | "hajimari" "(" ")" Block                            // [Implemented]
+             | "kaizen"   "(" [ ParamList ] ")" [ Permission ] Block ; // [Implemented]
 
 StructDef  = "struct" Ident "{" { FieldDecl } "}" ;
 FieldDecl  = Type Ident [ "," ] ;
@@ -142,10 +144,18 @@ DataMatcher = "peer" (Ident | String)
 Repeats = "indefinitely" | Number ;
 MetadataEntry = (Ident | String) ":" Literal ;               // JSON literal (string/number/bool/null/json!)
 
-FunctionSignature = Ident "(" [ ParamList ] ")" ;                  // see Parameters
+FunctionSignature = Ident "(" [ ParamList ] ")" [ ReturnTy ] ;     // see Parameters
 ```
 
-Contract-level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach filters, metadata, and optional explicit authority to entrypoint manifests and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are currently rejected. Free functions are fully compiled end-to-end today. See Gap Analysis for details.
+Contract-level forms and `kotoage fn` lower into the same multi-function IVM
+bytecode path as free functions. Contract metadata declared via `meta {}`
+influences IVM header fields (ABI version, vector length, max cycles) and mode
+bits (ZK/VECTOR). Trigger declarations attach filters, metadata, and optional
+explicit authority to entrypoint manifests and are auto-registered when a
+contract instance is activated (removed on deactivation). Namespaced trigger
+callbacks resolve during activation to an already active contract address or
+contract alias; bare namespaces resolve as `<name>::universal`, and unresolved
+targets fail activation. See Gap Analysis for details.
 
 Structured data-trigger example:
 ```kotodama
@@ -178,18 +188,21 @@ Accepted data event kinds by family:
 ### Parameters & Returns [Parsed/Enforced]
 ```
 ParamList  = Param { "," Param } ;
-Param      = [ Type Ident ] | Ident ;
-Type       = Ident ; // placeholder, not validated or used yet
+Param      = [ "state" ] ( Type Ident | Ident ":" Type | Ident ) ;
+Type       = Ident | Ident "<" Type { "," Type } ">" | "(" Type { "," Type } ")" ;
 ReturnTy   = "->" Type ;
 ```
 
-- The parser accepts `Type Name` pairs and an optional return type `-> T` everywhere and records them on the AST. [Parsed]
+- The parser accepts `Type Name`, `name: Type`, and optional return type `-> T`
+  signatures everywhere; semantic checks enforce supported parameter and
+  return-value use. [Implemented/Enforced]
 - Bare parameter names are still accepted and treated as typeless. [Implemented]
 - If a function declares a non-`unit` return type, all control‑flow paths must return a value. [Enforced]
 - If a function omits a return type, `return expr;` is rejected — declaring an explicit return type is required to return a value. [Enforced]
 - Parameter typing:
   - Recognized primitives: `int`/`i64`/`number`, `bool`, `string`, and numeric aliases (`fixed_u128`, `Amount`, `Balance`) are enforced in expressions. Numeric aliases are distinct `Numeric`-backed scalars restricted to unsigned, scale‑0 values; decimal literals are rejected in v1. Arithmetic preserves the alias, and mixing alias types requires converting through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative).
   - Unknown identifiers (e.g., `AccountId`, `Asset`) are treated as opaque handle types; they cannot be used in arithmetic but can be compared for equality. [Enforced]
+  - Internal helper functions may mark parameters as durable state handles with `state`, for example `fn read(state Ledger entry)` or `fn read(state Map<Name, Entry> entries, key: Name)`. Non-internal entrypoints reject `state` parameters, and callers must pass a durable state binding or durable state member expression. Scalar, map, struct, and tuple state handles are supported; aggregate handles lower to deterministic flattened child handles and remain subject to the normal function argument register limit. [Enforced]
 
 ## Blocks and Statements [Implemented]
 ```
@@ -235,7 +248,7 @@ Notes and limitations:
 - Field access: `expr.field` — tuple index and basic named struct fields lowered (1‑level). [Implemented]
 - For‑each: `for (a, b) in map_expr { ... }` — lowered to a deterministic two‑iteration expansion. [Implemented]
 - Modulo: `%` and `%=` lower to REM with regression coverage. [Implemented]
-- Tuples: return types may be tuples `-> (T1, T2)` and `return (e1, e2);` — parsed; typing/codegen WIP. [Parsed]
+- Tuples: return types may be tuples `-> (T1, T2)` and `return (e1, e2);` — typed and lowered through multi-return codegen. [Implemented]
 
 ## Expressions [Implemented]
 ```
@@ -250,31 +263,33 @@ Unary   = [ "-" | "!" ] Primary ;
 Primary = Number
         | String
         | "true" | "false"
-        | Ident "(" [ ArgList ] ")"   // call to builtin or future user fn
+        | Ident "(" [ ArgList ] ")"   // call to builtin or user-defined fn
         | Ident
         | "(" Expr ")" ;
 ArgList = Expr { "," Expr } ;
 ```
 
 Built-in calls recognized by the semantic layer (arity and types enforced):
-- ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`.
+- ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`. ZK verify helpers set host verification latches, so public entrypoints that call them require `permission(...)` and `view` functions cannot call them.
 - Vector helpers: `setvl(n)` (compile-time int `0..=255`).
 - Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(asset, symbol, quantity, mintable)`, `create_new_asset(asset, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, key, json)`, `nft_burn_asset(id)`.
 - Trigger syscalls: `create_trigger(json)`, `register_trigger(json)` (alias), `remove_trigger(name)`/`unregister_trigger(name)`, `set_trigger_enabled(name, enabled)`.
  - Iroha helpers (samples/dev): `create_nfts_for_all_users()`, `set_execution_depth(value)`, `set_account_detail(account, key, value)`.
  - Durable state helpers (host): `host::state_get(name_path) -> Blob`, `host::state_set(name_path, norito_bytes_value)`, `host::state_del(name_path)`.
- - Encoding helpers (WIP): `encode_int(int) -> Blob`, `decode_int(Blob) -> int`.
-- Inline ZK ISI builders (literal-only): `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)`, `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk)`. All arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
+ - Encoding helpers: `encode_int(int) -> Blob`, `decode_int(Blob) -> int`. [Implemented]
+- Inline ZK ISI builders (literal-only): `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)`, `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk)`. All arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - Path builder (method): `base.path(key) -> Name` builds canonical `"<base>/<key>"`.
  - VRF helpers: `vrf_verify(input, pk, proof, variant) -> Blob`, `vrf_verify_batch(batch: Blob) -> Blob` (returns 0 on failure). [Implemented]
  - Pointer utilities: `schema_info(schema: Name) -> Json {id,version}`, `pointer_to_norito(ptr)` (wrap any pointer-ABI TLV into NoritoBytes for state storage or replay). [Implemented]
  - Typed constructors for pointer-ABI values: `account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")`, `asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `nft_id("n0$wonderland")`, `name("cursor")`, `json("{\"k\":\"v\"}")`, `blob("...")`, `norito_bytes("...")`, plus AXT/Nexus types `dataspace_id("0x…")`, `axt_descriptor("0x…")`, `asset_handle("0x…")`, and `proof_blob("0x…")`. Canonical `account_id("...")` literals emit static `AccountId` TLVs into the data section; alias-shaped `account_id("merchant@paynet")` / `account_id("merchant@bank.paynet")` literals lower to the runtime `RESOLVE_ACCOUNT_ALIAS` host syscall. Passing a `Blob`/`NoritoBytes` decodes the TLV at runtime via `pointer_from_norito`.
  - AXT helpers: `axt_begin(AxtDescriptor)`, `axt_touch(DataSpaceId[, manifest: Blob])`, `verify_ds_proof(DataSpaceId[, ProofBlob])`, `use_asset_handle(AssetHandle, Blob intent[, ProofBlob])`, `axt_commit()`. [Implemented]
- - Contextual value: `authority()` returns the current `AccountId` under which the contract executes.
+- Contextual value: `authority()` returns the current `AccountId` under which the contract executes.
 
 User‑defined function calls are compiled: arguments move into `ARG_REGS`, calls use `JAL ra,<target>`, and returns use `r10` (and `r11` for tuple of two) with `JALR x0, x1, 0` from non‑entry functions. [Implemented]
 
 Notes on helpers:
+- Smart-contract lifecycle helpers that receive static `NoritoBytes` requests for manifest registration, bytecode registration, instance activation, or bytecode removal emit compiler-derived contract manifest/code/instance access keys. Dynamic lifecycle requests and deactivation remain conservative because the touched code hash or trigger set may only be discovered at runtime.
+- Literal `use_nullifier(...)` calls emit a `nullifier:<value>` access key. `transfer_v1_batch_apply(...)` emits the same asset/account access keys as equivalent individual transfers when its `NoritoBytes` payload decodes to `TransferAssetBatch`; dynamic or malformed payloads remain conservative.
 - `create_nfts_for_all_users()` creates one NFT per known account using a host-provided snapshot (used by tests).
 - `set_execution_depth(value)` sets SmartContract execution depth parameter (host development helper).
 - `setvl(n)` emits a `SETVL` opcode with an 8-bit immediate; `n` must be a compile-time int in `0..=255` (0 maps to 1 in the VM).
@@ -291,7 +306,8 @@ Notes on helpers:
   - `struct` fields: recursively allocate per-field storage and bind `name#idx` for field access via `name.field`.
   - scalar/other: initialize to 0 and bind `name`.
 - Durable host overlay: ABI v1 programs issue `STATE_GET/SET/DEL`. CoreHost stages writes/deletes per transaction (read‑your‑writes), then flushes the TLV payloads into WSV‑backed `smart_contract_state` after execution; prepass access logging uses the same overlay without persistence.
-- Capability gating: Iroha operations are exposed as explicit syscalls; permission modeling at the language level (e.g., `permission(...)`) is planned.
+- Internal helper `state` parameters reuse the same durable overlay. Aggregate state parameters pass the root handle plus flattened child handles such as `entry#0`; maps with aggregate values pass value-field handles such as `entries#0` so `entries[key].amount` still resolves to a deterministic durable path.
+- Capability gating: Iroha operations are exposed as explicit syscalls; public entrypoints that call mutating ledger helpers or ZK verify latch helpers must declare `permission(...)`.
 - No raw pointers or references: the language intentionally avoids `*`/`&` semantics and aliasing rules to reduce foot‑guns in financial contracts. Memory is managed implicitly by the runtime.
 
 ## Examples
@@ -302,7 +318,7 @@ fn add(a, b) {
 }
 ```
 
-Contract skeleton (parsed today; bodies not yet compiled):
+Contract skeleton with compiled entrypoint and helper bodies:
 ```
 seiyaku MyDex {
     state LiquidityPool pool;
@@ -317,6 +333,6 @@ seiyaku MyDex {
 
 ## Notes on the Compiler/IR
 - Source is type-checked into a small set of types (int, bool, string, unit, plus numeric aliases `fixed_u128`/`Amount`/`Balance` that behave as distinct `Numeric` scalars) and lowered to a simple three-address-code IR with basic blocks.
-- Code generation currently covers arithmetic (incl. `%`), control-flow (`if`/`while`/`for` with `break`/`continue`), structs/tuples, and the host-backed durable state/syscall surface. Remaining gaps are tracked in `status.md`.
+- Code generation covers arithmetic (incl. `%`), control-flow (`if`/`while`/`for` with `break`/`continue`), structs/tuples, multi-function calls, contract entrypoints, and the host-backed durable state/syscall surface. Further language evolution is tracked in `status.md` and `roadmap.md`.
 
 See also: docs/kotodama_gap_analysis.md for an up-to-date gap analysis and roadmap items.

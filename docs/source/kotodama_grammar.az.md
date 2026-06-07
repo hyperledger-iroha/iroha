@@ -274,7 +274,7 @@ Host/syscall qurğuları (SCALL üçün xəritə; ivm.md-də dəqiq nömrələr)
 Kommunal qurğular
 - `info(string|int)`: OUTPUT vasitəsilə strukturlaşdırılmış hadisə/mesaj verir.
 - `hash(blob) -> Blob*`: Blob kimi Norito kodlu hash qaytarır.
-- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` və `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk) -> Blob*`: daxili ISI qurucuları; bütün arqumentlər tərtib zamanı literalları olmalıdır (sətir hərfi və ya hərflərdən göstərici konstruktorları). `nullifier32` və `inputs32` tam olaraq 32 bayt olmalıdır (xam sətir və ya `0x` hex), `amount` isə mənfi olmamalıdır.
+- `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk) -> Blob*` və `build_unshield_inline(asset, to, amount, inputs32, [outputs32,] backend, proof, vk) -> Blob*`: daxili ISI qurucuları; bütün arqumentlər tərtib zamanı literalları olmalıdır (sətir hərfi və ya hərflərdən göstərici konstruktorları). `nullifier32` must be exactly 32 bytes, `inputs32` must contain one or more 32-byte chunks, optional `outputs32` must contain zero or more 32-byte chunks, and `amount` must be non-negative.
 - `schema_info(Name*) -> Json* { "id": "<hex>", "version": N }`
 - `encode_schema(Name*, Json*) -> Blob`: host sxem reyestrindən istifadə edərək JSON-u kodlayır (DefaultRegistry Sifariş/Ticarət nümunələrinə əlavə olaraq `QueryRequest` və `QueryResponse`-i dəstəkləyir).
 - `decode_schema(Name*, Blob|bytes) -> Json*`: host sxem reyestrindən istifadə edərək Norito baytlarını deşifrə edir.

@@ -26,6 +26,7 @@ use norito::derive::{JsonDeserialize, JsonSerialize};
 use norito::json;
 use sha3::Sha3_512;
 use thiserror::Error;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use rand::{Rng as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
@@ -143,15 +144,15 @@ pub enum HiddenRamFheInstruction {
     LoadState(u16, u16),
     /// Store a register back into a persisted encrypted state lane.
     StoreState(u16, u16),
-    /// Load a plaintext constant into a register.
+    /// Load a canonical RAM-LFE plaintext-field constant into a register.
     LoadConst(u16, u64),
     /// Add two ciphertext registers.
     Add(u16, u16, u16),
-    /// Add a plaintext scalar to a ciphertext register.
+    /// Add a canonical RAM-LFE plaintext-field scalar to a ciphertext register.
     AddPlain(u16, u16, u64),
-    /// Subtract a plaintext scalar from a ciphertext register.
+    /// Subtract a canonical RAM-LFE plaintext-field scalar from a ciphertext register.
     SubPlain(u16, u16, u64),
-    /// Multiply a ciphertext register by a plaintext scalar.
+    /// Multiply a ciphertext register by a canonical RAM-LFE plaintext-field scalar.
     MulPlain(u16, u16, u64),
     /// Multiply two ciphertext registers.
     Mul(u16, u16, u16),
@@ -635,8 +636,8 @@ pub fn evaluate_commitment_with_hidden_program(
 ///
 /// # Errors
 /// Returns [`RamLfeError`] when the program version, shape, register use,
-/// memory use, output shape, or accumulated multiplicative depth exceeds the
-/// published profile.
+/// memory use, output shape, plaintext immediate encoding, or accumulated
+/// multiplicative depth exceeds the published profile.
 pub fn validate_hidden_ram_fhe_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {
     validate_hidden_program(program)
 }
@@ -661,26 +662,26 @@ fn evaluate_hkdf_prf(
     let hkdf_salt = [HKDF_SALT_DOMAIN, expected.policy_hash.as_ref()].concat();
     let hkdf = Hkdf::<Sha3_512>::new(Some(&hkdf_salt), secret);
 
-    let mut opaque_material = [0_u8; Hash::LENGTH];
+    let mut opaque_material = Zeroizing::new([0_u8; Hash::LENGTH]);
     let opaque_info = [HKDF_OPAQUE_INFO_DOMAIN, transcript.as_slice()].concat();
-    hkdf.expand(&opaque_info, &mut opaque_material)
+    hkdf.expand(&opaque_info, opaque_material.as_mut())
         .map_err(|_| RamLfeError::DerivationFailed)?;
 
-    let opaque_id = Hash::new_from_chunks(&[OPAQUE_HASH_DOMAIN, opaque_material.as_slice()]);
+    let opaque_id = Hash::new_from_chunks(&[OPAQUE_HASH_DOMAIN, &opaque_material[..]]);
 
-    let mut receipt_material = [0_u8; Hash::LENGTH];
+    let mut receipt_material = Zeroizing::new([0_u8; Hash::LENGTH]);
     let receipt_info = [
         HKDF_RECEIPT_INFO_DOMAIN,
         transcript.as_slice(),
         opaque_id.as_ref(),
     ]
     .concat();
-    hkdf.expand(&receipt_info, &mut receipt_material)
+    hkdf.expand(&receipt_info, receipt_material.as_mut())
         .map_err(|_| RamLfeError::DerivationFailed)?;
 
     let receipt_hash = Hash::new_from_chunks(&[
         RECEIPT_HASH_DOMAIN,
-        receipt_material.as_slice(),
+        &receipt_material[..],
         opaque_id.as_ref(),
     ]);
     Ok(EvalResponse {
@@ -1036,7 +1037,7 @@ fn derive_program_rng(
     domain: &[u8],
 ) -> ChaCha20Rng {
     let step_bytes = step.to_le_bytes();
-    let seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+    let mut seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
         domain,
         secret,
         commitment.policy_hash.as_ref(),
@@ -1044,7 +1045,9 @@ fn derive_program_rng(
         &step_bytes,
     ])
     .into();
-    ChaCha20Rng::from_seed(seed)
+    let rng = ChaCha20Rng::from_seed(seed);
+    seed.zeroize();
+    rng
 }
 
 fn execute_hidden_program(
@@ -1386,8 +1389,9 @@ fn validate_hidden_program_instruction_tape(
                 *lane_depth = src_depth;
                 None
             }
-            HiddenRamFheInstruction::LoadConst(dst, _) => {
+            HiddenRamFheInstruction::LoadConst(dst, value) => {
                 validate_program_register_index(program, dst, pc)?;
+                validate_plaintext_immediate(value, pc)?;
                 Some((dst, 0))
             }
             HiddenRamFheInstruction::Add(dst, lhs, rhs) => {
@@ -1396,10 +1400,11 @@ fn validate_hidden_program_instruction_tape(
                     .max(program_depth_register(&register_depths, rhs, pc)?);
                 Some((dst, depth))
             }
-            HiddenRamFheInstruction::AddPlain(dst, src, _)
-            | HiddenRamFheInstruction::SubPlain(dst, src, _)
-            | HiddenRamFheInstruction::MulPlain(dst, src, _) => {
+            HiddenRamFheInstruction::AddPlain(dst, src, value)
+            | HiddenRamFheInstruction::SubPlain(dst, src, value)
+            | HiddenRamFheInstruction::MulPlain(dst, src, value) => {
                 validate_program_register_index(program, dst, pc)?;
+                validate_plaintext_immediate(value, pc)?;
                 Some((dst, program_depth_register(&register_depths, src, pc)?))
             }
             HiddenRamFheInstruction::Mul(dst, lhs, rhs) => {
@@ -1441,6 +1446,15 @@ fn validate_hidden_program_instruction_tape(
         }
     }
 
+    Ok(())
+}
+
+fn validate_plaintext_immediate(value: u64, pc: usize) -> Result<(), RamLfeError> {
+    if value >= RAM_LFE_BFV_PLAINTEXT_MODULUS {
+        return Err(invalid_program_error(&format!(
+            "instruction {pc} plaintext immediate {value} must be less than {RAM_LFE_BFV_PLAINTEXT_MODULUS}"
+        )));
+    }
     Ok(())
 }
 
@@ -1518,7 +1532,7 @@ fn derive_secret_affine_circuit(
     request: &ClientRequest,
 ) -> Result<BfvAffineCircuit, RamLfeError> {
     let input_count = usize::from(public_parameters.max_input_bytes).saturating_add(1);
-    let seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+    let mut seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
         BFV_AFFINE_CIRCUIT_DOMAIN,
         secret,
         commitment.policy_hash.as_ref(),
@@ -1526,6 +1540,7 @@ fn derive_secret_affine_circuit(
     ])
     .into();
     let mut rng = ChaCha20Rng::from_seed(seed);
+    seed.zeroize();
     let mut weights = Vec::with_capacity(BFV_AFFINE_OUTPUT_BYTES);
     let mut bias = Vec::with_capacity(BFV_AFFINE_OUTPUT_BYTES);
     for _ in 0..BFV_AFFINE_OUTPUT_BYTES {
@@ -1978,6 +1993,42 @@ mod tests {
     }
 
     #[test]
+    fn try_bfv_programmed_public_parameters_rejects_noncanonical_plaintext_immediate() {
+        let secret = b"resolver-secret-program-immediate";
+        let params = ram_lfe_bfv_parameters_v1();
+        let associated_data = b"program-immediate";
+        let program = HiddenRamFheProgram {
+            version: 1,
+            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+            instructions: vec![
+                HiddenRamFheInstruction::LoadConst(0, RAM_LFE_BFV_PLAINTEXT_MODULUS),
+                HiddenRamFheInstruction::Output(0),
+            ],
+        };
+        let (public_parameters, _, relinearization_key) =
+            derive_identifier_key_material_from_seed(&params, 1, secret, associated_data)
+                .expect("derive BFV public parameters");
+        let err = try_bfv_programmed_public_parameters_with_program(
+            public_parameters,
+            BfvEvaluationKeyBundle {
+                relinearization_key,
+                rotation_keys: Vec::new(),
+                galois_keys: Vec::new(),
+                bootstrap_key: None,
+            },
+            &program,
+            RamLfeVerificationMode::Signed,
+            None,
+        )
+        .expect_err("programmed constructor must reject noncanonical plaintext immediates");
+        assert!(
+            err.to_string().contains("plaintext immediate"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn programmed_policy_commitment_rejects_program_inputs_beyond_encoded_envelope() {
         let secret = b"resolver-secret-program-input-policy";
         let params = ram_lfe_bfv_parameters_v1();
@@ -2048,7 +2099,10 @@ mod tests {
 
         let err = decode_bfv_programmed_public_parameters(&encoded)
             .expect_err("oversized programmed envelope capacity must be rejected");
-        assert!(err.to_string().contains("supports at most 63 input bytes"));
+        assert!(
+            err.to_string().contains("max_input_bytes must be at most"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -2153,6 +2207,30 @@ mod tests {
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("out-of-range register must be rejected before execution");
         assert!(err.to_string().contains("register"));
+    }
+
+    #[test]
+    fn hidden_program_validation_rejects_noncanonical_plaintext_immediates() {
+        for instruction in [
+            HiddenRamFheInstruction::LoadConst(0, RAM_LFE_BFV_PLAINTEXT_MODULUS),
+            HiddenRamFheInstruction::AddPlain(0, 0, RAM_LFE_BFV_PLAINTEXT_MODULUS),
+            HiddenRamFheInstruction::SubPlain(0, 0, u64::MAX),
+            HiddenRamFheInstruction::MulPlain(0, 0, RAM_LFE_BFV_PLAINTEXT_MODULUS + 1),
+        ] {
+            let program = HiddenRamFheProgram {
+                version: 1,
+                register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+                memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+                instructions: vec![instruction, HiddenRamFheInstruction::Output(0)],
+            };
+
+            let err = validate_hidden_ram_fhe_program(&program)
+                .expect_err("noncanonical plaintext immediate must be rejected before execution");
+            assert!(
+                err.to_string().contains("plaintext immediate"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

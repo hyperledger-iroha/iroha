@@ -28,7 +28,6 @@ ivm/                         # → Cargo workspace root (a single Rust library c
 │   ├── syscalls.rs          # Iroha‑specific syscall number map & helpers
 │   ├── vector.rs            # SIMD helpers, SHA‑256 compression adapter
 │   ├── zk.rs                # zero‑knowledge‑mode helpers (ASSERT tracking, padding)
-│   ├── kotodama/            # KOTODAMA language compiler placeholder
 │   └── vm.rs                # `IVM` struct, fetch‑decode‑execute loop, public API
 ├── tests/                   # `cargo test` integration + property tests
 │   ├── arithmetic.rs        # ADD/SUB/MUL/… correctness
@@ -78,14 +77,14 @@ Notes
   2. **Metal vector hot path (delivered)** — interpreter vector ops (`VADD32/64`, `VAND`, `VXOR`, `VOR`, `VROT32`) now route through the shared vector helpers so Metal/CUDA/CPU back-ends are selected at runtime with deterministic fallbacks and chunked logical vector lengths (`roadmap.md`, WP2-A/B/D).
   3. **Ed25519 batch opcode (delivered)** — `ED25519BATCHVERIFY` now consumes a Norito-encoded request, charges a base + per-entry gas cost, writes the failure index to `rs2`, and reuses the CUDA fast path when available with deterministic CPU fallback (closing `roadmap.md`, WP3-A/B/C).
   4. **CRC64 GPU back-ends (delivered)** — Chunked Metal/CUDA helpers now feed `hardware_crc64` with a 192 KiB default cutoff (`NORITO_GPU_CRC64_MIN_BYTES` override) and support explicit helper overrides via `NORITO_CRC64_GPU_LIB` (stubbed in tests). The CUDA path composes per-chunk CRC outputs on-host, Metal mirrors the same chunking, and Stage‑1 cutovers were re-benchmarked (`examples/stage1_cutover` → `benchmarks/norito_stage1/cutover.csv`), keeping the scalar cutover at 4 KiB while aligning the Stage‑1 GPU minimum to 192 KiB, closing WP4-A/B/C.
-  5. **Kotodama codegen completion** — finish the pointer-ABI-aware bytecode emission and Norito argument helpers so the compiler can target every syscall surface without falling back to manual stubs (tracked in the Kotodama compiler backlog in `roadmap.md`).
+  5. **Kotodama codegen completion (delivered)** — the Kotodama compiler now lives in `crates/kotodama_lang`, emits pointer-ABI-aware IVM bytecode, and generates first-release manifest metadata for permissions, state, triggers, and compiler-derived access hints. Dynamic or malformed helper payloads remain conservative instead of emitting guessed access descriptors.
 
 ## Kotodama
 
 High-level smart contract language targeting IVM bytecode:
 
-- Grammar and syntax (current + planned): `../../docs/source/kotodama_grammar.md`
-- Gaps vs. implementation and roadmap: see `../../roadmap.md`
+- Grammar and syntax (implemented surface): `docs/kotodama_grammar.md`
+- Gaps vs. implementation and roadmap: see `docs/kotodama_gap_analysis.md` and `../../roadmap.md`
 
 
 ## Features
@@ -308,11 +307,12 @@ constant used by the VM. A convenient summary is also provided in
 
 「言霊の幸わうブロックチェーン」
 
-`kotodama` is a higher level language that will compile down to IVM bytecode.
-The compiler lives under `src/kotodama/` and currently contains placeholders
-for the parser, AST and code generator. Once completed it will allow writing
-smart contracts in a more ergonomic syntax while producing the same bytecode
-understood by the VM.
+`kotodama` is a higher level language that compiles to IVM bytecode. The
+compiler lives in `crates/kotodama_lang` and includes the lexer, parser,
+semantic analysis, IR lowering, bytecode emitter, manifest generation, linting,
+and source-analysis helpers. It produces the same `.to` bytecode understood by
+the VM while surfacing first-release contract metadata for runtime admission and
+scheduling.
 
 ## Example Programs
 

@@ -513,6 +513,18 @@ fn filter_report_summary(
     }
 }
 
+#[cfg(feature = "app_api")]
+fn validate_zk1_tag_filter(q: &ProverListQuery) -> Result<(), &'static str> {
+    let Some(tag) = q.has_tag.as_deref() else {
+        return Ok(());
+    };
+    if tag.len() == 4 && tag.as_bytes().iter().all(u8::is_ascii_graphic) {
+        Ok(())
+    } else {
+        Err("invalid ZK1 tag filter (expected exactly four printable ASCII characters)")
+    }
+}
+
 fn list_attachment_locations() -> Vec<AttachmentLocation> {
     let mut locs = Vec::new();
     if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
@@ -1049,7 +1061,7 @@ fn zk1_minimal_validate(bytes: &[u8]) -> Result<(), String> {
         if pos + len > bytes.len() {
             return Err("truncated TLV payload".into());
         }
-        // Optionally note recognized tags (no-op in stub)
+        // Known tags are advisory; future well-formed TLVs remain admissible.
         let _recognized = matches!(tag, b"PROF" | b"IPAK" | b"H2VK" | b"I10P");
         pos += len;
     }
@@ -1406,7 +1418,7 @@ pub struct ProverListQuery {
     pub id: Option<String>,
     /// Substring match on content type.
     pub content_type: Option<String>,
-    /// Require a ZK1 tag to be present (e.g., "PROF").
+    /// Require a ZK1 TLV tag to be present. Must be exactly four printable ASCII bytes (e.g., "PROF").
     pub has_tag: Option<String>,
     /// Maximum number of results to return.
     pub limit: Option<u32>,
@@ -1437,6 +1449,9 @@ pub async fn handle_list_reports(
     let failed_req = q.failed_only.unwrap_or(false)
         || q.errors_only.unwrap_or(false)
         || q.messages_only.unwrap_or(false);
+    if let Err(message) = validate_zk1_tag_filter(&q) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
     let requested_id = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_report_id(id) else {
             return (
@@ -1528,6 +1543,9 @@ pub async fn handle_count_reports(
 ) -> impl IntoResponse {
     let ok_req = q.ok_only.unwrap_or(false);
     let failed_req = q.failed_only.unwrap_or(false) || q.errors_only.unwrap_or(false);
+    if let Err(message) = validate_zk1_tag_filter(&q) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
     let requested_id = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_report_id(id) else {
             return (
@@ -1562,6 +1580,9 @@ pub async fn handle_delete_reports(
 ) -> impl IntoResponse {
     let ok_req = q.ok_only.unwrap_or(false);
     let failed_req = q.failed_only.unwrap_or(false) || q.errors_only.unwrap_or(false);
+    if let Err(message) = validate_zk1_tag_filter(&q) {
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    }
     let requested_id = if let Some(id) = q.id.as_deref() {
         let Some(clean) = sanitize_report_id(id) else {
             return (
@@ -1735,30 +1756,31 @@ mod tests {
     }
 
     fn fixture_attachment_bytes() -> Vec<u8> {
-        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
         let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
         let vk_commitment = hash_vk(&vk);
-        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", vk_commitment);
+        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", vk_commitment);
         let proof = fixture.proof_box("halo2/ipa");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add-public");
         let mut attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
         norito::to_bytes(&attachment).expect("proof attachment bytes")
     }
 
     fn fixture_state() -> Arc<CoreState> {
-        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
+        let seed = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
         let vk = seed.vk_box("halo2/ipa").expect("fixture vk bytes");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add");
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "tiny-add-public");
         let vk_commitment = hash_vk(&vk);
+        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", vk_commitment);
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
             1,
-            "tiny-add",
+            "tiny-add-public",
             None,
             "test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
-            [0; 32],
+            fixture.schema_hash,
             vk_commitment,
         );
         record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
@@ -1772,7 +1794,7 @@ mod tests {
             .insert(vk_id.clone(), record);
         world
             .verifying_keys_by_circuit_mut_for_testing()
-            .insert(("tiny-add".into(), 1), vk_id);
+            .insert(("tiny-add-public".into(), 1), vk_id);
         let mut state = iroha_core::state::State::new_for_testing(
             world,
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -2599,6 +2621,25 @@ mod tests {
             false,
             false,
         ));
+    }
+
+    #[test]
+    fn validate_zk1_tag_filter_rejects_malformed_tags() {
+        assert!(
+            validate_zk1_tag_filter(&ProverListQuery {
+                has_tag: Some("PROF".to_string()),
+                ..Default::default()
+            })
+            .is_ok()
+        );
+        for malformed in ["", "ABC", "ABCDE", "AB C", "A\nBC", "éééé"] {
+            let err = validate_zk1_tag_filter(&ProverListQuery {
+                has_tag: Some(malformed.to_string()),
+                ..Default::default()
+            })
+            .expect_err("malformed tag filter should fail closed");
+            assert!(err.contains("invalid ZK1 tag filter"));
+        }
     }
 
     #[test]

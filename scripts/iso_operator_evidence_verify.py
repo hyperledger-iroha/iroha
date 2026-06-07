@@ -384,6 +384,32 @@ def _contains_secret_material(value: str) -> bool:
     )
 
 
+def _contains_secret_identifier_material(value: str) -> bool:
+    strong_markers = (
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    paired_markers = ("authorization", "bearer", "token", "cookie")
+    return any(
+        any(marker in lowered for marker in strong_markers)
+        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
+        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+    )
+
+
 class EvidenceError(RuntimeError):
     """Raised when archived ISO operator evidence is unsafe or malformed."""
 
@@ -463,7 +489,7 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise EvidenceError(f"{label} must use forward slashes")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
-    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise EvidenceError(f"{label} must not contain secret-looking material")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
@@ -487,7 +513,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must use forward slashes")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
-    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise EvidenceError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
@@ -510,7 +536,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
-        if _contains_secret_material(arg) or _is_secret_looking_key(arg):
+        if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise EvidenceError("CLI argument must not contain secret-looking material")
         index += 1
 
@@ -1397,7 +1423,7 @@ def _reject_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must not start with a dash")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
-    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise EvidenceError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
@@ -2371,7 +2397,7 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise EvidenceError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise EvidenceError(f"{label} path must not contain dot segments")
-    if _contains_secret_material(path) or _is_secret_looking_key(path):
+    if _contains_secret_material(path) or _contains_secret_identifier_material(path):
         raise EvidenceError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):

@@ -360,6 +360,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-verify-direct-slot-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-root-symlink
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-ancestor-symlink
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-symlink-artifact-slot-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-hardlink-artifact-slot-secret-paths
@@ -390,11 +392,14 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-metadata-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-artifact-digests-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-files
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-ancestors
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-ancestors
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-path-before-openssl
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-path-before-openssl
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signer-key-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-cli-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-cli-secret-paths

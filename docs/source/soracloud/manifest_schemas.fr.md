@@ -166,6 +166,8 @@ La validation rejette les versions non prises en charge avec
 - Politique d'exécution FHE :
   -`max_plaintext_bytes <= max_ciphertext_bytes`.
   -`max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - La liaison du jeu de paramètres doit correspondre à `(param_set, version)`.
   - `max_multiplication_depth` ne doit pas dépasser la profondeur paramétrée.
   - L'admission à la stratégie rejette le cycle de vie de l'ensemble de paramètres `Proposed` ou `Withdrawn`.

@@ -139,14 +139,14 @@ impl PreparedPublicKeyCacheAccess for SmallConfiguration {
 
 /// Thread-safe wrapper around the w3f `SecretKey` that allows interior mutability.
 pub struct ManagedSecretKey<C: BlsConfiguration + ?Sized> {
-    bytes: Vec<u8>,
+    bytes: Zeroizing<Vec<u8>>,
     _marker: PhantomData<C>,
 }
 
 impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
     fn clone(&self) -> Self {
         Self {
-            bytes: self.bytes.clone(),
+            bytes: Zeroizing::new(self.bytes.as_slice().to_vec()),
             _marker: PhantomData,
         }
     }
@@ -155,23 +155,27 @@ impl<C: BlsConfiguration + ?Sized> Clone for ManagedSecretKey<C> {
 impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     fn new(secret: &W3fSecretKey<C::Engine>) -> Self {
         Self {
-            bytes: secret.clone().into_vartime().to_bytes(),
+            bytes: Zeroizing::new(secret.clone().into_vartime().to_bytes()),
             _marker: PhantomData,
         }
     }
 
     fn try_load_secret(&self) -> Result<W3fSecretKey<C::Engine>, ParseError> {
-        W3fSecretKey::<C::Engine>::from_bytes(&self.bytes)
+        W3fSecretKey::<C::Engine>::from_bytes(self.bytes.as_slice())
             .map_err(|err| ParseError(err.to_string()))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.bytes.clone()
+        self.bytes.as_slice().to_vec()
+    }
+
+    pub(crate) fn to_zeroizing_bytes(&self) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(self.bytes.as_slice().to_vec())
     }
 
     pub fn to_fixed_bytes(&self) -> [u8; 32] {
         let mut arr = [0u8; 32];
-        arr.copy_from_slice(&self.bytes);
+        arr.copy_from_slice(self.bytes.as_slice());
         arr
     }
 
@@ -202,7 +206,7 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         {
             let seed = checked_os_entropy("signing key split", BLS_RNG_SEED_LEN)
                 .map_err(|err| Error::Signing(err.to_string()))?;
-            let rng = crate::rng::rng_from_seed(seed.as_slice().to_vec());
+            let rng = crate::rng::rng_from_seed_slice(seed.as_slice());
             Ok(guard.sign(&msg, rng).to_bytes())
         }
         #[cfg(not(feature = "rand"))]
@@ -214,7 +218,7 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     #[cfg(test)]
     pub(crate) fn from_unchecked_bytes_for_test(bytes: Vec<u8>) -> Self {
         Self {
-            bytes,
+            bytes: Zeroizing::new(bytes),
             _marker: PhantomData,
         }
     }
@@ -222,10 +226,9 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
 
 impl<C: BlsConfiguration + ?Sized> zeroize::Zeroize for ManagedSecretKey<C> {
     fn zeroize(&mut self) {
-        let mut zero_seed = vec![0u8; C::Engine::SECRET_KEY_SIZE];
-        let new_secret = W3fSecretKey::<C::Engine>::from_seed(&zero_seed);
-        zero_seed.zeroize();
-        self.bytes = new_secret.into_vartime().to_bytes();
+        let zero_seed = Zeroizing::new(vec![0u8; C::Engine::SECRET_KEY_SIZE]);
+        let new_secret = W3fSecretKey::<C::Engine>::from_seed(zero_seed.as_slice());
+        self.bytes = Zeroizing::new(new_secret.into_vartime().to_bytes());
     }
 }
 
@@ -275,7 +278,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             KeyGenOption::Random => {
                 let seed = checked_os_entropy("key generation", C::Engine::SECRET_KEY_SIZE)?;
                 let split_seed = checked_os_entropy("key split", BLS_RNG_SEED_LEN)?;
-                let split_rng = crate::rng::rng_from_seed(split_seed.as_slice().to_vec());
+                let split_rng = crate::rng::rng_from_seed_slice(split_seed.as_slice());
                 let secret =
                     SecretKeyVT::<C::Engine>::from_seed(seed.as_slice()).into_split(split_rng);
                 ManagedSecretKey::new(&secret)
@@ -289,15 +292,14 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 extract.input_ikm(seed);
                 extract.input_ikm(&[0]);
                 seed.zeroize();
-                let mut okm = vec![0u8; C::Engine::SECRET_KEY_SIZE];
+                let mut okm = Zeroizing::new(vec![0u8; C::Engine::SECRET_KEY_SIZE]);
                 let h = extract.finalize().1;
-                h.expand(&info[..], &mut okm)
+                h.expand(&info[..], okm.as_mut_slice())
                     .map_err(|_| Error::KeyGen("BLS HKDF seed expansion failed".into()))?;
 
-                let deterministic_rng = crate::rng::rng_from_seed(okm.clone());
-                let secret =
-                    SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
-                okm.zeroize();
+                let deterministic_rng = crate::rng::rng_from_seed_slice(okm.as_slice());
+                let secret = SecretKeyVT::<C::Engine>::from_seed(okm.as_slice())
+                    .into_split(deterministic_rng);
                 ManagedSecretKey::new(&secret)
             }
             KeyGenOption::FromPrivateKey(key) => key,
@@ -656,7 +658,7 @@ mod tests {
         h.expand(&info, &mut okm).expect("legacy BLS HKDF expands");
         ikm.zeroize();
 
-        let deterministic_rng = crate::rng::rng_from_seed(okm.clone());
+        let deterministic_rng = crate::rng::rng_from_seed_slice(&okm);
         let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
         okm.zeroize();
         let private = ManagedSecretKey::new(&secret);
@@ -674,9 +676,36 @@ mod tests {
         assert_eq!(private.to_bytes(), legacy_private.to_bytes());
     }
 
+    fn assert_managed_secret_clone_preserves_bytes<C: BlsConfiguration>() {
+        let (public, private) = BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(
+            b"iroha-bls-managed-secret-clone".to_vec(),
+        ))
+        .expect("BLS keypair derives");
+        let clone = private.clone();
+
+        assert_eq!(private.to_bytes(), clone.to_bytes());
+        assert_eq!(
+            private.to_fixed_bytes().as_slice(),
+            clone.to_bytes().as_slice()
+        );
+        assert_eq!(
+            public.to_bytes(),
+            clone
+                .try_public_key()
+                .expect("clone public key derives")
+                .to_bytes()
+        );
+    }
+
     #[test]
     fn seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm() {
         assert_seeded_keypair_matches_legacy_ikm::<NormalConfiguration>();
         assert_seeded_keypair_matches_legacy_ikm::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn managed_secret_clone_preserves_bytes() {
+        assert_managed_secret_clone_preserves_bytes::<NormalConfiguration>();
+        assert_managed_secret_clone_preserves_bytes::<SmallConfiguration>();
     }
 }

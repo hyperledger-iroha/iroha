@@ -336,6 +336,75 @@ async fn router_builds_under_current_features() {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
+
+    #[cfg(not(feature = "profiling"))]
+    {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(Uri::from_static(iroha_torii_shared::uri::PROFILE))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(not(feature = "schema"))]
+    {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(Uri::from_static(iroha_torii_shared::uri::SCHEMA))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    {
+        for path in [
+            iroha_torii_shared::uri::STATUS,
+            "/status/peers",
+            iroha_torii_shared::uri::METRICS,
+            iroha_torii_shared::uri::AXT_PROOF_CACHE_STATUS,
+            "/v1/debug/witness",
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(Uri::from_static(path))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[cfg(not(feature = "zk-verify-batch"))]
+    {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(Uri::from_static("/v1/zk/verify-batch"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 }
 
 #[cfg(feature = "telemetry")]

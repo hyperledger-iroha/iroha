@@ -156,7 +156,7 @@ public final class OfflineNoteV2Test {
     assertThrows(
         () ->
             new OfflineNoteV2.KeyCertificateV2(
-                1,
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION + 1,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -172,7 +172,7 @@ public final class OfflineNoteV2Test {
     assertThrows(
         () ->
             new OfflineNoteV2.KeyCertificateV2(
-                2,
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -188,7 +188,7 @@ public final class OfflineNoteV2Test {
     assertThrows(
         () ->
             new OfflineNoteV2.KeyCertificateV2(
-                2,
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -204,7 +204,7 @@ public final class OfflineNoteV2Test {
     assertThrows(
         () ->
             new OfflineNoteV2.KeyCertificateV2(
-                2,
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),
@@ -220,7 +220,7 @@ public final class OfflineNoteV2Test {
     assertThrows(
         () ->
             new OfflineNoteV2.KeyCertificateV2(
-                2,
+                OfflineNoteV2.KEY_CERTIFICATE_VERSION,
                 string(cert, "platform"),
                 string(cert, "key_id"),
                 string(cert, "device_id"),

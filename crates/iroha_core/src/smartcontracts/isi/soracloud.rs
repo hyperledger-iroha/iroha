@@ -63,7 +63,11 @@ use iroha_data_model::{
         SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
         SORA_SERVICE_SECRET_ENTRY_VERSION_V1, SORA_SERVICE_STATE_ENTRY_VERSION_V1,
         SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
-        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
+        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1, SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_NATIVE_ENVELOPE_BYTES,
         SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
         SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
@@ -92,8 +96,8 @@ use iroha_data_model::{
         SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
         SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
         SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudFheInputAdmissionProofV1,
-        derive_agent_autonomy_request_commitment,
+        SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
+        SoracloudFheInputAdmissionProofV1, derive_agent_autonomy_request_commitment,
         derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -123,6 +127,8 @@ use iroha_data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
+        soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
+        soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
         soracloud_fhe_input_admission_open_verify_bounds,
         soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
     },
@@ -836,46 +842,82 @@ fn validate_soracloud_fhe_envelope_shape(
     Ok(())
 }
 
-fn proof_attachment_envelope(
+struct SoracloudFheProofAttachmentDecodeContext {
+    proof_backend_mismatch: &'static str,
+    verifier_backend_mismatch: &'static str,
+    verifier_name_empty: &'static str,
+    unsupported_backend: &'static str,
+    invalid_attachment_prefix: &'static str,
+    open_verify_label: &'static str,
+    max_open_verify_bytes: usize,
+}
+
+const FHE_INPUT_ADMISSION_ATTACHMENT_CONTEXT: SoracloudFheProofAttachmentDecodeContext =
+    SoracloudFheProofAttachmentDecodeContext {
+        proof_backend_mismatch: "fhe input admission proof backend mismatch",
+        verifier_backend_mismatch: "fhe input admission verifier backend mismatch",
+        verifier_name_empty: "fhe input admission verifier name must not be empty",
+        unsupported_backend: "Soracloud FHE input admission requires a supported STARK/FRI v1 proof backend",
+        invalid_attachment_prefix: "invalid FHE input admission proof attachment",
+        open_verify_label: "FHE input admission OpenVerifyEnvelope",
+        max_open_verify_bytes: SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES,
+    };
+
+const FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT: SoracloudFheProofAttachmentDecodeContext =
+    SoracloudFheProofAttachmentDecodeContext {
+        proof_backend_mismatch: "fhe bootstrap-key proof backend mismatch",
+        verifier_backend_mismatch: "fhe bootstrap-key verifier backend mismatch",
+        verifier_name_empty: "fhe bootstrap-key verifier name must not be empty",
+        unsupported_backend: "Soracloud FHE bootstrap-key proof requires a supported STARK/FRI v1 proof backend",
+        invalid_attachment_prefix: "invalid FHE bootstrap-key proof attachment",
+        open_verify_label: "FHE bootstrap-key proof OpenVerifyEnvelope",
+        max_open_verify_bytes: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
+    };
+
+fn proof_attachment_envelope_with_context(
     attachment: &ProofAttachment,
+    context: &SoracloudFheProofAttachmentDecodeContext,
 ) -> Result<OpenVerifyEnvelope, InstructionExecutionError> {
     if attachment.backend != attachment.proof.backend {
-        return Err(invalid_parameter(
-            "fhe input admission proof backend mismatch",
-        ));
+        return Err(invalid_parameter(context.proof_backend_mismatch));
     }
     if attachment.vk_ref.backend != attachment.backend {
-        return Err(invalid_parameter(
-            "fhe input admission verifier backend mismatch",
-        ));
+        return Err(invalid_parameter(context.verifier_backend_mismatch));
     }
     if attachment.vk_ref.name.trim().is_empty() {
-        return Err(invalid_parameter(
-            "fhe input admission verifier name must not be empty",
-        ));
+        return Err(invalid_parameter(context.verifier_name_empty));
     }
     if !crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
-        return Err(invalid_parameter(
-            "Soracloud FHE input admission requires a supported STARK/FRI v1 proof backend",
-        ));
+        return Err(invalid_parameter(context.unsupported_backend));
     }
     if let Some((field, reason)) = attachment.structural_error() {
         return Err(invalid_parameter(format!(
-            "invalid FHE input admission proof attachment: {field} {reason}"
+            "{}: {field} {reason}",
+            context.invalid_attachment_prefix
         )));
     }
-    if attachment.proof.bytes.len() > SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES {
+    if attachment.proof.bytes.len() > context.max_open_verify_bytes {
         return Err(invalid_parameter(format!(
-            "FHE input admission OpenVerifyEnvelope length {} exceeds maximum {}",
+            "{} length {} exceeds maximum {}",
+            context.open_verify_label,
             attachment.proof.bytes.len(),
-            SORACLOUD_FHE_INPUT_ADMISSION_MAX_OPEN_VERIFY_BYTES
+            context.max_open_verify_bytes
         )));
     }
-    norito::decode_from_bytes::<OpenVerifyEnvelope>(&attachment.proof.bytes).map_err(|err| {
-        invalid_parameter(format!(
-            "invalid FHE input admission OpenVerifyEnvelope: {err}"
-        ))
-    })
+    norito::decode_from_bytes::<OpenVerifyEnvelope>(&attachment.proof.bytes)
+        .map_err(|err| invalid_parameter(format!("invalid {}: {err}", context.open_verify_label)))
+}
+
+fn proof_attachment_envelope(
+    attachment: &ProofAttachment,
+) -> Result<OpenVerifyEnvelope, InstructionExecutionError> {
+    proof_attachment_envelope_with_context(attachment, &FHE_INPUT_ADMISSION_ATTACHMENT_CONTEXT)
+}
+
+fn bootstrap_key_proof_attachment_envelope(
+    attachment: &ProofAttachment,
+) -> Result<OpenVerifyEnvelope, InstructionExecutionError> {
+    proof_attachment_envelope_with_context(attachment, &FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT)
 }
 
 fn validate_soracloud_fhe_input_admission_native_envelope_size(
@@ -1173,6 +1215,360 @@ fn verify_soracloud_fhe_input_admission_backend(
     Ok(())
 }
 
+fn validate_soracloud_fhe_bootstrap_key_proof_native_envelope_size(
+    len: usize,
+) -> Result<(), InstructionExecutionError> {
+    if len > SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES {
+        return Err(invalid_parameter(format!(
+            "FHE bootstrap-key proof STARK native envelope bytes length {len} exceeds maximum {SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_soracloud_fhe_bootstrap_key_proof_envelope(
+    attachment: &ProofAttachment,
+    envelope: &OpenVerifyEnvelope,
+    statement_hash: Hash,
+) -> Result<(), InstructionExecutionError> {
+    if envelope.backend != BackendTag::Stark {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof envelope must declare STARK backend",
+        ));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof envelope aux must be empty",
+        ));
+    }
+    envelope
+        .validate_with_bounds(soracloud_fhe_bootstrap_key_proof_open_verify_bounds())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE bootstrap-key OpenVerifyEnvelope shape: {err}"
+            ))
+        })?;
+    if envelope.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof circuit id must be canonical v1",
+        ));
+    }
+    if envelope.public_inputs != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof public-input schema mismatch",
+        ));
+    }
+    let open =
+        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE bootstrap-key STARK public-input wrapper: {err}"
+            ))
+        })?;
+    if open.version != 1 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key STARK public-input wrapper version must be 1",
+        ));
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open.public_inputs != expected_public_inputs {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof public inputs do not match statement hash",
+        ));
+    }
+    if open.envelope_bytes.is_empty() {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key STARK native envelope bytes must be non-empty",
+        ));
+    }
+    validate_soracloud_fhe_bootstrap_key_proof_native_envelope_size(open.envelope_bytes.len())?;
+    let vk_commitment = attachment
+        .vk_commitment
+        .ok_or_else(|| invalid_parameter("FHE bootstrap-key proof requires vk_commitment"))?;
+    if vk_commitment != envelope.vk_hash {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof vk_commitment mismatch",
+        ));
+    }
+    let envelope_hash = attachment
+        .envelope_hash
+        .ok_or_else(|| invalid_parameter("FHE bootstrap-key proof requires envelope_hash"))?;
+    let expected = <[u8; Hash::LENGTH]>::from(Hash::new(&attachment.proof.bytes));
+    if envelope_hash != expected {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof envelope_hash mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_soracloud_fhe_bootstrap_key_proof_backend(
+    attachment: &ProofAttachment,
+    statement_hash: Hash,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    let attachment_vk_commitment = attachment
+        .vk_commitment
+        .ok_or_else(|| invalid_parameter("FHE bootstrap-key proof requires vk_commitment"))?;
+    let attachment_envelope_hash = attachment
+        .envelope_hash
+        .ok_or_else(|| invalid_parameter("FHE bootstrap-key proof requires envelope_hash"))?;
+    let expected_envelope_hash = <[u8; Hash::LENGTH]>::from(Hash::new(&attachment.proof.bytes));
+    if attachment_envelope_hash != expected_envelope_hash {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof envelope_hash mismatch",
+        ));
+    }
+    if attachment.vk_ref.name != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof vk_ref must use the canonical v1 circuit id",
+        ));
+    }
+    let envelope = bootstrap_key_proof_attachment_envelope(attachment)?;
+    if envelope.backend != BackendTag::Stark {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof envelope must declare STARK backend",
+        ));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof envelope aux must be empty",
+        ));
+    }
+    envelope
+        .validate_with_bounds(soracloud_fhe_bootstrap_key_proof_open_verify_bounds())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE bootstrap-key OpenVerifyEnvelope shape: {err}"
+            ))
+        })?;
+    if envelope.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof circuit id must be canonical v1",
+        ));
+    }
+    if envelope.public_inputs != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof public-input schema mismatch",
+        ));
+    }
+    let open =
+        norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes).map_err(|err| {
+            invalid_parameter(format!(
+                "invalid FHE bootstrap-key STARK public-input wrapper: {err}"
+            ))
+        })?;
+    if open.version != 1 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key STARK public-input wrapper version must be 1",
+        ));
+    }
+    let expected_public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
+    if open.public_inputs != expected_public_inputs {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof public inputs do not match statement hash",
+        ));
+    }
+    if open.envelope_bytes.is_empty() {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key STARK native envelope bytes must be non-empty",
+        ));
+    }
+    validate_soracloud_fhe_bootstrap_key_proof_native_envelope_size(open.envelope_bytes.len())?;
+    let record = state_transaction
+        .world
+        .verifying_keys
+        .get(&attachment.vk_ref)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "FHE bootstrap-key verifying key not found".into(),
+            )
+        })?;
+    if record.status != ConfidentialStatus::Active {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key is not active".into(),
+        ));
+    }
+    if record.namespace != "soracloud" {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key must be in the soracloud namespace".into(),
+        ));
+    }
+    if record.backend != BackendTag::Stark {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key must use STARK backend".into(),
+        ));
+    }
+    if record.curve != "goldilocks" {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key must use goldilocks STARK field".into(),
+        ));
+    }
+    if record.public_inputs_schema_hash
+        != soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key public-input schema mismatch".into(),
+        ));
+    }
+    if record.circuit_id != SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key must use the canonical v1 circuit".into(),
+        ));
+    }
+    if record.version != u32::from(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key must use the canonical v1 circuit version".into(),
+        ));
+    }
+    if record.gas_schedule_id.is_none() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key missing gas_schedule_id".into(),
+        ));
+    }
+    let circuit_key = (record.circuit_id.clone(), record.version);
+    match state_transaction
+        .world
+        .verifying_keys_by_circuit
+        .get(&circuit_key)
+    {
+        Some(active_id) if active_id == &attachment.vk_ref => {}
+        _ => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "FHE bootstrap-key verifying key circuit/version not active".into(),
+            ));
+        }
+    }
+    if envelope.circuit_id != record.circuit_id {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key proof circuit mismatch".into(),
+        ));
+    }
+    if envelope.vk_hash != record.commitment {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key proof verifying-key commitment mismatch".into(),
+        ));
+    }
+    if attachment_vk_commitment != record.commitment {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key attachment verifying-key commitment mismatch".into(),
+        ));
+    }
+    if record.max_proof_bytes > 0
+        && attachment.proof.bytes.len()
+            > usize::try_from(record.max_proof_bytes).unwrap_or(usize::MAX)
+    {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof exceeds verifying key max_proof_bytes",
+        ));
+    }
+    let vk_box = record.key.clone().ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key bytes missing".into(),
+        )
+    })?;
+    if u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key vk_len mismatch".into(),
+        ));
+    }
+    let actual_commitment = crate::zk::hash_vk(&vk_box);
+    if actual_commitment != record.commitment {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key commitment mismatch".into(),
+        ));
+    }
+    if vk_box.backend != attachment.backend {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FHE bootstrap-key verifying key backend mismatch".into(),
+        ));
+    }
+
+    state_transaction
+        .register_confidential_proof(attachment.proof.bytes.len())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "FHE bootstrap-key proof quota accounting failed: {err}"
+            ))
+        })?;
+    let ok = state_transaction
+        .lookup_preverified_proof(&attachment.proof, &attachment.vk_ref, record.commitment)
+        .unwrap_or_else(|| {
+            crate::zk::verify_backend_with_timing_checked(
+                attachment.backend.as_str(),
+                &attachment.proof,
+                Some(&vk_box),
+                &state_transaction.zk,
+            )
+            .ok
+        });
+    if !ok {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof verification failed",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_soracloud_fhe_bootstrap_key_proof(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    policy: &FheExecutionPolicyV1,
+    expected_statement_hash: Option<Hash>,
+    proof: Option<&SoracloudFheBootstrapKeyProofV1>,
+    require_proof: bool,
+) -> Result<(), InstructionExecutionError> {
+    if !require_proof && proof.is_some() {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof is only accepted for bootstrap operations",
+        ));
+    }
+    let Some(expected_statement_hash) = expected_statement_hash else {
+        if require_proof {
+            return Err(invalid_parameter(
+                "FHE bootstrap operation requires bootstrap-key proof statement digest",
+            ));
+        }
+        if proof.is_some() {
+            return Err(invalid_parameter(
+                "FHE bootstrap-key proof requires bootstrap-capable policy",
+            ));
+        }
+        return Ok(());
+    };
+    if policy.max_bootstrap_count == 0 {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof digest requires bootstrap-capable policy",
+        ));
+    }
+    let Some(proof) = proof else {
+        if require_proof {
+            return Err(invalid_parameter(
+                "FHE bootstrap operation requires bootstrap-key proof",
+            ));
+        }
+        return Ok(());
+    };
+    proof
+        .validate()
+        .map_err(|err| invalid_parameter(format!("invalid FHE bootstrap-key proof: {err}")))?;
+    if proof.statement_hash != expected_statement_hash {
+        return Err(invalid_parameter(
+            "FHE bootstrap-key proof statement hash mismatch",
+        ));
+    }
+    let envelope = bootstrap_key_proof_attachment_envelope(&proof.proof)?;
+    validate_soracloud_fhe_bootstrap_key_proof_envelope(
+        &proof.proof,
+        &envelope,
+        expected_statement_hash,
+    )?;
+    verify_soracloud_fhe_bootstrap_key_proof_backend(
+        &proof.proof,
+        expected_statement_hash,
+        state_transaction,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn verify_soracloud_fhe_input_admission_proof(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -1295,6 +1691,7 @@ fn verify_fhe_job_run_provenance(
     param_set: FheParamSetV1,
     evaluation_keys: BfvEvaluationKeyBundle,
     evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+    bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -1311,6 +1708,7 @@ fn verify_fhe_job_run_provenance(
         param_set,
         evaluation_keys,
         evaluation_key_refresh_transcript,
+        bootstrap_key_zero_refresh_proof,
         governance_tx_hash,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode fhe job provenance: {err}")))?;
@@ -6245,6 +6643,29 @@ fn verify_soracloud_fhe_refresh_transcript_digest(
             "fhe evaluation-key refresh transcript digest does not match the execution policy",
         ));
     }
+    if let Some(expected) = policy.bootstrap_key_zero_refresh_proof_statement_digest {
+        let actual = transcript
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                params,
+                evaluation_keys,
+                policy.refresh_transcript_mode,
+            )
+            .map_err(|err| invalid_parameter(err.to_string()))?
+            .ok_or_else(|| {
+                invalid_parameter(
+                    "fhe bootstrap-key proof statement digest requires bootstrap key material",
+                )
+            })?;
+        if actual != expected {
+            return Err(invalid_parameter(
+                "fhe bootstrap-key proof statement digest does not match the execution policy",
+            ));
+        }
+    } else if policy.max_bootstrap_count > 0 {
+        return Err(invalid_parameter(
+            "fhe bootstrap-capable policy must bind bootstrap-key proof statement digest",
+        ));
+    }
     Ok(())
 }
 
@@ -7136,6 +7557,7 @@ impl Execute for isi::RunSoracloudFheJob {
             self.param_set.clone(),
             self.evaluation_keys.clone(),
             self.evaluation_key_refresh_transcript.clone(),
+            self.bootstrap_key_zero_refresh_proof.clone(),
             self.governance_tx_hash,
             &self.provenance,
         )?;
@@ -7163,6 +7585,14 @@ impl Execute for isi::RunSoracloudFheJob {
             &self.policy,
             &self.evaluation_keys,
             &self.evaluation_key_refresh_transcript,
+        )?;
+        verify_soracloud_fhe_bootstrap_key_proof(
+            state_transaction,
+            &self.policy,
+            self.policy
+                .bootstrap_key_zero_refresh_proof_statement_digest,
+            self.bootstrap_key_zero_refresh_proof.as_ref(),
+            self.job.bootstrap_count > 0,
         )?;
         let loaded_inputs = load_soracloud_fhe_inputs(
             &bfv_params,
@@ -11924,6 +12354,7 @@ mod tests {
             SECRET_ENVELOPE_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
             SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
             SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
             SORACLOUD_FHE_INPUT_ADMISSION_MAX_STARK_WRAPPER_BYTES, SecretEnvelopeEncryptionV1,
             SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCapabilityPolicyV1,
             SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
@@ -12600,6 +13031,18 @@ mod tests {
             .expect("sample refresh transcript digest")
     }
 
+    fn sample_bfv_bootstrap_key_proof_statement_digest() -> Hash {
+        let params = ram_lfe_bfv_parameters_v1();
+        sample_bfv_refresh_transcript()
+            .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                &params,
+                &sample_bfv_evaluation_key_bundle(),
+                BfvRefreshTranscriptModeV1::ExactLift,
+            )
+            .expect("sample bootstrap-key proof statement digest")
+            .expect("sample evaluation keys carry a bootstrap key")
+    }
+
     fn sample_bounded_noise_bfv_refresh_material() -> (
         BfvParameters,
         BfvEvaluationKeyBundle,
@@ -12791,6 +13234,101 @@ mod tests {
         tampered.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&tampered.proof.bytes)));
         tampered.vk_commitment = Some(envelope.vk_hash);
         tampered
+    }
+
+    fn sample_fhe_bootstrap_key_proof(
+        statement_hash: Hash,
+        vk_commitment: [u8; Hash::LENGTH],
+    ) -> SoracloudFheBootstrapKeyProofV1 {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
+            envelope_bytes: vec![0xB5; 32],
+        };
+        let envelope = OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            vk_commitment,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+            norito::to_bytes(&open).expect("encode STARK wrapper"),
+        );
+        let proof_box = iroha_data_model::proof::ProofBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+        );
+        let mut proof = iroha_data_model::proof::ProofAttachment::new_ref(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            proof_box,
+            iroha_data_model::proof::VerifyingKeyId::new(
+                FHE_INPUT_ADMISSION_BACKEND,
+                SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            ),
+        );
+        proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(&proof.proof.bytes)));
+        proof.vk_commitment = Some(vk_commitment);
+        SoracloudFheBootstrapKeyProofV1 {
+            schema_version: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
+            statement_hash,
+            proof,
+        }
+    }
+
+    fn sample_fhe_bootstrap_key_vk_box() -> iroha_data_model::proof::VerifyingKeyBox {
+        iroha_data_model::proof::VerifyingKeyBox::new(
+            FHE_INPUT_ADMISSION_BACKEND.into(),
+            b"sample-soracloud-bootstrap-key-proof-vk".to_vec(),
+        )
+    }
+
+    fn install_fhe_bootstrap_key_verifier_record(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        vk_box: iroha_data_model::proof::VerifyingKeyBox,
+    ) -> (iroha_data_model::proof::VerifyingKeyId, [u8; Hash::LENGTH]) {
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new(
+            FHE_INPUT_ADMISSION_BACKEND,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        );
+        let commitment = crate::zk::hash_vk(&vk_box);
+        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
+            u32::from(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1),
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+            None,
+            "soracloud",
+            BackendTag::Stark,
+            "goldilocks",
+            soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
+            commitment,
+        );
+        record.vk_len = u32::try_from(vk_box.bytes.len()).expect("VK length fits u32");
+        record.status = ConfidentialStatus::Active;
+        record.key = Some(vk_box);
+        record.gas_schedule_id = Some(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1.into());
+        state_transaction
+            .world
+            .verifying_keys
+            .insert(vk_id.clone(), record.clone());
+        state_transaction
+            .world
+            .verifying_keys_by_circuit
+            .insert((record.circuit_id, record.version), vk_id.clone());
+        (vk_id, commitment)
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    fn preverified_bootstrap_key_proof_map(
+        proof: &SoracloudFheBootstrapKeyProofV1,
+        vk_commitment: [u8; Hash::LENGTH],
+    ) -> Arc<crate::zk::PreverifiedProofMap> {
+        let mut map = BTreeMap::new();
+        map.insert(
+            crate::zk::PreverifiedProofKey::new(
+                &proof.proof.proof,
+                &proof.proof.vk_ref,
+                vk_commitment,
+            ),
+            true,
+        );
+        Arc::new(map)
     }
 
     fn sample_fhe_input_admission_proof(
@@ -13541,6 +14079,9 @@ mod tests {
             evaluation_key_digest: sample_bfv_evaluation_key_digest(),
             evaluation_key_refresh_transcript_digest: sample_bfv_refresh_transcript_digest(),
             refresh_transcript_mode: BfvRefreshTranscriptModeV1::ExactLift,
+            bootstrap_key_zero_refresh_proof_statement_digest: Some(
+                sample_bfv_bootstrap_key_proof_statement_digest(),
+            ),
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
@@ -15191,6 +15732,16 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         bounded_policy.evaluation_key_refresh_transcript_digest = bounded_digest;
         bounded_policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        bounded_policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
+            transcript
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                    &params,
+                    &evaluation_keys,
+                    BfvRefreshTranscriptModeV1::BoundedNoise,
+                )
+                .expect("bounded bootstrap-key proof statement digest")
+                .expect("bounded sample carries bootstrap key"),
+        );
         verify_soracloud_fhe_refresh_transcript_digest(
             &params,
             &bounded_policy,
@@ -15203,6 +15754,29 @@ mod tests {
             BfvCiphertextBoundModeV1::BoundedNoise,
             "bounded policy must require bounded-noise ciphertext metadata"
         );
+
+        let mut missing_bootstrap_statement = bounded_policy.clone();
+        missing_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest = None;
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &missing_bootstrap_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("bootstrap-capable policy must bind bootstrap proof statement digest");
+        assert_invalid_parameter_contains(err, "bootstrap-capable policy");
+
+        let mut wrong_bootstrap_statement = bounded_policy.clone();
+        wrong_bootstrap_statement.bootstrap_key_zero_refresh_proof_statement_digest =
+            Some(Hash::new(b"wrong-bootstrap-proof-statement"));
+        let err = verify_soracloud_fhe_refresh_transcript_digest(
+            &params,
+            &wrong_bootstrap_statement,
+            &evaluation_keys,
+            &transcript,
+        )
+        .expect_err("wrong bootstrap proof statement digest must fail runtime admission");
+        assert_invalid_parameter_contains(err, "bootstrap-key proof statement digest");
 
         let mut exact_mode_policy = bounded_policy.clone();
         exact_mode_policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::ExactLift;
@@ -15226,6 +15800,412 @@ mod tests {
         )
         .expect_err("bounded-mode policy must reject exact-lift refresh transcript material");
         assert_invalid_parameter_contains(err, "refresh transcript");
+    }
+
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_is_required_for_bootstrap_jobs() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let policy = sample_fhe_policy();
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+
+        let err = verify_soracloud_fhe_bootstrap_key_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            None,
+            true,
+        )
+        .expect_err("bootstrap operation without proof must be rejected");
+        assert_invalid_parameter_contains(err, "requires bootstrap-key proof");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_requires_policy_statement_digest_for_bootstrap_jobs()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let mut policy = sample_fhe_policy();
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+
+        let err = verify_soracloud_fhe_bootstrap_key_proof(
+            &mut stx,
+            &policy,
+            policy.bootstrap_key_zero_refresh_proof_statement_digest,
+            None,
+            true,
+        )
+        .expect_err("bootstrap proof verifier must fail closed without policy statement digest");
+        assert_invalid_parameter_contains(err, "proof statement digest");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_rejects_non_bootstrap_jobs_before_decoding()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let policy = sample_fhe_policy();
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let mut proof = sample_fhe_bootstrap_key_proof(statement_hash, [0x42; Hash::LENGTH]);
+        proof.proof.proof.bytes = vec![0xA5];
+        proof.proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &proof.proof.proof.bytes,
+        )));
+
+        let err = verify_soracloud_fhe_bootstrap_key_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            false,
+        )
+        .expect_err("non-bootstrap jobs must reject bootstrap proofs before decoding");
+        assert_invalid_parameter_contains(err, "only accepted for bootstrap operations");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_rejects_statement_hash_mismatch()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let policy = sample_fhe_policy();
+        let expected_statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let proof = sample_fhe_bootstrap_key_proof(
+            Hash::new(b"wrong-bootstrap-key-proof-statement"),
+            [0x42; Hash::LENGTH],
+        );
+
+        let err = verify_soracloud_fhe_bootstrap_key_proof(
+            &mut stx,
+            &policy,
+            Some(expected_statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect_err("statement hash mismatch must reject before verifier lookup");
+        assert_invalid_parameter_contains(err, "statement hash mismatch");
+        Ok(())
+    }
+
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_envelope_uses_bootstrap_attachment_context() {
+        let policy = sample_fhe_policy();
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let proof = sample_fhe_bootstrap_key_proof(statement_hash, [0x42; Hash::LENGTH]);
+        bootstrap_key_proof_attachment_envelope(&proof.proof)
+            .expect("sample bootstrap-key proof envelope must decode");
+
+        let mut unsupported_backend = proof.proof.clone();
+        unsupported_backend.backend = "stark/fri/debug-proof".into();
+        unsupported_backend.proof.backend = unsupported_backend.backend.clone();
+        unsupported_backend.vk_ref = iroha_data_model::proof::VerifyingKeyId::new(
+            unsupported_backend.backend.as_str(),
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        );
+        let err = bootstrap_key_proof_attachment_envelope(&unsupported_backend)
+            .expect_err("bootstrap-key proof decoder must reject unsupported STARK labels");
+        assert_invalid_parameter_contains(err, "bootstrap-key proof requires");
+
+        let mut forged_envelope_hash = proof.proof.clone();
+        forged_envelope_hash.envelope_hash =
+            Some(<[u8; Hash::LENGTH]>::from(Hash::new(b"forged-envelope")));
+        let err = bootstrap_key_proof_attachment_envelope(&forged_envelope_hash)
+            .expect_err("bootstrap-key proof decoder must reject forged envelope hashes");
+        match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => {
+                assert!(message.contains("invalid FHE bootstrap-key proof attachment"));
+                assert!(message.contains("envelope_hash must match proof bytes"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        assert_eq!(
+            FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT.max_open_verify_bytes,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES
+        );
+        let oversized_outer = proof.proof.clone();
+        let oversized_context = SoracloudFheProofAttachmentDecodeContext {
+            max_open_verify_bytes: oversized_outer.proof.bytes.len() - 1,
+            ..FHE_BOOTSTRAP_KEY_PROOF_ATTACHMENT_CONTEXT
+        };
+        let envelope = bootstrap_key_proof_attachment_envelope(&oversized_outer)
+            .expect("sample bootstrap-key proof envelope must fit the production cap");
+        drop(envelope);
+        let err = proof_attachment_envelope_with_context(&oversized_outer, &oversized_context)
+            .expect_err("bootstrap-key proof decoder must use bootstrap OpenVerify cap");
+        assert_invalid_parameter_contains(err, "FHE bootstrap-key proof OpenVerifyEnvelope length");
+    }
+
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_rejects_unverified_fake_proof() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let policy = sample_fhe_policy();
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let (_vk_id, vk_commitment) =
+            install_fhe_bootstrap_key_verifier_record(&mut stx, sample_fhe_bootstrap_key_vk_box());
+        let proof = sample_fhe_bootstrap_key_proof(statement_hash, vk_commitment);
+
+        let err = verify_soracloud_fhe_bootstrap_key_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect_err("active verifier must still reject an unverified fake proof");
+        assert_invalid_parameter_contains(err, "proof verification failed");
+        Ok(())
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    #[test]
+    fn soracloud_fhe_bootstrap_key_proof_accepts_preverified_active_verifier()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let policy = sample_fhe_policy();
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let (_vk_id, vk_commitment) =
+            install_fhe_bootstrap_key_verifier_record(&mut stx, sample_fhe_bootstrap_key_vk_box());
+        let proof = sample_fhe_bootstrap_key_proof(statement_hash, vk_commitment);
+        stx.apply();
+        state_block
+            .set_preverified_batch(preverified_bootstrap_key_proof_map(&proof, vk_commitment));
+        let mut stx = state_block.transaction();
+
+        verify_soracloud_fhe_bootstrap_key_proof(
+            &mut stx,
+            &policy,
+            Some(statement_hash),
+            Some(&proof),
+            true,
+        )
+        .expect("active verifier and preverified proof must be accepted");
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn soracloud_fhe_bootstrap_key_proof_rejects_verifier_record_metadata_drift()
+    -> Result<(), eyre::Report> {
+        #[derive(Clone, Copy)]
+        enum VerifierTamper {
+            Status,
+            Namespace,
+            Backend,
+            Curve,
+            PublicInputs,
+            CircuitId,
+            Version,
+            MissingGasSchedule,
+            InactiveCircuitMapping,
+            MaxProofBytes,
+            MissingKey,
+            VkLen,
+            Commitment,
+        }
+
+        for (tamper, expected_error) in [
+            (VerifierTamper::Status, "verifying key is not active"),
+            (VerifierTamper::Namespace, "soracloud namespace"),
+            (VerifierTamper::Backend, "must use STARK backend"),
+            (VerifierTamper::Curve, "goldilocks STARK field"),
+            (VerifierTamper::PublicInputs, "public-input schema mismatch"),
+            (VerifierTamper::CircuitId, "canonical v1 circuit"),
+            (VerifierTamper::Version, "canonical v1 circuit version"),
+            (
+                VerifierTamper::MissingGasSchedule,
+                "missing gas_schedule_id",
+            ),
+            (
+                VerifierTamper::InactiveCircuitMapping,
+                "circuit/version not active",
+            ),
+            (VerifierTamper::MaxProofBytes, "max_proof_bytes"),
+            (VerifierTamper::MissingKey, "verifying key bytes missing"),
+            (VerifierTamper::VkLen, "vk_len mismatch"),
+            (
+                VerifierTamper::Commitment,
+                "verifying-key commitment mismatch",
+            ),
+        ] {
+            let kura = Kura::blank_kura_for_testing();
+            let state = state_with_soracloud_permission(&kura)?;
+            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+                .as_ref()
+                .header();
+            let mut state_block = state.block(block_header);
+            let mut stx = state_block.transaction();
+            let policy = sample_fhe_policy();
+            let statement_hash = policy
+                .bootstrap_key_zero_refresh_proof_statement_digest
+                .expect("sample policy binds bootstrap-key proof statement");
+            let vk_box = sample_fhe_bootstrap_key_vk_box();
+            let (vk_id, vk_commitment) =
+                install_fhe_bootstrap_key_verifier_record(&mut stx, vk_box.clone());
+
+            match tamper {
+                VerifierTamper::Status => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .status = ConfidentialStatus::Withdrawn;
+                }
+                VerifierTamper::Namespace => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .namespace = "other".to_string();
+                }
+                VerifierTamper::Backend => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .backend = BackendTag::Groth16;
+                }
+                VerifierTamper::Curve => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .curve = "bn254".to_string();
+                }
+                VerifierTamper::PublicInputs => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .public_inputs_schema_hash = [0xA7; Hash::LENGTH];
+                }
+                VerifierTamper::CircuitId => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .circuit_id = "soracloud_fhe_bootstrap_key_proof_v2".to_string();
+                }
+                VerifierTamper::Version => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .version = u32::from(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1) + 1;
+                }
+                VerifierTamper::MissingGasSchedule => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .gas_schedule_id = None;
+                }
+                VerifierTamper::InactiveCircuitMapping => {
+                    stx.world.verifying_keys_by_circuit.remove((
+                        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1.to_string(),
+                        u32::from(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1),
+                    ));
+                }
+                VerifierTamper::MaxProofBytes => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .max_proof_bytes = 1;
+                }
+                VerifierTamper::MissingKey => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .key = None;
+                }
+                VerifierTamper::VkLen => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .vk_len = u32::try_from(vk_box.bytes.len())
+                        .expect("VK length fits")
+                        .saturating_add(1);
+                }
+                VerifierTamper::Commitment => {
+                    stx.world
+                        .verifying_keys
+                        .get_mut(&vk_id)
+                        .expect("registered bootstrap verifier")
+                        .commitment = [0xA8; Hash::LENGTH];
+                }
+            }
+
+            let proof = sample_fhe_bootstrap_key_proof(statement_hash, vk_commitment);
+            let err = verify_soracloud_fhe_bootstrap_key_proof(
+                &mut stx,
+                &policy,
+                Some(statement_hash),
+                Some(&proof),
+                true,
+            )
+            .expect_err("metadata-drifted bootstrap verifier must fail closed");
+            match tamper {
+                VerifierTamper::MaxProofBytes => {
+                    assert_invalid_parameter_contains(err, expected_error);
+                }
+                _ => assert_invariant_contains(err, expected_error),
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -17219,6 +18199,7 @@ mod tests {
         param_set: FheParamSetV1,
         evaluation_keys: BfvEvaluationKeyBundle,
         evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
+        bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
         governance_tx_hash: Hash,
     ) -> ManifestProvenance {
         let payload = encode_fhe_job_run_provenance_payload(
@@ -17229,6 +18210,7 @@ mod tests {
             param_set,
             evaluation_keys,
             evaluation_key_refresh_transcript,
+            bootstrap_key_zero_refresh_proof,
             governance_tx_hash,
         )
         .expect("fhe job payload");
@@ -17236,6 +18218,81 @@ mod tests {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
         }
+    }
+
+    #[test]
+    fn fhe_job_provenance_binds_bootstrap_key_proof_option() {
+        let service_name: Name = "portal".parse().expect("valid");
+        let binding_name: Name = "vault".parse().expect("valid");
+        let input_1_payload = b"input-1";
+        let input_2_payload = b"input-2";
+        let job = sample_fhe_job(vec![
+            sample_fhe_input_ref("/state/private/input-1", input_1_payload),
+            sample_fhe_input_ref("/state/private/input-2", input_2_payload),
+        ]);
+        let policy = sample_fhe_policy();
+        let param_set = sample_fhe_param_set();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
+        let governance_tx_hash = Hash::new(b"gov-fhe-bootstrap-proof-provenance");
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let proof = sample_fhe_bootstrap_key_proof(statement_hash, [0x52; Hash::LENGTH]);
+
+        let signed_with_proof = fhe_job_provenance(
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            Some(proof.clone()),
+            governance_tx_hash,
+        );
+        let err = verify_fhe_job_run_provenance(
+            &ALICE_ID,
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            governance_tx_hash,
+            &signed_with_proof,
+        )
+        .expect_err("stripping a signed bootstrap-key proof must break provenance");
+        assert_invalid_parameter_contains(err, "signature verification failed");
+
+        let signed_without_proof = fhe_job_provenance(
+            &service_name,
+            &binding_name,
+            job.clone(),
+            policy.clone(),
+            param_set.clone(),
+            evaluation_keys.clone(),
+            evaluation_key_refresh_transcript.clone(),
+            None,
+            governance_tx_hash,
+        );
+        let err = verify_fhe_job_run_provenance(
+            &ALICE_ID,
+            &service_name,
+            &binding_name,
+            job,
+            policy,
+            param_set,
+            evaluation_keys,
+            evaluation_key_refresh_transcript,
+            Some(proof),
+            governance_tx_hash,
+            &signed_without_proof,
+        )
+        .expect_err("injecting an unsigned bootstrap-key proof must break provenance");
+        assert_invalid_parameter_contains(err, "signature verification failed");
     }
 
     fn sample_decryption_policy() -> DecryptionAuthorityPolicyV1 {
@@ -20738,6 +21795,41 @@ mod tests {
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
         let evaluation_key_refresh_transcript = sample_bfv_refresh_transcript();
         let governance_tx_hash = Hash::new(b"gov-fhe");
+        let statement_hash = policy
+            .bootstrap_key_zero_refresh_proof_statement_digest
+            .expect("sample policy binds bootstrap-key proof statement");
+        let mut out_of_scope_proof =
+            sample_fhe_bootstrap_key_proof(statement_hash, [0x42; Hash::LENGTH]);
+        out_of_scope_proof.proof.proof.bytes = vec![0xA5];
+        out_of_scope_proof.proof.envelope_hash = Some(<[u8; Hash::LENGTH]>::from(Hash::new(
+            &out_of_scope_proof.proof.proof.bytes,
+        )));
+        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
+            service_name: service_name.clone(),
+            binding_name: binding_name.clone(),
+            job: job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: Some(out_of_scope_proof.clone()),
+            governance_tx_hash,
+            provenance: fhe_job_provenance(
+                &service_name,
+                &binding_name,
+                job.clone(),
+                policy.clone(),
+                param_set.clone(),
+                evaluation_keys.clone(),
+                evaluation_key_refresh_transcript.clone(),
+                Some(out_of_scope_proof),
+                governance_tx_hash,
+            ),
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("non-bootstrap FHE jobs must reject out-of-scope bootstrap proofs");
+        assert_invalid_parameter_contains(err, "only accepted for bootstrap operations");
+
         iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
             service_name: service_name.clone(),
             binding_name: binding_name.clone(),
@@ -20746,6 +21838,7 @@ mod tests {
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -20755,6 +21848,7 @@ mod tests {
                 param_set.clone(),
                 evaluation_keys,
                 evaluation_key_refresh_transcript,
+                None,
                 governance_tx_hash,
             ),
         })
@@ -20887,6 +21981,16 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         policy.evaluation_key_refresh_transcript_digest = refresh_digest;
         policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
+            evaluation_key_refresh_transcript
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                    &params,
+                    &evaluation_keys,
+                    BfvRefreshTranscriptModeV1::BoundedNoise,
+                )
+                .expect("bounded bootstrap-key proof statement digest")
+                .expect("bounded sample carries bootstrap key"),
+        );
         let param_set = sample_fhe_param_set();
         let governance_tx_hash = Hash::new(b"gov-fhe-bounded-add");
         iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
@@ -20897,6 +22001,7 @@ mod tests {
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
@@ -20906,6 +22011,7 @@ mod tests {
                 param_set,
                 evaluation_keys,
                 evaluation_key_refresh_transcript,
+                None,
                 governance_tx_hash,
             ),
         })
@@ -21105,10 +22211,41 @@ mod tests {
             .expect("bounded-noise evaluation-key digest");
         policy.evaluation_key_refresh_transcript_digest = refresh_digest;
         policy.refresh_transcript_mode = BfvRefreshTranscriptModeV1::BoundedNoise;
+        policy.bootstrap_key_zero_refresh_proof_statement_digest = Some(
+            evaluation_key_refresh_transcript
+                .bootstrap_key_zero_refresh_proof_statement_digest_for_evaluation_keys_with_mode(
+                    &params,
+                    &evaluation_keys,
+                    BfvRefreshTranscriptModeV1::BoundedNoise,
+                )
+                .expect("bounded bootstrap-key proof statement digest")
+                .expect("bounded sample carries bootstrap key"),
+        );
         policy.max_rotation_count =
             NonZeroU32::new(u32::from(params.polynomial_degree)).expect("nonzero rotation budget");
         policy.max_bootstrap_count = 2;
         let param_set = sample_fhe_param_set();
+        #[cfg(feature = "zk-preverify")]
+        let bootstrap_key_proof = {
+            let bootstrap_statement_hash = policy
+                .bootstrap_key_zero_refresh_proof_statement_digest
+                .expect("bootstrap-capable policy binds statement hash");
+            let (_bootstrap_vk_id, bootstrap_vk_commitment) =
+                install_fhe_bootstrap_key_verifier_record(
+                    &mut stx,
+                    sample_fhe_bootstrap_key_vk_box(),
+                );
+            let proof =
+                sample_fhe_bootstrap_key_proof(bootstrap_statement_hash, bootstrap_vk_commitment);
+            stx.apply();
+            state_block.set_preverified_batch(preverified_bootstrap_key_proof_map(
+                &proof,
+                bootstrap_vk_commitment,
+            ));
+            proof
+        };
+        #[cfg(feature = "zk-preverify")]
+        let mut stx = state_block.transaction();
 
         let mut multiply_job = sample_fhe_job(vec![
             sample_fhe_input_ref("/state/private/bounded-mul-left", &multiply_lhs_payload),
@@ -21128,27 +22265,43 @@ mod tests {
         packed_job.operation = FheJobOperationV1::RotateLeft;
         packed_job.rotation_steps = packed_rotation_steps;
 
+        #[cfg(feature = "zk-preverify")]
         let mut bootstrap_job = sample_fhe_job(vec![sample_fhe_input_ref(
             "/state/private/bounded-bootstrap",
             &bootstrap_payload,
         )]);
-        bootstrap_job.job_id = "bounded-bootstrap-job".to_string();
-        bootstrap_job.output_state_key = "/state/private/bounded-bootstrap-output".to_string();
-        bootstrap_job.operation = FheJobOperationV1::Bootstrap;
-        bootstrap_job.bootstrap_count = 2;
+        #[cfg(feature = "zk-preverify")]
+        {
+            bootstrap_job.job_id = "bounded-bootstrap-job".to_string();
+            bootstrap_job.output_state_key = "/state/private/bounded-bootstrap-output".to_string();
+            bootstrap_job.operation = FheJobOperationV1::Bootstrap;
+            bootstrap_job.bootstrap_count = 2;
+        }
 
-        for (job, governance_seed) in [
+        let jobs = vec![
             (multiply_job.clone(), b"gov-fhe-bounded-multiply".as_slice()),
             (
                 packed_job.clone(),
                 b"gov-fhe-bounded-packed-rotate".as_slice(),
             ),
-            (
+        ];
+        #[cfg(feature = "zk-preverify")]
+        let jobs = {
+            let mut jobs = jobs;
+            jobs.push((
                 bootstrap_job.clone(),
                 b"gov-fhe-bounded-bootstrap".as_slice(),
-            ),
-        ] {
+            ));
+            jobs
+        };
+
+        for (job, governance_seed) in jobs {
             let governance_tx_hash = Hash::new(governance_seed);
+            #[cfg(feature = "zk-preverify")]
+            let bootstrap_key_zero_refresh_proof =
+                (job.bootstrap_count > 0).then(|| bootstrap_key_proof.clone());
+            #[cfg(not(feature = "zk-preverify"))]
+            let bootstrap_key_zero_refresh_proof = None;
             iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
                 service_name: service_name.clone(),
                 binding_name: binding_name.clone(),
@@ -21157,6 +22310,7 @@ mod tests {
                 param_set: param_set.clone(),
                 evaluation_keys: evaluation_keys.clone(),
                 evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+                bootstrap_key_zero_refresh_proof: bootstrap_key_zero_refresh_proof.clone(),
                 governance_tx_hash,
                 provenance: fhe_job_provenance(
                     &service_name,
@@ -21166,6 +22320,7 @@ mod tests {
                     param_set.clone(),
                     evaluation_keys.clone(),
                     evaluation_key_refresh_transcript.clone(),
+                    bootstrap_key_zero_refresh_proof,
                     governance_tx_hash,
                 ),
             })
@@ -21281,59 +22436,62 @@ mod tests {
             expected_packed_slots
         );
 
-        let bootstrap_entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                bootstrap_job.output_state_key.clone(),
-            ))
-            .expect("bounded bootstrap output entry");
-        assert_eq!(
-            bootstrap_entry.encryption,
-            SoraStateEncryptionV1::FheCiphertext
-        );
-        assert_eq!(
-            bootstrap_entry.payload_bytes.get(),
-            u64::try_from(bootstrap_entry.payload.len()).expect("payload len fits u64")
-        );
-        assert_eq!(
-            bootstrap_entry.payload_commitment,
-            Hash::new(&bootstrap_entry.payload)
-        );
-        assert_eq!(
-            bootstrap_entry.source_action,
-            SoraServiceLifecycleActionV1::FheJobRun
-        );
-        assert_eq!(
-            bootstrap_entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::BoundedNoise)
-        );
-        assert_eq!(
-            bootstrap_entry.fhe_residual_multiple_bound,
-            Some(
-                bfv_bootstrap_key_refresh_bounded_noise_output_bound(
-                    &params,
-                    evaluation_keys
-                        .bootstrap_key
-                        .as_ref()
-                        .expect("bounded bootstrap key"),
-                    fresh_bound,
-                    bootstrap_job.bootstrap_count,
+        #[cfg(feature = "zk-preverify")]
+        {
+            let bootstrap_entry = world
+                .soracloud_service_state_entries()
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    binding_name.as_ref().to_owned(),
+                    bootstrap_job.output_state_key.clone(),
+                ))
+                .expect("bounded bootstrap output entry");
+            assert_eq!(
+                bootstrap_entry.encryption,
+                SoraStateEncryptionV1::FheCiphertext
+            );
+            assert_eq!(
+                bootstrap_entry.payload_bytes.get(),
+                u64::try_from(bootstrap_entry.payload.len()).expect("payload len fits u64")
+            );
+            assert_eq!(
+                bootstrap_entry.payload_commitment,
+                Hash::new(&bootstrap_entry.payload)
+            );
+            assert_eq!(
+                bootstrap_entry.source_action,
+                SoraServiceLifecycleActionV1::FheJobRun
+            );
+            assert_eq!(
+                bootstrap_entry.fhe_bound_mode,
+                Some(BfvCiphertextBoundModeV1::BoundedNoise)
+            );
+            assert_eq!(
+                bootstrap_entry.fhe_residual_multiple_bound,
+                Some(
+                    bfv_bootstrap_key_refresh_bounded_noise_output_bound(
+                        &params,
+                        evaluation_keys
+                            .bootstrap_key
+                            .as_ref()
+                            .expect("bounded bootstrap key"),
+                        fresh_bound,
+                        bootstrap_job.bootstrap_count,
+                    )
+                    .expect("bounded bootstrap output bound")
                 )
-                .expect("bounded bootstrap output bound")
-            )
-        );
-        let bootstrap_output = decode_soracloud_fhe_envelope(&bootstrap_entry.payload)?;
-        let bootstrap_plaintext = bootstrap_output
-            .slots
-            .iter()
-            .map(|slot| {
-                decrypt_bounded_noise(&params, &secret_key, slot)
-                    .expect("decrypt bounded bootstrap output")[0]
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(bootstrap_plaintext, vec![9, 11]);
+            );
+            let bootstrap_output = decode_soracloud_fhe_envelope(&bootstrap_entry.payload)?;
+            let bootstrap_plaintext = bootstrap_output
+                .slots
+                .iter()
+                .map(|slot| {
+                    decrypt_bounded_noise(&params, &secret_key, slot)
+                        .expect("decrypt bounded bootstrap output")[0]
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(bootstrap_plaintext, vec![9, 11]);
+        }
         Ok(())
     }
 
@@ -21426,15 +22584,17 @@ mod tests {
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
                 &binding_name,
                 job,
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
+                policy.clone(),
+                param_set.clone(),
+                evaluation_keys.clone(),
+                evaluation_key_refresh_transcript.clone(),
+                None,
                 governance_tx_hash,
             ),
         })
@@ -21478,6 +22638,8 @@ mod tests {
         let binding_name: Name = "vault".parse().expect("valid");
         let input_key = "/state/private/bounded-input";
         let input_payload = sample_fhe_payload(b"alice", b"seed-bounded-noise-job-input");
+        let exact_input_key = "/state/private/exact-input";
+        let exact_input_payload = sample_fhe_payload(b"bob", b"seed-exact-job-input");
         let input_residual_bound =
             bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
                 .expect("fresh input residual bound");
@@ -21503,10 +22665,33 @@ mod tests {
                 source_action: SoraServiceLifecycleActionV1::StateMutation,
             },
         )?;
+        record_service_state_entry(
+            &mut stx,
+            SoraServiceStateEntryV1 {
+                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: "1.0.0".to_string(),
+                binding_name: binding_name.clone(),
+                state_key: exact_input_key.to_string(),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                payload_bytes: NonZeroU64::new(
+                    u64::try_from(exact_input_payload.len()).expect("payload len"),
+                )
+                .expect("nonzero"),
+                payload_commitment: Hash::new(&exact_input_payload),
+                payload: exact_input_payload.clone(),
+                fhe_residual_multiple_bound: Some(input_residual_bound),
+                fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
+                last_update_sequence: 2,
+                governance_tx_hash: Hash::new(b"exact-input-state"),
+                source_action: SoraServiceLifecycleActionV1::StateMutation,
+            },
+        )?;
 
-        let mut job = sample_fhe_job(vec![sample_fhe_input_ref(input_key, &input_payload)]);
-        job.operation = FheJobOperationV1::Bootstrap;
-        job.bootstrap_count = 1;
+        let job = sample_fhe_job(vec![
+            sample_fhe_input_ref(input_key, &input_payload),
+            sample_fhe_input_ref(exact_input_key, &exact_input_payload),
+        ]);
         let policy = sample_fhe_policy();
         let param_set = sample_fhe_param_set();
         let evaluation_keys = sample_bfv_evaluation_key_bundle();
@@ -21520,15 +22705,17 @@ mod tests {
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
                 &binding_name,
                 job,
-                policy,
-                param_set,
-                evaluation_keys,
-                evaluation_key_refresh_transcript,
+                policy.clone(),
+                param_set.clone(),
+                evaluation_keys.clone(),
+                evaluation_key_refresh_transcript.clone(),
+                None,
                 governance_tx_hash,
             ),
         })
@@ -21614,16 +22801,74 @@ mod tests {
             param_set: param_set.clone(),
             evaluation_keys: evaluation_keys.clone(),
             evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
             governance_tx_hash,
             provenance: fhe_job_provenance(
                 &service_name,
                 &binding_name,
                 job,
+                policy.clone(),
+                param_set.clone(),
+                evaluation_keys.clone(),
+                evaluation_key_refresh_transcript.clone(),
+                None,
+                governance_tx_hash,
+            ),
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("missing bootstrap proof must fail before persisted input decode");
+        assert_invalid_parameter_contains(err, "requires bootstrap-key proof");
+
+        let exact_input_key = "/state/private/exact-input";
+        let exact_input_payload = sample_fhe_payload(b"bob", b"seed-exact-oversized-job-input");
+        record_service_state_entry(
+            &mut stx,
+            SoraServiceStateEntryV1 {
+                schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: "1.0.0".to_string(),
+                binding_name: binding_name.clone(),
+                state_key: exact_input_key.to_string(),
+                encryption: SoraStateEncryptionV1::FheCiphertext,
+                payload_bytes: NonZeroU64::new(
+                    u64::try_from(exact_input_payload.len()).expect("payload len"),
+                )
+                .expect("nonzero"),
+                payload_commitment: Hash::new(&exact_input_payload),
+                payload: exact_input_payload.clone(),
+                fhe_residual_multiple_bound: Some(input_residual_bound),
+                fhe_bound_mode: Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
+                last_update_sequence: 2,
+                governance_tx_hash: Hash::new(b"exact-oversized-input-state"),
+                source_action: SoraServiceLifecycleActionV1::StateMutation,
+            },
+        )?;
+
+        let add_job = sample_fhe_job(vec![
+            sample_fhe_input_ref(input_key, &input_payload),
+            sample_fhe_input_ref(exact_input_key, &exact_input_payload),
+        ]);
+        let add_governance_tx_hash = Hash::new(b"gov-fhe-oversized-input-add");
+        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
+            service_name: service_name.clone(),
+            binding_name: binding_name.clone(),
+            job: add_job.clone(),
+            policy: policy.clone(),
+            param_set: param_set.clone(),
+            evaluation_keys: evaluation_keys.clone(),
+            evaluation_key_refresh_transcript: evaluation_key_refresh_transcript.clone(),
+            bootstrap_key_zero_refresh_proof: None,
+            governance_tx_hash: add_governance_tx_hash,
+            provenance: fhe_job_provenance(
+                &service_name,
+                &binding_name,
+                add_job,
                 policy,
                 param_set,
                 evaluation_keys,
                 evaluation_key_refresh_transcript,
-                governance_tx_hash,
+                None,
+                add_governance_tx_hash,
             ),
         })
         .execute(&ALICE_ID, &mut stx)

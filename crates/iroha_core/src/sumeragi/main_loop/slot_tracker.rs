@@ -3,6 +3,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
+    ops::{Deref, DerefMut},
     time::{Duration, Instant},
 };
 
@@ -319,6 +320,29 @@ impl FrontierSlot {
         matches!(self.candidate.body_state, FrontierBodyState::Missing)
     }
 
+    pub(super) fn body_present(&self) -> bool {
+        matches!(self.candidate.body_state, FrontierBodyState::Available)
+    }
+
+    pub(super) fn mark_body_available(&mut self, now: Instant) {
+        self.candidate.body_state = FrontierBodyState::Available;
+        if matches!(
+            self.candidate.validation_state,
+            FrontierValidationState::Unknown
+        ) {
+            self.candidate.validation_state = FrontierValidationState::Pending;
+        }
+        self.phase = FrontierSlotPhase::ValidateBody;
+        self.record_progress(now);
+        self.sync_compat_fields();
+    }
+
+    pub(super) fn take_pending_requesters(&mut self) -> BTreeSet<PeerId> {
+        let pending_requesters = std::mem::take(&mut self.repair_state.pending_requesters);
+        self.sync_compat_fields();
+        pending_requesters
+    }
+
     pub(super) fn note_local_vote_emitted(&mut self) {
         self.lock_state = FrontierOwnerLockState::LocallyVoted;
     }
@@ -479,7 +503,6 @@ impl FrontierSlot {
                         self.note_lag_if_needed(now);
                     }
                 } else {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 if let Some(requester) = requester {
@@ -497,7 +520,6 @@ impl FrontierSlot {
             } => {
                 let previous_body_missing = self.body_missing();
                 if !self.matches_candidate(block_hash, view) {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 if let Some(sender) = sender {
@@ -585,7 +607,6 @@ impl FrontierSlot {
             }
             FrontierSlotEvent::OnCommitQcObserved { block_hash, view } => {
                 if !self.matches_candidate(block_hash, view) {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 self.owner_kind = SlotOwnerKind::ExactSlotRepair;
@@ -716,7 +737,6 @@ impl FrontierSlot {
                     };
                     self.note_lag_if_needed(now);
                 } else {
-                    self.sync_compat_fields();
                     return actions;
                 }
                 if let Some(requester) = requester {
@@ -846,6 +866,20 @@ impl FrontierSlot {
 
         self.sync_compat_fields();
         actions
+    }
+}
+
+impl Deref for FrontierSlot {
+    type Target = FrontierCandidate;
+
+    fn deref(&self) -> &Self::Target {
+        &self.candidate
+    }
+}
+
+impl DerefMut for FrontierSlot {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.candidate
     }
 }
 

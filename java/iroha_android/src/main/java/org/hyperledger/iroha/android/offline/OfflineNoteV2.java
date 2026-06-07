@@ -38,6 +38,7 @@ public final class OfflineNoteV2 {
   public static final String RECURSIVE_VERIFIER_NAME = "offline-note-v2-recursive-v1";
   public static final String RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1 =
       "{\"schema\":\"offline_note_recursive\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}";
+  public static final int KEY_CERTIFICATE_VERSION = 1;
 
   private static final int MULTISIG_POLICY_VERSION_V1 = 1;
   private static final int MAX_NUMERIC_SCALE = 28;
@@ -1759,8 +1760,9 @@ public final class OfflineNoteV2 {
 
   private static void requireCertificateCore(
       final int version, final String accountId, final byte[] publicKey, final boolean oneUse) {
-    if (version != 2) {
-      throw new IllegalArgumentException("Offline Note V2 key certificate version must be 2");
+    if (version != KEY_CERTIFICATE_VERSION) {
+      throw new IllegalArgumentException(
+          "Offline Note V2 key certificate version must be " + KEY_CERTIFICATE_VERSION);
     }
     if (!oneUse) {
       throw new IllegalArgumentException("Offline Note V2 key certificate must be one-use");

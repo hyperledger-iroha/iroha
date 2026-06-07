@@ -439,7 +439,7 @@ impl StreamingKeyMaterial {
         let mut hasher = Sha3_256::new();
         hasher.update(SNAPSHOT_KEY_DOMAIN);
         hasher.update(&*private);
-        SessionKey::new(hasher.finalize().to_vec())
+        SessionKey::from_zeroizing_vec(Zeroizing::new(hasher.finalize().to_vec()))
     }
 }
 
@@ -515,6 +515,9 @@ struct X25519Ephemeral {
     public: [u8; 32],
 }
 
+type EphemeralSharedSecret = Zeroizing<[u8; 32]>;
+type OutboundEphemeralMaterial = (Vec<u8>, Option<EphemeralSharedSecret>);
+
 impl X25519Ephemeral {
     fn new_random() -> Result<Self, HandshakeError> {
         let mut secret_bytes = Zeroizing::new([0u8; 32]);
@@ -530,9 +533,12 @@ impl X25519Ephemeral {
         Self { secret, public }
     }
 
-    fn shared_secret(&self, peer: &X25519PublicKey) -> Result<[u8; 32], HandshakeError> {
+    fn shared_secret(
+        &self,
+        peer: &X25519PublicKey,
+    ) -> Result<EphemeralSharedSecret, HandshakeError> {
         let shared = self.secret.diffie_hellman(peer);
-        let mut out = [0u8; 32];
+        let mut out = Zeroizing::new([0u8; 32]);
         out.copy_from_slice(shared.as_bytes());
         if out.iter().all(|byte| *byte == 0) {
             return Err(HandshakeError::InvalidX25519EphemeralPublicKey);
@@ -1434,7 +1440,7 @@ impl StreamingSession {
     fn outbound_ephemeral_material(
         &mut self,
         suite: &EncryptionSuite,
-    ) -> Result<(Vec<u8>, Option<[u8; 32]>), HandshakeError> {
+    ) -> Result<OutboundEphemeralMaterial, HandshakeError> {
         match suite_ephemeral_mechanism(suite)? {
             EphemeralMechanism::X25519 => {
                 let eph = self.ensure_x25519_ephemeral()?;
@@ -1452,7 +1458,8 @@ impl StreamingSession {
     /// Returns the derived public key so callers can advertise it in outbound `KeyUpdate`
     /// frames.
     pub fn set_local_ephemeral_x25519(&mut self, secret_bytes: [u8; 32]) -> Vec<u8> {
-        let secret = StaticSecret::from(secret_bytes);
+        let secret_bytes = Zeroizing::new(secret_bytes);
+        let secret = StaticSecret::from(*secret_bytes);
         let eph = X25519Ephemeral::from_secret(secret);
         let public = eph.public.to_vec();
         self.local_ephemeral = Some(EphemeralState::X25519(eph));
@@ -1594,7 +1601,7 @@ impl StreamingSession {
         let transport_material = shared_secret
             .as_ref()
             .map(|shared| {
-                let sts_root = streaming_crypto::derive_sts_root(shared)?;
+                let sts_root = streaming_crypto::derive_sts_root(shared.as_ref())?;
                 let transport =
                     streaming_crypto::derive_transport_keys_from_sts_root(&sts_root, self.role)?;
                 Ok::<_, HandshakeError>((sts_root, transport))
@@ -1710,7 +1717,7 @@ impl StreamingSession {
                 .kyber_shared_secret_from_ciphertext(fingerprint, frame.pub_ephemeral.as_slice())?,
         };
 
-        let sts_root = streaming_crypto::derive_sts_root(&shared_secret_bytes)?;
+        let sts_root = streaming_crypto::derive_sts_root(shared_secret_bytes.as_ref())?;
         let transport =
             streaming_crypto::derive_transport_keys_from_sts_root(&sts_root, self.role)?;
 
@@ -1880,7 +1887,7 @@ impl StreamingSession {
     fn kyber_encapsulate(
         &self,
         _fingerprint: &Hash,
-    ) -> Result<(Vec<u8>, [u8; 32]), HandshakeError> {
+    ) -> Result<(Vec<u8>, EphemeralSharedSecret), HandshakeError> {
         let public_bytes = self
             .kyber_remote_public
             .as_ref()
@@ -1896,7 +1903,7 @@ impl StreamingSession {
             self.kem_suite.shared_secret_len()
         );
         debug_assert_eq!(ciphertext.as_bytes().len(), self.kem_suite.ciphertext_len());
-        let mut secret_bytes = [0u8; 32];
+        let mut secret_bytes = Zeroizing::new([0u8; 32]);
         secret_bytes.copy_from_slice(shared_secret.as_bytes());
         Ok((ciphertext.as_bytes().to_vec(), secret_bytes))
     }
@@ -1905,7 +1912,7 @@ impl StreamingSession {
         &self,
         fingerprint: &Hash,
         ciphertext: &[u8],
-    ) -> Result<[u8; 32], HandshakeError> {
+    ) -> Result<EphemeralSharedSecret, HandshakeError> {
         let stored_fingerprint = self
             .kyber_remote_fingerprint
             .ok_or(HandshakeError::MissingKyberRemotePublic)?;
@@ -1934,7 +1941,7 @@ impl StreamingSession {
             .map_err(|_| HandshakeError::InvalidKyberCiphertext)?;
         let shared = decapsulate_mlkem(self.kem_suite, secret_bytes.as_ref(), ciphertext)
             .map_err(|_| HandshakeError::InvalidKyberCiphertext)?;
-        let mut out = [0u8; 32];
+        let mut out = Zeroizing::new([0u8; 32]);
         out.copy_from_slice(shared.as_bytes());
         Ok(out)
     }
@@ -2046,6 +2053,8 @@ pub fn key_update_transcript_bytes(frame: &KeyUpdate) -> Result<Vec<u8>, norito:
 
 #[cfg(test)]
 mod key_update_tests {
+    use soranet_pq::generate_mlkem_keypair_from_os;
+
     use super::*;
 
     #[test]
@@ -2053,6 +2062,26 @@ mod key_update_tests {
         let ephemeral = X25519Ephemeral::new_random().expect("random x25519 ephemeral");
 
         assert_ne!(ephemeral.public, [0u8; 32]);
+    }
+
+    #[test]
+    fn snapshot_session_key_is_deterministic_and_domain_separated() {
+        let identity = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+            .expect("seeded streaming identity");
+        let material = StreamingKeyMaterial::new(identity).expect("streaming key material");
+
+        let first = material.snapshot_session_key();
+        let second = material.snapshot_session_key();
+
+        let (_, private_bytes) = material.identity().private_key().to_bytes();
+        let private = Zeroizing::new(private_bytes);
+        let mut hasher = Sha3_256::new();
+        hasher.update(SNAPSHOT_KEY_DOMAIN);
+        hasher.update(&*private);
+        let expected = hasher.finalize().to_vec();
+
+        assert_eq!(first.payload(), second.payload());
+        assert_eq!(first.payload(), expected.as_slice());
     }
 
     #[test]
@@ -2084,6 +2113,52 @@ mod key_update_tests {
             .expect("publisher transport keys");
 
         let gck_plaintext = [0xAB; GROUP_CONTENT_KEY_LEN];
+        let content_update = publisher_session
+            .build_content_key_update(&gck_plaintext, 1, 1)
+            .expect("content key update");
+        let decrypted_gck = viewer_session
+            .process_content_key_update(&content_update)
+            .expect("decrypted group content key");
+
+        assert_eq!(decrypted_gck, gck_plaintext);
+        assert_eq!(
+            publisher_session.latest_gck(),
+            Some(gck_plaintext.as_slice())
+        );
+        assert_eq!(viewer_session.latest_gck(), Some(gck_plaintext.as_slice()));
+    }
+
+    #[test]
+    fn kyber_content_key_update_roundtrips_after_key_exchange() {
+        let publisher_keys = KeyPair::try_from_seed(vec![0x6B; 32], Algorithm::Ed25519)
+            .expect("seeded publisher Ed25519 keypair");
+        let viewer_kyber = generate_mlkem_keypair_from_os(STREAMING_DEFAULT_KEM_SUITE)
+            .expect("viewer streaming ML-KEM keypair");
+        let viewer_fingerprint =
+            kyber_public_fingerprint(&viewer_kyber.public_key).expect("viewer kyber fingerprint");
+        let suite = EncryptionSuite::Kyber768XChaCha20Poly1305(viewer_fingerprint);
+        let session_id = [0xD7; 32];
+
+        let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+        publisher_session
+            .set_kyber_remote_public(viewer_fingerprint, &viewer_kyber.public_key)
+            .expect("publisher remote kyber key");
+        let publisher_update = publisher_session
+            .build_key_update(session_id, &suite, 1, 1, publisher_keys.private_key())
+            .expect("publisher key update");
+
+        let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+        viewer_session
+            .set_kyber_remote_public(viewer_fingerprint, &viewer_kyber.public_key)
+            .expect("viewer suite kyber fingerprint");
+        viewer_session
+            .set_kyber_local_key_pair(&viewer_kyber.public_key, viewer_kyber.secret_key.as_ref())
+            .expect("viewer local kyber keypair");
+        viewer_session
+            .process_remote_key_update(&publisher_update, publisher_keys.public_key())
+            .expect("viewer transport keys");
+
+        let gck_plaintext = [0xCD; GROUP_CONTENT_KEY_LEN];
         let content_update = publisher_session
             .build_content_key_update(&gck_plaintext, 1, 1)
             .expect("content key update");

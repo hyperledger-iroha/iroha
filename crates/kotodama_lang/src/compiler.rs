@@ -21,6 +21,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
     domain::DomainId,
+    escrow::EscrowId,
     isi::{
         BurnBox, ExecuteTrigger, GrantBox, InstructionBox, Log, MintBox, RegisterBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
@@ -71,9 +72,12 @@ const STATE_WILDCARD_KEY: &str = "state:*";
 const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-resolved";
 const HINT_SKIP_CONTRACT_CALL_TARGET: &str = "contract call target is not compiler-resolved";
 const HINT_SKIP_OPAQUE_ISI: &str = "opaque ISI access is not compiler-resolved";
+const HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE: &str =
+    "literal create_trigger spec could not be decoded for access metadata";
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
+const ZK_ASSET_WILDCARD_KEY: &str = "zk_asset:*";
 const NFT_COARSE_KEY: &str = "nft";
 const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 const AUTHORITY_PLACEHOLDER: &str = "$authority";
@@ -196,13 +200,17 @@ pub struct AccessHintDiagnostics {
     pub state_wildcards: usize,
     /// Number of ISI instructions that could not be resolved to concrete hints.
     pub isi_wildcards: usize,
+    /// Number of literal trigger specs that could not yield trigger access hints.
+    pub literal_trigger_spec_decode_failures: usize,
 }
 
 impl AccessHintDiagnostics {
     /// Whether any access-hint fallback occurred.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.state_wildcards == 0 && self.isi_wildcards == 0
+        self.state_wildcards == 0
+            && self.isi_wildcards == 0
+            && self.literal_trigger_spec_decode_failures == 0
     }
 }
 
@@ -566,6 +574,32 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
     Ok(raw.as_bytes().to_vec())
 }
 
+fn decode_fixed32_chunks(
+    raw: &str,
+    label: &str,
+    allow_empty: bool,
+) -> Result<Vec<[u8; 32]>, String> {
+    let bytes = decode_hex_or_raw_bytes(raw).map_err(|err| format!("{label} literal {err}"))?;
+    if bytes.is_empty() {
+        return if allow_empty {
+            Ok(Vec::new())
+        } else {
+            Err(format!("{label} must contain one or more 32-byte chunks"))
+        };
+    }
+    if bytes.len() % 32 != 0 {
+        return Err(format!("{label} must be a multiple of 32 bytes"));
+    }
+    Ok(bytes
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(chunk);
+            out
+        })
+        .collect())
+}
+
 fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
     use ir::DataRefKind as DRK;
     use iroha_primitives::json::Json;
@@ -736,14 +770,14 @@ impl Default for CompilerOptions {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use iroha_data_model::DomainId;
+    use iroha_data_model::{DomainId, asset::id::AssetDefinitionId};
 
     use super::{
         AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
-        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, HINT_SKIP_CONTRACT_CALL_TARGET, NFT_COARSE_KEY,
-        WIDE_IMM_MAX, emit_addi, emit_load64, emit_store64, patch_pointer_literal_stub,
-        pointer_type_for_kind, reserve_pointer_literal_stub, retain_taira_supported_access_key,
-        stack_slot_offset_bytes,
+        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, HINT_SKIP_CONTRACT_CALL_TARGET,
+        HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, NFT_COARSE_KEY, WIDE_IMM_MAX, emit_addi,
+        emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
+        reserve_pointer_literal_stub, retain_taira_supported_access_key, stack_slot_offset_bytes,
     };
     use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
     use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
@@ -773,6 +807,12 @@ mod tests {
 
     fn sample_account_literal() -> String {
         sample_account_id().to_string()
+    }
+
+    fn kotodama_escrow_hex(name: &str) -> String {
+        let name: iroha_data_model::name::Name = name.parse().expect("valid escrow name");
+        let id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&name);
+        hex::encode(id.as_hash().as_ref())
     }
 
     fn sample_account_id_alt() -> iroha_data_model::account::AccountId {
@@ -1275,6 +1315,162 @@ fn main() {
                 "expected {label} syscall in compiled code"
             );
         }
+    }
+
+    #[test]
+    fn native_escrow_builtins_report_literal_access_hints() {
+        let asset_def = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let src = format!(
+            r#"
+fn main() {{
+  let evidence = norito_bytes("00");
+  escrow_open_offer(name("aitai_offer"), asset_definition("{asset_def}"), 10, evidence);
+  escrow_accept(name("aitai_offer"));
+  escrow_mark_payment_sent(name("aitai_offer"));
+  escrow_release(name("aitai_offer"));
+  escrow_cancel(name("aitai_offer"));
+  escrow_open_dispute(name("aitai_offer"), evidence);
+  escrow_resolve_dispute(name("aitai_offer"), 6, 4, evidence);
+}}
+"#
+        );
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile native escrow access hints");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected native escrow access hints");
+        let escrow_hash = kotodama_escrow_hex("aitai_offer");
+        for key in [
+            format!("escrow_id:{escrow_hash}"),
+            format!("asset_escrow:{escrow_hash}"),
+            format!("asset_def:{asset_def}"),
+            format!("asset:{asset_def}:$authority"),
+        ] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn named_anonymous_escrow_builtins_report_literal_access_hints() {
+        let src = r#"
+fn main() {
+  let evidence = norito_bytes("01");
+  anonymous_escrow_accept(name("shielded_offer"));
+  anonymous_escrow_mark_payment_sent(name("shielded_offer"));
+  anonymous_escrow_open_dispute(name("shielded_offer"), evidence);
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile anonymous escrow access hints");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected anonymous escrow access hints");
+        let escrow_hash = kotodama_escrow_hex("shielded_offer");
+        for key in [
+            format!("escrow_id:{escrow_hash}"),
+            format!("anonymous_asset_escrow:{escrow_hash}"),
+        ] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn literal_anonymous_escrow_request_reports_access_hints() {
+        use iroha_data_model::{
+            asset::AssetDefinitionId,
+            isi::escrow::OpenAnonymousAssetEscrow,
+            proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+        };
+
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition");
+        let escrow_name: iroha_data_model::name::Name =
+            "shielded_offer".parse().expect("escrow name");
+        let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
+        let backend = "halo2/ipa/poly-open".to_string();
+        let proof = ProofAttachment::new_ref(
+            backend.clone(),
+            ProofBox::new(backend.clone(), vec![1, 2, 3]),
+            VerifyingKeyId::new(backend, "escrow_vk"),
+        );
+        let request = OpenAnonymousAssetEscrow::new(
+            escrow_id,
+            asset_def.clone(),
+            vec![[0x11; 32]],
+            [0x22; 32],
+            proof,
+            None,
+        );
+        let hex_payload = format!(
+            "0x{}",
+            hex::encode(norito::to_bytes(&request).expect("encode anonymous escrow request"))
+        );
+        let src = format!(
+            r#"
+fn main() {{
+  anonymous_escrow_open_offer(norito_bytes("{hex_payload}"));
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile literal anonymous escrow request");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected anonymous request access hints");
+        let escrow_hash = kotodama_escrow_hex("shielded_offer");
+        for key in [
+            format!("escrow_id:{escrow_hash}"),
+            format!("anonymous_asset_escrow:{escrow_hash}"),
+            format!("zk_asset:{asset_def}"),
+        ] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+        let asset_def_key = format!("asset_def:{asset_def}");
+        assert!(
+            hints.read_keys.contains(&asset_def_key),
+            "missing read key {asset_def_key}"
+        );
+        assert!(
+            !hints.write_keys.contains(&asset_def_key),
+            "anonymous escrow open should not write asset definition key {asset_def_key}"
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
     }
 
     #[test]
@@ -2720,16 +2916,38 @@ fn main() {
     }
 
     #[test]
-    fn fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_opaque_access() {
-        let src = r#"
-kotoage fn apply_batch() permission(Admin) {
-  let batch = norito_bytes("00");
+    fn fastpq_batch_apply_builtin_emits_batch_apply_syscall_and_exact_access() {
+        let from = sample_account_id();
+        let to = sample_account_id_alt();
+        let asset_definition: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition");
+        let batch = iroha_data_model::isi::transfer::TransferAssetBatch::new(vec![
+            iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
+                from.clone(),
+                to.clone(),
+                asset_definition.clone(),
+                7_u64,
+            ),
+            iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
+                to.clone(),
+                from.clone(),
+                asset_definition.clone(),
+                3_u64,
+            ),
+        ]);
+        let batch_hex = hex::encode(norito::to_bytes(&batch).expect("batch request"));
+        let src = format!(
+            r#"
+kotoage fn apply_batch() permission(Admin) {{
+  let batch = norito_bytes("0x{batch_hex}");
   transfer_v1_batch_apply(batch);
-}
-"#;
+}}
+"#
+        );
         let compiler = test_mode_compiler();
         let (bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
+            .compile_source_with_manifest(&src)
             .expect("compile transfer_v1_batch_apply builtin");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let code = &bytes[parsed.code_offset..];
@@ -2760,13 +2978,26 @@ kotoage fn apply_batch() permission(Admin) {
             .iter()
             .find(|entry| entry.name == "apply_batch")
             .expect("apply_batch entrypoint");
-        assert_eq!(apply_batch.access_hints_complete, Some(false));
-        assert_eq!(
-            apply_batch.access_hints_skipped,
-            vec!["opaque ISI access is not compiler-resolved".to_string()]
-        );
-        assert!(apply_batch.read_keys.is_empty());
-        assert!(apply_batch.write_keys.is_empty());
+        assert_eq!(apply_batch.access_hints_complete, Some(true));
+        assert!(apply_batch.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&apply_batch.read_keys);
+        assert_taira_supported_access_keys(&apply_batch.write_keys);
+        for account in [&from, &to] {
+            let key = super::key_asset(&iroha_data_model::asset::AssetId::of(
+                asset_definition.clone(),
+                account.clone(),
+            ));
+            assert!(
+                apply_batch.read_keys.iter().any(|actual| actual == &key),
+                "missing transfer batch read key {key}; got {:?}",
+                apply_batch.read_keys
+            );
+            assert!(
+                apply_batch.write_keys.iter().any(|actual| actual == &key),
+                "missing transfer batch write key {key}; got {:?}",
+                apply_batch.write_keys
+            );
+        }
     }
 
     #[test]
@@ -3813,6 +4044,8 @@ fn main() {
     #[test]
     fn inline_zk_builder_builtins_lower_to_ir() {
         let account = sample_account_literal();
+        let input = "00".repeat(32);
+        let outputs = format!("{}{}", "11".repeat(32), "22".repeat(32));
         let src = format!(
             r#"
 fn main() {{
@@ -3828,7 +4061,17 @@ fn main() {{
     asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
     account_id("{account}"),
     5,
-    blob("0000000000000000000000000000000000000000000000000000000000000000"),
+    blob("{input}"),
+    "halo2",
+    blob("proof"),
+    blob("vk")
+  );
+  let _unshield_with_outputs = build_unshield_inline(
+    asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+    account_id("{account}"),
+    6,
+    blob("{input}"),
+    blob("{outputs}"),
     "halo2",
     blob("proof"),
     blob("vk")
@@ -3841,7 +4084,8 @@ fn main() {{
         let ir = ir::lower(&typed).expect("lower inline builder source");
 
         let mut saw_submit = false;
-        let mut saw_unshield = false;
+        let mut saw_unshield_without_outputs = false;
+        let mut saw_unshield_with_outputs = false;
         for instr in ir
             .functions
             .iter()
@@ -3850,13 +4094,83 @@ fn main() {{
         {
             match instr {
                 ir::Instr::BuildSubmitBallotInline { .. } => saw_submit = true,
-                ir::Instr::BuildUnshieldInline { .. } => saw_unshield = true,
+                ir::Instr::BuildUnshieldInline { outputs, .. } => {
+                    if outputs.is_some() {
+                        saw_unshield_with_outputs = true;
+                    } else {
+                        saw_unshield_without_outputs = true;
+                    }
+                }
                 _ => {}
             }
         }
 
         assert!(saw_submit, "expected BuildSubmitBallotInline IR");
-        assert!(saw_unshield, "expected BuildUnshieldInline IR");
+        assert!(
+            saw_unshield_without_outputs,
+            "expected legacy BuildUnshieldInline IR"
+        );
+        assert!(
+            saw_unshield_with_outputs,
+            "expected BuildUnshieldInline IR with private change outputs"
+        );
+    }
+
+    #[test]
+    fn unshield_inline_literal_encodes_input_and_output_chunks() {
+        let asset = ir::Temp(0);
+        let to = ir::Temp(1);
+        let amount = ir::Temp(2);
+        let inputs = ir::Temp(3);
+        let outputs = ir::Temp(4);
+        let backend = ir::Temp(5);
+        let proof = ir::Temp(6);
+        let vk = ir::Temp(7);
+        let func_idx = 0;
+        let mut string_map = HashMap::new();
+        string_map.insert(
+            (func_idx, asset),
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string(),
+        );
+        string_map.insert((func_idx, to), sample_account_literal());
+        string_map.insert(
+            (func_idx, inputs),
+            format!("0x{}{}", "11".repeat(32), "12".repeat(32)),
+        );
+        string_map.insert(
+            (func_idx, outputs),
+            format!("0x{}{}", "21".repeat(32), "22".repeat(32)),
+        );
+        string_map.insert((func_idx, backend), "halo2/ipa".to_string());
+        string_map.insert((func_idx, proof), "0xab".to_string());
+        string_map.insert((func_idx, vk), "vk_unshield_outputs".to_string());
+        let mut int_const_map = HashMap::new();
+        int_const_map.insert((func_idx, amount), 7);
+
+        let raw = super::unshield_inline_instruction_literal(
+            &string_map,
+            &int_const_map,
+            func_idx,
+            asset,
+            to,
+            amount,
+            inputs,
+            Some(outputs),
+            backend,
+            proof,
+            vk,
+        )
+        .expect("fold unshield inline literal");
+        let payload = super::decode_norito_literal_payload(&raw).expect("literal payload");
+        let boxed: iroha_data_model::isi::InstructionBox =
+            norito::decode_from_bytes(&payload).expect("decode InstructionBox");
+        let unshield = boxed
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::zk::Unshield>()
+            .expect("Unshield instruction");
+        assert_eq!(unshield.public_amount(), &7u128);
+        assert_eq!(unshield.inputs().as_slice(), &[[0x11u8; 32], [0x12u8; 32]]);
+        assert_eq!(unshield.outputs().as_slice(), &[[0x21u8; 32], [0x22u8; 32]]);
     }
 
     #[test]
@@ -3876,7 +4190,7 @@ fn main() {
   let _bytes = build_unshield_inline(name("asset"), authority(), 1, blob("00"), "halo2", blob("proof"), blob("vk"));
 }
 "#,
-                "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)",
+                "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, [Blob|bytes outputs32,] string backend, Blob|bytes proof, Blob|bytes vk)",
             ),
             (
                 r#"
@@ -3884,7 +4198,7 @@ fn main() {
   let _bytes = build_unshield_inline(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), authority(), 1, blob("00"), "halo2", 1, blob("vk"));
 }
 "#,
-                "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, string backend, Blob|bytes proof, Blob|bytes vk)",
+                "build_unshield_inline expects (AssetDefinitionId, AccountId, int amount, Blob|bytes inputs32, [Blob|bytes outputs32,] string backend, Blob|bytes proof, Blob|bytes vk)",
             ),
         ] {
             let parsed = parse(src).expect("parse invalid inline builder source");
@@ -6013,6 +6327,61 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_execute_instruction_escrow_literal() {
+        use iroha_data_model::{
+            asset::AssetDefinitionId,
+            isi::{InstructionBox, escrow::OpenAssetEscrow},
+        };
+        use iroha_primitives::numeric::Numeric;
+
+        let escrow_hash = kotodama_escrow_hex("aitai_offer");
+        let escrow_name: iroha_data_model::name::Name = "aitai_offer".parse().expect("escrow name");
+        let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition");
+        let isi = InstructionBox::from(OpenAssetEscrow::new(
+            escrow_id,
+            asset_def.clone(),
+            Numeric::from(10_u64),
+        ));
+        let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
+        let hex_payload = format!("0x{}", hex::encode(bytes));
+        let src = format!(
+            r#"
+fn main() {{
+  execute_instruction(norito_bytes("{hex_payload}"));
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("compile escrow execute_instruction literal");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected escrow execute_instruction access hints");
+        for key in [
+            format!("escrow_id:{escrow_hash}"),
+            format!("asset_escrow:{escrow_hash}"),
+            format!("asset_def:{asset_def}"),
+            format!("asset:{asset_def}:$authority"),
+        ] {
+            assert!(hints.read_keys.contains(&key), "missing read key {key}");
+            assert!(hints.write_keys.contains(&key), "missing write key {key}");
+        }
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.access_hints_complete, Some(true));
+        assert!(main.access_hints_skipped.is_empty());
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_execute_instruction_details() {
         use std::str::FromStr;
 
@@ -6812,6 +7181,153 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_static_smart_contract_lifecycle_helpers() {
+        let code_hash = iroha_crypto::Hash::new(b"kotodama lifecycle access hints");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            7,
+            &sample_account_id(),
+            0,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            code_hash: Some(code_hash),
+            abi_hash: None,
+            compiler_fingerprint: Some("test".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let register_code_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode { manifest },
+            )
+            .expect("register manifest request"),
+        );
+        let register_bytes_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes {
+                    code_hash,
+                    code: vec![0, 1, 2, 3],
+                },
+            )
+            .expect("register bytes request"),
+        );
+        let activate_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
+                    contract_address: contract_address.clone(),
+                    code_hash,
+                },
+            )
+            .expect("activate request"),
+        );
+        let remove_hex = hex::encode(
+            norito::to_bytes(
+                &iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes {
+                    code_hash,
+                    reason: Some("test cleanup".to_owned()),
+                },
+            )
+            .expect("remove request"),
+        );
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn lifecycle() permission(Admin) {{
+    register_smart_contract_code(norito_bytes("0x{register_code_hex}"));
+    register_smart_contract_bytes(norito_bytes("0x{register_bytes_hex}"));
+    activate_contract_instance(norito_bytes("0x{activate_hex}"));
+    remove_smart_contract_bytes(norito_bytes("0x{remove_hex}"));
+  }}
+}}
+"#
+        );
+
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("static smart contract lifecycle helpers should have complete access hints");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected contract lifecycle access hints");
+        assert_taira_supported_access_keys(&hints.read_keys);
+        assert_taira_supported_access_keys(&hints.write_keys);
+        assert!(!hints.read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY));
+        assert!(
+            !hints
+                .write_keys
+                .iter()
+                .any(|key| key == GLOBAL_WILDCARD_KEY)
+        );
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let lifecycle = entrypoints
+            .iter()
+            .find(|entry| entry.name == "lifecycle")
+            .expect("lifecycle entrypoint");
+        assert_eq!(lifecycle.access_hints_complete, Some(true));
+        assert!(lifecycle.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&lifecycle.read_keys);
+        assert_taira_supported_access_keys(&lifecycle.write_keys);
+
+        for key in [
+            super::key_contract_code(&code_hash),
+            super::key_contract_manifest(&code_hash),
+            super::key_contract_instance(&contract_address),
+            super::key_contract_instance_code_hash(&code_hash),
+        ] {
+            assert!(
+                lifecycle.read_keys.iter().any(|actual| actual == &key),
+                "missing lifecycle read key {key}; got {:?}",
+                lifecycle.read_keys
+            );
+        }
+        for key in [
+            super::key_contract_code(&code_hash),
+            super::key_contract_manifest(&code_hash),
+            super::key_contract_instance(&contract_address),
+            super::key_contract_instance_code_hash(&code_hash),
+        ] {
+            assert!(
+                lifecycle.write_keys.iter().any(|actual| actual == &key),
+                "missing lifecycle write key {key}; got {:?}",
+                lifecycle.write_keys
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_literal_nullifier_helper() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn consume() permission(Admin) {
+    use_nullifier(42);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("literal nullifier should have complete access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let consume = entrypoints
+            .iter()
+            .find(|entry| entry.name == "consume")
+            .expect("consume entrypoint");
+        assert_eq!(consume.access_hints_complete, Some(true));
+        assert!(consume.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&consume.read_keys);
+        assert_taira_supported_access_keys(&consume.write_keys);
+        let nullifier_key = super::key_nullifier(42);
+        assert_eq!(consume.read_keys, [nullifier_key.clone()]);
+        assert_eq!(consume.write_keys, [nullifier_key]);
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_static_peer_helpers() {
         let public_key = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
         let peer = iroha_data_model::peer::PeerId::from(
@@ -7292,6 +7808,32 @@ seiyaku Test {{
                     .expect("authority literal"),
             )
         );
+    }
+
+    #[test]
+    fn manifest_trigger_decl_preserves_namespaced_callback() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn arm() {}
+  register_trigger wake {
+    call callee::run;
+    on time pre_commit;
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let arm = entrypoints
+            .iter()
+            .find(|entry| entry.name == "arm")
+            .expect("arm entrypoint");
+        assert_eq!(arm.triggers.len(), 1);
+        let callback = &arm.triggers[0].callback;
+        assert_eq!(callback.namespace.as_deref(), Some("callee"));
+        assert_eq!(callback.entrypoint, "run");
     }
 
     #[test]
@@ -8083,6 +8625,36 @@ seiyaku Test {
     }
 
     #[test]
+    fn access_hint_diagnostics_report_literal_trigger_spec_decode_failures() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn register() permission(Admin) {
+    create_trigger(json("{\"name\":\"t1\"}"));
+  }
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (_bytes, manifest, diag) = compiler
+            .compile_source_with_manifest_and_diagnostics(src)
+            .expect("compile manifest");
+        assert_eq!(diag.literal_trigger_spec_decode_failures, 1);
+        assert_eq!(diag.isi_wildcards, 1);
+        assert_eq!(diag.state_wildcards, 0);
+        assert!(!diag.is_empty());
+
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let register = entrypoints
+            .iter()
+            .find(|entry| entry.name == "register")
+            .expect("register entrypoint");
+        assert_eq!(register.access_hints_complete, Some(false));
+        assert_eq!(
+            register.access_hints_skipped,
+            vec![HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE.to_string()]
+        );
+    }
+
+    #[test]
     fn production_rejects_incomplete_access_hints() {
         let src = r#"
 seiyaku Test {
@@ -8096,6 +8668,23 @@ seiyaku Test {
             .compile_source_with_manifest(src)
             .expect_err("production should reject incomplete access metadata");
         assert!(err.contains("E_ACCESS_INCOMPLETE"));
+    }
+
+    #[test]
+    fn production_rejects_literal_trigger_spec_decode_failures_with_hint() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn register() permission(Admin) {
+    create_trigger(json("{\"name\":\"t1\"}"));
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let err = compiler
+            .compile_source_with_manifest(src)
+            .expect_err("production should reject undecodable literal trigger specs");
+        assert!(err.contains("E_ACCESS_INCOMPLETE"));
+        assert!(err.contains(HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE));
     }
 
     #[test]
@@ -9098,6 +9687,7 @@ impl Compiler {
                         to,
                         amount,
                         inputs,
+                        outputs,
                         backend,
                         proof,
                         vk,
@@ -9110,6 +9700,7 @@ impl Compiler {
                             *to,
                             *amount,
                             *inputs,
+                            *outputs,
                             *backend,
                             *proof,
                             *vk,
@@ -9436,6 +10027,7 @@ impl Compiler {
             derive_isi_access_hints(
                 &ir_prog,
                 &string_map,
+                &int_const_map,
                 &authority_account_temps,
                 &dataref_kind_map,
                 &instruction_literal_access_map,
@@ -10018,7 +10610,7 @@ impl Compiler {
                                 })?;
                             if idx >= regalloc::ARG_REGS.len() {
                                 return Err(format!(
-                                    "too many return values in function: {} > {} (argument `{}` requires stack passing, which is not yet supported)",
+                                    "too many function parameters: {} > {} (argument `{}` exceeds the ABI v1 register argument limit)",
                                     func.params.len(),
                                     regalloc::ARG_REGS.len(),
                                     name
@@ -11084,6 +11676,7 @@ impl Compiler {
                             to,
                             amount,
                             inputs,
+                            outputs,
                             backend,
                             proof,
                             vk,
@@ -11136,24 +11729,23 @@ impl Compiler {
                                     );
                                     i18n::translate(self.lang, Message::SemanticError(&err))
                                 })?;
-                            // inputs: require exactly one 32-byte chunk
                             let inputs_literal = require_literal("inputs", inputs)?;
-                            let in_bytes =
-                                decode_hex_or_raw_bytes(&inputs_literal).map_err(|e| {
-                                    let err = format!("build_unshield_inline inputs literal {e}");
+                            let ins = decode_fixed32_chunks(&inputs_literal, "inputs", false)
+                                .map_err(|e| {
+                                    let err = format!("build_unshield_inline {e}");
                                     i18n::translate(self.lang, Message::SemanticError(&err))
                                 })?;
-                            if in_bytes.len() != 32 {
-                                let err =
-                                    "build_unshield_inline inputs must be 32 bytes".to_string();
-                                return Err(i18n::translate(
-                                    self.lang,
-                                    Message::SemanticError(&err),
-                                ));
-                            }
-                            let mut one = [0u8; 32];
-                            one.copy_from_slice(&in_bytes);
-                            let ins = vec![one];
+                            let outs = if let Some(outputs) = outputs {
+                                let outputs_literal = require_literal("outputs", outputs)?;
+                                decode_fixed32_chunks(&outputs_literal, "outputs", true).map_err(
+                                    |e| {
+                                        let err = format!("build_unshield_inline {e}");
+                                        i18n::translate(self.lang, Message::SemanticError(&err))
+                                    },
+                                )?
+                            } else {
+                                Vec::new()
+                            };
                             let backend_str = require_literal("backend", backend)?;
                             let proof_literal = require_literal("proof", proof)?;
                             let proof_bytes =
@@ -11172,7 +11764,7 @@ impl Compiler {
                                 to: acct,
                                 public_amount: amt as u128,
                                 inputs: ins,
-                                outputs: Vec::new(),
+                                outputs: outs,
                                 proof: pa,
                                 root_hint: None,
                             };
@@ -12082,6 +12674,7 @@ impl Compiler {
                                 &mut code,
                                 encode_addi(13, 0, if *returns_pointer { 1 } else { 0 })?,
                             );
+                            push_word(&mut code, encode_addi(14, 0, 1)?);
                             push_syscall(
                                 &mut code,
                                 syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
@@ -12089,6 +12682,75 @@ impl Compiler {
                             if let Some(dest) = dest {
                                 let (rd, spilled, imm) = dst_reg(dest);
                                 push_word(&mut code, encode_addi(rd, 10, 0)?);
+                                spill_back(dest, rd, spilled, imm, &mut code)?;
+                            }
+                        }
+                        Instr::InvokeEntrypointAsMulti {
+                            dests,
+                            actor,
+                            entrypoint,
+                            payload,
+                            return_pointer_mask,
+                        } => {
+                            if dests.len() > regalloc::MAX_RETURN_VALUES {
+                                return Err(format!(
+                                    "too many return values in invoke_entrypoint_as: {} > {}",
+                                    dests.len(),
+                                    regalloc::MAX_RETURN_VALUES
+                                ));
+                            }
+                            if let Some(actor_raw) = string_map.get(&(func_idx, *actor)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    10,
+                                    DataKey(DataKind::Blob, actor_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(actor, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, rs, 0)?);
+                            }
+                            if let Some(entrypoint_raw) = string_map.get(&(func_idx, *entrypoint)) {
+                                emit_literal_stub(
+                                    &mut code,
+                                    &mut fixups,
+                                    11,
+                                    DataKey(DataKind::Blob, entrypoint_raw.clone()),
+                                );
+                            } else {
+                                let rs = src_reg(entrypoint, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, rs, 0)?);
+                            }
+                            if let Some(payload_raw) = string_map.get(&(func_idx, *payload)) {
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *payload)) {
+                                    emit_literal_stub(
+                                        &mut code,
+                                        &mut fixups,
+                                        12,
+                                        data_key_for_pointer(*kind, payload_raw),
+                                    );
+                                } else {
+                                    let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                    push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                                }
+                            } else {
+                                let rs_payload = src_reg(payload, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(12, rs_payload, 0)?);
+                            }
+                            let return_pointer_mask = i16::try_from(*return_pointer_mask)
+                                .map_err(|_| "return pointer mask does not fit ADDI immediate")?;
+                            let return_count = i16::try_from(dests.len())
+                                .map_err(|_| "return count does not fit ADDI immediate")?;
+                            push_word(&mut code, encode_addi(13, 0, return_pointer_mask)?);
+                            push_word(&mut code, encode_addi(14, 0, return_count)?);
+                            push_syscall(
+                                &mut code,
+                                syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
+                            );
+                            for (idx, dest) in dests.iter().enumerate() {
+                                let source_reg = (regalloc::RET_REG + idx) as u8;
+                                let (rd, spilled, imm) = dst_reg(dest);
+                                push_word(&mut code, encode_addi(rd, source_reg, 0)?);
                                 spill_back(dest, rd, spilled, imm, &mut code)?;
                             }
                         }
@@ -15934,6 +16596,7 @@ fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
 fn derive_isi_access_hints(
     ir_prog: &ir::Program,
     string_map: &HashMap<(usize, ir::Temp), String>,
+    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
@@ -15951,6 +16614,7 @@ fn derive_isi_access_hints(
                     instr,
                     func_idx,
                     string_map,
+                    int_const_map,
                     authority_account_temps,
                     dataref_kind_map,
                     instruction_literal_access_map,
@@ -16070,6 +16734,7 @@ fn record_isi_access(
     instr: &ir::Instr,
     func_idx: usize,
     string_map: &HashMap<(usize, ir::Temp), String>,
+    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     authority_account_temps: &HashSet<(usize, ir::Temp)>,
     dataref_kind_map: &HashMap<(usize, ir::Temp), ir::DataRefKind>,
     instruction_literal_access_map: &HashMap<(usize, ir::Temp), AccessSets>,
@@ -16077,34 +16742,116 @@ fn record_isi_access(
     hint_diagnostics: &mut AccessHintDiagnostics,
     hint_skips: &mut IndexSet<String>,
 ) {
-    let mut apply_fallback =
-        |access_set: &mut AccessSets, hint_diagnostics: &mut AccessHintDiagnostics| {
-            record_hint_skip(hint_skips, HINT_SKIP_OPAQUE_ISI);
-            hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
-            access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
-            access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
-        };
+    let mut apply_fallback = |access_set: &mut AccessSets,
+                              hint_diagnostics: &mut AccessHintDiagnostics,
+                              reason: &str| {
+        record_hint_skip(hint_skips, reason);
+        hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
+        if reason == HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE {
+            hint_diagnostics.literal_trigger_spec_decode_failures = hint_diagnostics
+                .literal_trigger_spec_decode_failures
+                .saturating_add(1);
+        }
+        access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
+        access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
+    };
     match instr {
         ir::Instr::TransferBatchBegin | ir::Instr::TransferBatchEnd => {}
-        ir::Instr::TransferBatchApply { .. } => {
-            apply_fallback(access_set, hint_diagnostics);
+        ir::Instr::TransferBatchApply { payload } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_transfer_asset_batch_access(raw, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
         }
         ir::Instr::CallContract { .. } => {}
-        ir::Instr::EscrowOpenOffer { .. }
-        | ir::Instr::EscrowAccept { .. }
-        | ir::Instr::EscrowMarkPaymentSent { .. }
-        | ir::Instr::EscrowRelease { .. }
-        | ir::Instr::EscrowCancel { .. }
-        | ir::Instr::EscrowOpenDispute { .. }
-        | ir::Instr::EscrowResolveDispute { .. }
-        | ir::Instr::AnonymousEscrowOpenOffer { .. }
-        | ir::Instr::AnonymousEscrowAccept { .. }
-        | ir::Instr::AnonymousEscrowMarkPaymentSent { .. }
-        | ir::Instr::AnonymousEscrowRelease { .. }
-        | ir::Instr::AnonymousEscrowCancel { .. }
-        | ir::Instr::AnonymousEscrowOpenDispute { .. }
-        | ir::Instr::AnonymousEscrowResolveDispute { .. } => {
-            apply_fallback(access_set, hint_diagnostics)
+        ir::Instr::EscrowOpenOffer { escrow, asset, .. } => {
+            let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            let asset_definition = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset);
+            record_asset_escrow_open_access(access_set, &escrow_id, asset_definition.as_ref());
+        }
+        ir::Instr::EscrowAccept { escrow }
+        | ir::Instr::EscrowMarkPaymentSent { escrow }
+        | ir::Instr::EscrowOpenDispute { escrow, .. } => {
+            let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            record_asset_escrow_lifecycle_access(access_set, &escrow_id);
+        }
+        ir::Instr::EscrowRelease { escrow }
+        | ir::Instr::EscrowCancel { escrow }
+        | ir::Instr::EscrowResolveDispute { escrow, .. } => {
+            let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            record_asset_escrow_close_access(access_set, &escrow_id);
+        }
+        ir::Instr::AnonymousEscrowOpenOffer { request } => {
+            let Some(raw) = string_map.get(&(func_idx, *request)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_anonymous_escrow_request_access(
+                raw,
+                AnonymousEscrowRequestKind::OpenOffer,
+                access_set,
+            )
+            .is_none()
+            {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
+        }
+        ir::Instr::AnonymousEscrowRelease { request } => {
+            let Some(raw) = string_map.get(&(func_idx, *request)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_anonymous_escrow_request_access(
+                raw,
+                AnonymousEscrowRequestKind::Release,
+                access_set,
+            )
+            .is_none()
+            {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
+        }
+        ir::Instr::AnonymousEscrowCancel { request } => {
+            let Some(raw) = string_map.get(&(func_idx, *request)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_anonymous_escrow_request_access(
+                raw,
+                AnonymousEscrowRequestKind::Cancel,
+                access_set,
+            )
+            .is_none()
+            {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
+        }
+        ir::Instr::AnonymousEscrowResolveDispute { request } => {
+            let Some(raw) = string_map.get(&(func_idx, *request)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_anonymous_escrow_request_access(
+                raw,
+                AnonymousEscrowRequestKind::ResolveDispute,
+                access_set,
+            )
+            .is_none()
+            {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
+        }
+        ir::Instr::AnonymousEscrowAccept { escrow }
+        | ir::Instr::AnonymousEscrowMarkPaymentSent { escrow }
+        | ir::Instr::AnonymousEscrowOpenDispute { escrow, .. } => {
+            let Some(escrow_id) = escrow_id_from_name_temp(string_map, func_idx, *escrow) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            record_anonymous_asset_escrow_lifecycle_access(access_set, &escrow_id);
         }
         ir::Instr::TransferAsset {
             from, to, asset, ..
@@ -16144,7 +16891,7 @@ fn record_isi_access(
         }
         ir::Instr::RegisterDomain { domain } | ir::Instr::UnregisterDomain { domain } => {
             let Some(id) = parse_domain_temp(string_map, func_idx, *domain) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_domain_rw(access_set, &id);
         }
@@ -16155,7 +16902,7 @@ fn record_isi_access(
                 func_idx,
                 *account,
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_account_hint_rw(access_set, &id);
         }
@@ -16168,7 +16915,7 @@ fn record_isi_access(
                 func_idx,
                 *account,
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_account_hint_rw(access_set, &id);
         }
@@ -16190,7 +16937,7 @@ fn record_isi_access(
                 ),
                 parse_temp(string_map, func_idx, *key),
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_account_detail_hint_rw(access_set, &id, &key);
         }
@@ -16219,7 +16966,7 @@ fn record_isi_access(
                 account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *to),
                 parse_temp(string_map, func_idx, *nft),
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_account_hint_r(access_set, &from);
             add_account_hint_r(access_set, &to);
@@ -16227,13 +16974,13 @@ fn record_isi_access(
         }
         ir::Instr::RemoveTrigger { name } | ir::Instr::SetTriggerEnabled { name, .. } => {
             let Some(id) = parse_temp(string_map, func_idx, *name) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_trigger_rw(access_set, &id);
         }
         ir::Instr::CreateRole { name, .. } | ir::Instr::DeleteRole { name } => {
             let Some(id) = parse_temp(string_map, func_idx, *name) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_role_rw(access_set, &id);
         }
@@ -16247,7 +16994,7 @@ fn record_isi_access(
                 ),
                 parse_temp(string_map, func_idx, *name),
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_account_hint_rw(access_set, &account);
             add_role_r(access_set, &role);
@@ -16261,12 +17008,12 @@ fn record_isi_access(
                 func_idx,
                 *account,
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             let Some(perm) =
                 permission_name_from_token(string_map, dataref_kind_map, func_idx, *token)
             else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_account_hint_rw(access_set, &account);
             add_permission_account_hint_w(access_set, &account, &perm);
@@ -16299,10 +17046,14 @@ fn record_isi_access(
         }
         ir::Instr::CreateTrigger { json } => {
             let Some(raw) = string_map.get(&(func_idx, *json)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             let Some(id) = trigger_id_from_json(raw) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(
+                    access_set,
+                    hint_diagnostics,
+                    HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE,
+                );
             };
             add_trigger_rw(access_set, &id);
         }
@@ -16312,25 +17063,25 @@ fn record_isi_access(
                 return;
             }
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             let Some(isi) = decode_instruction_box_literal(raw) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             if record_instruction_box_access(&isi, access_set).is_none() {
-                apply_fallback(access_set, hint_diagnostics);
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
         ir::Instr::VendorExecuteQuery { payload, .. }
         | ir::Instr::QueryExecuteNorito { payload, .. } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             let Some(request) = decode_query_request_literal(raw) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             if record_query_request_access(&request, access_set).is_none() {
-                apply_fallback(access_set, hint_diagnostics);
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
         ir::Instr::QueryGet { key, syscall, .. } => {
@@ -16344,7 +17095,7 @@ fn record_isi_access(
             )
             .is_none()
             {
-                apply_fallback(access_set, hint_diagnostics);
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
         ir::Instr::GetAccountBalance { account, asset, .. } => {
@@ -16359,7 +17110,7 @@ fn record_isi_access(
                 (Some(account), Some(asset)) => {
                     add_asset_r_for_account_hint(access_set, &asset, &account);
                 }
-                _ => apply_fallback(access_set, hint_diagnostics),
+                _ => apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI),
             }
         }
         ir::Instr::GetPublicInput { .. }
@@ -16367,34 +17118,45 @@ fn record_isi_access(
         | ir::Instr::DebugPrint { .. }
         | ir::Instr::DebugLog { .. }
         | ir::Instr::CommitOutput => {}
-        ir::Instr::UseNullifier { .. } => {
-            apply_fallback(access_set, hint_diagnostics);
+        ir::Instr::UseNullifier { nullifier } => {
+            let Some(raw) = int_const_map.get(&(func_idx, *nullifier)).copied() else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            let Ok(value) = u64::try_from(raw) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            add_nullifier_rw(access_set, value);
         }
-        ir::Instr::SmartContractLifecycle { .. } => {
-            apply_fallback(access_set, hint_diagnostics);
+        ir::Instr::SmartContractLifecycle { payload, syscall } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            if record_smart_contract_lifecycle_access(raw, *syscall, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            }
         }
         ir::Instr::ZkRootsGet { payload, .. } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             if record_zk_roots_get_access(raw, access_set).is_none() {
-                apply_fallback(access_set, hint_diagnostics);
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
         ir::Instr::ZkVoteGetTally { payload, .. } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             if record_zk_vote_get_tally_access(raw, access_set).is_none() {
-                apply_fallback(access_set, hint_diagnostics);
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
         ir::Instr::VrfEpochSeed { payload, .. } => {
             let Some(raw) = string_map.get(&(func_idx, *payload)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             if record_vrf_epoch_seed_access(raw, access_set).is_none() {
-                apply_fallback(access_set, hint_diagnostics);
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
         ir::Instr::BuildSubmitBallotInline { .. } | ir::Instr::BuildUnshieldInline { .. } => {}
@@ -16403,7 +17165,7 @@ fn record_isi_access(
                 parse_domain_temp(string_map, func_idx, *domain),
                 account_access_hint_for_temp(string_map, authority_account_temps, func_idx, *to),
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_domain_rw(access_set, &domain);
             add_account_hint_r(access_set, &to);
@@ -16421,10 +17183,10 @@ fn record_isi_access(
         }
         ir::Instr::RegisterPeer { json } | ir::Instr::UnregisterPeer { json } => {
             let Some(raw) = string_map.get(&(func_idx, *json)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             let Some(peer) = peer_id_from_json_literal(raw) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_peer_rw(access_set, &peer);
         }
@@ -16432,23 +17194,23 @@ fn record_isi_access(
         ir::Instr::SubscriptionRecordUsage => add_subscription_context_rw(access_set, "usage"),
         ir::Instr::AxtBegin { descriptor } => {
             let Some(raw) = string_map.get(&(func_idx, *descriptor)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             let Some(descriptor) = decode_axt_descriptor_literal(raw) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_axt_descriptor_access(access_set, &descriptor);
         }
         ir::Instr::AxtTouch { dsid, manifest } => {
             let Some(dsid) = parse_dataspace_temp(string_map, func_idx, *dsid) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             if let Some(manifest) = manifest {
                 let Some(raw) = string_map.get(&(func_idx, *manifest)) else {
-                    return apply_fallback(access_set, hint_diagnostics);
+                    return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
                 };
                 let Some(manifest) = decode_axt_touch_manifest_literal(raw) else {
-                    return apply_fallback(access_set, hint_diagnostics);
+                    return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
                 };
                 add_axt_touch_manifest_access(access_set, dsid, &manifest);
             } else {
@@ -16457,7 +17219,7 @@ fn record_isi_access(
         }
         ir::Instr::VerifyDsProof { dsid, .. } => {
             let Some(dsid) = parse_dataspace_temp(string_map, func_idx, *dsid) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_axt_dataspace_r(access_set, dsid);
             access_set
@@ -16469,13 +17231,13 @@ fn record_isi_access(
                 string_map.get(&(func_idx, *handle)),
                 string_map.get(&(func_idx, *intent)),
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             let (Some(handle), Some(intent)) = (
                 decode_asset_handle_literal(handle_raw),
                 decode_remote_spend_intent_literal(intent_raw),
             ) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             add_asset_handle_access(access_set, &handle, &intent);
         }
@@ -16484,18 +17246,21 @@ fn record_isi_access(
             request, syscall, ..
         } => {
             let Some(raw) = string_map.get(&(func_idx, *request)) else {
-                return apply_fallback(access_set, hint_diagnostics);
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             };
             if record_soracloud_request_access(raw, *syscall, access_set).is_none() {
-                apply_fallback(access_set, hint_diagnostics);
+                apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
         }
         ir::Instr::InvokeEntrypointAs { .. }
+        | ir::Instr::InvokeEntrypointAsMulti { .. }
         | ir::Instr::ExpectRejectAs { .. }
         | ir::Instr::ActorAccount { .. }
         | ir::Instr::ActorPublicKey { .. }
-        | ir::Instr::ActorSign { .. } => apply_fallback(access_set, hint_diagnostics),
-        _ => apply_fallback(access_set, hint_diagnostics),
+        | ir::Instr::ActorSign { .. } => {
+            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI)
+        }
+        _ => apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI),
     }
 }
 
@@ -16539,6 +17304,50 @@ fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
     let mut access = AccessSets::default();
     record_instruction_box_access(&instr, &mut access)?;
     Some(access)
+}
+
+enum AnonymousEscrowRequestKind {
+    OpenOffer,
+    Release,
+    Cancel,
+    ResolveDispute,
+}
+
+fn record_anonymous_escrow_request_access(
+    raw: &str,
+    kind: AnonymousEscrowRequestKind,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    use iroha_data_model::isi::escrow as DMEscrow;
+
+    let payload = decode_norito_literal_payload(raw)?;
+    match kind {
+        AnonymousEscrowRequestKind::OpenOffer => {
+            let request: DMEscrow::OpenAnonymousAssetEscrow =
+                norito::decode_from_bytes(&payload).ok()?;
+            record_anonymous_asset_escrow_open_access(
+                access_set,
+                &request.escrow_id,
+                &request.asset_definition,
+            );
+        }
+        AnonymousEscrowRequestKind::Release => {
+            let request: DMEscrow::ReleaseAnonymousAssetEscrow =
+                norito::decode_from_bytes(&payload).ok()?;
+            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
+        }
+        AnonymousEscrowRequestKind::Cancel => {
+            let request: DMEscrow::CancelAnonymousAssetEscrow =
+                norito::decode_from_bytes(&payload).ok()?;
+            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
+        }
+        AnonymousEscrowRequestKind::ResolveDispute => {
+            let request: DMEscrow::ResolveAnonymousEscrowDispute =
+                norito::decode_from_bytes(&payload).ok()?;
+            record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
+        }
+    }
+    Some(())
 }
 
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
@@ -16588,6 +17397,70 @@ fn record_vrf_epoch_seed_access(raw: &str, access_set: &mut AccessSets) -> Optio
     access_set.reads.insert(format!("vrf:epoch_seed:{epoch}"));
     if fallback_to_latest {
         access_set.reads.insert("vrf:epoch_seed:latest".to_owned());
+    }
+    Some(())
+}
+
+fn record_smart_contract_lifecycle_access(
+    raw: &str,
+    syscall: u32,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    use iroha_data_model::isi::smart_contract_code as DMScode;
+
+    let payload = decode_norito_literal_payload(raw)?;
+    match syscall {
+        syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
+            let request: DMScode::RegisterSmartContractCode =
+                norito::decode_from_bytes(&payload).ok()?;
+            let code_hash = request.manifest.code_hash.as_ref()?;
+            add_contract_code_r(access_set, code_hash);
+            add_contract_manifest_rw(access_set, code_hash);
+        }
+        syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
+            let request: DMScode::RegisterSmartContractBytes =
+                norito::decode_from_bytes(&payload).ok()?;
+            add_contract_code_rw(access_set, &request.code_hash);
+        }
+        syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
+            let request: DMScode::ActivateContractInstance =
+                norito::decode_from_bytes(&payload).ok()?;
+            add_contract_code_r(access_set, &request.code_hash);
+            add_contract_manifest_r(access_set, &request.code_hash);
+            add_contract_instance_rw(access_set, &request.contract_address);
+            add_contract_instance_code_hash_rw(access_set, &request.code_hash);
+        }
+        syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
+            let request: DMScode::RemoveSmartContractBytes =
+                norito::decode_from_bytes(&payload).ok()?;
+            add_contract_code_rw(access_set, &request.code_hash);
+            add_contract_manifest_r(access_set, &request.code_hash);
+            add_contract_instance_code_hash_r(access_set, &request.code_hash);
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+fn record_transfer_asset_batch_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
+    let payload = decode_norito_literal_payload(raw)?;
+    let batch: iroha_data_model::isi::transfer::TransferAssetBatch =
+        norito::decode_from_bytes(&payload).ok()?;
+    record_transfer_asset_batch_entries_access(&batch, access_set)
+}
+
+fn record_transfer_asset_batch_entries_access(
+    batch: &iroha_data_model::isi::transfer::TransferAssetBatch,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    if batch.entries().is_empty() {
+        return None;
+    }
+    for entry in batch.entries() {
+        let source = AssetId::of(entry.asset_definition().clone(), entry.from().clone());
+        let destination = AssetId::of(entry.asset_definition().clone(), entry.to().clone());
+        add_asset_rw(access_set, &source);
+        add_asset_rw(access_set, &destination);
     }
     Some(())
 }
@@ -16861,6 +17734,7 @@ fn unshield_inline_instruction_literal(
     to: ir::Temp,
     amount: ir::Temp,
     inputs: ir::Temp,
+    outputs: Option<ir::Temp>,
     backend: ir::Temp,
     proof: ir::Temp,
     vk: ir::Temp,
@@ -16876,8 +17750,12 @@ fn unshield_inline_instruction_literal(
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .ok()?;
     let public_amount = u128::try_from(*int_const_map.get(&(func_idx, amount))?).ok()?;
-    let inputs_bytes = decode_hex_or_raw_bytes(&literal(inputs)?).ok()?;
-    let input: [u8; 32] = inputs_bytes.try_into().ok()?;
+    let inputs = decode_fixed32_chunks(&literal(inputs)?, "inputs", false).ok()?;
+    let outputs = if let Some(outputs) = outputs {
+        decode_fixed32_chunks(&literal(outputs)?, "outputs", true).ok()?
+    } else {
+        Vec::new()
+    };
     let backend_str = literal(backend)?;
     let proof_bytes = decode_hex_or_raw_bytes(&literal(proof)?).ok()?;
     let vk_ref = literal(vk)?;
@@ -16890,8 +17768,8 @@ fn unshield_inline_instruction_literal(
         asset: asset_id,
         to: account,
         public_amount,
-        inputs: vec![input],
-        outputs: Vec::new(),
+        inputs,
+        outputs,
         proof,
         root_hint: None,
     };
@@ -16931,6 +17809,78 @@ fn record_instruction_box_access(
         };
         add_asset_def_detail_rw(access_set, instr.asset(), &key);
         return Some(());
+    }
+    if let Some(instr) = any.downcast_ref::<iroha_data_model::isi::transfer::TransferAssetBatch>() {
+        return record_transfer_asset_batch_entries_access(instr, access_set);
+    }
+
+    {
+        use iroha_data_model::isi::escrow as DMEscrow;
+
+        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAssetEscrow>() {
+            record_asset_escrow_open_access(
+                access_set,
+                &instr.escrow_id,
+                Some(&instr.asset_definition),
+            );
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::AcceptAssetEscrow>() {
+            record_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::MarkEscrowPaymentSent>() {
+            record_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::ReleaseAssetEscrow>() {
+            record_asset_escrow_close_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::CancelAssetEscrow>() {
+            record_asset_escrow_close_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenEscrowDispute>() {
+            record_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::ResolveEscrowDispute>() {
+            record_asset_escrow_close_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAnonymousAssetEscrow>() {
+            record_anonymous_asset_escrow_open_access(
+                access_set,
+                &instr.escrow_id,
+                &instr.asset_definition,
+            );
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::AcceptAnonymousAssetEscrow>() {
+            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::MarkAnonymousEscrowPaymentSent>() {
+            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::ReleaseAnonymousAssetEscrow>() {
+            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::CancelAnonymousAssetEscrow>() {
+            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::OpenAnonymousEscrowDispute>() {
+            record_anonymous_asset_escrow_lifecycle_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
+        if let Some(instr) = any.downcast_ref::<DMEscrow::ResolveAnonymousEscrowDispute>() {
+            record_anonymous_asset_escrow_close_access(access_set, &instr.escrow_id);
+            return Some(());
+        }
     }
 
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
@@ -17193,6 +18143,14 @@ fn parse_temp<T: ParseTempLiteral>(
     temp: ir::Temp,
 ) -> Option<T> {
     T::parse_temp_literal(string_map.get(&(func_idx, temp))?)
+}
+
+fn escrow_id_from_name_temp(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    func_idx: usize,
+    temp: ir::Temp,
+) -> Option<EscrowId> {
+    parse_temp::<Name>(string_map, func_idx, temp).map(|name| EscrowId::from_kotodama_name(&name))
 }
 
 fn parse_domain_temp(
@@ -17485,6 +18443,21 @@ fn key_asset_def(id: &AssetDefinitionId) -> String {
     format!("asset_def:{id}")
 }
 
+fn key_escrow_id(id: &EscrowId) -> String {
+    format!("escrow_id:{}", hex::encode(id.as_hash().as_ref()))
+}
+
+fn key_asset_escrow(id: &EscrowId) -> String {
+    format!("asset_escrow:{}", hex::encode(id.as_hash().as_ref()))
+}
+
+fn key_anonymous_asset_escrow(id: &EscrowId) -> String {
+    format!(
+        "anonymous_asset_escrow:{}",
+        hex::encode(id.as_hash().as_ref())
+    )
+}
+
 fn key_asset(id: &AssetId) -> String {
     format!("asset:{id}")
 }
@@ -17565,6 +18538,26 @@ fn key_zk_asset(id: &AssetDefinitionId) -> String {
 
 fn key_peer(id: &iroha_data_model::peer::PeerId) -> String {
     format!("peer:{id}")
+}
+
+fn key_contract_manifest(code_hash: &iroha_crypto::Hash) -> String {
+    format!("contract.manifest:{code_hash}")
+}
+
+fn key_contract_code(code_hash: &iroha_crypto::Hash) -> String {
+    format!("contract.code:{code_hash}")
+}
+
+fn key_contract_instance(address: &iroha_data_model::smart_contract::ContractAddress) -> String {
+    format!("contract.instance:{address}")
+}
+
+fn key_contract_instance_code_hash(code_hash: &iroha_crypto::Hash) -> String {
+    format!("contract.instance.code_hash:{code_hash}")
+}
+
+fn key_nullifier(value: u64) -> String {
+    format!("nullifier:{value}")
 }
 
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
@@ -17683,8 +18676,78 @@ fn add_zk_asset_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_zk_asset(id));
 }
 
+fn add_dynamic_zk_asset_rw(set: &mut AccessSets) {
+    set.reads.insert(ZK_ASSET_WILDCARD_KEY.to_string());
+    set.writes.insert(ZK_ASSET_WILDCARD_KEY.to_string());
+}
+
+fn add_escrow_id_rw(set: &mut AccessSets, id: &EscrowId) {
+    let key = key_escrow_id(id);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
+    add_escrow_id_rw(set, id);
+    let key = key_asset_escrow(id);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_anonymous_asset_escrow_rw(set: &mut AccessSets, id: &EscrowId) {
+    add_escrow_id_rw(set, id);
+    let key = key_anonymous_asset_escrow(id);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
 fn add_peer_rw(set: &mut AccessSets, id: &iroha_data_model::peer::PeerId) {
     let key = key_peer(id);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_manifest_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    set.reads.insert(key_contract_manifest(code_hash));
+}
+
+fn add_contract_manifest_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    let key = key_contract_manifest(code_hash);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_code_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    set.reads.insert(key_contract_code(code_hash));
+}
+
+fn add_contract_code_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    let key = key_contract_code(code_hash);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_instance_rw(
+    set: &mut AccessSets,
+    address: &iroha_data_model::smart_contract::ContractAddress,
+) {
+    let key = key_contract_instance(address);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_contract_instance_code_hash_r(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    set.reads.insert(key_contract_instance_code_hash(code_hash));
+}
+
+fn add_contract_instance_code_hash_rw(set: &mut AccessSets, code_hash: &iroha_crypto::Hash) {
+    let key = key_contract_instance_code_hash(code_hash);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_nullifier_rw(set: &mut AccessSets, value: u64) {
+    let key = key_nullifier(value);
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }
@@ -17932,6 +18995,55 @@ fn add_trigger_rw(set: &mut AccessSets, id: &TriggerId) {
     set.writes.insert(key_trigger_repetitions(id));
 }
 
+fn record_asset_escrow_open_access(
+    set: &mut AccessSets,
+    escrow_id: &EscrowId,
+    asset_definition: Option<&AssetDefinitionId>,
+) {
+    add_asset_escrow_rw(set, escrow_id);
+    set.reads.insert(ACCOUNT_WILDCARD_KEY.to_string());
+    set.writes.insert(ACCOUNT_WILDCARD_KEY.to_string());
+    if let Some(asset_definition) = asset_definition {
+        add_asset_def_domain_r_if_projected(set, asset_definition);
+        add_asset_rw_for_account_hint(set, asset_definition, &AccountAccessHint::Authority);
+        add_dynamic_asset_account_rw(set, asset_definition);
+    } else {
+        add_dynamic_asset_definition_rw_for_optional_account_hint(
+            set,
+            Some(&AccountAccessHint::Authority),
+        );
+    }
+}
+
+fn record_asset_escrow_lifecycle_access(set: &mut AccessSets, escrow_id: &EscrowId) {
+    add_asset_escrow_rw(set, escrow_id);
+}
+
+fn record_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &EscrowId) {
+    add_asset_escrow_rw(set, escrow_id);
+    add_dynamic_asset_definition_rw(set);
+}
+
+fn record_anonymous_asset_escrow_open_access(
+    set: &mut AccessSets,
+    escrow_id: &EscrowId,
+    asset_definition: &AssetDefinitionId,
+) {
+    add_anonymous_asset_escrow_rw(set, escrow_id);
+    add_asset_def_domain_r_if_projected(set, asset_definition);
+    add_asset_def_r(set, asset_definition);
+    add_zk_asset_rw(set, asset_definition);
+}
+
+fn record_anonymous_asset_escrow_lifecycle_access(set: &mut AccessSets, escrow_id: &EscrowId) {
+    add_anonymous_asset_escrow_rw(set, escrow_id);
+}
+
+fn record_anonymous_asset_escrow_close_access(set: &mut AccessSets, escrow_id: &EscrowId) {
+    add_anonymous_asset_escrow_rw(set, escrow_id);
+    add_dynamic_zk_asset_rw(set);
+}
+
 fn instr_queues_isi(instr: &ir::Instr) -> bool {
     matches!(
         instr,
@@ -17994,6 +19106,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::VrfEpochSeed { .. }
             | ir::Instr::CallContract { .. }
             | ir::Instr::InvokeEntrypointAs { .. }
+            | ir::Instr::InvokeEntrypointAsMulti { .. }
             | ir::Instr::ExpectRejectAs { .. }
             | ir::Instr::ActorAccount { .. }
             | ir::Instr::ActorPublicKey { .. }
@@ -18072,6 +19185,32 @@ fn build_entrypoint_descriptors(
         hint_report_by_name.insert(&func.name, report);
     }
 
+    let mut trigger_anchor_names = typed
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            TypedItem::Function(func)
+                if entrypoint_kind_from_modifiers(&func.modifiers).is_some() =>
+            {
+                Some(func.name.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if trigger_anchor_names.is_empty()
+        && let Some(func) = typed.items.iter().find_map(|item| match item {
+            TypedItem::Function(func)
+                if func.modifiers.kind == FunctionKind::Free && func.name == "main" =>
+            {
+                Some(func)
+            }
+            _ => None,
+        })
+    {
+        trigger_anchor_names.push(func.name.clone());
+    }
+    let namespaced_trigger_anchor = trigger_anchor_names.first().cloned();
+
     let mut triggers_by_name: HashMap<String, Vec<TriggerDescriptor>> = HashMap::new();
     for trigger in &typed.triggers {
         let descriptor = TriggerDescriptor {
@@ -18085,8 +19224,18 @@ fn build_entrypoint_descriptors(
                 entrypoint: trigger.call.entrypoint.clone(),
             },
         };
+        let trigger_anchor = if trigger.call.namespace.is_some() {
+            namespaced_trigger_anchor.clone().ok_or_else(|| {
+                format!(
+                    "trigger `{}` has a namespaced callback but the contract has no entrypoint descriptor to carry it",
+                    trigger.id
+                )
+            })?
+        } else {
+            trigger.call.entrypoint.clone()
+        };
         triggers_by_name
-            .entry(trigger.call.entrypoint.clone())
+            .entry(trigger_anchor)
             .or_default()
             .push(descriptor);
     }

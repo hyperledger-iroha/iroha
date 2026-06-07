@@ -13,14 +13,15 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
-    account::AccountId as DMAccountId,
-    block::BlockHeader,
+    Registrable,
+    account::{Account, AccountId as DMAccountId},
+    asset::{Asset, AssetDefinition, AssetId},
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     },
 };
+use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 
 #[tokio::test]
 async fn gov_proposal_get_returns_record() {
@@ -158,32 +159,42 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
 
 #[tokio::test]
 async fn gov_council_current_uses_configured_fallback() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_store = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), kura, query_store);
-
-    state.gov.parliament_committee_size = 1;
-    state.gov.parliament_term_blocks = 5;
-    state.gov.citizenship_bond_amount = 200;
-
     let eligible_kp = KeyPair::random();
     let ineligible_kp = KeyPair::random();
     let eligible_account = DMAccountId::of(eligible_kp.public_key().clone());
     let ineligible_account = DMAccountId::of(ineligible_kp.public_key().clone());
 
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    stx.world.citizens_mut().insert(
-        eligible_account.clone(),
-        iroha_core::state::CitizenshipRecord::new(eligible_account.clone(), 500, 0),
+    let asset_definition_id =
+        iroha_config::parameters::actual::Governance::default().parliament_eligibility_asset_id;
+    let eligible_account_record = Account::new(eligible_account.clone()).build(&eligible_account);
+    let ineligible_account_record =
+        Account::new(ineligible_account.clone()).build(&eligible_account);
+    let asset_definition =
+        AssetDefinition::numeric(asset_definition_id.clone()).build(&eligible_account);
+    let eligible_asset = Asset::new(
+        AssetId::new(asset_definition_id.clone(), eligible_account.clone()),
+        Numeric::new(500, 0),
     );
-    stx.world.citizens_mut().insert(
-        ineligible_account.clone(),
-        iroha_core::state::CitizenshipRecord::new(ineligible_account.clone(), 50, 0),
+    let ineligible_asset = Asset::new(
+        AssetId::new(asset_definition_id.clone(), ineligible_account.clone()),
+        Numeric::new(50, 0),
     );
-    stx.apply();
-    block.commit().expect("commit citizen fixture block");
+
+    let world = World::with_assets(
+        std::iter::empty::<iroha_data_model::domain::Domain>(),
+        [eligible_account_record, ineligible_account_record],
+        [asset_definition],
+        [eligible_asset, ineligible_asset],
+        [],
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let query_store = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(world, kura, query_store);
+
+    state.gov.parliament_committee_size = 1;
+    state.gov.parliament_term_blocks = 5;
+    state.gov.parliament_min_stake = 200;
+    state.gov.parliament_eligibility_asset_id = asset_definition_id;
 
     let state = Arc::new(state);
     let resp = iroha_torii::handle_gov_council_current(state)

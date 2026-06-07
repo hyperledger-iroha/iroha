@@ -230,6 +230,120 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
 }
 
 #[test]
+fn wsv_unshield_routes_private_change_outputs() {
+    let caller = sample_account();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
+        "violet".parse().unwrap(),
+    );
+
+    let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(caller.clone());
+    let domain: DomainId = iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap();
+    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+    assert!(wsv.register_domain(&caller, domain));
+    wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+    assert!(wsv.register_asset_definition(&caller, asset.clone(), Mintable::Infinitely));
+    let vk_unshield = VerifyingKeyId::new("halo2/ipa", "vk_unshield_outputs");
+    wsv.insert_verifying_key(vk_unshield.clone(), vec![0x21, 0x22, 0x23, 0x24]);
+    wsv.grant_permission(&caller, PermissionToken::RegisterZkAsset(asset.clone()));
+    assert!(wsv.register_zk_asset(
+        asset.clone(),
+        ZkPolicyConfig {
+            mode: ZkAssetMode::Hybrid,
+            allow_shield: true,
+            allow_unshield: true,
+            vk_transfer: None,
+            vk_unshield: Some(vk_unshield.clone()),
+            vk_shield: None,
+        },
+    ));
+    wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
+    wsv.grant_permission(&caller, PermissionToken::ReadAccountAssets(caller.clone()));
+
+    let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+    assert_eq!(host.wsv.drain_zk_events().len(), 1);
+    let mut vm = IVM::new(u64::MAX);
+
+    let env_bytes = build_open_verify_envelope_bytes(8);
+    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &env_bytes);
+    let p_env = vm.alloc_input_tlv(&tlv_env).unwrap();
+    vm.set_register(10, p_env);
+    let gas = host
+        .syscall(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD, &mut vm)
+        .expect("verify latch");
+    assert_eq!(gas, verify_gas(env_bytes.len()));
+    assert_eq!(vm.register(10), 1);
+
+    let proof_attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+        "halo2/ipa".into(),
+        iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x01]),
+        vk_unshield,
+    );
+    let unshield = json_object([
+        ("type", json_value("zk.Unshield")),
+        (
+            "payload",
+            json_object([
+                ("asset", json_value(&asset.to_string())),
+                ("to", json_value(&caller)),
+                ("public_amount", json_value(&2u64)),
+                ("inputs", json_value(&vec![vec![5u64; 32]])),
+                (
+                    "outputs",
+                    json_value(&vec![vec![9u64; 32], vec![10u64; 32]]),
+                ),
+                (
+                    "proof",
+                    norito::json::to_value(&proof_attachment).expect("proof json"),
+                ),
+                ("root_hint", norito::json::Value::Null),
+            ]),
+        ),
+    ]);
+    let unshield_bytes = norito::json::to_vec(&unshield).expect("encode unshield json");
+    let tlv = make_tlv(PointerType::Json as u16, &unshield_bytes);
+    let p = vm.alloc_input_tlv(&tlv).unwrap();
+    vm.set_register(10, p);
+    let gas = host
+        .syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+        .expect("unshield with private change outputs");
+    assert_eq!(gas, mutation_gas(json_bytes_payload_len(&unshield_bytes)));
+
+    let (_latest, roots, depth) = host.wsv.get_roots(&asset, 8);
+    assert_eq!(depth, 2);
+    assert_eq!(roots.len(), 2);
+    let events = host.wsv.drain_zk_events();
+    assert_eq!(events.len(), 3);
+    assert!(matches!(
+        &events[0],
+        ivm::mock_wsv::ZkEvent::CommitmentAdded {
+            asset: event_asset,
+            commitment,
+            new_root,
+        } if event_asset == &asset && commitment == &[9u8; 32] && new_root == &roots[0]
+    ));
+    assert!(matches!(
+        &events[1],
+        ivm::mock_wsv::ZkEvent::CommitmentAdded {
+            asset: event_asset,
+            commitment,
+            new_root,
+        } if event_asset == &asset && commitment == &[10u8; 32] && new_root == &roots[1]
+    ));
+    assert!(matches!(
+        &events[2],
+        ivm::mock_wsv::ZkEvent::Unshielded {
+            asset: event_asset,
+            to,
+            public_amount,
+        } if event_asset == &asset
+            && to == &caller
+            && public_amount == &iroha_primitives::numeric::Numeric::from(2u64)
+    ));
+}
+
+#[test]
 fn unshield_rejects_mismatched_verifying_key() {
     let caller = sample_account();
     let caller_id = caller.clone();

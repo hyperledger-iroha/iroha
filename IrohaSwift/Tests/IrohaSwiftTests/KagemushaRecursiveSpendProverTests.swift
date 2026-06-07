@@ -1089,6 +1089,89 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         }
     }
 
+    func testRejectsOversizedInputArchivesBeforeBridgeCall() {
+        let validArchive = Self.validKagemushaNoritoArchive()
+        let oversizedArchive = Data(
+            repeating: 0x7f,
+            count: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1
+        )
+        let oversizedMessage =
+            "must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes"
+        let helpers: [(String, (Data) throws -> Data)] = [
+            ("init", KagemushaRecursiveSpendProver.initSpend),
+            ("append", KagemushaRecursiveSpendProver.appendSpend),
+            ("transitionProfileInit", KagemushaRecursiveSpendProver.transitionProfileInit),
+            ("transitionProfileAppend", KagemushaRecursiveSpendProver.transitionProfileAppend),
+            ("lineageAppendBoundary", KagemushaRecursiveSpendProver.lineageAppendBoundary),
+            ("verify", KagemushaRecursiveSpendProver.verifySpend),
+            ("redeem", KagemushaRecursiveSpendProver.redeemSpend)
+        ]
+
+        for (label, helper) in helpers {
+            assertRecursiveSpendInputError(
+                .oversizedInputArchive,
+                "helper \(label)",
+                descriptionContains: oversizedMessage
+            ) {
+                try helper(oversizedArchive)
+            }
+        }
+
+        assertRecursiveSpendInputError(
+            .oversizedInputArchive,
+            "init witness request",
+            descriptionContains: oversizedMessage
+        ) {
+            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                requestArchive: oversizedArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(
+            .oversizedInputArchive,
+            "init witness bundle",
+            descriptionContains: oversizedMessage
+        ) {
+            try KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                requestArchive: validArchive,
+                bundleArchive: oversizedArchive
+            )
+        }
+        assertRecursiveSpendInputError(
+            .oversizedInputArchive,
+            "append witness previous witness",
+            descriptionContains: oversizedMessage
+        ) {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: oversizedArchive,
+                requestArchive: validArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(
+            .oversizedInputArchive,
+            "append witness request",
+            descriptionContains: oversizedMessage
+        ) {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: validArchive,
+                requestArchive: oversizedArchive,
+                bundleArchive: validArchive
+            )
+        }
+        assertRecursiveSpendInputError(
+            .oversizedInputArchive,
+            "append witness bundle",
+            descriptionContains: oversizedMessage
+        ) {
+            try KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                previousWitnessArchive: validArchive,
+                requestArchive: validArchive,
+                bundleArchive: oversizedArchive
+            )
+        }
+    }
+
     func testRejectsEmptyPayloadInputArchivesBeforeBridgeCall() {
         let validArchive = Self.validKagemushaNoritoArchive()
         let emptyPayloadArchive = Self.emptyPayloadKagemushaNoritoArchive()
@@ -1333,12 +1416,20 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
     private func assertRecursiveSpendInputError(
         _ expected: KagemushaRecursiveSpendProverError,
         _ message: String,
+        descriptionContains: String? = nil,
         file: StaticString = #filePath,
         line: UInt = #line,
         _ body: () throws -> Data
     ) {
         XCTAssertThrowsError(try body(), message, file: file, line: line) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendProverError, expected, file: file, line: line)
+            if let descriptionContains {
+                XCTAssertTrue(
+                    error.localizedDescription.contains(descriptionContains),
+                    file: file,
+                    line: line
+                )
+            }
         }
     }
 

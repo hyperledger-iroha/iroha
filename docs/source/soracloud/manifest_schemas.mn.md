@@ -166,6 +166,8 @@ Iroha 3 дээр байршуулах:
 - FHE-ийн гүйцэтгэлийн бодлого:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - параметрийн багц нь `(param_set, version)`-тай тохирч байх ёстой.
   - `max_multiplication_depth` нь параметрийн тогтоосон гүнээс хэтрэхгүй байх ёстой.
   - бодлогын элсэлт нь `Proposed` эсвэл `Withdrawn` параметрийн багцын амьдралын мөчлөгөөс татгалздаг.

@@ -166,6 +166,8 @@ translator: machine-google-reviewed
 - מדיניות ביצוע FHE:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
+    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
   - הכריכה של ערכת פרמטרים חייבת להתאים לפי `(param_set, version)`.
   - אסור ל-`max_multiplication_depth` לחרוג מעומק מוגדר פרמטר.
   - קבלה לפוליסה דוחה את מחזור החיים של ערכת פרמטרים `Proposed` או `Withdrawn`.

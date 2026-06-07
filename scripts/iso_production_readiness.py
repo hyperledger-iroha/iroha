@@ -348,6 +348,32 @@ def _contains_secret_material(value: str) -> bool:
     )
 
 
+def _contains_secret_identifier_material(value: str) -> bool:
+    strong_markers = (
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    paired_markers = ("authorization", "bearer", "token", "cookie")
+    return any(
+        any(marker in lowered for marker in strong_markers)
+        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
+        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+    )
+
+
 class ReadinessError(RuntimeError):
     """Raised when a readiness input is malformed or digest-tampered."""
 
@@ -368,7 +394,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _reject_secret_string(value: str, label: str) -> None:
-    if _contains_secret_material(value) or _is_secret_looking_key(value):
+    if _contains_secret_material(value) or _contains_secret_identifier_material(value):
         raise ReadinessError(f"{label} contains secret-looking material")
 
 
@@ -1605,7 +1631,7 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise ReadinessError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise ReadinessError(f"{label} path must not contain dot segments")
-    if _contains_secret_material(path) or _is_secret_looking_key(path):
+    if _contains_secret_material(path) or _contains_secret_identifier_material(path):
         raise ReadinessError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):

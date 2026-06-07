@@ -79,6 +79,32 @@ def _contains_secret_material(value: str) -> bool:
         for candidate in _secret_scan_values(value)
         for pattern in SECRET_VALUE_PATTERNS
     )
+
+
+def _contains_secret_identifier_material(value: str) -> bool:
+    strong_markers = (
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    paired_markers = ("authorization", "bearer", "token", "cookie")
+    return any(
+        any(marker in lowered for marker in strong_markers)
+        or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
+        for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+    )
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
@@ -213,7 +239,7 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise TrustBundleError(f"{label} must use forward slashes")
     if ";" in raw:
         raise TrustBundleError(f"{label} must not contain semicolon path parameters")
-    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise TrustBundleError(f"{label} must not contain secret-looking material")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
@@ -237,7 +263,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise TrustBundleError(f"{label} must use forward slashes")
     if ";" in raw:
         raise TrustBundleError(f"{label} must not contain semicolon path parameters")
-    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+    if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise TrustBundleError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
@@ -260,7 +286,7 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
-        if _contains_secret_material(arg) or _is_secret_looking_key(arg):
+        if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise TrustBundleError("CLI argument must not contain secret-looking material")
         index += 1
 
@@ -1258,7 +1284,7 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise TrustBundleError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise TrustBundleError(f"{label} path must not contain dot segments")
-    if _contains_secret_material(path) or _is_secret_looking_key(path):
+    if _contains_secret_material(path) or _contains_secret_identifier_material(path):
         raise TrustBundleError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
